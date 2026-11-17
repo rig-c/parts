@@ -33,9 +33,11 @@ import { runProjectConfigChecks } from './tools/check_project_config.ts';
 import { runGroundConfigChecks, runGroundExampleChecks, runGroundUnitChecks } from './tools/check_ground.ts';
 import { runSeamConfigChecks } from './tools/check_seam_config.ts';
 import { runJointContactChecks } from './tools/check_joint_contact.ts';
+import { runBehindSeamChecks } from './tools/check_behind_seams.ts';
 import { runSetupPaintingChecks } from './tools/check_setup_painting.ts';
 import { runBoundaryColourChecks } from './tools/check_boundary_colour.ts';
 import { BOUNDARY_COLOUR_LINE, UNDECLARED_BOUNDARY_COLOUR_REASON, measureBoundaryColour } from './src/boundarycolour.ts';
+import { BEHIND_SEAM_LINE, UNDECLARED_BEHIND_SEAM_REASON } from './src/behindseams.ts';
 import { runCutMaterialChecks } from './tools/check_cut_material.ts';
 import { runPinholeChecks } from './tools/check_pinholes.ts';
 import { runArtJointChecks } from './tools/check_art_joints.ts';
@@ -17789,10 +17791,11 @@ function runRequirementCases(dir: string, say: (name: string, ok: boolean, detai
     plain.status === 0 &&
       !('requirements' in (plain.fig ?? {})) &&
       !existsSync(join(plain.outDir, 'requirements')) &&
-      // Issue #942: the one line the plain run prints that names requirements is boundary_colour's SKIP, which tells
-      // the reader where the check would be declared — it is printed once, and nothing else mentions requirements.
+      // Issue #942: boundary_colour's SKIP tells the reader where the check would be declared.
+      // Issue #1314: behind seams adds its undeclared SKIP. Each prints once; no other line mentions requirements.
       plain.text.split('\n').filter((l) => l.includes(`${BOUNDARY_COLOUR_LINE}: SKIP — ${UNDECLARED_BOUNDARY_COLOUR_REASON}`)).length === 1 &&
-      !plain.text.split('\n').filter((l) => !l.includes(`${BOUNDARY_COLOUR_LINE}: SKIP`)).join('\n').includes('requirements') &&
+      plain.text.split('\n').filter((l) => l.includes(`${BEHIND_SEAM_LINE}: SKIP — ${UNDECLARED_BEHIND_SEAM_REASON}`)).length === 1 &&
+      !plain.text.split('\n').filter((l) => !l.includes(`${BOUNDARY_COLOUR_LINE}: SKIP`) && !l.includes(`${BEHIND_SEAM_LINE}: SKIP — ${UNDECLARED_BEHIND_SEAM_REASON}`)).join('\n').includes('requirements') &&
       empty.status === 0 &&
       'requirements' in (empty.fig ?? {}) &&
       stripBlock(empty) === plainCheck &&
@@ -26658,7 +26661,7 @@ function runRequirementsSuite(): number {
         rsDetail[1].startsWith(' field "rests"[1]: names "hem" a second time') &&
         rsDetail[2].startsWith(' field "rests"[0]: names "hem", which "not_swinging" names too') &&
         rsDetail[3].startsWith(' field "rest": is not a field this format reads') &&
-        (rsBad[3]?.problems[0].detail ?? '').includes('rises, rests, may_fold, fixed_skeleton, cut_material, setup_painting, pinholes, seam_over_motion, boundary_colour;'),
+        (rsBad[3]?.problems[0].detail ?? '').includes('rises, rests, may_fold, fixed_skeleton, cut_material, setup_painting, pinholes, seam_over_motion, boundary_colour, behind_seams;'),
       `read ${JSON.stringify([rsRead.rises, rsRead.rests])}; absent ${JSON.stringify(npAbsent.rests)}; refused: ${rsDetail.join(' | ')}`,
       'issue #245: rests is declared per part like its siblings — a list of names, each once, empty refused rather than read as none, a misspelt key refused by the format; a resting tip may also rise (a raised hand resting on something), but a part declared not swinging has no reading to hold at rest',
     );
@@ -56588,6 +56591,17 @@ function runJointContactSuite(): number {
   return bad();
 }
 
+function runBehindSeamSuite(): number {
+  section('behind-seams: synthetic rear visibility on the official seam grid');
+  const { say, bad } = counter();
+  const dir = temp('behind-seams');
+  try { runBehindSeamChecks(dir, (name, ok, detail) => say(name, ok, detail,
+    'Hand-computable blocks; official grid, raster callbacks, attachment transport and declared checkStage wiring.'),
+  rigcRunnerAt(suiteRigc(), spawnRigc)); }
+  finally { rmSync(dir, { recursive: true, force: true }); }
+  return bad();
+}
+
 function runDepthMapSuite(): number {
   section('depth-maps: numeric provider maps and analytic normals');
   const { say, bad } = counter();
@@ -56598,6 +56612,7 @@ function runDepthMapSuite(): number {
 }
 
 const SUITES: ReadonlyArray<readonly [string, (corpus: string | null) => number | null]> = [
+  ['behind-seams', runBehindSeamSuite],
   ['depth-maps', runDepthMapSuite],
   ['joint-contact', runJointContactSuite],
   ['raster-components', runComponentsSuite],
@@ -56828,7 +56843,7 @@ const SHARDS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['1', ['build', 'cli', 'check@runBreathAloneCases', 'influence', 'auto-mesh-examples', 'chain@standard', 'chain@physics', 'check@runSweepCheckCases', 'config-write', 'limb-slots', 'comfy', 'take-layers', 'alternate-tips', 'chain@feature-contracts', 'readme-loop@loop-plain', 'limb-layout', 'subset-cover', 'ground-examples', 'depth-maps', 'check@coincide', 'winding', 'prompt', 'sheet', 'chain@feature-readme-plain', 'joint-contact', 'parts', 'raster-blur', 'raster-morph', 'raster-warp']],
   ['2', ['check@fixtures', 'retune', 'rig', 'mesh-draft', 'alternate-layers', 'check@runPlantedFeetCases', 'fixed-skeleton', 'config', 'check@runDiscCheckCases', 'check@runStressCases', 'front-slot', 'corpus', 'chain@physics-driven', 'chain@structure', 'chain@feature-authoring', 'readme-loop@loop-cloth', 'keypoints', 'contour', 'foot-ownership', 'structure', 'assemble-examples@standard', 'skeleton', 'inputs-examples', 'assemble-examples@end', 'check@runMotionSeamWorldCases', 'check@runSweepUnitCases', 'layers-psd', 'propose-corpus', 'raster-composite', 'raster-resize']],
   ['3', ['check@judgements', 'remesh', 'check@runMotionSeamCases', 'tree', 'check@requirements', 'check@row-scope', 'auto-motion', 'scene', 'chain@no-neck', 'chain@gesture', 'check@weight-step', 'check@runLimbCheckCases', 'check@runContourStepCases', 'requirements', 'assemble', 'auto-mesh', 'check@runBallCheckCases', 'check@runDressRiderCheckCases', 'loop', 'build-cost', 'contour-wiring', 'waist', 'chain-inherit', 'arm-split-upgrade', 'check@runRiderCheckCases', 'painting', 'diagnostics', 'layers-wrapper', 'inputs', 'plausibility', 'check@runRigcIdentityCases', 'hybrid-limb', 'editor-receipts', 'part-sources', 'check@gate-chain', 'core-pointer', 'fetch-examples', 'png', 'raster-components', 'raster-poly', 'chain@feature-readme-posed', 'readme-loop@loop-posed', 'readme-loop@end']],
-  ['4', ['check@runEnvironmentCheckCases', 'setup-painting', 'check@runAnimationFoldCases', 'propose', 'boundary-colour', 'check@runClothCheckCases', 'check@runFeetLevelCases', 'check@runClothSettlesCases', 'check@extremes', 'check@seated', 'check@stretch', 'mesh-stats', 'chain@cloth', 'chain@physics-mixed', 'chain@travel', 'chain@end', 'chain@feature-readme-cloth']],
+  ['4', ['check@runEnvironmentCheckCases', 'setup-painting', 'check@runAnimationFoldCases', 'propose', 'boundary-colour', 'check@runClothCheckCases', 'check@runFeetLevelCases', 'check@runClothSettlesCases', 'check@extremes', 'check@seated', 'check@stretch', 'mesh-stats', 'chain@cloth', 'chain@physics-mixed', 'chain@travel', 'chain@end', 'chain@feature-readme-cloth', 'behind-seams']],
 ];/**
  * The part of a split suite this worker runs (issue #395): null when it runs the whole suite, else the example its
  * unit names or {@link END_UNIT}. Set once, by {@link workerMain}, before the suite starts.
@@ -57586,6 +57601,7 @@ const SUMMARY_CLAUSE_SUITES: ReadonlyArray<readonly [string, readonly string[]]>
   ['fixed-skeleton', ['fixed-skeleton']],
   ['setup-painting', ['setup-painting']],
   ['boundary-colour', ['boundary-colour']],
+  ['behind-seams', ['behind-seams']],
   ['loop-encoder', ['loop']],
   ['skeleton', ['skeleton']],
   ['inputs', ['inputs']],
@@ -57755,6 +57771,7 @@ function printGreenSummary(tally: RunTally, log: (line: string) => void = consol
   const ran = tally.blocks.length - holes.length;
   const corpusClause = holes.includes('corpus') ? '' : `, + ${n('corpus')} corpus`;
   const chainClause = holes.includes('chain') ? '' : `, + ${n('chain')} example-chain`;
+  const behindSeamsClause = holes.includes('behind-seams') ? '' : `, + ${n('behind-seams')} behind-seams`;
   const readmeLoopClause = holes.includes('readme-loop') ? '' : `, + ${n('readme-loop')} readme-loop`;
   const proposeClause = holes.includes('propose-corpus') ? '' : `, + ${n('propose-corpus')} example-propose`;
   const assembleExamplesClause = holes.includes('assemble-examples') ? '' : `, + ${n('assemble-examples')} assemble-example`;
@@ -57763,7 +57780,7 @@ function printGreenSummary(tally: RunTally, log: (line: string) => void = consol
   log(
     `rig-parts selftest: green — ${tally.total} control(s) over ${ran} suite(s): ${raster} raster-op, + ${n('png')} codec, ` +
       `+ ${n('layers-wrapper')} wrapper-reader, + ${n('layers-psd')} PSD-reader, + ${n('config')} config, + ${n('parts')} parts.json, ` +
-      `+ ${n('sheet')} sheet, + ${n('cli')} CLI, + ${n('assemble')} assemble, + ${n('plausibility')} plausibility, + ${n('propose')} propose, + ${n('keypoints')} keypoints, + ${n('painting')} painting, + ${n('structure')} structure, + ${n('diagnostics')} diagnostics, + ${n('rig')} rig, + ${n('chain-inherit')} chain-inherit, + ${n('contour')} contour-mesh, + ${n('contour-wiring')} contour-wiring, + ${n('auto-mesh')} auto-mesh, + ${n('check')} check, + ${n('requirements')} requirements, + ${n('fixed-skeleton')} fixed-skeleton, + ${n('setup-painting')} setup-painting, + ${n('boundary-colour')} boundary-colour, + ${n('loop')} loop-encoder, + ${n('skeleton')} skeleton, + ${n('inputs')} inputs, + ${n('fetch-examples')} fetch-examples, + ${n('prompt')} prompt, + ${n('comfy')} comfy-adapter, + ${n('build')} build, + ${n('scene')} scene, + ${n('tree')} tree, + ${n('run-tally')} tally${corpusClause}${proposeClause}${assembleExamplesClause}${inputsClause}${autoExamplesClause}${chainClause}${readmeLoopClause}`,
+      `+ ${n('sheet')} sheet, + ${n('cli')} CLI, + ${n('assemble')} assemble, + ${n('plausibility')} plausibility, + ${n('propose')} propose, + ${n('keypoints')} keypoints, + ${n('painting')} painting, + ${n('structure')} structure, + ${n('diagnostics')} diagnostics, + ${n('rig')} rig, + ${n('chain-inherit')} chain-inherit, + ${n('contour')} contour-mesh, + ${n('contour-wiring')} contour-wiring, + ${n('auto-mesh')} auto-mesh, + ${n('check')} check, + ${n('requirements')} requirements, + ${n('fixed-skeleton')} fixed-skeleton, + ${n('setup-painting')} setup-painting, + ${n('boundary-colour')} boundary-colour, + ${n('loop')} loop-encoder, + ${n('skeleton')} skeleton, + ${n('inputs')} inputs, + ${n('fetch-examples')} fetch-examples, + ${n('prompt')} prompt, + ${n('comfy')} comfy-adapter, + ${n('build')} build, + ${n('scene')} scene, + ${n('tree')} tree, + ${n('run-tally')} tally${corpusClause}${proposeClause}${assembleExamplesClause}${inputsClause}${autoExamplesClause}${chainClause}${readmeLoopClause}${behindSeamsClause}`,
   );
   if (holes.length > 0) log(`  ⚠️ HOLE: ${holes.join(', ')} did not run, so this run does not cover ${holes.length === 1 ? 'it' : 'them'}.`);
   // the summary ends here

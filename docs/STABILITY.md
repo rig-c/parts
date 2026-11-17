@@ -1177,6 +1177,34 @@ original resolution **before** existing Lanczos3 stage resampling. Setup RGBA
 is composited on the native stage grid. Source readers preserve alpha; the
 global RGB-only source helper and checks without this declaration are unchanged.
 
+The optional `behind_seams` key in `spine-parts-requirements/1` (issue #1314,
+additive) declares the required `BEHIND_PART_SEAMS` check, independently of the
+existing requirement kinds and without a new CLI flag. Its optional fields are
+`threshold`, `allowance` and `pairs`; pair entries require distinct nonempty
+`part` and `neighbour` names and may override `threshold` and `allowance`.
+Names must resolve to known parts and an already selected pair; duplicate
+pairs, including reversed pairs, are invalid. Shape errors use `REQUIREMENTS_FIELD`.
+An authored threshold T is an integer from 0 through 255; omission has no
+default, and a pair without either a rig or pair T reports SKIP and a HOLE,
+never PASS. Allowance is a nonnegative safe integer, defaulting to 0 by the
+explicit design ruling, with optional per-pair override for both halves.
+
+Declared readings independently measure motion-opened rear visibility and
+standing contrasting rear visibility on core's official seam grid, at setup
+and every idle frame. There is no WARN mode, one-cell floor, rest mask or
+subtraction of setup-visible cells. `BEHIND_PART_SEAMS` keeps `setup`,
+`motion_opened` and `standing` separate, names the selected pair and provenance,
+per-frame `behind_slots`, grid and sampled/read/unmeasured counts, and reports
+per-frame hits, worst counts, temporal spans and spatial runs. Exceeding the
+allowance uses `CHECK_BEHIND_PART_SEAMS`; a mandatory unread population uses
+`CHECK_BEHIND_PART_SEAMS_UNMEASURED`. Missing behind slots, idle, setup,
+motion support, boundary population or verified render evidence is a HOLE,
+not a zero PASS. Existing render/sidecar refusals remain refusals. The standing
+bracketed-run definition does not certify curved or diagonal openings.
+A boundary-colour PASS does not prove seam closure. Without `behind_seams`,
+existing configurations remain optional and their checks retain their behavior;
+no behind-part PASS is claimed. See [Behind-part seams](AUTHORING.md#behind-part-seams-issue-1314).
+
 The optional `cut_material` block in `--requirements` declares a part, joint,
 independent stage-pixel centre, inward axis, reach and continuous bend interval.
 `assemble --requirements` and `build --requirements` write source-edge evidence

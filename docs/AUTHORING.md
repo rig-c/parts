@@ -6194,6 +6194,8 @@ outside the consumed inputs pending [#1177](https://github.com/rig-c/parts/issue
 | <a id="CHECK_SETUP_PAINTING_MEASURED"></a>`CHECK_SETUP_PAINTING_MEASURED` | missing native setup/ownership or unsupported clipping | supply observable textured setup geometry; an unavailable instrument never passes |
 | <a id="CHECK_BOUNDARY_COLOUR_STEP"></a>`CHECK_BOUNDARY_COLOUR_STEP` | the requirements file declares `boundary_colour.max_step_excess` and a part boundary's colour step in the rig's render exceeds the same boundary's step in the rig's own pieces by more than it; the part pair, the frame (`setup` or `idle frame <n> (t <s> s)`), the stage pixel, the excess, the declared allowance and both steps are quoted. Unlike [`CHECK_SETUP_MATCHES_PAINTING`](#CHECK_SETUP_MATCHES_PAINTING), which compares the painting per declared region at the setup pose, this compares against the rig's own flat pieces (`parts.json` placement at setup, each piece's rest colour through its art UVs on every idle frame), so a part drawn over its neighbour's line art is not a failure | the pair's rig image or mesh: `rig/images/<part>.png` (a texture stretched into its padded UVs, or a notch cut out of it), or that part's mesh in `config.json` `meshes` when the mesh cuts a corner off the art; see [Boundary colour step](#boundary-colour-step-issue-942) |
 | <a id="CHECK_BOUNDARY_COLOUR_UNMEASURED"></a>`CHECK_BOUNDARY_COLOUR_UNMEASURED` | `boundary_colour` is declared and the step cannot be taken: no `parts.json`, no `idle`, or a default-skin region or mesh image without a sequence, with a parts record, whose rig image is not its parts PNG with one even pad on every side (refused before anything is built); otherwise a drawn slot has no `parts.json` piece, is clipped, or its rig image is not its parts PNG with one even pad on every side (the slot and frame are named). Never a pass | make every drawn slot a `parts.json` piece, or drop `boundary_colour` from the requirements file (the bar then reports SKIP) |
+| <a id="CHECK_BEHIND_PART_SEAMS"></a>`CHECK_BEHIND_PART_SEAMS` | `behind_seams` is declared and a selected pair exceeds its allowance in the independent motion-opened or standing reading at setup or on an idle frame; the pair, behind slots, reading, frame, counted seam cells and allowance are named | repair the declared seam or author its per-pair allowance; no WARN mode or rest-visible mask; see [Behind-part seams](#behind-part-seams-issue-1314) |
+| <a id="CHECK_BEHIND_PART_SEAMS_UNMEASURED"></a>`CHECK_BEHIND_PART_SEAMS_UNMEASURED` | a pair with an authored effective threshold cannot read a mandatory population: selected pair, eligible behind slots, idle, readable setup, motion support, boundary population, or verified render/grid/material evidence; mandatory unread evidence makes the combined line FAIL. A missing threshold alone is a nonrequired SKIP and HOLE without this refusal code | supply the named measurement evidence; an invalid selected-pair override also refuses by name, and existing renderer or sidecar refusals remain refusals |
 | <a id="SETUP_PAINTING_REQUIRED_LIMIT"></a>`SETUP_PAINTING_REQUIRED_LIMIT` | `setup_painting.required` is `true` and a limit the check needs is absent: `rgb_tolerance`, `regions`, or a region's `max_pixels` (the object names the region). Refused when the requirements file is read, before anything is built (issue #943) | author the named limit; none is derived from the art. Without `required` the same region reports SKIP |
 | <a id="CHECK_SOURCE_GRID"></a>`CHECK_SOURCE_GRID` | the setup-pose still and its black-tinted twin (the coverage `SETUP_POSE_VS_SOURCE` reads) did not come back on one grid over one opaque background | a rigc problem; report it |
 | <a id="CHECK_RIGC_VERSION"></a>`CHECK_RIGC_VERSION` | `rigc --version` is below 1.4.0, or prints no version: its `render` has no `--geometry`, which `TEXTURE_STRETCH` reads. Refused before anything is built | `bun install` (this package depends on rig-c ^2.20.4), or put a newer `rigc` first on `PATH` |
@@ -6246,7 +6248,7 @@ outside the consumed inputs pending [#1177](https://github.com/rig-c/parts/issue
 | <a id="BUILD_REQUIREMENTS_CONFLICT"></a>`BUILD_REQUIREMENTS_CONFLICT` | `build --requirements <file>` names a file with other bytes than the one `config.requirements` declares (issue #556): the detail names both, each resolved (the flag against the working directory, the declaration against the config's) with its sha256 — or `no such file`. Refused before assemble writes anything. The same file by both, or a copy of its bytes, is not refused: the declaration is read and recorded | drop the flag to build from the config's file, or point `config.requirements` at the flag's |
 | <a id="BUILD_STAGE_REQUEST"></a>`BUILD_STAGE_REQUEST` | an internal build worker was given a missing or malformed request, an unknown stage, or incomplete runner, input, output or scratch paths; the worker refuses before running a stage. This is the internal process protocol, not a public command or option | invoke `rig-parts build` with its documented flags; if that command produces this refusal, report the named request defect rather than constructing or modifying a worker request |
 | <a id="REQUIREMENTS_FILE"></a>`REQUIREMENTS_FILE` | `--requirements` names no file, or one that does not parse as a JSON object. Refused before anything is built (by `build`, before assemble) | the path of a `spine-parts-requirements/1` file |
-| <a id="REQUIREMENTS_FIELD"></a>`REQUIREMENTS_FIELD` | a field of the file is missing, of the wrong type, or not one the format reads: `spec`, `fps` (a positive number when supplied, required only when a declared measurement reads the file's sampling rate, with no default), `requirements`, each requirement's `name` (letters, digits, underscores; once each), `kind`, `animation` and its kind's fields — every bar among them (`within_px`, `fraction`, `tolerance`, `least_drive` above 0, `within_degrees` from 0 to 180, `lo_degrees` ≤ `hi_degrees`, `within_ratio` ≥ 1) — and each target's `bone`, `animation` and exactly one of `at` and `keys` (times strictly increasing), and `not_planted`, `not_swinging`, `rises` and `rests` when given (each a non-empty list of part names, each once; no part both in `not_swinging` and in `rises` or `rests`), and `may_fold` when given (a non-empty list of `{ "slot", "animation", "why" }`, every one a non-blank string, each pair once; issue #320), and `pinholes` when given (an object whose one field, `required`, is `true` or `false`; issue #944), `seam_over_motion` when given (the same shape; issue #941), and `boundary_colour` when given (an object whose one field, `max_step_excess`, is an integer from 0 through 255; issue #942). `note`, `*_note` (strings) and `x-…` (any value) are read by nothing, as in the config | write the field; the bar is yours. For a pair read only by `seam_over_motion.required`, declare `config.motion_seams` `[{part, neighbour}]` and omit a seam requirement. See the [carrier contract](#CONFIG_MOTION_SEAM) and [background over every frame](#background-over-every-frame-issue-941). |
+| <a id="REQUIREMENTS_FIELD"></a>`REQUIREMENTS_FIELD` | a field of the file is missing, of the wrong type, or not one the format reads: `spec`, `fps` (a positive number when supplied, required only when a declared measurement reads the file's sampling rate, with no default), `requirements`, each requirement's `name` (letters, digits, underscores; once each), `kind`, `animation` and its kind's fields — every bar among them (`within_px`, `fraction`, `tolerance`, `least_drive` above 0, `within_degrees` from 0 to 180, `lo_degrees` ≤ `hi_degrees`, `within_ratio` ≥ 1) — and each target's `bone`, `animation` and exactly one of `at` and `keys` (times strictly increasing), and `not_planted`, `not_swinging`, `rises` and `rests` when given (each a non-empty list of part names, each once; no part both in `not_swinging` and in `rises` or `rests`), and `may_fold` when given (a non-empty list of `{ "slot", "animation", "why" }`, every one a non-blank string, each pair once; issue #320), and `pinholes` when given (an object whose one field, `required`, is `true` or `false`; issue #944), `seam_over_motion` when given (the same shape; issue #941), and `boundary_colour` when given (an object whose one field, `max_step_excess`, is an integer from 0 through 255; issue #942), and `behind_seams` when given (optional `threshold`, `allowance`, `pairs`; each pair requires distinct nonempty `part` and `neighbour`, with optional `threshold` and `allowance`; thresholds are integers from 0 through 255, allowances are nonnegative safe integers, and reverse duplicates are invalid; issue #1314). `note`, `*_note` (strings) and `x-…` (any value) are read by nothing, as in the config | write the field; the bar is yours. For a pair read only by `seam_over_motion.required`, declare `config.motion_seams` `[{part, neighbour}]` and omit a seam requirement. See the [carrier contract](#CONFIG_MOTION_SEAM) and [background over every frame](#background-over-every-frame-issue-941). |
 | <a id="REQUIREMENTS_RESOLVES"></a>`REQUIREMENTS_RESOLVES` | a bone, an `ik` or `transform` constraint (by name and `constraint_type`, as rig-c resolves it), a slot, a mesh attachment or an animation the file names is not in `rig.json` or `motion.json`, or a seam's part or a `not_planted`, `not_swinging`, `rises` or `rests` name is not in `parts.json` — the detail lists the ones that are; or an animation whose name cannot be a directory. Refused before anything is built | the name as the rig spells it |
 | <a id="REQUIREMENTS_CONSTRAINT_DRIVES"></a>`REQUIREMENTS_CONSTRAINT_DRIVES` | a `follow` names a bone its constraint does not constrain, or a property it does not drive: an `ik` drives `rotate` only; a `transform` drives `rotate` when a `to` names `rotate`, `translate` when one names `x` or `y` | the constraint's own bone and property |
 | <a id="REQUIREMENTS_TARGET_PARENT"></a>`REQUIREMENTS_TARGET_PARENT` | a scene target's bone is the root or is not parented to it, or the root is not at rest at the origin, or the animation keys the root — a stage point is a bone's position only under a root that stands still at the origin | a bone under the root for the scene to place |
@@ -6972,6 +6974,7 @@ Under `--source <painting.png>`, a second reported line, also never a FAIL
 | <a id="CHECK_SUPPORT_GRID"></a>`CHECK_SUPPORT_GRID` | a support sidecar, part PNG or painting cannot be registered to the declared native canvas | use the same parts.json dimensions and source scale, and regenerate assemble output; no resized or guessed domain is substituted |
 | <a id="SETUP_MATCHES_PAINTING"></a>`SETUP_MATCHES_PAINTING` | declared region count, native box, limit and actual top contributor rows; observations source-over white unless `setup_painting.backdrop` declares the opaque plate behind a full-frame painting | PASS/FAIL against authored limits; no limit is SKIP, or the refusal `SETUP_PAINTING_REQUIRED_LIMIT` under `setup_painting.required: true`; with `--source`, no declaration is SKIP with its reason and declaration remedy; undeclared regions are not judged |
 | <a id="BOUNDARY_COLOUR_STEP"></a>`BOUNDARY_COLOUR_STEP` | the worst colour-step excess over the rig's own pieces at any part boundary of the setup and every idle frame, its part pair, frame and stage pixel, and the declared `max_step_excess` | PASS/FAIL against the declared allowance (FAIL is [`CHECK_BOUNDARY_COLOUR_STEP`](#CHECK_BOUNDARY_COLOUR_STEP), an unreadable piece [`CHECK_BOUNDARY_COLOUR_UNMEASURED`](#CHECK_BOUNDARY_COLOUR_UNMEASURED)); no `boundary_colour` in the requirements file is SKIP with its reason and the declaration to add, never a pass |
+| <a id="BEHIND_PART_SEAMS"></a>`BEHIND_PART_SEAMS` | selected front pair and declaration provenance, per-frame `behind_slots`, core seam grid, separate `setup`, `motion_opened` and `standing` readings, sampled/read/unmeasured counts, per-frame hits, worst frame, temporal spans and spatial runs | required for pairs with an authored effective threshold: PASS/FAIL against the effective allowance, default 0; missing T is a nonrequired SKIP and HOLE, while mandatory unread evidence causes `CHECK_BEHIND_PART_SEAMS_UNMEASURED` and combined FAIL; no declaration is SKIP, and curved or diagonal openings are not certified |
 
 `assemble` writes optional `part_support_domains.json` beside `parts.json`, with
 spec `rig-parts-support-domains/1`. It binds the exact parts.json and named PNG
@@ -7814,6 +7817,9 @@ art:
   its own parts PNG through its own art UVs — the boundary's colours at rest,
   tracked through the pieces' own UVs.
 
+A PASS does not prove seam closure: a standing opening present in both the
+render and its own-parts reference can have zero step excess.
+
 The reading is the excess of the render's step over the reference's,
 `max(0, s_render - s_reference)`, and the bar is its largest value over every
 pair of every frame. A texture stretched into its padded UVs and a notch cut out
@@ -7839,6 +7845,88 @@ The public examples read, clean: `demo` 1, `scarf` 1, `reference-sample` 3,
 `demo` and `scarf`. Each example declares 12 in its `requirements.json`, a file
 `config.json` does not name (as for `pinholes`), and the chain suite holds each
 to it (`CH942`); the suite `boundary-colour` holds the plants.
+
+### Behind-part seams (issue #1314)
+
+The optional `behind_seams` object in `spine-parts-requirements/1` activates
+`BEHIND_PART_SEAMS`. A pair with an authored effective T has required
+readings, with no WARN mode, new requirement kind or CLI flag. Omitting the
+block preserves existing requirements and checks; the behind-part reading is
+SKIP, never a claimed pass. An empty object is valid but supplies no contrast
+threshold: it reports a nonrequired SKIP and HOLE without an unmeasured refusal.
+It cannot establish a behind-part PASS.
+
+| Field | Contract |
+| --- | --- |
+| `behind_seams.threshold` | Optional authored T, an integer from 0 through 255. There is no default. A pair override can supply it; a pair with neither value reports SKIP and a HOLE. |
+| `behind_seams.allowance` | Optional nonnegative safe integer counted-cell allowance for both independent halves. The explicit design ruling sets omission to 0. |
+| `behind_seams.pairs` | Optional array of selected-pair overrides; no adjacency is guessed. |
+| `behind_seams.pairs[i].part`, `behind_seams.pairs[i].neighbour` | Required distinct nonempty part names. They must resolve to known parts in the selected declaration population; repeating a pair in either order is invalid. |
+| `behind_seams.pairs[i].threshold` | Optional authored integer T from 0 through 255, overriding the rig value for this pair. No effective T means SKIP and a HOLE. |
+| `behind_seams.pairs[i].allowance` | Optional nonnegative safe integer, overriding the rig allowance for both halves of this pair. |
+
+Malformed shapes and fields are [`REQUIREMENTS_FIELD`](#REQUIREMENTS_FIELD).
+Pair names must resolve to known parts and the pair must already belong to
+the actual selected declarations; neither is inferred from tags or body roles. Existing limb-segment, proven body-root and explicit
+seam declarations supply pair provenance. Missing selection or unresolved
+parts cannot be a zero reading. No threshold is borrowed from boundary colour
+or the setup seam bar.
+
+For each selected front pair A/B, the behind set contains every slot strictly
+earlier than both members in that frame's actual draw order, including all its
+fragments. The complete ordered `behind_slots` list is reported and recomputed
+when draw order changes. Hiding the whole set proves the set's contribution;
+it does not uniquely attribute a defect to one rear slot.
+
+The two readings are independent:
+
+- `motion_opened` attributes core's stock transported setup-overlap
+  `gapCovered` cells to that behind set. Its ordinary all-behind-hidden
+  counterfactual must be transparent at the exact seam-cell centre, and setup
+  attribution must show A or B covering that material. It uses no one-cell
+  floor. A rigidly translated closed pair stays closed; no setup overlap band
+  means this half is unmeasured, even when the standing half can read.
+- `standing` scans row and column runs whose combined A/B alpha is below
+  128/255, bracketed immediately by different unambiguous A/B owners. A cell
+  counts when the behind set has positive surviving source-over contribution
+  and its straight RGB differs from BOTH endpoint neighbours by strictly more
+  than the effective T in max-channel distance. Equal-colour antialias ramps
+  count zero contrast. Later opaque art contributes no visible rear colour.
+  There is no width guess, rest mask or subtraction of setup-visible cells.
+  This bracketed-run definition does not certify curved or diagonal openings.
+
+Both readings use core's public `seamGridOf` from `@rig-c/core/seam` and its
+official raster traversal. The full
+render and ordinary hidden-set render retain identical pose, sampling, skin,
+constraints, physics, environment and viewport; the hidden render does not
+combine `--hide` with `--seam`. A viewport match alone is not a seam-grid proof.
+Cells join by world centre and cell side, never by nearest image pixel.
+
+The report keeps `setup` separate from idle. Setup standing is measured in its
+own right; setup motion-opened is zero by definition only if setup was read.
+Standing is measured independently on every idle frame, including the trough.
+Rows name the pair, declaration provenance, animation, `behind_slots`, grid and
+sampled/read/unmeasured frame counts. Independent `motion_opened` and `standing`
+readings retain per-frame `index`, `time`, `px`, `cell`, `box`, `max_px`, the
+earliest worst hit and contiguous spans. `max_run` is temporal, in frames and
+seconds; `max_spatial_run_cells` is the longest counted horizontal/vertical run,
+with world length equal to cells times cell side. Counts named `px` are seam
+cells; rig-pixel area is count times cell side squared. Geometric rear-visible,
+raw contrast and threshold-filtered counts remain distinct. Overlapping pair
+counts are not a unique whole-rig area.
+
+A measured count above the effective allowance is
+[`CHECK_BEHIND_PART_SEAMS`](#CHECK_BEHIND_PART_SEAMS). A pair without an
+effective T reports a nonrequired SKIP and HOLE; missing T alone emits no
+`CHECK_BEHIND_PART_SEAMS_UNMEASURED` problem and cannot establish a behind-part
+PASS. With authored T, missing behind slots, idle, setup, motion support,
+boundary population or verified render/material evidence leaves the affected
+reading SKIP with a HOLE and emits
+[`CHECK_BEHIND_PART_SEAMS_UNMEASURED`](#CHECK_BEHIND_PART_SEAMS_UNMEASURED),
+making the combined line FAIL. Existing hard render and sidecar failures
+remain named refusals. Setup-only or partial readings cannot establish the
+combined PASS. Other animations and
+alternate skins/sets are outside an idle-only claim unless explicitly measured.
 
 ## 8. What one character costs
 
@@ -8753,55 +8841,63 @@ Internal `SeamSupport.drawings` never enters check JSON. Named requirement
 <!-- check-row-table:begin -->
 | Row family | Registered JSON paths | row_scope | row_kind | row_subjects (producer expression) | Producer |
 | --- | --- | --- | --- | --- | --- |
-| `ANIMATIONS_DO_NOT_FOLD.declared_not_folding` | `ANIMATIONS_DO_NOT_FOLD.declared_not_folding` | part when the supplied mapping resolves a piece; otherwise rig | finding | resolved piece for e.slot; otherwise [] | [check.ts:3545](../src/check.ts#L3545) |
-| `ANIMATIONS_DO_NOT_FOLD.folding` | `ANIMATIONS_DO_NOT_FOLD.folding` | part when the supplied mapping resolves a piece; otherwise rig | finding when entry === undefined; otherwise evidence | resolved piece for slot; otherwise [] | [check.ts:3507](../src/check.ts#L3507) |
+| `ANIMATIONS_DO_NOT_FOLD.declared_not_folding` | `ANIMATIONS_DO_NOT_FOLD.declared_not_folding` | part when the supplied mapping resolves a piece; otherwise rig | finding | resolved piece for e.slot; otherwise [] | [check.ts:3550](../src/check.ts#L3550) |
+| `ANIMATIONS_DO_NOT_FOLD.folding` | `ANIMATIONS_DO_NOT_FOLD.folding` | part when the supplied mapping resolves a piece; otherwise rig | finding when entry === undefined; otherwise evidence | resolved piece for slot; otherwise [] | [check.ts:3512](../src/check.ts#L3512) |
 | `ART_JOINT_DISTANCE.joints` | `ART_JOINT_DISTANCE.joints` | 'rig' | finding when status === 'FAIL'; otherwise evidence | [] | [artjoints.ts:86](../src/artjoints.ts#L86) |
+| `BEHIND_PART_SEAMS.contributors` | `BEHIND_PART_SEAMS.pairs[].setup.motion_opened.samples[].contributors`; `BEHIND_PART_SEAMS.pairs[].setup.standing.samples[].contributors`; `BEHIND_PART_SEAMS.pairs[].frames[].motion_opened.samples[].contributors`; `BEHIND_PART_SEAMS.pairs[].frames[].standing.samples[].contributors` | 'pair' | evidence | [pair.a, pair.b] | [behindseams.ts:320](../src/behindseams.ts#L320) |
+| `BEHIND_PART_SEAMS.hits` | `BEHIND_PART_SEAMS.pairs[].motion_opened.frames`; `BEHIND_PART_SEAMS.pairs[].standing.frames`; `BEHIND_PART_SEAMS.pairs[].motion_opened.worst`; `BEHIND_PART_SEAMS.pairs[].standing.worst` | 'pair' | finding when r.px > allowance; otherwise evidence | parts | [behindseams.ts:374](../src/behindseams.ts#L374) |
+| `BEHIND_PART_SEAMS.pairs` | `BEHIND_PART_SEAMS.pairs` | 'pair' | finding when failed; otherwise evidence | parts | [behindseams.ts:450](../src/behindseams.ts#L450) |
+| `BEHIND_PART_SEAMS.pairs[].frames` | `BEHIND_PART_SEAMS.pairs[].frames` |  |  |  |  |
+| `BEHIND_PART_SEAMS.pairs[].setup` | `BEHIND_PART_SEAMS.pairs[].setup` |  |  |  |  |
+| `BEHIND_PART_SEAMS.samples` | `BEHIND_PART_SEAMS.pairs[].setup.motion_opened.samples`; `BEHIND_PART_SEAMS.pairs[].setup.standing.samples`; `BEHIND_PART_SEAMS.pairs[].frames[].motion_opened.samples`; `BEHIND_PART_SEAMS.pairs[].frames[].standing.samples` | 'pair' | evidence | [pair.a, pair.b] | [behindseams.ts:319](../src/behindseams.ts#L319) |
+| `BEHIND_PART_SEAMS.spans` | `BEHIND_PART_SEAMS.pairs[].motion_opened.spans`; `BEHIND_PART_SEAMS.pairs[].standing.spans` | 'pair' | evidence | parts | [behindseams.ts:382](../src/behindseams.ts#L382) |
+| `BEHIND_PART_SEAMS.unmeasured` | `BEHIND_PART_SEAMS.unmeasured` | pair === null ? 'rig' : 'pair'; 'rig' | finding when required; otherwise evidence; finding | pair === null ? [] : [pair.a, pair.b]; [] | [behindseams.ts:395](../src/behindseams.ts#L395), [behindseams.ts:527](../src/behindseams.ts#L527), [behindseams.ts:555](../src/behindseams.ts#L555) |
 | `BOUNDARY_COLOUR_STEP.over` | `BOUNDARY_COLOUR_STEP.over` | 'pair' | finding | r.parts | [boundarycolour.ts:221](../src/boundarycolour.ts#L221) |
 | `BOUNDARY_COLOUR_STEP.unmeasured` | `BOUNDARY_COLOUR_STEP.unmeasured` | part when the supplied mapping resolves a piece; otherwise rig | evidence | resolved piece for r.slot; otherwise [] | [boundarycolour.ts:222](../src/boundarycolour.ts#L222) |
-| `CLOTH_SETTLES.rows` | `CLOTH_SETTLES.rows` | 'rig' | finding when speeds.length > 0 && s < speeds.length; otherwise evidence | [] | [check.ts:5987](../src/check.ts#L5987) |
+| `CLOTH_SETTLES.rows` | `CLOTH_SETTLES.rows` | 'rig' | finding when speeds.length > 0 && s < speeds.length; otherwise evidence | [] | [check.ts:5992](../src/check.ts#L5992) |
 | `CUT_JOINT_MATERIAL.rows` | `CUT_JOINT_MATERIAL.rows` | 'part' | finding when r.status === 'FAIL'; otherwise evidence | [r.part] | [cutmaterial.ts:280](../src/cutmaterial.ts#L280) |
-| `FEET_STAY_LEVEL.feet` | `FEET_STAY_LEVEL.feet` | 'part' | finding when row.status === 'FAIL'; otherwise evidence | [row.part] | [check.ts:3746](../src/check.ts#L3746) |
-| `FEET_STAY_LEVEL.feet[].worst.through` | `FEET_STAY_LEVEL.feet[].worst.through` | 'rig' | evidence | [] | [check.ts:3721](../src/check.ts#L3721) |
-| `LIMB_ONE_BONE.parts` | `LIMB_ONE_BONE.parts` | 'part' | finding when fail; otherwise evidence | [p.name] | [check.ts:4038](../src/check.ts#L4038) |
+| `FEET_STAY_LEVEL.feet` | `FEET_STAY_LEVEL.feet` | 'part' | finding when row.status === 'FAIL'; otherwise evidence | [row.part] | [check.ts:3751](../src/check.ts#L3751) |
+| `FEET_STAY_LEVEL.feet[].worst.through` | `FEET_STAY_LEVEL.feet[].worst.through` | 'rig' | evidence | [] | [check.ts:3726](../src/check.ts#L3726) |
+| `LIMB_ONE_BONE.parts` | `LIMB_ONE_BONE.parts` | 'part' | finding when fail; otherwise evidence | [p.name] | [check.ts:4043](../src/check.ts#L4043) |
 | `PART_SUPPORT_REPORT.pairs` | `PART_SUPPORT_REPORT.pairs` | 'pair' | evidence; finding when length > 0; otherwise evidence | [F.name, B.name] | [coincide.ts:114](../src/coincide.ts#L114), [coincide.ts:130](../src/coincide.ts#L130) |
 | `PART_SUPPORT_REPORT.raw_pairs` | `PART_SUPPORT_REPORT.raw_pairs` | 'pair' | evidence | [F.name, B.name] | [coincide.ts:110](../src/coincide.ts#L110) |
 | `PART_SUPPORT_REPORT.unowned.regions` | `PART_SUPPORT_REPORT.unowned.regions` | 'rig' | finding | [] | [coincide.ts:145](../src/coincide.ts#L145) |
-| `SEAM_OVER_MOTION.pairs` | `SEAM_OVER_MOTION.pairs` | 'pair' | evidence | [p.a, p.b] | [check.ts:5384](../src/check.ts#L5384) |
-| `SEAM_OVER_MOTION.required.pairs` | `SEAM_OVER_MOTION.required.pairs` | 'pair' | finding when open > 0; otherwise evidence | [p.a, p.b] | [check.ts:4708](../src/check.ts#L4708) |
-| `SEAM_OVER_MOTION.required.pairs[].open_frames` | `SEAM_OVER_MOTION.required.pairs[].open_frames` | 'pair' | evidence | [p.a, p.b] | [check.ts:4700](../src/check.ts#L4700) |
-| `SEAM_OVER_MOTION.roots.unmeasured` | `SEAM_OVER_MOTION.roots.unmeasured` | 'part' | evidence | [root.part] | [check.ts:5361](../src/check.ts#L5361) |
-| `SEAM_OVER_MOTION.rows` | `SEAM_OVER_MOTION.rows` | 'pair'; unique ? 'pair' : 'rig' | finding when motionSeamFinding(want.root !== undefined, p.status, p.banded, opens.length); otherwise evidence; finding when motionSeamFinding(rootNames.has(r.pair), r.status, r.banded, r.opens.length); otherwise evidence | [want.a, want.b]; unique ? [pair.a, pair.b] : [] | [check.ts:5318](../src/check.ts#L5318), [check.ts:5390](../src/check.ts#L5390) |
-| `SEAM_OVER_MOTION.rows[].cells` | `SEAM_OVER_MOTION.rows[].cells` | 'pair' | evidence | [want.a, want.b] | [check.ts:5331](../src/check.ts#L5331) |
-| `SEAM_OVER_MOTION.rows[].joint_contact.reasons` | `SEAM_OVER_MOTION.rows[].joint_contact.reasons` | 'pair' | evidence | [want.a, want.b] | [check.ts:5321](../src/check.ts#L5321) |
+| `SEAM_OVER_MOTION.pairs` | `SEAM_OVER_MOTION.pairs` | 'pair' | evidence | [p.a, p.b] | [check.ts:5389](../src/check.ts#L5389) |
+| `SEAM_OVER_MOTION.required.pairs` | `SEAM_OVER_MOTION.required.pairs` | 'pair' | finding when open > 0; otherwise evidence | [p.a, p.b] | [check.ts:4713](../src/check.ts#L4713) |
+| `SEAM_OVER_MOTION.required.pairs[].open_frames` | `SEAM_OVER_MOTION.required.pairs[].open_frames` | 'pair' | evidence | [p.a, p.b] | [check.ts:4705](../src/check.ts#L4705) |
+| `SEAM_OVER_MOTION.roots.unmeasured` | `SEAM_OVER_MOTION.roots.unmeasured` | 'part' | evidence | [root.part] | [check.ts:5366](../src/check.ts#L5366) |
+| `SEAM_OVER_MOTION.rows` | `SEAM_OVER_MOTION.rows` | 'pair'; unique ? 'pair' : 'rig' | finding when motionSeamFinding(want.root !== undefined, p.status, p.banded, opens.length); otherwise evidence; finding when motionSeamFinding(rootNames.has(r.pair), r.status, r.banded, r.opens.length); otherwise evidence | [want.a, want.b]; unique ? [pair.a, pair.b] : [] | [check.ts:5323](../src/check.ts#L5323), [check.ts:5395](../src/check.ts#L5395) |
+| `SEAM_OVER_MOTION.rows[].cells` | `SEAM_OVER_MOTION.rows[].cells` | 'pair' | evidence | [want.a, want.b] | [check.ts:5336](../src/check.ts#L5336) |
+| `SEAM_OVER_MOTION.rows[].joint_contact.reasons` | `SEAM_OVER_MOTION.rows[].joint_contact.reasons` | 'pair' | evidence | [want.a, want.b] | [check.ts:5326](../src/check.ts#L5326) |
 | `SEAM_OVER_MOTION.rows[].pose_at_worst.joints` | `SEAM_OVER_MOTION.rows[].pose_at_worst.joints` | 'rig' | evidence | [] | [motionseampose.ts:53](../src/motionseampose.ts#L53) |
-| `SEAM_OVER_MOTION.worlds.*.rows` | `SEAM_OVER_MOTION.worlds.*.rows` | 'pair' | evidence | [want.a, want.b] | [check.ts:5315](../src/check.ts#L5315) |
-| `SEAM_OVER_RANGE.joints` | `SEAM_OVER_RANGE.joints` | 'part' | evidence; finding when poses.some(p => p.status === 'FAIL'); otherwise evidence | [j.part] | [check.ts:4362](../src/check.ts#L4362), [check.ts:4408](../src/check.ts#L4408) |
-| `SEAM_OVER_RANGE.joints[].poses` | `SEAM_OVER_RANGE.joints[].poses` | 'part' | finding when fail; otherwise evidence | [j.part] | [check.ts:4406](../src/check.ts#L4406) |
+| `SEAM_OVER_MOTION.worlds.*.rows` | `SEAM_OVER_MOTION.worlds.*.rows` | 'pair' | evidence | [want.a, want.b] | [check.ts:5320](../src/check.ts#L5320) |
+| `SEAM_OVER_RANGE.joints` | `SEAM_OVER_RANGE.joints` | 'part' | evidence; finding when poses.some(p => p.status === 'FAIL'); otherwise evidence | [j.part] | [check.ts:4367](../src/check.ts#L4367), [check.ts:4413](../src/check.ts#L4413) |
+| `SEAM_OVER_RANGE.joints[].poses` | `SEAM_OVER_RANGE.joints[].poses` | 'part' | finding when fail; otherwise evidence | [j.part] | [check.ts:4411](../src/check.ts#L4411) |
 | `SETUP_MATCHES_PAINTING.regions` | `SETUP_MATCHES_PAINTING.regions` | 'rig' | finding when status === 'FAIL'; otherwise evidence | [] | [setuppainting.ts:175](../src/setuppainting.ts#L175) |
 | `SETUP_MATCHES_PAINTING.regions[].slots` | `SETUP_MATCHES_PAINTING.regions[].slots` | part when the supplied mapping resolves a piece; otherwise rig | evidence | resolved piece for slot; otherwise [] | [setuppainting.ts:176](../src/setuppainting.ts#L176) |
-| `STILL_REGIONS_DARK.*.crossing` | `STILL_REGIONS_DARK.*.crossing` | part when the supplied mapping resolves a piece; otherwise rig | finding | resolved piece for sl.name; otherwise [] | [check.ts:8998](../src/check.ts#L8998) |
-| `STILL_REGIONS_DARK.*.still_slots` | `STILL_REGIONS_DARK.*.still_slots` | part when the supplied mapping resolves a piece; otherwise rig | evidence; finding when r.max > tolerance; otherwise evidence | resolved piece for slot; otherwise [] | [check.ts:8984](../src/check.ts#L8984), [check.ts:8989](../src/check.ts#L8989) |
-| `STRESS_OFF_CHAIN.not_read` | `STRESS_OFF_CHAIN.not_read` | 'part' | evidence | [r.part] | [check.ts:3966](../src/check.ts#L3966) |
-| `STRESS_OFF_CHAIN.per_part` | `STRESS_OFF_CHAIN.per_part` | 'part' | finding when poses.some(p => typeof p.reading === 'number' && p.reading > STRESS_RIGID); otherwise evidence | [r.part] | [check.ts:3954](../src/check.ts#L3954) |
-| `STRESS_OFF_CHAIN.per_part[].off_chain` | `STRESS_OFF_CHAIN.per_part[].off_chain` | 'part' | evidence | [r.part] | [check.ts:3954](../src/check.ts#L3954) |
-| `STRESS_OFF_CHAIN.per_part[].poses` | `STRESS_OFF_CHAIN.per_part[].poses` | 'part' | evidence; finding when shown > STRESS_RIGID; otherwise evidence | [r.part] | [check.ts:3922](../src/check.ts#L3922), [check.ts:3940](../src/check.ts#L3940) |
-| `TEXTURE_STRETCH.per_mesh` | `TEXTURE_STRETCH.per_mesh` | part when the supplied mapping resolves a piece; otherwise rig | evidence; finding when severity > TEXTURE_STRETCH_CEILING; otherwise evidence | resolved piece for m.slot; otherwise [] | [check.ts:9648](../src/check.ts#L9648), [check.ts:9658](../src/check.ts#L9658) |
-| `TIP_OVER_ROOT.parts` | `TIP_OVER_ROOT.parts` | 'part' | evidence; finding when !ok && !(!rigid && hanging.onLink && Math.max(c.root, c.tip) < TIP_TRAVEL_FLOOR); otherwise evidence | [p.name] | [check.ts:8402](../src/check.ts#L8402), [check.ts:8407](../src/check.ts#L8407), [check.ts:8428](../src/check.ts#L8428), [check.ts:8439](../src/check.ts#L8439) |
-| `WIND_BAND.pairs` | `WIND_BAND.pairs` | 'pair' | finding when !holdsAll; otherwise evidence | [p.a, p.b] | [check.ts:6491](../src/check.ts#L6491) |
-| `WIND_BAND.pairs[].steps` | `WIND_BAND.pairs[].steps` | 'pair' | finding when !s.holds; otherwise evidence | [p.a, p.b] | [check.ts:6502](../src/check.ts#L6502) |
-| `figure_openings.openings` | `figure_openings.openings` | 'pair' | finding | [ps.under, ps.above] | [check.ts:5808](../src/check.ts#L5808) |
-| `loop_physics` | `loop_physics` | 'rig' | evidence | [] | [check.ts:7473](../src/check.ts#L7473) |
-| `requirements.lines.* (bone)` | `requirements.lines.*` | 'rig' | finding when line.status === 'FAIL'; otherwise evidence | [] | [check.ts:7772](../src/check.ts#L7772) |
-| `requirements.lines.* (seam)` | `requirements.lines.*` | 'pair' | finding when line.status === 'FAIL'; otherwise evidence | [r.part, r.neighbour] | [check.ts:7772](../src/check.ts#L7772) |
-| `requirements.lines.* (stretch)` | `requirements.lines.*` | part when the supplied mapping resolves a piece; otherwise rig | finding when line.status === 'FAIL'; otherwise evidence | resolved piece for r.slot; otherwise [] | [check.ts:7772](../src/check.ts#L7772) |
-| `seam_cells.frames` | `frames` | 'pair' | evidence | [p.a, p.b] | [check.ts:4697](../src/check.ts#L4697) |
-| `seam_cells.frames[].cells` | `frames[].cells` | part when the supplied mapping resolves a piece; otherwise rig | evidence | resolved piece for cell.setupTop ?? ''; otherwise [] | [check.ts:4657](../src/check.ts#L4657) |
-| `seam_pairs` | `seam_pairs`; `seam_scope.whole_pairs`; `sets.*.seam_pairs`; `sets.*.seam_scope.whole_pairs` | subjects.length === 0 ? 'rig' : subjects.length === 1 ? 'part' : 'pair' | evidence | subjects | [check.ts:2507](../src/check.ts#L2507) |
-| `seam_scope.changes` | `seam_scope.changes`; `sets.*.seam_scope.changes` | 'rig' | evidence | [] | [check.ts:1985](../src/check.ts#L1985) |
-| `seam_scope.domain.states` | `seam_scope.domain.states`; `sets.*.seam_scope.domain.states` | 'rig' | evidence | [] | [check.ts:2070](../src/check.ts#L2070) |
-| `seam_scope.pairs` | `seam_scope.pairs`; `sets.*.seam_scope.pairs` | subjects.length === 0 ? 'rig' : subjects.length === 1 ? 'part' : 'pair' | evidence | subjects | [check.ts:7383](../src/check.ts#L7383) |
-| `seam_scope.population.pairs` | `seam_scope.population.pairs`; `sets.*.seam_scope.population.pairs` | 'pair' | evidence | row.parts | [check.ts:2441](../src/check.ts#L2441) |
-| `seam_scope.population.single_art` | `seam_scope.population.single_art`; `sets.*.seam_scope.population.single_art` | 'part' | evidence | [row.part] | [check.ts:2442](../src/check.ts#L2442) |
+| `STILL_REGIONS_DARK.*.crossing` | `STILL_REGIONS_DARK.*.crossing` | part when the supplied mapping resolves a piece; otherwise rig | finding | resolved piece for sl.name; otherwise [] | [check.ts:9022](../src/check.ts#L9022) |
+| `STILL_REGIONS_DARK.*.still_slots` | `STILL_REGIONS_DARK.*.still_slots` | part when the supplied mapping resolves a piece; otherwise rig | evidence; finding when r.max > tolerance; otherwise evidence | resolved piece for slot; otherwise [] | [check.ts:9008](../src/check.ts#L9008), [check.ts:9013](../src/check.ts#L9013) |
+| `STRESS_OFF_CHAIN.not_read` | `STRESS_OFF_CHAIN.not_read` | 'part' | evidence | [r.part] | [check.ts:3971](../src/check.ts#L3971) |
+| `STRESS_OFF_CHAIN.per_part` | `STRESS_OFF_CHAIN.per_part` | 'part' | finding when poses.some(p => typeof p.reading === 'number' && p.reading > STRESS_RIGID); otherwise evidence | [r.part] | [check.ts:3959](../src/check.ts#L3959) |
+| `STRESS_OFF_CHAIN.per_part[].off_chain` | `STRESS_OFF_CHAIN.per_part[].off_chain` | 'part' | evidence | [r.part] | [check.ts:3959](../src/check.ts#L3959) |
+| `STRESS_OFF_CHAIN.per_part[].poses` | `STRESS_OFF_CHAIN.per_part[].poses` | 'part' | evidence; finding when shown > STRESS_RIGID; otherwise evidence | [r.part] | [check.ts:3927](../src/check.ts#L3927), [check.ts:3945](../src/check.ts#L3945) |
+| `TEXTURE_STRETCH.per_mesh` | `TEXTURE_STRETCH.per_mesh` | part when the supplied mapping resolves a piece; otherwise rig | evidence; finding when severity > TEXTURE_STRETCH_CEILING; otherwise evidence | resolved piece for m.slot; otherwise [] | [check.ts:9672](../src/check.ts#L9672), [check.ts:9682](../src/check.ts#L9682) |
+| `TIP_OVER_ROOT.parts` | `TIP_OVER_ROOT.parts` | 'part' | evidence; finding when !ok && !(!rigid && hanging.onLink && Math.max(c.root, c.tip) < TIP_TRAVEL_FLOOR); otherwise evidence | [p.name] | [check.ts:8426](../src/check.ts#L8426), [check.ts:8431](../src/check.ts#L8431), [check.ts:8452](../src/check.ts#L8452), [check.ts:8463](../src/check.ts#L8463) |
+| `WIND_BAND.pairs` | `WIND_BAND.pairs` | 'pair' | finding when !holdsAll; otherwise evidence | [p.a, p.b] | [check.ts:6496](../src/check.ts#L6496) |
+| `WIND_BAND.pairs[].steps` | `WIND_BAND.pairs[].steps` | 'pair' | finding when !s.holds; otherwise evidence | [p.a, p.b] | [check.ts:6507](../src/check.ts#L6507) |
+| `figure_openings.openings` | `figure_openings.openings` | 'pair' | finding | [ps.under, ps.above] | [check.ts:5813](../src/check.ts#L5813) |
+| `loop_physics` | `loop_physics` | 'rig' | evidence | [] | [check.ts:7494](../src/check.ts#L7494) |
+| `requirements.lines.* (bone)` | `requirements.lines.*` | 'rig' | finding when line.status === 'FAIL'; otherwise evidence | [] | [check.ts:7796](../src/check.ts#L7796) |
+| `requirements.lines.* (seam)` | `requirements.lines.*` | 'pair' | finding when line.status === 'FAIL'; otherwise evidence | [r.part, r.neighbour] | [check.ts:7796](../src/check.ts#L7796) |
+| `requirements.lines.* (stretch)` | `requirements.lines.*` | part when the supplied mapping resolves a piece; otherwise rig | finding when line.status === 'FAIL'; otherwise evidence | resolved piece for r.slot; otherwise [] | [check.ts:7796](../src/check.ts#L7796) |
+| `seam_cells.frames` | `frames` | 'pair' | evidence | [p.a, p.b] | [check.ts:4702](../src/check.ts#L4702) |
+| `seam_cells.frames[].cells` | `frames[].cells` | part when the supplied mapping resolves a piece; otherwise rig | evidence | resolved piece for cell.setupTop ?? ''; otherwise [] | [check.ts:4662](../src/check.ts#L4662) |
+| `seam_pairs` | `seam_pairs`; `seam_scope.whole_pairs`; `sets.*.seam_pairs`; `sets.*.seam_scope.whole_pairs` | subjects.length === 0 ? 'rig' : subjects.length === 1 ? 'part' : 'pair' | evidence | subjects | [check.ts:2508](../src/check.ts#L2508) |
+| `seam_scope.changes` | `seam_scope.changes`; `sets.*.seam_scope.changes` | 'rig' | evidence | [] | [check.ts:1986](../src/check.ts#L1986) |
+| `seam_scope.domain.states` | `seam_scope.domain.states`; `sets.*.seam_scope.domain.states` | 'rig' | evidence | [] | [check.ts:2071](../src/check.ts#L2071) |
+| `seam_scope.pairs` | `seam_scope.pairs`; `sets.*.seam_scope.pairs` | subjects.length === 0 ? 'rig' : subjects.length === 1 ? 'part' : 'pair' | evidence | subjects | [check.ts:7393](../src/check.ts#L7393) |
+| `seam_scope.population.pairs` | `seam_scope.population.pairs`; `sets.*.seam_scope.population.pairs` | 'pair' | evidence | row.parts | [check.ts:2442](../src/check.ts#L2442) |
+| `seam_scope.population.single_art` | `seam_scope.population.single_art`; `sets.*.seam_scope.population.single_art` | 'part' | evidence | [row.part] | [check.ts:2443](../src/check.ts#L2443) |
 
 | Open serialized type path | Reason for schema exclusion |
 | --- | --- |
