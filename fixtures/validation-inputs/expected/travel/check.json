@@ -558,6 +558,7 @@
         "world_tip_rig_px": 0.012,
         "world_ratio": 0.507,
         "travel_floor_rig_px": 0.5,
+        "measured_driver": "none",
         "unmeasured": "below half a rig pixel: the motion does not show on the art's own grid"
       },
       {

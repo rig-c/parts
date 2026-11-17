@@ -31331,7 +31331,7 @@ function chainGateGoldenCase(ex: string, out: string, key: string, partCount: nu
 export function runValidationTravelProbe(key: string, out: string, dir: string, say: (name: string, ok: boolean, detail: string, why: string) => void): void {
 if (key === 'standard' || key === 'travel') {
   const vFig = readJsonAt(join(out, 'check', 'check.json')) as Record<string, unknown>;
-  const vTip = vFig.TIP_OVER_ROOT as { status: string; instrument: string; parts: Array<{ part: string; hang_from?: string; ratio?: number | null; world_ratio?: number | null; root_rig_px?: number; tip_rig_px?: number; unmeasured?: string; travel_floor_rig_px?: number }> };
+  const vTip = vFig.TIP_OVER_ROOT as { status: string; instrument: string; parts: Array<{ part: string; hang_from?: string; ratio?: number | null; world_ratio?: number | null; root_rig_px?: number; tip_rig_px?: number; unmeasured?: string; travel_floor_rig_px?: number; measured_driver?: string }> };
   const row = vTip.parts.find(p => p.part === 'bottomwear');
   const rec = readParts(join(out, 'parts.json')).parts.find(p => p.name === 'bottomwear') as PartRecord;
   const stage = (readJsonAt(join(out, 'rig', 'rig.json')) as RigSpec).skeleton;
@@ -31354,6 +31354,7 @@ if (key === 'standard' || key === 'travel') {
   const other = vTip.parts.find(p => p.part === 'sleeve');
   const expected = skip
     ? row?.unmeasured === "below half a rig pixel: the motion does not show on the art's own grid" && row.travel_floor_rig_px === TIP_TRAVEL_FLOOR &&
+      row.measured_driver === 'none' &&
       typeof row.ratio === 'number' && row.ratio < TIP_RATIO_FLOOR && travels.every(t => t !== null && t.root !== null && t.tip !== null && Math.max(t.root, t.tip) < TIP_TRAVEL_FLOOR) &&
       other?.unmeasured === undefined && typeof other?.ratio === 'number' && other.ratio >= TIP_RATIO_FLOOR
     : typeof row?.ratio === 'number' && row.ratio >= TIP_RATIO_FLOOR && atMax.every(r => r !== null && r.travel.tip !== null && r.travel.tip * r.scale < 0.2);
@@ -31373,6 +31374,16 @@ if (key === 'standard' || key === 'travel') {
   say(`CH944_SAMPLE_FEATURE_DEFECT_IS_NAMED[${skip ? 'CH906:missing-art-grid-reason' : 'CH905:wrong-world-ratio'}]`,
     accepts(row) && !accepts(broken), `positive ${accepts(row)}; planted row ${JSON.stringify(broken)} accepted ${accepts(broken)}`,
     'the positive and defect go through exactly the same travel/geometry predicate');
+  if (skip) for (const defect of ['missing-measured-driver', 'wrong-measured-driver'] as const) {
+    const brokenDriver = row === undefined ? undefined : { ...row };
+    if (brokenDriver !== undefined) {
+      if (defect === 'missing-measured-driver') delete brokenDriver.measured_driver;
+      else brokenDriver.measured_driver = 'unavailable';
+    }
+    say(`CH944_SAMPLE_FEATURE_DEFECT_IS_NAMED[CH906:${defect}]`,
+      accepts(row) && !accepts(brokenDriver), `positive ${accepts(row)}; planted row ${JSON.stringify(brokenDriver)} accepted ${accepts(brokenDriver)}`,
+      'the actual travel row requires measured driver none; missing or unavailable is refused by the same geometry predicate without changing numeric expectations');
+  }
 }
 
 }
