@@ -6,25 +6,32 @@
  * The pool uploads a snapshot without `.git`, so `validationHead()` in
  * `fixtures/validation_cache.ts` throws unless `RIG_PARTS_VALIDATION_HEAD` is
  * exported in the job. And `selftest.ts --only …` exits 2 when green, which the
- * pool runner records as `status: "failed"` (`exitCode: 2`) and folds to exit 1.
+ * pool runner records as `status: "failed"` (`exitCode: 2`) and folds to exit 1,
+ * while `selftest.ts` also exits 2 on floor faults, unreadable corpus paths and
+ * shard/merge errors.
  *
  * This hand:
  *   1. reads `git rev-parse HEAD` in the caller's tree and refuses by name when
  *      HEAD cannot be determined or when the tracked tree is dirty;
  *   2. passes that SHA into the remote job as `RIG_PARTS_VALIDATION_HEAD`, with
- *      `RIG_PARTS_SELFTEST_JOBS=1` and optional `--only <suites>`;
- *   3. reads the inner selftest exit code (from the runner's `result.json` when
- *      `nova-run.sh` folded a non-zero exit to 1, or from the runner's exit
- *      status directly) and reports `green` (0 -> exit 0), `green-partial`
- *      (2 -> exit 0), `red` (1 -> exit 1) or `refused` (64 -> exit 64).
+ *      `RIG_PARTS_SELFTEST_JOBS=1`, `--summary-json scratch/selftest-summary.json`
+ *      and optional `--only <suites>`;
+ *   3. reads the inner selftest exit code and the recovered summary JSON, and
+ *      reports `green-partial` (exit 0) only when exit is 2 and the summary
+ *      proves a partial run (`only` set) with zero failures and zero faults;
+ *      an exit 2 with a missing/unreadable summary or any fault is reported
+ *      `refused` by name and exits 2.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 
 const FIELDS = ['label', 'owner', 'session'] as const;
 const HEAD_SHA = /^[a-f0-9]{40}$/;
+
+/** Relative path inside the job root where `selftest.ts --summary-json` writes its summary. */
+export const VERIFY_NOVA_SUMMARY_REL = 'scratch/selftest-summary.json';
 
 export interface VerifyNovaArgs {
   label: string;
@@ -38,6 +45,7 @@ export type VerifyNovaStatus = 'green' | 'green-partial' | 'red' | 'refused';
 export interface VerifyNovaVerdict {
   status: VerifyNovaStatus;
   exit: number;
+  detail?: string;
 }
 
 export interface RunnerOutcome {
@@ -46,6 +54,19 @@ export interface RunnerOutcome {
   error?: Error;
   stdout: string;
   stderr: string;
+}
+
+interface SummaryShape {
+  spec?: unknown;
+  exit?: unknown;
+  partial?: unknown;
+  only?: unknown;
+  faults?: unknown;
+  totals?: {
+    ran?: unknown;
+    controls?: unknown;
+    failed?: unknown;
+  };
 }
 
 /** Parse `--label`, `--owner`, `--session` and optional `--only <suites>`, or return a named refusal. */
@@ -102,8 +123,8 @@ export function verifyNovaRemote(head: string, only?: string): string {
   if (!HEAD_SHA.test(head)) {
     throw new Error(`verify:nova: invalid HEAD commit SHA ${JSON.stringify(head)}`);
   }
-  const tail = only === undefined ? '' : ` -- --only '${only.replaceAll("'", "'\\''")}'`;
-  return `RIG_PARTS_VALIDATION_HEAD=${head} RIG_PARTS_SELFTEST_JOBS=1 bun run selftest${tail}`;
+  const tail = only === undefined ? '' : ` --only '${only.replaceAll("'", "'\\''")}'`;
+  return `RIG_PARTS_VALIDATION_HEAD=${head} RIG_PARTS_SELFTEST_JOBS=1 bun run selftest -- --summary-json ${VERIFY_NOVA_SUMMARY_REL}${tail}`;
 }
 
 /** The pool runner: `NOVA_RUN`, else `nova-run.sh` on `PATH`, else `null`. */
@@ -115,14 +136,92 @@ export function findNovaRunner(env: NodeJS.ProcessEnv = process.env): string | n
   return null;
 }
 
-/** Map the inner selftest exit code (`0`, `2`, `1`, `64`) to its named verdict and hand exit code. */
-export function verifyNovaVerdict(innerExit: number, combinedOutput = ''): VerifyNovaVerdict {
-  if (innerExit === 0) return { status: 'green', exit: 0 };
-  if (innerExit === 2 && !combinedOutput.includes('this run cannot account for itself')) {
+function readSummaryFile(summaryPath: string): SummaryShape | string {
+  if (!existsSync(summaryPath)) return `summary file ${summaryPath} is absent`;
+  try {
+    const parsed = JSON.parse(readFileSync(summaryPath, 'utf8')) as unknown;
+    if (typeof parsed !== 'object' || parsed === null) return `summary file ${summaryPath} is not a JSON object`;
+    return parsed as SummaryShape;
+  } catch (error) {
+    return `summary file ${summaryPath} is unreadable (${error instanceof Error ? error.message : String(error)})`;
+  }
+}
+
+/**
+ * Classify the inner selftest outcome from positive summary evidence:
+ * - `2` is `green-partial` (exit 0) ONLY when `--summary-json` exists and shows
+ *   `spec: "rig-selftest-summary/1"`, `exit: 2`, `partial: true`, non-empty
+ *   `only`, `faults: []`, `totals.failed === 0`, and `totals.controls > 0`.
+ *   Any missing/unreadable summary or fault on exit 2 is `refused` (exit 2).
+ * - `0` is `green` (exit 0) when the summary is present with `exit: 0`,
+ *   `partial: false`, `faults: []` and `totals.failed === 0`.
+ * - `64` is `refused` (exit 64).
+ * - `1` (or any other code) is `red` (exit 1 or non-zero).
+ */
+export function verifyNovaVerdict(innerExit: number, summaryPath: string): VerifyNovaVerdict {
+  if (innerExit === 64) return { status: 'refused', exit: 64 };
+  if (innerExit === 1) return { status: 'red', exit: 1 };
+  if (innerExit === 2) {
+    const summary = readSummaryFile(summaryPath);
+    if (typeof summary === 'string') {
+      return { status: 'refused', exit: 2, detail: summary };
+    }
+    const faults = Array.isArray(summary.faults) ? summary.faults.map(String) : null;
+    if (faults === null) {
+      return { status: 'refused', exit: 2, detail: `summary ${summaryPath} has no faults array` };
+    }
+    if (faults.length > 0) {
+      return { status: 'refused', exit: 2, detail: `summary faults: ${faults.join('; ')}` };
+    }
+    const only = Array.isArray(summary.only) ? summary.only.filter((s): s is string => typeof s === 'string' && s !== '') : [];
+    const failed = summary.totals?.failed;
+    const controls = summary.totals?.controls;
+    const ran = summary.totals?.ran;
+    if (
+      summary.spec !== 'rig-selftest-summary/1' ||
+      summary.exit !== 2 ||
+      summary.partial !== true ||
+      only.length === 0 ||
+      failed !== 0 ||
+      typeof controls !== 'number' ||
+      controls <= 0 ||
+      typeof ran !== 'number' ||
+      ran <= 0
+    ) {
+      return {
+        status: 'refused',
+        exit: 2,
+        detail: `summary ${summaryPath} does not establish a green partial (spec=${JSON.stringify(summary.spec)}, exit=${JSON.stringify(summary.exit)}, partial=${JSON.stringify(summary.partial)}, only=${JSON.stringify(summary.only)}, failed=${JSON.stringify(failed)}, controls=${JSON.stringify(controls)})`,
+      };
+    }
     return { status: 'green-partial', exit: 0 };
   }
-  if (innerExit === 64) return { status: 'refused', exit: 64 };
-  return { status: 'red', exit: innerExit === 1 ? 1 : (innerExit || 1) };
+  if (innerExit === 0) {
+    const summary = readSummaryFile(summaryPath);
+    if (typeof summary === 'string') {
+      return { status: 'refused', exit: 2, detail: summary };
+    }
+    const faults = Array.isArray(summary.faults) ? summary.faults.map(String) : null;
+    if (faults === null || faults.length > 0) {
+      return {
+        status: 'refused',
+        exit: 2,
+        detail: faults === null ? `summary ${summaryPath} has no faults array` : `summary faults: ${faults.join('; ')}`,
+      };
+    }
+    if (
+      summary.spec !== 'rig-selftest-summary/1' ||
+      summary.exit !== 0 ||
+      summary.partial !== false ||
+      summary.totals?.failed !== 0 ||
+      typeof summary.totals?.controls !== 'number' ||
+      summary.totals.controls <= 0
+    ) {
+      return { status: 'refused', exit: 2, detail: `summary ${summaryPath} does not establish a full green run` };
+    }
+    return { status: 'green', exit: 0 };
+  }
+  return { status: 'red', exit: innerExit || 1 };
 }
 
 /**
@@ -233,6 +332,26 @@ export function runVerifyNovaChecks(root: string, say: Say): void {
       join(fakeBin, 'bun'),
       '#!/bin/sh\n' +
         `printf 'HEAD=%s JOBS=%s ARGS=%s\\n' "\${RIG_PARTS_VALIDATION_HEAD:-}" "\${RIG_PARTS_SELFTEST_JOBS:-}" "$*" >> '${bunCalls}'\n` +
+        'summary_path=""\n' +
+        'prev=""\n' +
+        'for a in "$@"; do\n' +
+        '  if [ "$prev" = "--summary-json" ]; then summary_path="$a"; fi\n' +
+        '  prev="$a"\n' +
+        'done\n' +
+        'if [ -n "$summary_path" ] && [ "${FAKE_BUN_SUMMARY:-green-partial}" != "none" ]; then\n' +
+        '  mkdir -p "$(dirname "$summary_path")"\n' +
+        '  case "${FAKE_BUN_SUMMARY:-green-partial}" in\n' +
+        '    green-partial)\n' +
+        '      printf \'%s\\n\' \'{"spec":"rig-selftest-summary/1","tool":"rig-parts","exit":2,"partial":true,"only":["tree"],"faults":[],"totals":{"suites":75,"ran":1,"skipped_suites":74,"controls":74,"passed":74,"failed":0,"skipped":74,"holes":0}}\' > "$summary_path"\n' +
+        '      ;;\n' +
+        '    fault)\n' +
+        '      printf \'%s\\n\' \'{"spec":"rig-selftest-summary/1","tool":"rig-parts","exit":2,"partial":true,"only":["tree"],"faults":["the suite \\"tree\\" ran and printed no PASS or FAIL line"],"totals":{"suites":75,"ran":1,"skipped_suites":74,"controls":0,"passed":0,"failed":0,"skipped":74,"holes":0}}\' > "$summary_path"\n' +
+        '      ;;\n' +
+        '    green)\n' +
+        '      printf \'%s\\n\' \'{"spec":"rig-selftest-summary/1","tool":"rig-parts","exit":0,"partial":false,"only":null,"faults":[],"totals":{"suites":75,"ran":75,"skipped_suites":0,"controls":100,"passed":100,"failed":0,"skipped":0,"holes":0}}\' > "$summary_path"\n' +
+        '      ;;\n' +
+        '  esac\n' +
+        'fi\n' +
         'exit "${FAKE_BUN_EXIT:-0}"\n',
     );
     chmodSync(join(fakeBin, 'bun'), 0o755);
@@ -248,6 +367,11 @@ export function runVerifyNovaChecks(root: string, say: Say): void {
         '  rc=$?\n' +
         '  ev="${FAKE_NOVA_EVIDENCE:?}"\n' +
         '  mkdir -p "$ev"\n' +
+        `  if [ -f '${VERIFY_NOVA_SUMMARY_REL}' ]; then\n` +
+        `    mkdir -p "$ev/artifacts/$(dirname '${VERIFY_NOVA_SUMMARY_REL}')"\n` +
+        `    cp '${VERIFY_NOVA_SUMMARY_REL}' "$ev/artifacts/${VERIFY_NOVA_SUMMARY_REL}"\n` +
+        `    rm -f '${VERIFY_NOVA_SUMMARY_REL}'\n` +
+        '  fi\n' +
         '  status="failed"\n' +
         '  if [ "$rc" = "0" ]; then status="passed"; fi\n' +
         '  printf \'{"id":"stub","status":"%s","exitCode":%d}\\n\' "$status" "$rc" > "$ev/result.json"\n' +
@@ -301,7 +425,7 @@ export function runVerifyNovaChecks(root: string, say: Say): void {
         emptyGitRun.status === 2 &&
         emptyGitRun.reached === null &&
         emptyGitRun.stderr.includes('verify:nova: no HEAD commit'),
-      `no-git: exit ${String(noGitRun.status)}, runner reached=${noGitRun.reached !== null}, stderr=${JSON.stringify(noGitRun.stderr.trim())}; empty-git: exit ${String(emptyGitRun.status)}, runner reached=${emptyGitRun.reached !== null}`,
+      `no-git: exit ${String(noGitRun.status)}, runner reached=${noGitRun.reached !== null}; empty-git: exit ${String(emptyGitRun.status)}, runner reached=${emptyGitRun.reached !== null}`,
     );
 
     // Prepare a clean git repo with one commit.
@@ -333,7 +457,7 @@ export function runVerifyNovaChecks(root: string, say: Say): void {
         dirtyStaged.reached === null &&
         dirtyStaged.stderr.includes(`verify:nova: tracked tree is dirty at HEAD ${head}`) &&
         dirtyStaged.stderr.includes('A  staged.txt'),
-      `unstaged: exit ${String(dirtyUnstaged.status)}, reached=${dirtyUnstaged.reached !== null}, stderr=${JSON.stringify(dirtyUnstaged.stderr.trim())}; staged: exit ${String(dirtyStaged.status)}, reached=${dirtyStaged.reached !== null}`,
+      `unstaged: exit ${String(dirtyUnstaged.status)}, reached=${dirtyUnstaged.reached !== null}; staged: exit ${String(dirtyStaged.status)}, reached=${dirtyStaged.reached !== null}`,
     );
 
     // 3. Refusal: missing, blank or "unknown" --label, --owner, --session, missing NOVA_RUN, and bad flags.
@@ -387,14 +511,19 @@ export function runVerifyNovaChecks(root: string, say: Say): void {
       `exit ${String(unknownSuite.status)}; stderr tail=${JSON.stringify(unknownSuite.stderr.trim().split('\n').slice(-2).join(' | '))}`,
     );
 
-    // 5. Exit 2 -> green-partial (exit 0), Exit 1 -> red (exit 1), Exit 0 -> green (exit 0), against stub runner (both direct and folded).
+    // 5. Exit 2 with verified partial summary -> green-partial (exit 0), Exit 1 -> red (exit 1), Exit 0 -> green (exit 0), against stub runner (direct and folded).
     const fakePath = `${fakeBin}${delimiter}${process.env.PATH ?? ''}`;
-    const partialDirect = runHand(repo, [...baseArgs, '--only', 'tree'], { PATH: fakePath, FAKE_BUN_EXIT: '2' });
+    const partialDirect = runHand(repo, [...baseArgs, '--only', 'tree'], {
+      PATH: fakePath,
+      FAKE_BUN_EXIT: '2',
+      FAKE_BUN_SUMMARY: 'green-partial',
+    });
     const partialCalls = existsSync(bunCalls) ? readFileSync(bunCalls, 'utf8').trim() : '';
     const evidenceDir = join(work, 'evidence-partial');
     const partialFolded = runHand(repo, [...baseArgs, '--only', 'tree'], {
       PATH: fakePath,
       FAKE_BUN_EXIT: '2',
+      FAKE_BUN_SUMMARY: 'green-partial',
       FAKE_NOVA_FOLD: '1',
       FAKE_NOVA_EVIDENCE: evidenceDir,
     });
@@ -405,13 +534,17 @@ export function runVerifyNovaChecks(root: string, say: Say): void {
       FAKE_NOVA_FOLD: '1',
       FAKE_NOVA_EVIDENCE: join(work, 'evidence-red'),
     });
-    const greenDirect = runHand(repo, baseArgs, { PATH: fakePath, FAKE_BUN_EXIT: '0' });
+    const greenDirect = runHand(repo, baseArgs, {
+      PATH: fakePath,
+      FAKE_BUN_EXIT: '0',
+      FAKE_BUN_SUMMARY: 'green',
+    });
     const greenCalls = existsSync(bunCalls) ? readFileSync(bunCalls, 'utf8').trim() : '';
     say(
       'TY1327_05_EXIT_2_IS_REPORTED_GREEN_PARTIAL_EXIT_0_AND_EXIT_1_IS_REPORTED_RED_EXIT_1',
       partialDirect.status === 0 &&
         partialDirect.stdout.includes(`verify:nova: green-partial (inner exit 2, head ${head})`) &&
-        partialCalls === `HEAD=${head} JOBS=1 ARGS=run selftest -- --only tree` &&
+        partialCalls === `HEAD=${head} JOBS=1 ARGS=run selftest -- --summary-json ${VERIFY_NOVA_SUMMARY_REL} --only tree` &&
         partialFolded.status === 0 &&
         partialFolded.stdout.includes(`verify:nova: green-partial (inner exit 2, head ${head}, evidence ${evidenceDir})`) &&
         redDirect.status === 1 &&
@@ -420,11 +553,57 @@ export function runVerifyNovaChecks(root: string, say: Say): void {
         redFolded.stderr.includes(`verify:nova: red (inner exit 1, head ${head}`) &&
         greenDirect.status === 0 &&
         greenDirect.stdout.includes(`verify:nova: green (inner exit 0, head ${head})`) &&
-        greenCalls === `HEAD=${head} JOBS=1 ARGS=run selftest`,
+        greenCalls === `HEAD=${head} JOBS=1 ARGS=run selftest -- --summary-json ${VERIFY_NOVA_SUMMARY_REL}`,
       `partial direct: exit ${String(partialDirect.status)} (${partialCalls}); partial folded: exit ${String(partialFolded.status)}; red direct: exit ${String(redDirect.status)}; red folded: exit ${String(redFolded.status)}; green: exit ${String(greenDirect.status)}`,
     );
 
-    // 6. CLAUDE.md V1 line and package.json script wiring.
+    // 6. Exit 2 with no summary file, or with a summary carrying a fault, is reported `refused` and exits non-zero (2).
+    const noSummaryDirect = runHand(repo, [...baseArgs, '--only', 'tree'], {
+      PATH: fakePath,
+      FAKE_BUN_EXIT: '2',
+      FAKE_BUN_SUMMARY: 'none',
+    });
+    const noSummaryFolded = runHand(repo, [...baseArgs, '--only', 'tree'], {
+      PATH: fakePath,
+      FAKE_BUN_EXIT: '2',
+      FAKE_BUN_SUMMARY: 'none',
+      FAKE_NOVA_FOLD: '1',
+      FAKE_NOVA_EVIDENCE: join(work, 'evidence-no-summary'),
+    });
+    const faultSummaryDirect = runHand(repo, [...baseArgs, '--only', 'tree'], {
+      PATH: fakePath,
+      FAKE_BUN_EXIT: '2',
+      FAKE_BUN_SUMMARY: 'fault',
+    });
+    const faultSummaryFolded = runHand(repo, [...baseArgs, '--only', 'tree'], {
+      PATH: fakePath,
+      FAKE_BUN_EXIT: '2',
+      FAKE_BUN_SUMMARY: 'fault',
+      FAKE_NOVA_FOLD: '1',
+      FAKE_NOVA_EVIDENCE: join(work, 'evidence-fault-summary'),
+    });
+    say(
+      'TY1327_06_EXIT_2_WITHOUT_SUMMARY_OR_WITH_SUMMARY_FAULT_IS_REFUSED_NONZERO',
+      noSummaryDirect.status === 2 &&
+        !noSummaryDirect.stdout.includes('green-partial') &&
+        noSummaryDirect.stderr.includes('verify:nova: refused (inner exit 2') &&
+        noSummaryDirect.stderr.includes('is absent') &&
+        noSummaryFolded.status === 2 &&
+        !noSummaryFolded.stdout.includes('green-partial') &&
+        noSummaryFolded.stderr.includes('verify:nova: refused (inner exit 2') &&
+        noSummaryFolded.stderr.includes('is absent') &&
+        faultSummaryDirect.status === 2 &&
+        !faultSummaryDirect.stdout.includes('green-partial') &&
+        faultSummaryDirect.stderr.includes('verify:nova: refused (inner exit 2') &&
+        faultSummaryDirect.stderr.includes('summary faults: the suite "tree" ran and printed no PASS or FAIL line') &&
+        faultSummaryFolded.status === 2 &&
+        !faultSummaryFolded.stdout.includes('green-partial') &&
+        faultSummaryFolded.stderr.includes('verify:nova: refused (inner exit 2') &&
+        faultSummaryFolded.stderr.includes('summary faults: the suite "tree" ran and printed no PASS or FAIL line'),
+      `no-summary direct: exit ${String(noSummaryDirect.status)}, folded: exit ${String(noSummaryFolded.status)}; fault-summary direct: exit ${String(faultSummaryDirect.status)}, folded: exit ${String(faultSummaryFolded.status)}`,
+    );
+
+    // 7. CLAUDE.md V1 line and package.json script wiring.
     const claudeMd = readFileSync(join(root, 'CLAUDE.md'), 'utf8');
     const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { scripts?: Record<string, string> };
     const v1Faults = claudeMdV1Faults(claudeMd);
@@ -432,7 +611,7 @@ export function runVerifyNovaChecks(root: string, say: Say): void {
       claudeMd.replace('`bun run verify:nova -- --only <suites>`', '`bun run selftest -- --only <suites the diff touches>`'),
     );
     say(
-      'TY1327_06_CLAUDE_MD_V1_ROW_AND_PACKAGE_JSON_NAME_VERIFY_NOVA',
+      'TY1327_07_CLAUDE_MD_V1_ROW_AND_PACKAGE_JSON_NAME_VERIFY_NOVA',
       pkg.scripts?.['verify:nova'] === 'bun scripts/verify_nova.ts' &&
         v1Faults.length === 0 &&
         plantedV1Faults.length === 1,
@@ -464,33 +643,49 @@ if (import.meta.main) {
     );
     process.exit(2);
   }
-  const remote = verifyNovaRemote(tree.head, read.only);
-  const outcome = await runVerifyNovaProcess(runner, [
-    '--label',
-    read.label,
-    '--owner',
-    read.owner,
-    '--session',
-    read.session,
-    '--',
-    'bash',
-    '-c',
-    remote,
-  ]);
-  if (outcome.error !== undefined || outcome.status === null) {
-    console.error(
-      `verify:nova: could not run ${runner}: ${outcome.error?.message ?? (outcome.signal === null ? 'it left no exit status' : `it died by ${outcome.signal}`)}`,
-    );
-    process.exit(1);
+  const localSummary = join(process.cwd(), VERIFY_NOVA_SUMMARY_REL);
+  const hadLocalSummary = existsSync(localSummary);
+  const savedLocalSummary = hadLocalSummary ? readFileSync(localSummary) : null;
+  if (hadLocalSummary) rmSync(localSummary, { force: true });
+  try {
+    const remote = verifyNovaRemote(tree.head, read.only);
+    const outcome = await runVerifyNovaProcess(runner, [
+      '--label',
+      read.label,
+      '--owner',
+      read.owner,
+      '--session',
+      read.session,
+      '--',
+      'bash',
+      '-c',
+      remote,
+    ]);
+    if (outcome.error !== undefined || outcome.status === null) {
+      console.error(
+        `verify:nova: could not run ${runner}: ${outcome.error?.message ?? (outcome.signal === null ? 'it left no exit status' : `it died by ${outcome.signal}`)}`,
+      );
+      process.exit(1);
+    }
+    const resolved = resolveInnerExit(outcome);
+    if (typeof resolved === 'string') {
+      console.error(`verify:nova: ${resolved}`);
+      process.exit(outcome.status || 1);
+    }
+    const summaryPath =
+      resolved.evidence !== null ? join(resolved.evidence, 'artifacts', VERIFY_NOVA_SUMMARY_REL) : localSummary;
+    const verdict = verifyNovaVerdict(resolved.innerExit, summaryPath);
+    const detailClause = verdict.detail !== undefined ? `: ${verdict.detail}` : '';
+    const summary = `verify:nova: ${verdict.status} (inner exit ${resolved.innerExit}, head ${tree.head}${resolved.evidence !== null ? `, evidence ${resolved.evidence}` : ''})${detailClause}`;
+    if (verdict.exit === 0) console.log(summary);
+    else console.error(summary);
+    process.exit(verdict.exit);
+  } finally {
+    if (savedLocalSummary !== null) {
+      mkdirSync(dirname(localSummary), { recursive: true });
+      writeFileSync(localSummary, savedLocalSummary);
+    } else {
+      rmSync(localSummary, { force: true });
+    }
   }
-  const resolved = resolveInnerExit(outcome);
-  if (typeof resolved === 'string') {
-    console.error(`verify:nova: ${resolved}`);
-    process.exit(outcome.status || 1);
-  }
-  const verdict = verifyNovaVerdict(resolved.innerExit, `${outcome.stdout}\n${outcome.stderr}`);
-  const summary = `verify:nova: ${verdict.status} (inner exit ${resolved.innerExit}, head ${tree.head}${resolved.evidence !== null ? `, evidence ${resolved.evidence}` : ''})`;
-  if (verdict.exit === 0) console.log(summary);
-  else console.error(summary);
-  process.exit(verdict.exit);
 }
