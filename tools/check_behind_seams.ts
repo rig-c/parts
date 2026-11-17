@@ -587,31 +587,39 @@ function runBehindSeamPrimitiveChecks(say: Say): void {
 
   const withinBarMixed = measured(ambiguousMixed, { threshold: 40, allowance: 3 });
   const fullyUnread = measured(behindAmbiguousFixture(3, 'left', false), { threshold: 40 });
+  const frameLine = (line: string): boolean => /pair "a\|b" idle frame \d+ /.test(line);
+  const setupLine = (line: string): boolean => line.includes('pair "a|b" setup ');
   const mixedLogVerdict = (failLines: readonly string[], allowedLines: readonly string[], unreadLines: readonly string[]): boolean => {
-    const failFrames = failLines.filter(line => line.includes('idle frame '));
-    const allowedFrames = allowedLines.filter(line => line.includes('idle frame '));
-    const unreadFrames = unreadLines.filter(line => line.includes('idle frame '));
+    const failFrames = failLines.filter(frameLine);
+    const allowedFrames = allowedLines.filter(frameLine);
+    const unreadFrames = unreadLines.filter(frameLine);
     return failFrames.length === 3 && allowedFrames.length === 3 && unreadFrames.length === 3 &&
       failFrames.every((line, i) => !line.includes('SKIP') &&
-        line.includes(`idle frame ${i} standing FAIL, 3 cells — unread corridors: 1 (cells 1); HOLE:`)) &&
+        line === `${BEHIND_SEAM_LINE}: pair "a|b" idle frame ${i} standing FAIL, 3 cells — unread corridors: 1 (cells 1); HOLE: standing endpoints include ambiguous half-alpha owners; unread corridors are not zero`) &&
       allowedFrames.every((line, i) => !line.includes('SKIP') &&
-        line.includes(`idle frame ${i} standing 3 cells — unread corridors: 1 (cells 1); HOLE:`)) &&
-      !failLines.some(line => line.includes('setup') && line.includes('SKIP')) &&
-      !allowedLines.some(line => line.includes('setup') && line.includes('SKIP')) &&
+        line === `${BEHIND_SEAM_LINE}: pair "a|b" idle frame ${i} standing 3 cells — unread corridors: 1 (cells 1); HOLE: standing endpoints include ambiguous half-alpha owners; unread corridors are not zero`) &&
+      failLines.filter(setupLine).every(line => !line.includes('SKIP') && line.includes('3 cells')) &&
+      allowedLines.filter(setupLine).every(line => !line.includes('SKIP') && line.includes('3 cells')) &&
       unreadFrames.every((line, i) => line === `${BEHIND_SEAM_LINE}: pair "a|b" idle frame ${i} SKIP — HOLE: standing endpoints include ambiguous half-alpha owners; unread corridors are not zero`);
   };
   const oldTextMutant = localised.reading.unmeasured.map(u =>
     `${BEHIND_SEAM_LINE}: ${u.pair === null ? 'rig' : `pair "${u.pair}"`} ${u.frame} SKIP — ${u.reason}`);
-  const mixedJsonBefore = JSON.stringify(localised.reading);
+  const fixtureReadings = [closed, opened, touching, cross, localised, withinBarMixed, fullyUnread];
+  const jsonBefore = fixtureReadings.map(result => JSON.stringify(result.reading));
+  const jsonAfter = fixtureReadings.map(result => {
+    behindSeamLines(result.reading);
+    return JSON.stringify(result.reading);
+  });
   say('BHS50_MIXED_FRAME_LOG_LINE_REPORTS_COUNTED_STATUS_AND_UNREAD_CORRIDOR_CLAUSE',
     mixedLogVerdict(localised.lines, withinBarMixed.lines, fullyUnread.lines) &&
       !mixedLogVerdict(oldTextMutant, withinBarMixed.lines, fullyUnread.lines) &&
       !mixedLogVerdict(localised.lines, oldTextMutant, fullyUnread.lines) &&
-      mixedJsonBefore === JSON.stringify(measured(ambiguousMixed, { threshold: 40 }).reading),
-    JSON.stringify({ failFrame0: localised.lines.find(line => line.includes('idle frame 0')),
-      allowedFrame0: withinBarMixed.lines.find(line => line.includes('idle frame 0')),
-      unreadFrame0: fullyUnread.lines.find(line => line.includes('idle frame 0')),
-      mutantRejected: !mixedLogVerdict(oldTextMutant, withinBarMixed.lines, fullyUnread.lines) }));
+      equal(jsonBefore, jsonAfter),
+    JSON.stringify({ failFrame0: localised.lines.find(frameLine),
+      allowedFrame0: withinBarMixed.lines.find(frameLine),
+      unreadFrame0: fullyUnread.lines.find(frameLine),
+      mutantRejected: !mixedLogVerdict(oldTextMutant, withinBarMixed.lines, fullyUnread.lines),
+      jsonUnchanged: equal(jsonBefore, jsonAfter) }));
 
   const crossUnread = behindCrossFixture();
   crossUnread.pages.get('b')!.set(1, 2, [...FRONT, 255]);
