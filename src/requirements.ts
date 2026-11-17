@@ -3,6 +3,7 @@ import { jointMaterialProblems, type JointMaterial } from './cutmaterial.ts';
 import { fixedSkeletonProblems, type FixedSkeleton } from './artjoints.ts';
 import { boundaryColourProblems, type BoundaryColour } from './boundarycolour.ts';
 import { behindSeamsProblems, type BehindSeams } from './behindseams.ts';
+import { motionSeamProblems, type MotionSeamDeclaration } from './motionseams.ts';
 /**
  * What a scene requires of a rig's motion, declared in a file `check` is given
  * (`--requirements`, issue #93, increment 2 of #87) and measured from the
@@ -210,6 +211,8 @@ export interface RequirementsFile {
   pinholes?: PinholesDeclaration;
   /** Issue #941: `check`'s background bar over every declared seam pair and every frame, only under `required: true`; absent when the file does not declare it. */
   seam_over_motion?: SeamOverMotionDeclaration;
+  /** Issue #1269: motion coverage without a distance bar; absence and an explicit empty inventory stay distinct. */
+  motion_seams?: MotionSeamDeclaration[];
   /** Issue #942: the boundary colour-step bar against the rig's own pieces, measured by `check` only when declared. */
   boundary_colour?: BoundaryColour;
   /** Issue #1314: required behind-part seam readings when declared; an absent threshold is unmeasured, never defaulted. */
@@ -332,7 +335,8 @@ const EXCEPTION_ABSENT: Record<ExceptionList, string> = {
  * a name used twice, and a `contact` against its own bone and point or an
  * `aim` at a point of its own bone (issue #540: each reads 0 by construction,
  * or no line at all). Resolving the names against the rig is
- * {@link resolveRequirements}'s.
+ * {@link resolveRequirements}'s. Optional `motion_seams` declares motion coverage
+ * without a distance bar; its part names resolve through the same rig and parts readers.
  */
 export function readRequirements(path: string): RequirementsFile {
   const at = resolve(path);
@@ -356,7 +360,15 @@ export function readRequirements(path: string): RequirementsFile {
     problems.push({ code: 'REQUIREMENTS_SELF_TARGET', object: `${label} field "target"`, detail });
   };
   if (raw.spec !== REQUIREMENTS_SPEC) field(`${at} field "spec"`, `is ${JSON.stringify(raw.spec)}; ${JSON.stringify(REQUIREMENTS_SPEC)} is required`);
-  for (const k of Object.keys(raw)) if (!['spec', 'fps', 'targets', 'requirements', ...EXCEPTION_LISTS, 'may_fold', 'fixed_skeleton', 'cut_material', 'setup_painting', 'pinholes', 'seam_over_motion', 'boundary_colour', 'behind_seams'].includes(k) && !freeKey(k, raw[k])) field(`${at} field "${k}"`, 'is not a field this format reads (spec, fps, targets, requirements, not_planted, not_swinging, rises, rests, may_fold, fixed_skeleton, cut_material, setup_painting, pinholes, seam_over_motion, boundary_colour, behind_seams; note or *_note as a string; x-<name> as a record)');
+  for (const k of Object.keys(raw)) if (!['spec', 'fps', 'targets', 'requirements', ...EXCEPTION_LISTS, 'may_fold', 'fixed_skeleton', 'cut_material', 'setup_painting', 'pinholes', 'seam_over_motion', 'motion_seams', 'boundary_colour', 'behind_seams'].includes(k) && !freeKey(k, raw[k])) field(`${at} field "${k}"`, 'is not a field this format reads (spec, fps, targets, requirements, not_planted, not_swinging, rises, rests, may_fold, fixed_skeleton, cut_material, setup_painting, pinholes, seam_over_motion, motion_seams, boundary_colour, behind_seams; note or *_note as a string; x-<name> as a record)');
+  if ('motion_seams' in raw) {
+    // Shape uses the shared reader; actual names resolve against the rig and parts below.
+    const names = new Set<string>();
+    if (Array.isArray(raw.motion_seams)) for (const row of raw.motion_seams) if (isRecord(row)) {
+      for (const name of [row.part, row.neighbour]) if (typeof name === 'string') names.add(name);
+    }
+    problems.push(...motionSeamProblems(raw.motion_seams, names, `${at} motion_seams`, 'REQUIREMENTS_FIELD'));
+  }
   if ('pinholes' in raw) problems.push(...pinholesProblems(raw.pinholes, `${at} pinholes`));
   if ('seam_over_motion' in raw) problems.push(...seamOverMotionProblems(raw.seam_over_motion, `${at} seam_over_motion`));
   if ('boundary_colour' in raw) problems.push(...boundaryColourProblems(raw.boundary_colour, `${at} boundary_colour`));
@@ -549,7 +561,7 @@ export function readRequirements(path: string): RequirementsFile {
   }
   const fps = finite(raw.fps) ? raw.fps : undefined;
   refuseIfAny(problems);
-  return { path: at, fps, targets, requirements, not_planted: lists.not_planted, not_swinging: lists.not_swinging, rises: lists.rises, rests: lists.rests, may_fold: mayFold, ...(raw.fixed_skeleton === undefined ? {} : { fixed_skeleton: raw.fixed_skeleton as FixedSkeleton }), ...(raw.cut_material === undefined ? {} : { cut_material: raw.cut_material as JointMaterial[] }), ...(raw.setup_painting === undefined ? {} : { setup_painting: raw.setup_painting as SetupPainting }), ...(raw.pinholes === undefined ? {} : { pinholes: { required: (raw.pinholes as PinholesDeclaration).required } }), ...(raw.seam_over_motion === undefined ? {} : { seam_over_motion: { required: (raw.seam_over_motion as SeamOverMotionDeclaration).required } }), ...(raw.boundary_colour === undefined ? {} : { boundary_colour: { max_step_excess: (raw.boundary_colour as BoundaryColour).max_step_excess } }), ...(raw.behind_seams === undefined ? {} : { behind_seams: raw.behind_seams as BehindSeams }) };
+  return { path: at, fps, targets, requirements, not_planted: lists.not_planted, not_swinging: lists.not_swinging, rises: lists.rises, rests: lists.rests, may_fold: mayFold, ...(raw.motion_seams === undefined ? {} : { motion_seams: raw.motion_seams as MotionSeamDeclaration[] }), ...(raw.fixed_skeleton === undefined ? {} : { fixed_skeleton: raw.fixed_skeleton as FixedSkeleton }), ...(raw.cut_material === undefined ? {} : { cut_material: raw.cut_material as JointMaterial[] }), ...(raw.setup_painting === undefined ? {} : { setup_painting: raw.setup_painting as SetupPainting }), ...(raw.pinholes === undefined ? {} : { pinholes: { required: (raw.pinholes as PinholesDeclaration).required } }), ...(raw.seam_over_motion === undefined ? {} : { seam_over_motion: { required: (raw.seam_over_motion as SeamOverMotionDeclaration).required } }), ...(raw.boundary_colour === undefined ? {} : { boundary_colour: { max_step_excess: (raw.boundary_colour as BoundaryColour).max_step_excess } }), ...(raw.behind_seams === undefined ? {} : { behind_seams: raw.behind_seams as BehindSeams }) };
 }
 
 // ---------------------------------------------------------------------------
@@ -627,6 +639,10 @@ export function resolveRequirements(file: RequirementsFile, rig: Record<string, 
   const target = (object: string, t: TargetRef): void => {
     if ('bone' in t) bone(`${object} target`, t.bone);
   };
+  if (file.motion_seams !== undefined) {
+    const slots = new Set((Array.isArray(rig.slots) ? rig.slots : []).filter(isRecord).map(s => s.name).filter((name): name is string => typeof name === 'string'));
+    problems.push(...motionSeamProblems(file.motion_seams, slots, 'requirements.motion_seams', 'REQUIREMENTS_RESOLVES'));
+  }
   for (const j of file.fixed_skeleton?.joints ?? []) bone(`fixed_skeleton joint "${j.name}"`, j.bone);
   for (const r of file.requirements) {
     const object = `requirement "${r.name}" (${r.kind})`;
@@ -1267,11 +1283,17 @@ export function seamPairs(part: PlacedArt, neighbour: PlacedArt): SeamPair[] {
  * (`REQUIREMENTS_SEAM`, quoting why there is none); a part `parts.json` does not
  * list is unresolved (`REQUIREMENTS_RESOLVES`); and two parts whose art does
  * not meet at the setup pose share no seam (`REQUIREMENTS_SEAM`). `art` is
- * asked only for parts `parts.json` lists.
+ * asked only for parts `parts.json` lists. Bar-free `motion_seams` names also
+ * resolve here against parts.json, without reading distance art or requiring adjacency.
  */
 export function resolveSeams(file: RequirementsFile, partNames: readonly string[] | null, noParts: string | null, art: (part: string) => PlacedArt): Map<string, SeamPair[]> {
   const problems: Problem[] = [];
   const out = new Map<string, SeamPair[]>();
+  if (file.motion_seams !== undefined) {
+    if (partNames === null && file.motion_seams.length > 0) {
+      problems.push({ code: 'REQUIREMENTS_SEAM', object: 'requirements.motion_seams', detail: `requires parts.json to resolve the declared part names; none was read: ${noParts ?? 'no parts.json'}` });
+    } else problems.push(...motionSeamProblems(file.motion_seams, new Set(partNames ?? []), 'requirements.motion_seams', 'REQUIREMENTS_RESOLVES'));
+  }
   const cache = new Map<string, PlacedArt>();
   const artOf = (n: string): PlacedArt => {
     const hit = cache.get(n);

@@ -1177,6 +1177,19 @@ original resolution **before** existing Lanczos3 stage resampling. Setup RGBA
 is composited on the native stage grid. Source readers preserve alpha; the
 global RGB-only source helper and checks without this declaration are unchanged.
 
+The optional `motion_seams` key in `spine-parts-requirements/1` (issue #1269,
+additive) is a bar-free array of `{part, neighbour}` declarations. Check reads
+its union with the manifest's motion seams and existing `seam` requirements,
+retaining every declaration source and counting unordered pairs once across
+sources. Each list uses the shared motion-seam validator: malformed entries,
+self-pairs and duplicate or reversed pairs within a list are `REQUIREMENTS_FIELD`;
+names absent from the rig or parts manifest are `REQUIREMENTS_RESOLVES`, and a
+nonempty declaration without parts is `REQUIREMENTS_SEAM`. The checker never
+writes `parts.json`. Empty lists add no coverage; zero pairs retain the existing
+required-gate failure bytes. Existing `seam` requirements and `within_px`
+measurements are unchanged. Config declarations retain their assemble-to-parts
+route. See [Background over every frame](AUTHORING.md#background-over-every-frame-issue-941).
+
 The optional `behind_seams` key in `spine-parts-requirements/1` (issue #1314,
 additive) declares the required `BEHIND_PART_SEAMS` check, independently of the
 existing requirement kinds and without a new CLI flag. Its optional fields are

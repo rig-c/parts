@@ -61,7 +61,7 @@ import { softOcclusionLine } from './src/assemble.ts';
 import { holeBox as pinholeBox944, measurePinholes, PINHOLES_RULE, sourceInRig as sourceInRig944 } from './src/assemble.ts';
 import { singleRunPadRecord } from './src/assemble.ts';
 import { readSource as readSource944 } from './src/build.ts';
-import { pinholesRequired } from './src/requirements.ts';
+import { pinholesRequired, REQUIREMENTS_SPEC } from './src/requirements.ts';
 import { SETUP_PAINTING_LINE as SETUP_PAINTING_LINE978 } from './src/setuppainting.ts';
 import { softTrailBounds, cleanedOccluderFixture, softOccluderFixture, softTrailDiff, yieldLimbCoverFixture, SOFT_SKIN } from './fixtures/soft_occluder.ts';
 import { runYieldContourChecks } from './tools/check_yield_contour.ts';
@@ -643,7 +643,7 @@ import { runHeadCropPreflightChecks } from './fixtures/head_crop_preflight_check
 import { makeInputs, squarePad } from './src/inputs.ts';
 import { OPAQUE_ALPHA_ABOVE, exportLayers, implausibleRules, type Layer, layerFigures, type LayerSet, layerSetDiff, PLAUSIBLE_AREA_RATIO_MAX, PLAUSIBLE_JUDGED_AREA_RATIO, PLAUSIBLE_TRANSLUCENT_MAX, PLAUSIBLE_BACKGROUND_MAX, PLAUSIBLE_BACKGROUND_TRANSLUCENT_MIN, readLayers, readPsdLayers, readWrapperLayers, ruleSummary, templateLayerNames, templatePsdBytes } from './src/layers.ts';
 import { PAINTING_REFERENCE_FILE, PAINTING_REFERENCE_SCHEMA, parsePaintingReference, writePaintingReference, type PaintingReferenceInput } from './src/painting-reference.ts';
-import { PAINTING_RUN, type PartRecord, type PartsFile, type RecompositeRecord, readFrom as originalReadFrom, readParts, serializeParts, tagOf, writeParts } from './src/parts.ts';
+import { PAINTING_RUN, type PartRecord, type PartsFile, type RecompositeRecord, partImageReference, readFrom as originalReadFrom, readParts, serializeParts, tagOf, writeParts } from './src/parts.ts';
 import {
   alphaComposite,
   connectedComponents,
@@ -19260,6 +19260,57 @@ function runMotionSeamWorldCases(say: (name: string, ok: boolean, detail: string
 }
 
 
+/** Issue #1269: independent inventories, with no source mutation or inferred pair. */
+function runRequirementsMotionSeamCases(dir: string, say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const parts: PartsFile = { rig_size: [8, 8], scale_rig_per_source: 1, ghost_px: {}, parts: ['cloth', 'arm', 'trim'].map(name => ({
+    name, from: 'full:neckwear', x: 0, y: 0, w: 2, h: 2, opaque_px: 4, projected_core_px: 4,
+    source_px_taken: 4, refused_drift_px: 0, merged_px: 0, seam_override_px: 0,
+  })) };
+  parts.parts.forEach(Object.freeze);
+  Object.freeze(parts.parts);
+  Object.freeze(parts);
+  const before = serializeParts(parts);
+  const path = join(dir, 'motion-only-contract.json');
+  const declarations = [{ part: 'cloth', neighbour: 'arm' }];
+  writeFileSync(path, JSON.stringify({ spec: REQUIREMENTS_SPEC, requirements: [], motion_seams: declarations }));
+  const file = readRequirements(path);
+  const selected = motionSeamSelection(parts, [], undefined, undefined, file.motion_seams).pairs;
+  const pairsWrapper = motionSeamPairs(parts, [], undefined, undefined, file.motion_seams);
+  const dropped = motionSeamSelection(parts, []).pairs;
+  const readsDeclared = (pairs: readonly MotionSeamPair[]): boolean => pairs.length === 1 &&
+    pairs[0].a === 'cloth' && pairs[0].b === 'arm' && pairs[0].declared.some(source => source.includes('requirements') && source.includes('motion_seams'));
+  say('SO32_REQUIREMENTS_ONLY_MOTION_SEAMS_SELECT_FROZEN_PARTS_AND_DROPPING_THE_SOURCE_FAILS',
+    readsDeclared(selected) && readsDeclared(pairsWrapper) && !readsDeclared(dropped) && dropped.length === 0 && serializeParts(parts) === before,
+    `selected ${JSON.stringify(selected)}; dropped-source mutant ${JSON.stringify(dropped)}; parts bytes unchanged ${serializeParts(parts) === before}`,
+    'issue #1269 premise: frozen parts select zero pairs until an external declaration is passed; config is carried only through assembly (SO31). Both selection APIs read the requirements source, and dropping it fails this predicate');
+
+  const manifest = { ...parts, motion_seams: declarations };
+  const distance = [{ name: 'old_seam', part: 'arm', neighbour: 'trim' }];
+  const external = [{ part: 'arm', neighbour: 'cloth' }, { part: 'cloth', neighbour: 'trim' }];
+  const union = motionSeamSelection(manifest, distance, undefined, undefined, external).pairs;
+  const canonical = (pair: MotionSeamPair): string => JSON.stringify([pair.a, pair.b].sort());
+  const expected = [JSON.stringify(['arm', 'cloth']), JSON.stringify(['arm', 'trim']), JSON.stringify(['cloth', 'trim'])].sort();
+  const unionHolds = (pairs: readonly MotionSeamPair[]): boolean => JSON.stringify(pairs.map(canonical).sort()) === JSON.stringify(expected) &&
+    pairs.find(pair => canonical(pair) === expected[0])?.declared.length === 2 &&
+    pairs.some(pair => pair.declared.includes('requirement "old_seam" (seam)'));
+  const duplicateMutant = [...union, { pair: 'arm|cloth', a: 'arm', b: 'cloth', declared: ['requirements.motion_seams[0]'] }];
+  const lostProvenanceMutant = union.map(pair => canonical(pair) === expected[0] ? { ...pair, declared: pair.declared.slice(0, 1) } : pair);
+  say('SO33_MOTION_SEAM_SOURCES_UNION_AND_REVERSED_DUPLICATES_KEEP_ALL_PROVENANCE_ONCE',
+    unionHolds(union) && !unionHolds(duplicateMutant) && !unionHolds(lostProvenanceMutant) &&
+      JSON.stringify(motionSeamPairs(parts, [], undefined, undefined, [])) === JSON.stringify(dropped) &&
+      JSON.stringify(motionSeamPairs(manifest, [], undefined, undefined, [])) === JSON.stringify(motionSeamPairs(manifest, [])) && serializeParts(parts) === before,
+    `union ${JSON.stringify(union)}; duplicate mutant accepted ${unionHolds(duplicateMutant)}; provenance mutant accepted ${unionHolds(lostProvenanceMutant)}`,
+    'issue #1269 tower ruling: explicit declarations and distance requirements form a union; reversed cross-source pairs count once with both sources, [] adds nothing and inventories need not match');
+
+  const missing = [{ part: 'cloth', neighbour: 'absent' }];
+  const rejected = refusals(() => motionSeamSelection(parts, [], undefined, undefined, missing));
+  const refusesMissing = (error: PartsError | null): boolean => error?.problems.some(problem => problem.code === 'REQUIREMENTS_RESOLVES' && problem.detail.includes('absent')) === true;
+  say('SO34_REQUIREMENTS_MOTION_SEAMS_CANNOT_ACCEPT_A_PART_MISSING_FROM_THE_FROZEN_MANIFEST',
+    refusesMissing(rejected) && !refusesMissing(null) && serializeParts(parts) === before,
+    `missing-part declaration ${codes(rejected)}; accepting mutant refused ${refusesMissing(null)}`,
+    'issue #1269: accepting a disagreeing name is a missing-part error under the shared declaration rules, not a new inventory-conflict rule; an accepting mutant fails the refusal predicate');
+}
+
 /** Issue #591: the injected runner observes the actual orchestration, including custom schedules. */
 /**
  * Issue #941: an animation that tears the elbow on frame 7 of 13 alone — the forearm's bone translated 20 rig px
@@ -19275,7 +19326,7 @@ function soTearMotion(along: number): Record<string, unknown> {
 type SoBuilt = (label: string, limbs: boolean, patch?: Record<string, unknown>, fullRun?: string) => { status: number; out: string; fig: Record<string, unknown> | null; stage: string };
 
 /** Issue #941: `seam_over_motion.required` — every declared pair, every frame, 0 background cells; planted, clean, undeclared and malformed. */
-function runSeamRequiredCases(dir: string, built: SoBuilt, say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+function runSeamRequiredCases(dir: string, built: SoBuilt, say: (name: string, ok: boolean, detail: string, why: string) => void, runCli: (args: string[]) => { status: number; out: string }): void {
   runSeamCellChecks(join(dir, 'cell-evidence'), say);
   writeFileSync(join(dir, 'anim-tear.json'), JSON.stringify(soTearMotion(20)));
   writeFileSync(join(dir, 'anim-hold.json'), JSON.stringify(soTearMotion(0)));
@@ -19344,6 +19395,62 @@ function runSeamRequiredCases(dir: string, built: SoBuilt, say: (name: string, o
         `clean exit ${clean.status}, requirements ${JSON.stringify(summary)}, required ${JSON.stringify(cleanRequired)}, rows ${JSON.stringify(rows.map(row => ({ animation: row.animation, drawn: row.drawn, banded: row.banded })))}; planted tear exit ${planted.status}, required ${JSON.stringify(req)}`,
         'issue #982: config.motion_seams carries an explicit pair with requirements: [] through assemble and build into the required background reading. Both animations are read on every frame with 0 declared requirements and 0 PASS. The existing frame-7 tear is refused through the same carrier.',
       );
+      // Prepare the synthetic copy before freezing its bytes. No assembly or rig stage runs after this point.
+      const frozen = join(dir, 'frozen-motion-parts');
+      cpSync(clean.stage, frozen, { recursive: true, filter: source => source !== join(clean.stage, 'check') });
+      const frozenPath = join(frozen, 'parts.json');
+      const frozenParts = readParts(frozenPath);
+      delete frozenParts.motion_seams;
+      for (const part of frozenParts.parts) delete part.limb;
+      writeFileSync(frozenPath, serializeParts(frozenParts));
+      const frozenBytes = readFileSync(frozenPath);
+      const frozenHash = createHash('sha256').update(frozenBytes).digest('hex');
+      const frozenImages = frozenParts.parts.map(part => ({ path: join(frozen, partImageReference(part).path),
+        bytes: readFileSync(join(frozen, partImageReference(part).path)) }));
+      const frozenUnchanged = (): boolean => readFileSync(frozenPath).equals(frozenBytes) &&
+        createHash('sha256').update(readFileSync(frozenPath)).digest('hex') === frozenHash &&
+        frozenImages.every(image => readFileSync(image.path).equals(image.bytes));
+      const declaredFile = join(dir, 'frozen-motion-requirements.json');
+      const declaredBody = { spec: REQUIREMENTS_SPEC, fps: 12, requirements: [], seam_over_motion: { required: true } };
+      const checkFrozen = (label: string, motionSeams?: Array<{ part: string; neighbour: string }>) => {
+        writeFileSync(declaredFile, JSON.stringify({ ...declaredBody, ...(motionSeams === undefined ? {} : { motion_seams: motionSeams }) }));
+        const out = join(dir, `frozen-motion-${label}`);
+        const answer = runCli(['check', '--rig', join(frozen, 'rig'), '--parts', frozen, '--requirements', declaredFile, '--out', out]);
+        return { ...answer, fig: readJsonFile(join(out, 'check.json')), unchanged: frozenUnchanged() };
+      };
+      const absent = checkFrozen('absent');
+      const empty = checkFrozen('empty', []);
+      const covered = checkFrozen('covered', explicit.motion_seams);
+      const coveredLine = lineOf(covered.fig);
+      const coveredRequired = coveredLine?.required;
+      const coveredRequirements = covered.fig?.requirements as { summary: RequirementsSummary; lines: Record<string, RequirementLine> } | undefined;
+      const coverageHolds = (answer: typeof covered): boolean => {
+        const line = lineOf(answer.fig);
+        return answer.status === 0 && answer.fig?.PASS === true && line?.pairs.length === 1 && line.pairs[0].pair === 'upperarm_r|forearm_r' &&
+          line.pairs[0].declared.join(',') === 'requirements.motion_seams[0]' &&
+          JSON.stringify(line.animations) === '["idle","tear"]' && line.rows.length === 2 &&
+          line.rows.every(row => row.status === 'read' && row.drawn === 13 && row.banded === 13) &&
+          line.required?.status === 'PASS' && line.required.failed === 0 &&
+          JSON.stringify(withoutCheckRows(line.required.pairs)) === JSON.stringify([{ pair: 'upperarm_r|forearm_r', class: 'explicit', frames: 26, background_frames: 0, max_px: 0 }]);
+      };
+      say('SO35_STANDALONE_CHECK_READS_REQUIREMENTS_ONLY_COVERAGE_WITH_FROZEN_PARTS_BYTES',
+        coverageHolds(covered) && !coverageHolds(absent) && !coverageHolds(empty) &&
+          frozenParts.motion_seams === undefined && frozenParts.parts.every(part => part.limb === undefined) &&
+          coveredRequirements?.summary.declared === 0 && coveredRequirements.summary.measured === 0 && coveredRequirements.summary.pass === 0 &&
+          Object.keys(coveredRequirements.lines).length === 0 && absent.unchanged && empty.unchanged && covered.unchanged && frozenUnchanged(),
+        `absent exit ${absent.status}; empty exit ${empty.status}; declared exit ${covered.status}, required ${JSON.stringify(coveredRequired)}; parts sha256 ${frozenHash}; unchanged ${frozenUnchanged()}`,
+        'issue #1269: standalone check reads the requirements-only source through runCheck, with no assembly, manifest declarations, limb metadata or distance carrier; dropping the orchestration source fails the same full pair-frame coverage predicate and leaves manifest and PNG bytes intact');
+      const absentFailure = fails(absent.out);
+      const emptyFailure = fails(empty.out);
+      say('SO36_ZERO_AND_EMPTY_REQUIREMENTS_MOTION_SEAMS_KEEP_THE_EXACT_EXISTING_REQUIRED_REFUSAL',
+        absent.status === 1 && empty.status === 1 && absentFailure.length === 1 && JSON.stringify(absentFailure) === JSON.stringify(emptyFailure) &&
+          absentFailure[0].startsWith(`FAIL  ${MOTION_SEAM_REQUIRED_CODE}: ${MOTION_SEAM_LINE} — is SKIP — no neighbour pair is declared`) &&
+          JSON.stringify(lineOf(absent.fig)?.required) === JSON.stringify(lineOf(empty.fig)?.required) &&
+          lineOf(absent.fig)?.required?.status === 'FAIL' && lineOf(absent.fig)?.pairs.length === 0 && lineOf(empty.fig)?.pairs.length === 0 &&
+          absent.unchanged && empty.unchanged,
+        `absent ${JSON.stringify(absentFailure)}; [] ${JSON.stringify(emptyFailure)}; required blocks identical ${JSON.stringify(lineOf(absent.fig)?.required) === JSON.stringify(lineOf(empty.fig)?.required)}`,
+        'issue #1269: [] adds no pair, so the zero-source refusal and required block remain exactly the absent-source result, never a successful zero reading');
+
     }
   }
 
@@ -19472,6 +19579,7 @@ function runMotionSeamCases(report: FixtureCaseReporter): void {
   runMotionRootSeamCases(say);
   const dir = temp('motion-seam');
   try {
+    runRequirementsMotionSeamCases(dir, say);
     writeRun(join(dir, 'full'), SO_FULL);
     writeRun(join(dir, 'full-uncut'), SO_FULL.map((l) => ({ ...l, name: 'neckwear' })));
     writeRun(join(dir, 'head'), FRAMED_HEAD);
@@ -19615,7 +19723,7 @@ function runMotionSeamCases(report: FixtureCaseReporter): void {
     );
     runMotionRootRendererCases(dir, cut.out, say);
     runMotionSeamWorldIntegration(dir, say, ln);
-    runSeamRequiredCases(dir, built, say);
+    runSeamRequiredCases(dir, built, say, runCli);
 
     // Issue #933: openings inside the figure over motion on undeclared setup-overlapping layer pairs.
     // Positive control ("idle"): a deliberate setup gap between arm and body (x 10..15, y 20..39 inside frame_body) is
@@ -26516,6 +26624,47 @@ function runRequirementsSuite(): number {
       'the sixth kind is read like the five: every field and the bar by name, no default, one throw; a seam is between two parts, so naming one part twice is refused rather than measured as 0, and a part is drawn by the slot of its name, so a name with no slot is a miss',
     );
 
+    const motionPairs = [{ part: 'p', neighbour: 'n' }];
+    const motionOnly = readRequirements(file('motion-only', { spec, requirements: [], motion_seams: motionPairs }));
+    const motionEmpty = readRequirements(file('motion-empty', { spec, requirements: [], motion_seams: [] }));
+    const motionAbsent = readRequirements(file('motion-absent', { spec, requirements: [] }));
+    say(
+      'RQ201_MOTION_SEAMS_READS_WITHOUT_A_DISTANCE_CARRIER_AND_PRESERVES_ABSENT_VERSUS_EMPTY',
+      JSON.stringify(motionOnly.motion_seams) === JSON.stringify(motionPairs) && motionOnly.requirements.length === 0 && motionOnly.fps === undefined &&
+        JSON.stringify(motionEmpty.motion_seams) === '[]' && !Object.hasOwn(motionAbsent, 'motion_seams'),
+      `pairs ${JSON.stringify(motionOnly.motion_seams)}; requirements ${motionOnly.requirements.length}; fps ${String(motionOnly.fps)}; empty ${JSON.stringify(motionEmpty.motion_seams)}; absent owns field ${Object.hasOwn(motionAbsent, 'motion_seams')}`,
+      'issue #1269: motion coverage declares only the two part names; it adds no distance requirement or sampling-rate default and does not turn absence into an explicit empty inventory',
+    );
+    const malformedMotion: unknown[] = [null, {}, [null], [{ part: '', neighbour: 'n' }], [{ part: 'p' }],
+      [{ part: 'p', neighbour: 'p' }], [...motionPairs, { part: 'n', neighbour: 'p' }], [{ ...motionPairs[0], within_px: 2 }]];
+    const motionBad = malformedMotion.map((motion_seams, i) => refusals(() => readRequirements(file(`motion-shape-${i}`, { spec, requirements: [], motion_seams }))));
+    say(
+      'RQ202_MOTION_SEAMS_USES_THE_SHARED_SHAPE_SELF_PAIR_AND_UNORDERED_DUPLICATE_REFUSALS',
+      motionBad.every(error => error !== null && error.problems.length > 0 && error.problems.every(problem => problem.code === 'REQUIREMENTS_FIELD' && problem.object.includes('motion_seams'))) &&
+        motionBad[0]?.problems[0].detail === 'requires an array of {part, neighbour} declarations' &&
+        motionBad[5]?.problems[0].detail.includes('two different parts') === true &&
+        motionBad[6]?.problems[0].detail.includes('including reversed order') === true &&
+        motionBad[7]?.problems[0].object.endsWith('.within_px') === true,
+      motionBad.map(error => codes(error)).join('; '),
+      'issue #1269: the existing motion declaration reader refuses every malformed shape, an unknown field, one part on both sides and either order of a duplicate; a distance bar belongs to a seam requirement',
+    );
+    const missingMotion = readRequirements(file('motion-missing', { spec, requirements: [], motion_seams: [{ part: 'p', neighbour: 'ghost' }] }));
+    const motionSlotMiss = refusals(() => resolveRequirements(missingMotion, miniRig, miniMotion, 'root'));
+    const motionPartMiss = refusals(() => resolveSeams(missingMotion, ['p', 'n'], null, () => { throw new Error('bar-free declaration must not read art'); }));
+    const motionNoParts = refusals(() => resolveSeams(motionOnly, null, 'no parts.json beside the rig', () => { throw new Error('no parts art'); }));
+    let motionArtReads = 0;
+    const motionResolved = resolveSeams(motionOnly, ['p', 'n'], null, () => { motionArtReads++; throw new Error('bar-free declaration must not read art'); });
+    say(
+      'RQ203_MOTION_SEAM_NAMES_RESOLVE_AGAINST_BOTH_RIG_SLOTS_AND_PARTS_WITHOUT_DISTANCE_ART_READS',
+      refusals(() => resolveRequirements(motionOnly, miniRig, miniMotion, 'root')) === null && motionResolved.size === 0 && motionArtReads === 0 &&
+        motionSlotMiss?.problems.some(problem => problem.code === 'REQUIREMENTS_RESOLVES' && problem.object.endsWith('[0].neighbour') && problem.detail.includes('ghost')) === true &&
+        motionPartMiss?.problems.some(problem => problem.code === 'REQUIREMENTS_RESOLVES' && problem.object.endsWith('[0].neighbour') && problem.detail.includes('ghost')) === true &&
+        motionNoParts?.problems.some(problem => problem.code === 'REQUIREMENTS_SEAM' && problem.detail.endsWith('no parts.json beside the rig')) === true &&
+        resolveSeams(motionEmpty, null, null, () => { throw new Error('empty inventory must not read art'); }).size === 0,
+      `slot miss ${codes(motionSlotMiss)}; parts miss ${codes(motionPartMiss)}; no parts ${codes(motionNoParts)}; art reads ${motionArtReads}`,
+      'issue #1269: declarations resolve by the existing requirements path and the shared motionSeamProblems; frozen-part names must exist, but no setup-distance seam or adjacency is required',
+    );
+
     const block = (x: number, y: number, w: number, h: number, alpha = 255): PlacedArt => {
       const r = newRaster(w, h);
       for (let i = 0; i < w * h; i++) r.data[i * 4 + 3] = alpha;
@@ -26661,7 +26810,7 @@ function runRequirementsSuite(): number {
         rsDetail[1].startsWith(' field "rests"[1]: names "hem" a second time') &&
         rsDetail[2].startsWith(' field "rests"[0]: names "hem", which "not_swinging" names too') &&
         rsDetail[3].startsWith(' field "rest": is not a field this format reads') &&
-        (rsBad[3]?.problems[0].detail ?? '').includes('rises, rests, may_fold, fixed_skeleton, cut_material, setup_painting, pinholes, seam_over_motion, boundary_colour, behind_seams;'),
+        (rsBad[3]?.problems[0].detail ?? '').includes('rises, rests, may_fold, fixed_skeleton, cut_material, setup_painting, pinholes, seam_over_motion, motion_seams, boundary_colour, behind_seams;'),
       `read ${JSON.stringify([rsRead.rises, rsRead.rests])}; absent ${JSON.stringify(npAbsent.rests)}; refused: ${rsDetail.join(' | ')}`,
       'issue #245: rests is declared per part like its siblings — a list of names, each once, empty refused rather than read as none, a misspelt key refused by the format; a resting tip may also rise (a raised hand resting on something), but a part declared not swinging has no reading to hold at rest',
     );
