@@ -37,6 +37,7 @@ import { runBehindSeamChecks } from './tools/check_behind_seams.ts';
 import { runSetupPaintingChecks } from './tools/check_setup_painting.ts';
 import { runBoundaryColourChecks } from './tools/check_boundary_colour.ts';
 import { BOUNDARY_COLOUR_LINE, UNDECLARED_BOUNDARY_COLOUR_REASON, measureBoundaryColour } from './src/boundarycolour.ts';
+import { BEHIND_SEAM_LINE, UNDECLARED_BEHIND_SEAM_REASON } from './src/behindseams.ts';
 import { runCutMaterialChecks } from './tools/check_cut_material.ts';
 import { runPinholeChecks } from './tools/check_pinholes.ts';
 import { runArtJointChecks } from './tools/check_art_joints.ts';
@@ -17790,10 +17791,11 @@ function runRequirementCases(dir: string, say: (name: string, ok: boolean, detai
     plain.status === 0 &&
       !('requirements' in (plain.fig ?? {})) &&
       !existsSync(join(plain.outDir, 'requirements')) &&
-      // Issue #942: the one line the plain run prints that names requirements is boundary_colour's SKIP, which tells
-      // the reader where the check would be declared — it is printed once, and nothing else mentions requirements.
+      // Issue #942: boundary_colour's SKIP tells the reader where the check would be declared.
+      // Issue #1314: behind seams adds its undeclared SKIP. Each prints once; no other line mentions requirements.
       plain.text.split('\n').filter((l) => l.includes(`${BOUNDARY_COLOUR_LINE}: SKIP — ${UNDECLARED_BOUNDARY_COLOUR_REASON}`)).length === 1 &&
-      !plain.text.split('\n').filter((l) => !l.includes(`${BOUNDARY_COLOUR_LINE}: SKIP`)).join('\n').includes('requirements') &&
+      plain.text.split('\n').filter((l) => l.includes(`${BEHIND_SEAM_LINE}: SKIP — ${UNDECLARED_BEHIND_SEAM_REASON}`)).length === 1 &&
+      !plain.text.split('\n').filter((l) => !l.includes(`${BOUNDARY_COLOUR_LINE}: SKIP`) && !l.includes(`${BEHIND_SEAM_LINE}: SKIP — ${UNDECLARED_BEHIND_SEAM_REASON}`)).join('\n').includes('requirements') &&
       empty.status === 0 &&
       'requirements' in (empty.fig ?? {}) &&
       stripBlock(empty) === plainCheck &&

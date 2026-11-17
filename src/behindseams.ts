@@ -9,6 +9,7 @@ import { seamSourceAttachment, type MotionSeamPair } from './check.ts';
 import type { Problem } from './errors.ts';
 
 export const BEHIND_SEAM_LINE = 'BEHIND_PART_SEAMS';
+export const UNDECLARED_BEHIND_SEAM_REASON = 'HOLE: no requirements.behind_seams declares an authored threshold T; not measured, never a pass';
 export const BEHIND_SEAM_CODE = 'CHECK_BEHIND_PART_SEAMS';
 export const BEHIND_SEAM_UNMEASURED_CODE = 'CHECK_BEHIND_PART_SEAMS_UNMEASURED';
 
@@ -559,7 +560,7 @@ export function measureBehindSeams(api: typeof import('@rig-c/core/render-shared
 
 /** Null has no JSON/tally effect, but its console declaration is always honest. */
 export function behindSeamLines(line: BehindSeamsMeasured | null): string[] {
-  if (line === null) return [`${BEHIND_SEAM_LINE}: SKIP — HOLE: no requirements.behind_seams declares an authored threshold T; not measured, never a pass`];
+  if (line === null) return [`${BEHIND_SEAM_LINE}: SKIP — ${UNDECLARED_BEHIND_SEAM_REASON}`];
   return [
     `${BEHIND_SEAM_LINE}: ${line.status} — ${line.pairs.length} selected pair(s), setup separately and every idle frame at ${line.fps} fps; ${line.limitations}`,
     ...line.pairs.flatMap(p => {
