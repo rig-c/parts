@@ -5,7 +5,7 @@ import { Plate, type RGBA } from '@rig-c/core/plate';
 import { pageFor, projector, rasterisePiece, renderFrame, type AttachmentRest, type Frame, type Piece } from '@rig-c/core/render-shared';
 import { seamGridOf, seamsOf, setupCellReader, type SeamFrame, type SeamGrid, type SeamPair } from '@rig-c/core/seam';
 import { BEHIND_SEAM_LINE, BEHIND_SEAM_CODE, BEHIND_SEAM_UNMEASURED_CODE, behindSeamsProblems,
-  measureBehindSeamFrames, behindSeamLines, type BehindSeams, type BehindSeamsFramesInput,
+  measureBehindSeamFrames, behindSeamLines, behindTurnPlan, type BehindSeams, type BehindSeamsFramesInput,
   type BehindSeamsStockPair, type BehindSeamsCount, type BehindSeamsMeasured, type BehindSeamsFrame } from '../src/behindseams.ts';
 import { type RigcRunner } from '../src/check.ts';
 import { PartsError, type Problem } from '../src/errors.ts';
@@ -666,7 +666,7 @@ function runBehindSeamRequirementChecks(dir: string, say: Say): void {
       ...(value === undefined ? {} : { behind_seams: value }) }) + '\n');
     return path;
   };
-  const declaration: BehindSeams = { threshold: 10, allowance: 12, pairs: [{ part: 'a', neighbour: 'b', threshold: 11, allowance: 4 }] };
+  const declaration: BehindSeams = { threshold: 10, allowance: 12, turn: true, pairs: [{ part: 'a', neighbour: 'b', threshold: 11, allowance: 4 }] };
   const read = readRequirements(write('declared', declaration));
   const again = readRequirements(write('roundtrip', read.behind_seams));
   say('BHS27_REAL_REQUIREMENTS_READER_PRESERVES_OPTIONAL_BLOCK_AND_OVERRIDES',
@@ -675,6 +675,7 @@ function runBehindSeamRequirementChecks(dir: string, say: Say): void {
     JSON.stringify({ present: read.behind_seams, roundtrip: again.behind_seams }));
   const invalid: Array<{ label: string; value: unknown }> = [
     { label: 'null', value: null }, { label: 'number', value: 1 }, { label: 'array', value: [] },
+    ...[false, 0, {}, { yaw: [-15, 15] }].map(turn => ({ label: 'turn-' + JSON.stringify(turn), value: { turn } })),
     ...[-1, 256, 0.5, '10'].map(threshold => ({ label: 'threshold-' + String(threshold), value: { threshold } })),
     ...[-1, 0.5, Number.MAX_SAFE_INTEGER + 1, '4'].map(allowance => ({ label: 'allowance-' + String(allowance), value: { allowance } })),
     { label: 'unknown', value: { threshold: 0, surprise: 1 } }, { label: 'pairs-object', value: { pairs: {} } },
@@ -704,7 +705,7 @@ function runBehindSeamRequirementChecks(dir: string, say: Say): void {
 }
 
 /** A three-block variant of the established check fixture, generated only in this suite's temp directory. */
-function writeBehindSeamCheckRig(dir: string): void {
+export function writeBehindSeamCheckRig(dir: string): void {
   writeCheckRig(dir, { peak: 0, duration: 1 / 6 });
   const rigPath = join(dir, 'rig.json');
   const rig = JSON.parse(readFileSync(rigPath, 'utf8')) as {
@@ -743,6 +744,95 @@ function writeBehindSeamCheckRig(dir: string): void {
   };
   motion.animations.idle.tracks.push({ bone: 'carrier_ctl', property: 'translatey',
     keys: [{ t: 0, v: [0] }, { t: 1 / 12, v: [4] }, { t: 1 / 6, v: [0] }] });
+  writeFileSync(motionPath, JSON.stringify(motion) + '\n');
+}
+
+/** Bounded diagnostics: full native samples remain in check.json, not one case line. */
+function turnBrief(turn: BehindSeamsMeasured['turn']) {
+  return turn === undefined ? null : { status: turn.status, poses: turn.poses, unmeasured: turn.unmeasured,
+    pairs: turn.pairs.map(p => ({ pair: p.pair, sampled: p.sampled_poses, read: p.read_poses, unread: p.unmeasured_poses,
+      motion: p.motion_opened, standing: p.standing,
+      frames: p.frames.map(f => ({ pose: f.pose, motion: { status: f.motion_opened.status, px: f.motion_opened.px },
+        standing: { status: f.standing.status, px: f.standing.px, unread_cells: f.standing.unread_cells } })) })) };
+}
+
+/** Fixed endpoints and full corners, stated before any detector call. */
+export function runBehindTurnPrimitiveChecks(say: Say): void {
+  const rig = {
+    bones: ['yaw_dial', 'pitch_dial', 'torso_control'].map(name => ({ name, rotation: 0 })),
+    constraints: [['yaw', 'turn', 'yaw_dial', 15], ['pitch', 'tilt', 'pitch_dial', 12], ['torso', 'body_turn', 'torso_control', 10]].map(([name, animation, bone, band]) =>
+      ({ type: 'slider', name, animation, bone, property: 'rotate', local: true, from: -Number(band), max: Number(band) })),
+  };
+  const plan = behindTurnPlan(rig);
+  const expected = [
+    [-15, 0, 0], [15, 0, 0], [0, -12, 0], [0, 12, 0], [0, 0, -10], [0, 0, 10],
+    [-15, -12, -10], [-15, -12, 10], [-15, 12, -10], [-15, 12, 10],
+    [15, -12, -10], [15, -12, 10], [15, 12, -10], [15, 12, 10],
+  ];
+  say('BHS51_TURN_PLAN_IS_DECLARED_ENDPOINTS_AND_FULL_CORNERS',
+    plan.reason === undefined && equal(plan.poses.map(p => Object.values(p.values)), expected) && new Set(plan.poses.map(p => p.name)).size === 14 &&
+      behindTurnPlan({ ...rig, constraints: rig.constraints.slice(0, 1) }).poses.length === 2,
+    JSON.stringify({ poses: plan.poses, oneDial: behindTurnPlan({ ...rig, constraints: rig.constraints.slice(0, 1) }).poses }));
+  const legacy = behindTurnPlan({ bones: [{ name: 'turn', x: 0 }] });
+  const invalid = behindTurnPlan({ ...rig, constraints: [{ ...rig.constraints[0], max: undefined }] });
+  say('BHS52_TURN_NEVER_INVENTS_MISSING_DIAL_RANGES',
+    legacy.poses.length === 0 && legacy.reason?.includes('legacy dial "turn"') === true && invalid.poses.length === 0 && invalid.reason?.includes('finite increasing') === true && behindTurnPlan({}).poses.length === 0,
+    JSON.stringify({ legacy, invalid, absent: behindTurnPlan({}) }));
+  const moving = behindMotionFixture(), idle = { ...moving, frames: moving.frames.map(() => moving.setup) };
+  idle.frames = idle.frames.map((f, index) => ({ ...f, index, time: index / 12 }));
+  const native = stockOf(moving);
+  // Exactly two declared endpoints. Idle stays closed; the positive endpoint alone opens 12 cells.
+  const poses = [{ name: 'yaw_dial=-15', values: { yaw_dial: -15 } }, { name: 'yaw_dial=15', values: { yaw_dial: 15 } }];
+  const frames = [moving.frames[0], moving.frames[1]].map((f, index) => ({ ...asFrame(f), index, time: 0 }));
+  const turn: NonNullable<BehindSeamsFramesInput['turn']> = { poses, frames, setup: asFrame(moving.setup), rest: moving.rest,
+    stock: native.map(s => ({ ...s, frames: 2, drawn: 2, banded: 2, gapCovered: s.gapCovered.map(hit => ({ ...hit, time: 0 })) })) };
+  const base = measured(idle), red = measured(idle, { threshold: 0, turn: true }, { turn });
+  say('BHS53_TURN_ONLY_SEAM_FAIL_LEAVES_IDLE_AND_SETUP_UNCHANGED',
+    base.reading.status === 'PASS' && red.reading.status === 'FAIL' && equal(red.reading.pairs, base.reading.pairs) &&
+      red.reading.turn?.pairs[0].motion_opened.max_px === 12 && red.reading.turn.pairs[0].standing.max_px === 12 &&
+      red.reading.turn.pairs[0].sampled_poses === 2 && red.reading.turn.pairs[0].read_poses === 2 &&
+      red.reading.turn.pairs[0].frames[1].pose === 'yaw_dial=15' && red.problems.some(p => p.code === BEHIND_SEAM_CODE && p.object.includes('turn yaw_dial=15')),
+    JSON.stringify({ idle: base.reading.status, turn: turnBrief(red.reading.turn), codes: red.problems.map(p => p.code) }));
+  const fixed = { ...turn, frames: frames.map((_, index) => ({ ...asFrame(moving.setup), index, time: 0 })),
+    stock: turn.stock!.map(s => ({ ...s, gapCovered: [] })) };
+  const green = measured(idle, { threshold: 0, turn: true }, { turn: fixed });
+  const allowed = measured(idle, { threshold: 0, allowance: 12, turn: true }, { turn });
+  say('BHS54_REPAIRED_TURN_AND_AUTHORED_ALLOWANCE_PASS', green.reading.status === 'PASS' && green.reading.turn?.status === 'PASS' &&
+    allowed.reading.status === 'PASS' && allowed.reading.turn?.pairs[0].motion_opened.max_px === 12,
+    JSON.stringify({ green: turnBrief(green.reading.turn), allowed: allowed.reading.turn?.status }));
+  const dropped = measured(idle, { threshold: 0, turn: true }, { turn: { ...turn, frames: frames.slice(0, 1) } });
+  const unread = measured(idle, { threshold: 0, turn: true }, { turn: { ...turn, stock: null } });
+  const completeControl = (r: BehindSeamsMeasured): boolean => r.turn?.poses.length === 2 && r.turn.pairs[0]?.frames.length === 2 && r.turn.pairs[0].read_poses === 2;
+  say('BHS55_SAMPLE_DROPPING_MUTANT_CANNOT_PASS_THE_CONTROL', completeControl(red.reading) && !completeControl(dropped.reading) &&
+    dropped.reading.status === 'FAIL' && (dropped.reading.turn?.pairs[0].unmeasured_poses ?? 0) > 0 && dropped.problems.some(p => p.code === BEHIND_SEAM_UNMEASURED_CODE) &&
+    unread.reading.status === 'FAIL' && unread.reading.turn?.pairs[0].motion_opened.status === 'SKIP',
+    JSON.stringify({ dropped: turnBrief(dropped.reading.turn), unread: unread.reading.turn?.status, mutantRejected: !completeControl(dropped.reading) }));
+  const missing = measured(idle, { threshold: 0, turn: true });
+  const optional = measured(idle, { turn: true });
+  say('BHS56_OPT_IN_WITH_NO_DIAL_PERSISTS_SKIP_AND_HOLE', missing.reading.turn?.status === 'SKIP' &&
+    missing.reading.turn.unmeasured.some(u => u.frame === 'turn' && u.reason.startsWith('HOLE:')) &&
+    missing.reading.status === 'FAIL' && missing.problems.some(p => p.code === BEHIND_SEAM_UNMEASURED_CODE) &&
+    optional.reading.turn?.status === 'SKIP' && !optional.problems.some(p => p.code === BEHIND_SEAM_UNMEASURED_CODE),
+    JSON.stringify({ required: missing.reading.turn, optional: optional.reading.turn }));
+  say('BHS57_NO_OPT_IN_IGNORES_TURN_INPUT_BYTE_FOR_BYTE', JSON.stringify(base.reading) === JSON.stringify(measured(idle, { threshold: 0 }, { turn }).reading) &&
+    !Object.hasOwn(base.reading, 'turn') && !base.lines.some(l => l.includes(': turn ')), 'No opt-in: identical serialized reading, no turn key or turn console rows.');
+}
+
+/** Real emitted slider constraints, consumed by rigc's own existing poser. */
+export function writeBehindSeamTurnCheckRig(dir: string, repaired = false): void {
+  writeBehindSeamCheckRig(dir);
+  const rigPath = join(dir, 'rig.json'), motionPath = join(dir, 'motion.json');
+  const rig = JSON.parse(readFileSync(rigPath, 'utf8')) as { bones: Array<Record<string, unknown>>; constraints?: Array<Record<string, unknown>> };
+  const motion = JSON.parse(readFileSync(motionPath, 'utf8')) as { animations: Record<string, { duration: number; loop: boolean; tracks: Array<Record<string, unknown>> }> };
+  motion.animations.idle.tracks = motion.animations.idle.tracks.filter(t => t.bone !== 'carrier_ctl');
+  for (const [bone, animation, band] of [['yaw_dial', 'turn', 15], ['pitch_dial', 'tilt', 12], ['body_yaw_dial', 'body_turn', 10]] as const) {
+    rig.bones.push({ name: bone, parent: 'root', x: 0, y: 0 });
+    (rig.constraints ??= []).push({ type: 'slider', name: bone, bone, property: 'rotate', local: true,
+      animation, from: -band, to: 0, scale: 1 / (2 * band), max: band, additive: true, mix: 1 });
+    motion.animations[animation] = { duration: 1, loop: false, tracks: [{ bone: 'carrier_ctl', property: 'translatey',
+      keys: [{ t: 0, v: [0] }, { t: 0.5, v: [0] }, { t: 1, v: [animation === 'turn' && !repaired ? 4 : 0] }] }] };
+  }
+  writeFileSync(rigPath, JSON.stringify(rig) + '\n');
   writeFileSync(motionPath, JSON.stringify(motion) + '\n');
 }
 
@@ -794,12 +884,34 @@ function runBehindSeamIntegrationChecks(dir: string, say: Say, rigc: RigcRunner)
   say('BHS42_ACTUAL_CHECK_FIXTURE_INPUTS_ARE_NOT_REWRITTEN',
     before.every((bytes, i) => bytes === readFileSync(join(input, ['rig.json', 'motion.json', 'parts.json'][i]), 'utf8')),
     'Generated synthetic rig, motion and part records retained byte for byte through three actual checkStage calls.');
+  const missingTurn = run('turn-no-dial', requirement('turn-no-dial', { threshold: 0, turn: true }));
+  const missingBlock = missingTurn.figures[BEHIND_SEAM_LINE] as BehindSeamsMeasured;
+  say('BHS58_CHECK_JSON_PERSISTS_NO_DIAL_SKIP_AND_REQUIRED_HOLE', missingBlock.turn?.status === 'SKIP' &&
+    missingBlock.turn.unmeasured.some(u => u.reason.includes('no declared turn dial')) && missingTurn.figures.PASS === false &&
+    missingTurn.report.problems.some(p => p.code === BEHIND_SEAM_UNMEASURED_CODE), JSON.stringify(missingBlock.turn));
+  writeBehindSeamTurnCheckRig(input);
+  const noOpt = run('turn-no-opt', requirement('turn-no-opt', { threshold: 0 }));
+  const turned = run('turn-declared', requirement('turn-opt', { threshold: 0, turn: true }));
+  const noOptBlock = noOpt.figures[BEHIND_SEAM_LINE] as BehindSeamsMeasured, turnedBlock = turned.figures[BEHIND_SEAM_LINE] as BehindSeamsMeasured;
+  say('BHS59_ACTUAL_TURN_POSER_READS_ALL_ENDPOINTS_AND_CORNERS_WITH_IDLE_UNCHANGED',
+    noOptBlock.status === 'PASS' && turnedBlock.status === 'FAIL' && equal(noOptBlock.pairs, turnedBlock.pairs) &&
+      turnedBlock.turn?.poses.length === 14 && turnedBlock.turn.pairs[0].frames.length === 14 &&
+      turnedBlock.turn.pairs[0].read_poses === 14 && turnedBlock.turn.pairs[0].motion_opened.max_px > 0 &&
+      turnedBlock.turn.pairs[0].standing.max_px > 0 && turned.report.problems.some(p => p.code === BEHIND_SEAM_CODE && p.object.includes('yaw_dial=15')),
+    JSON.stringify({ idle: noOptBlock.status, turn: turnBrief(turnedBlock.turn), problems: turned.report.problems }));
+  writeBehindSeamTurnCheckRig(input, true);
+  const repaired = run('turn-repaired', requirement('turn-fixed', { threshold: 0, turn: true }));
+  const repairedBlock = repaired.figures[BEHIND_SEAM_LINE] as BehindSeamsMeasured;
+  say('BHS60_ACTUAL_TURN_POSER_REPAIRED_POSITIVE_CONTROL', repairedBlock.status === 'PASS' && repairedBlock.turn?.status === 'PASS' &&
+    repairedBlock.turn.pairs[0].read_poses === 14 && !repaired.report.problems.some(p => p.code === BEHIND_SEAM_CODE || p.code === BEHIND_SEAM_UNMEASURED_CODE),
+    JSON.stringify({ turn: turnBrief(repairedBlock.turn), problems: repaired.report.problems }));
 }
 
 export function runBehindSeamChecks(dir: string, say: Say, rigc: RigcRunner): void {
   mkdirSync(dir, { recursive: true });
   runBehindSeamFixtureChecks(say);
   runBehindSeamPrimitiveChecks(say);
+  runBehindTurnPrimitiveChecks(say);
   runBehindSeamRequirementChecks(dir, say);
   runBehindSeamIntegrationChecks(join(dir, 'pipeline'), say, rigc);
 }
