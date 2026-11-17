@@ -271,6 +271,7 @@ and do not certify visibility. See the
 <!-- stable:commands -->
 | command | flags |
 | --- | --- |
+| `edited-part` | `--config`, `--part`, `--file`, `--from`, `--editor`; optional `--rig-config` (issue #1328; splice a receipt into explicit full configs, without reassembly) |
 | `diff-components` | `--stack`, `--painting`, `--parts`, `--floor`; optional `--threshold`, `--figure`, `--owners`; exactly one of `--out`, `--verify` (issues #1005, #1291; exhaustive native error inventory, `rig-parts-diff-components/1` by default and `rig-parts-diff-components/2` with `--owners`, and byte-bound reader for both) |
 | `depth-prepare` | `--parts`, `--config`, `--out` (issue #897; separate numeric-depth recipe) |
 | `depth-bind` | `--map`, `--input`, `--part` (issue #1284; exclusive receipt creation from current file bytes) |
@@ -1271,6 +1272,17 @@ anything is assembled. Absent or `false`, nothing more is demanded and no byte
 moves.
 
 ### Edited rig-space parts
+
+`edited-part` (issue #1328) records `sha256` and `from_sha256` from the
+supplied PNG bytes and the non-empty `editor` declaration. It replaces the
+named part's receipt in place or appends one, preserving every other row and
+unrelated config byte. Both explicit full configs are validated before any
+write; each must already declare `assemble.edited_parts`. Paths are recorded
+relative to each config's edited-parts directory. There is no config discovery
+or reassembly: a wrong same-size `--from` is recorded successfully, then the
+existing build baseline verifier refuses it with `ASSEMBLE_EDITED_PART_BASELINE`.
+Writer validation refusals leave both configs unchanged. The command prints
+one line naming the part, both hashes and the declared editor.
 
 The optional `assemble.edited_parts` block (issue #1278, additive) replaces
 existing base-plan parts with verified rig-pixel PNG files after all automatic

@@ -1146,6 +1146,39 @@ the author's non-empty declaration; the tool cannot verify which editor was
 used. The decoded width and height must equal the assembled part's box.
 A changed crop, scale, name or order needs a plan or cut change instead.
 
+Record a receipt with the shipped writer (issue #1328), after declaring
+`assemble.edited_parts` with its directory and an empty `receipts` array in
+each full character config:
+
+```sh
+rig-parts edited-part --config draft/config.json --part sleeve_r --file retouched/sleeve_r.png --from assembled/parts/sleeve_r.png --editor "image editor"
+# Update a second full config only when explicitly named:
+rig-parts edited-part --config draft/config.json --part sleeve_r --file retouched/sleeve_r.png --from assembled/parts/sleeve_r.png --editor "image editor" --rig-config rig/config.json
+```
+
+CLI paths resolve from the working directory; the stored `file` resolves from
+each config's own `edited_parts.dir`. The writer hashes the encoded PNG bytes,
+checks that both files decode and have equal dimensions, and validates every
+candidate config before writing either. It replaces the existing row for that
+part or appends at the array's length. New rows use key order `part`, `file`,
+`sha256`, `from_sha256`, `editor`; other rows and unrelated config bytes retain
+their original spelling and whitespace. No matching config is discovered.
+
+The writer never reassembles or certifies the baseline. A wrong same-size
+`--from` is recorded; the next build refuses `ASSEMBLE_EDITED_PART_BASELINE`,
+naming the current assembled hash and the recorded hash. Supply the exact PNG
+from a normal build of this config. A successful writer prints one line with
+the part, both hashes and the declared editor; it does not prove which editor
+was used. Validation refusals leave all named configs byte-identical.
+
+| Rule | What was found | What is required |
+| --- | --- | --- |
+| <a id="EDITED_PART_ARGUMENT"></a>`EDITED_PART_ARGUMENT` | A writer argument is missing or blank. | Supply a non-empty config, part, file, from and editor; omit rig-config or name a non-empty path. |
+| <a id="EDITED_PART_BLOCK"></a>`EDITED_PART_BLOCK` | A named config has no assemble.edited_parts. | Declare its directory and receipts array before recording. |
+| <a id="EDITED_PART_FILE"></a>`EDITED_PART_FILE` | The file or from path is unreadable. | Supply readable PNG files at both explicit paths. |
+| <a id="EDITED_PART_PNG"></a>`EDITED_PART_PNG` | The file or from bytes are not a decodable PNG. | Supply PNGs supported by the existing codec. |
+| <a id="EDITED_PART_SIZE"></a>`EDITED_PART_SIZE` | Edited and from PNG dimensions differ. | Edit at the original crop and rig-pixel size. |
+
 Replacement occurs after projection, drift checks, seam override, ghost
 cleanup, paintingEdge and final region restoration. No automatic pass runs
 on the replacement afterward. The output part PNG is the verified file's

@@ -329,6 +329,7 @@ Command details and config saving are in the [command reference](docs/AUTHORING.
 | `layers` | [Inspect wrapper layers or a PSD](docs/AUTHORING.md#command-reference) |
 | `sheet` | [Make a contact sheet](docs/AUTHORING.md#command-reference) |
 | `assemble` | [Merge layers into measured parts](docs/AUTHORING.md#command-reference) |
+| `edited-part` | [Record an edited part receipt](docs/AUTHORING.md#edited-rig-space-parts-assembleedited_parts-issue-1278) |
 | `propose` | [Draft or inspect a character config](docs/AUTHORING.md#command-reference) |
 | `compare` | [Compare two skeletons by name](docs/AUTHORING.md#command-reference) |
 | `rig` | [Author gated rig and motion specs](docs/AUTHORING.md#command-reference) |

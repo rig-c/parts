@@ -2,6 +2,7 @@
 import { diffComponentsCommand } from './src/diffcomponents.ts';
 import { applyTakenLayers } from './src/takelayers.ts';
 import { applyDepth, bindDepthMap, prepareDepth } from './src/depthworkflow.ts';
+import { writeEditedPart } from './tools/edited-part-cli.ts';
 /**
  * rig-parts — one painting and its See-through layers in, Spine-ready parts
  * and rig specs out, verified through rig-c.
@@ -73,6 +74,10 @@ const LATER: ReadonlyArray<[string, string]> = [];
 const HELP = `rig-parts ${version()} — Spine-ready parts from one painting and its See-through layers
 
 usage:
+  rig-parts edited-part --config <config.json> --part <name> --file <edited.png> --from <assembled.png> --editor <text> [--rig-config <config.json>]
+      Record both file hashes and the declared editor in one edited_parts receipt.
+      Update only explicitly named configs; build verifies the assembled baseline.
+
   rig-parts diff-components --stack <png> --painting <png> --parts <parts.json> --floor <px>
       [--threshold <channel>] [--figure <binary-png>] [--owners] (--out <json> | --verify <json>)
       Exhaustive native difference inventory; default max RGB channel > 40.
@@ -1185,6 +1190,7 @@ function printLayerTable(set: LayerSet): void {
  * no row; `layers` takes one positional path beside its flags (issue #359).
  */
 const TAKES = {
+  'edited-part': { valued: ['--config', '--part', '--file', '--from', '--editor', '--rig-config'], switches: [] },
   'check-parts': { valued: ['--parts', '--out'], switches: ['--json'] },
   'diff-components': { valued: ['--stack', '--painting', '--parts', '--figure', '--floor', '--threshold', '--out', '--verify'], switches: ['--owners'] },
   'depth-bind': { valued: ['--map', '--input', '--part'], switches: [] },
@@ -2530,6 +2536,19 @@ function cmdDepthPrepare(args: string[]): number {
   } catch (error) { return printRefusal(error); }
 }
 
+function cmdEditedPart(args: string[]): number {
+  for (let i = 0; i < args.length; i += 2) {
+    if (args[i + 1] === undefined || args[i + 1].startsWith('--')) return usage(`edited-part ${args[i]} requires a value`);
+  }
+  const f = flags(args, 'edited-part', ['--config', '--part', '--file', '--from', '--editor']);
+  if (typeof f === 'string') return usage(f);
+  try {
+    const receipt = writeEditedPart({ config: f.get('--config')!, part: f.get('--part')!, file: f.get('--file')!, from: f.get('--from')!, editor: f.get('--editor')!, rigConfig: f.get('--rig-config') });
+    console.log(`edited-part: part ${JSON.stringify(receipt.part)} sha256=${receipt.sha256} from_sha256=${receipt.from_sha256} editor=${JSON.stringify(receipt.editor)}`);
+    return EXIT_OK;
+  } catch (error) { return printRefusal(error); }
+}
+
 function cmdDepthBind(args: string[]): number {
   const f = flags(args, 'depth-bind', ['--map', '--input', '--part']);
   if (typeof f === 'string') return usage(f);
@@ -2565,6 +2584,7 @@ function main(argv: string[]): number | Promise<number> {
   if (command === 'diff-components') return cmdDiffComponents(rest);
   if (command === 'layers') return cmdLayers(rest);
   if (command === 'depth-prepare') return cmdDepthPrepare(rest);
+  if (command === 'edited-part') return cmdEditedPart(rest);
   if (command === 'depth-bind') return cmdDepthBind(rest);
   if (command === 'depth-apply') return cmdDepthApply(rest);
   if (command === 'sheet') return cmdSheet(rest);

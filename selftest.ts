@@ -50,6 +50,7 @@ import { runSeeThroughTransformChecks } from './tools/check_seethrough_transform
 import { runPlateChecks } from './tools/check_plate.ts';
 import { runEditorReceiptChecks } from './tools/check_editor_receipts.ts';
 import { runEditedPartChecks, runEditedReferenceCwdChecks } from './tools/check_edited_parts.ts';
+import { runEditedPartWriterChecks } from './tools/check_edited_part_writer.ts';
 import { runPartSourceChecks } from './tools/check_part_sources.ts';
 import { runReadmePolicyChecks } from './scripts/readme_policy.ts';
 import { beginPhases, finishPhases, measurePhase, phaseRecord, measurementPayloadValid, familyRows, observerPids, observeFamily, unmeasuredFamily, type PhaseRecord, type FamilyPeak } from './scripts/selftest_measure.ts';
@@ -56508,6 +56509,9 @@ function runEditorReceiptsSuite(): number {
     let editedIndex = 0;
     runEditedPartChecks(join(dir, 'edited-parts'), (name, pass, detail) => say(`EP1278${String(++editedIndex).padStart(2, '0')}_${name}`, pass, detail,
       'issue #1278: final rig-space file bytes, receipt census, whole-file trace, strict metadata and refusal atomicity over successful outputs'));
+    let writerIndex = 0;
+    runEditedPartWriterChecks(join(dir, 'writer'), (name, pass, detail) => say(`EPW${String(++writerIndex).padStart(2, '0')}_${name}`, pass, detail,
+      'issue #1328: shipped command, byte-preserving receipt splice, explicit configs, existing receipt readers and build baseline authority'));
   }
   finally { rmSync(dir, { recursive: true, force: true }); }
   return bad();
