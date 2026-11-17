@@ -7893,6 +7893,11 @@ The two readings are independent:
   than the effective T in max-channel distance. Equal-colour antialias ramps
   count zero contrast. Later opaque art contributes no visible rear colour.
   There is no width guess, rest mask or subtraction of setup-visible cells.
+  A corridor with an ambiguous endpoint owner stays unread; neither A nor B
+  is inferred. Other readable corridors on that frame retain their measured
+  cells. A counted total above allowance stays FAIL even when another corridor
+  is unread; an unread population cannot turn a measured failure into SKIP.
+  With unread corridors and no measured excess, standing is SKIP, never PASS.
   This bracketed-run definition does not certify curved or diagonal openings.
 
 Both readings use core's public `seamGridOf` from `@rig-c/core/seam` and its
@@ -7915,13 +7920,53 @@ cells; rig-pixel area is count times cell side squared. Geometric rear-visible,
 raw contrast and threshold-filtered counts remain distinct. Overlapping pair
 counts are not a unique whole-rig area.
 
+Issue #1325 adds optional unread-corridor evidence to the per-frame `standing`
+record, both at `BEHIND_PART_SEAMS.pairs[].setup.standing` and at
+`BEHIND_PART_SEAMS.pairs[].frames[].standing`. The fields below are relative to
+that record. They describe bracketed low-alpha runs with an endpoint owner of
+0 or 3; they do not infer an owner or count those runs as measured contrast.
+The reported cells are the run's interior, excluding its endpoints, whether
+or not rear colour would qualify against T. A cell can be unread on one axis
+and readable on the other; unread evidence does not remove a measured hit.
+
+| Field | Contract |
+| --- | --- |
+| `unread_cells` | Optional positive integer: the number of distinct native grid cells in all unread corridors of this frame. Cross-axis intersections count once; this is not a sum of `cell_count` values or a measured defect count. |
+| `unread_corridors` | Optional nonempty array. Horizontal corridors come first, in top-to-bottom row and left-to-right run order; vertical corridors follow, in left-to-right column and top-to-bottom run order. |
+| `unread_corridors[].axis` | `horizontal` for a row run, `vertical` for a column run. |
+| `unread_corridors[].endpoints` | Two numeric tuples in spatial order: left/right for horizontal, top/bottom for vertical. They are not reordered into A/B ownership order. Each tuple is `[grid_x, grid_y, world_x, world_y, owner]`. |
+| `unread_corridors[].endpoints[][0]` | Zero-based grid column, increasing right from the native viewport's left edge. |
+| `unread_corridors[].endpoints[][1]` | Zero-based grid row, increasing down from the native viewport's top edge. |
+| `unread_corridors[].endpoints[][2]` | World-space x coordinate of the endpoint cell centre. |
+| `unread_corridors[].endpoints[][3]` | World-space y coordinate of the endpoint cell centre, y up. |
+| `unread_corridors[].endpoints[][4]` | Observed half-alpha owner code: 0 means neither A nor B reaches 128/255; 1 means only A does; 2 means only B does; 3 means both do. A and B are the selected pair's named members; 0 and 3 are not resolved by guessing. |
+| `unread_corridors[].cells` | Interior native-cell centres as numeric `[world_x, world_y]` tuples, y up, left-to-right or top-to-bottom along the run. A centre may occur in multiple corridors. |
+| `unread_corridors[].cell_count` | The number of interior cells in this corridor, exactly `cells.length`. |
+| `unread_corridors[].row_scope` | `pair`; the corridor observes the selected front pair, not an individual rear slot. |
+| `unread_corridors[].row_kind` | `evidence`, including when the required check fails. |
+| `unread_corridors[].row_subjects` | The two selected part names in producer A/B order. |
+
+Both optional fields are omitted when no ambiguous corridor is found; no zero
+or empty-array placeholders are written. Fully read frames retain their existing
+bytes. These additions do not change `motion_opened` or its report shape.
+Numeric colour underflow and other unavailable evidence retain their named
+unmeasured handling; absence of these optional fields alone does not prove a
+fully read frame.
+
+`sampled_frames`, `read_frames` and `unmeasured_frames` count idle frames only.
+A frame enters `read_frames` only when both halves are available and no standing
+corridor is unread. A partially unread frame remains in `unmeasured_frames`
+even when its measured standing cells already make it FAIL. Setup is reported
+separately and is not counted as an idle frame.
+
 A measured count above the effective allowance is
 [`CHECK_BEHIND_PART_SEAMS`](#CHECK_BEHIND_PART_SEAMS). A pair without an
 effective T reports a nonrequired SKIP and HOLE; missing T alone emits no
 `CHECK_BEHIND_PART_SEAMS_UNMEASURED` problem and cannot establish a behind-part
 PASS. With authored T, missing behind slots, idle, setup, motion support,
-boundary population or verified render/material evidence leaves the affected
-reading SKIP with a HOLE and emits
+boundary population or verified render/material evidence cannot establish PASS.
+An unavailable reading is SKIP; a partially unread standing reading retains
+any measured FAIL as described above. An unread population reports a HOLE and emits
 [`CHECK_BEHIND_PART_SEAMS_UNMEASURED`](#CHECK_BEHIND_PART_SEAMS_UNMEASURED),
 making the combined line FAIL. Existing hard render and sidecar failures
 remain named refusals. Setup-only or partial readings cannot establish the
@@ -8844,14 +8889,15 @@ Internal `SeamSupport.drawings` never enters check JSON. Named requirement
 | `ANIMATIONS_DO_NOT_FOLD.declared_not_folding` | `ANIMATIONS_DO_NOT_FOLD.declared_not_folding` | part when the supplied mapping resolves a piece; otherwise rig | finding | resolved piece for e.slot; otherwise [] | [check.ts:3550](../src/check.ts#L3550) |
 | `ANIMATIONS_DO_NOT_FOLD.folding` | `ANIMATIONS_DO_NOT_FOLD.folding` | part when the supplied mapping resolves a piece; otherwise rig | finding when entry === undefined; otherwise evidence | resolved piece for slot; otherwise [] | [check.ts:3512](../src/check.ts#L3512) |
 | `ART_JOINT_DISTANCE.joints` | `ART_JOINT_DISTANCE.joints` | 'rig' | finding when status === 'FAIL'; otherwise evidence | [] | [artjoints.ts:86](../src/artjoints.ts#L86) |
-| `BEHIND_PART_SEAMS.contributors` | `BEHIND_PART_SEAMS.pairs[].setup.motion_opened.samples[].contributors`; `BEHIND_PART_SEAMS.pairs[].setup.standing.samples[].contributors`; `BEHIND_PART_SEAMS.pairs[].frames[].motion_opened.samples[].contributors`; `BEHIND_PART_SEAMS.pairs[].frames[].standing.samples[].contributors` | 'pair' | evidence | [pair.a, pair.b] | [behindseams.ts:320](../src/behindseams.ts#L320) |
-| `BEHIND_PART_SEAMS.hits` | `BEHIND_PART_SEAMS.pairs[].motion_opened.frames`; `BEHIND_PART_SEAMS.pairs[].standing.frames`; `BEHIND_PART_SEAMS.pairs[].motion_opened.worst`; `BEHIND_PART_SEAMS.pairs[].standing.worst` | 'pair' | finding when r.px > allowance; otherwise evidence | parts | [behindseams.ts:374](../src/behindseams.ts#L374) |
-| `BEHIND_PART_SEAMS.pairs` | `BEHIND_PART_SEAMS.pairs` | 'pair' | finding when failed; otherwise evidence | parts | [behindseams.ts:450](../src/behindseams.ts#L450) |
+| `BEHIND_PART_SEAMS.contributors` | `BEHIND_PART_SEAMS.pairs[].setup.motion_opened.samples[].contributors`; `BEHIND_PART_SEAMS.pairs[].setup.standing.samples[].contributors`; `BEHIND_PART_SEAMS.pairs[].frames[].motion_opened.samples[].contributors`; `BEHIND_PART_SEAMS.pairs[].frames[].standing.samples[].contributors` | 'pair' | evidence | [pair.a, pair.b] | [behindseams.ts:348](../src/behindseams.ts#L348) |
+| `BEHIND_PART_SEAMS.hits` | `BEHIND_PART_SEAMS.pairs[].motion_opened.frames`; `BEHIND_PART_SEAMS.pairs[].standing.frames`; `BEHIND_PART_SEAMS.pairs[].motion_opened.worst`; `BEHIND_PART_SEAMS.pairs[].standing.worst` | 'pair' | finding when r.px > allowance; otherwise evidence | parts | [behindseams.ts:408](../src/behindseams.ts#L408) |
+| `BEHIND_PART_SEAMS.pairs` | `BEHIND_PART_SEAMS.pairs` | 'pair' | finding when failed; otherwise evidence | parts | [behindseams.ts:485](../src/behindseams.ts#L485) |
 | `BEHIND_PART_SEAMS.pairs[].frames` | `BEHIND_PART_SEAMS.pairs[].frames` |  |  |  |  |
 | `BEHIND_PART_SEAMS.pairs[].setup` | `BEHIND_PART_SEAMS.pairs[].setup` |  |  |  |  |
-| `BEHIND_PART_SEAMS.samples` | `BEHIND_PART_SEAMS.pairs[].setup.motion_opened.samples`; `BEHIND_PART_SEAMS.pairs[].setup.standing.samples`; `BEHIND_PART_SEAMS.pairs[].frames[].motion_opened.samples`; `BEHIND_PART_SEAMS.pairs[].frames[].standing.samples` | 'pair' | evidence | [pair.a, pair.b] | [behindseams.ts:319](../src/behindseams.ts#L319) |
-| `BEHIND_PART_SEAMS.spans` | `BEHIND_PART_SEAMS.pairs[].motion_opened.spans`; `BEHIND_PART_SEAMS.pairs[].standing.spans` | 'pair' | evidence | parts | [behindseams.ts:382](../src/behindseams.ts#L382) |
-| `BEHIND_PART_SEAMS.unmeasured` | `BEHIND_PART_SEAMS.unmeasured` | pair === null ? 'rig' : 'pair'; 'rig' | finding when required; otherwise evidence; finding | pair === null ? [] : [pair.a, pair.b]; [] | [behindseams.ts:395](../src/behindseams.ts#L395), [behindseams.ts:527](../src/behindseams.ts#L527), [behindseams.ts:555](../src/behindseams.ts#L555) |
+| `BEHIND_PART_SEAMS.samples` | `BEHIND_PART_SEAMS.pairs[].setup.motion_opened.samples`; `BEHIND_PART_SEAMS.pairs[].setup.standing.samples`; `BEHIND_PART_SEAMS.pairs[].frames[].motion_opened.samples`; `BEHIND_PART_SEAMS.pairs[].frames[].standing.samples` | 'pair' | evidence | [pair.a, pair.b] | [behindseams.ts:347](../src/behindseams.ts#L347) |
+| `BEHIND_PART_SEAMS.spans` | `BEHIND_PART_SEAMS.pairs[].motion_opened.spans`; `BEHIND_PART_SEAMS.pairs[].standing.spans` | 'pair' | evidence | parts | [behindseams.ts:416](../src/behindseams.ts#L416) |
+| `BEHIND_PART_SEAMS.unmeasured` | `BEHIND_PART_SEAMS.unmeasured` | pair === null ? 'rig' : 'pair'; 'rig' | finding when required; otherwise evidence; finding | pair === null ? [] : [pair.a, pair.b]; [] | [behindseams.ts:429](../src/behindseams.ts#L429), [behindseams.ts:562](../src/behindseams.ts#L562), [behindseams.ts:590](../src/behindseams.ts#L590) |
+| `BEHIND_PART_SEAMS.unread_corridors` | `BEHIND_PART_SEAMS.pairs[].setup.standing.unread_corridors`; `BEHIND_PART_SEAMS.pairs[].frames[].standing.unread_corridors` | 'pair' | evidence | [pair.a, pair.b] | [behindseams.ts:271](../src/behindseams.ts#L271) |
 | `BOUNDARY_COLOUR_STEP.over` | `BOUNDARY_COLOUR_STEP.over` | 'pair' | finding | r.parts | [boundarycolour.ts:221](../src/boundarycolour.ts#L221) |
 | `BOUNDARY_COLOUR_STEP.unmeasured` | `BOUNDARY_COLOUR_STEP.unmeasured` | part when the supplied mapping resolves a piece; otherwise rig | evidence | resolved piece for r.slot; otherwise [] | [boundarycolour.ts:222](../src/boundarycolour.ts#L222) |
 | `CLOTH_SETTLES.rows` | `CLOTH_SETTLES.rows` | 'rig' | finding when speeds.length > 0 && s < speeds.length; otherwise evidence | [] | [check.ts:5992](../src/check.ts#L5992) |

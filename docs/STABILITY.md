@@ -1201,6 +1201,35 @@ allowance uses `CHECK_BEHIND_PART_SEAMS`; a mandatory unread population uses
 motion support, boundary population or verified render evidence is a HOLE,
 not a zero PASS. Existing render/sidecar refusals remain refusals. The standing
 bracketed-run definition does not certify curved or diagonal openings.
+
+Issue #1325 adds the following optional evidence fields to
+`BEHIND_PART_SEAMS.pairs[].setup.standing` and
+`BEHIND_PART_SEAMS.pairs[].frames[].standing` only. Paths in the table are
+relative to that standing record.
+
+| Field | Stable meaning |
+| --- | --- |
+| `unread_cells` | Distinct native cells in this frame's unread corridors; cross-axis intersections count once. This is an unread population, not a contrast count. |
+| `unread_corridors` | Nonempty array of ambiguous-endpoint runs, horizontal rows before vertical columns, each in native scan order. |
+| `unread_corridors[].axis` | `horizontal` or `vertical`. |
+| `unread_corridors[].endpoints` | Two `[grid_x, grid_y, world_x, world_y, owner]` tuples in left/right or top/bottom order. Grid indices are zero-based, x right and y down; world coordinates are cell centres, y up. Owner codes are 0 for neither A/B reaching half alpha, 1 for A only, 2 for B only and 3 for both; no owner is inferred. |
+| `unread_corridors[].cells` | Interior world-centre `[x, y]` tuples in run order, excluding endpoints. All corridor cells are reported, without a rear-colour or contrast filter; intersections may repeat across corridors. |
+| `unread_corridors[].cell_count` | Exactly `cells.length` for that corridor. |
+| `unread_corridors[].row_scope` | `pair`. |
+| `unread_corridors[].row_kind` | `evidence`. |
+| `unread_corridors[].row_subjects` | The two selected part names in producer A/B order. |
+
+Both fields are omitted when no ambiguous corridor is found, preserving the
+bytes of fully read frames; no zero or empty-array placeholders are added.
+`motion_opened` gains no field. Missing optional unread-corridor evidence does
+not certify other unavailable readings or numeric colour underflow as read.
+A corridor with an ambiguous endpoint owner remains unread without choosing
+an A/B owner. Readable corridors retain their measured cells: a standing count
+above allowance remains FAIL even with unread corridors, while unread
+corridors without a measured excess leave standing SKIP. Required unread
+evidence still makes the combined line FAIL. Idle `read_frames` excludes
+partially unread frames, including those whose measured count already fails;
+they remain in `unmeasured_frames`. Setup is counted separately.
 A boundary-colour PASS does not prove seam closure. Without `behind_seams`,
 existing configurations remain optional and their checks retain their behavior;
 no behind-part PASS is claimed. See [Behind-part seams](AUTHORING.md#behind-part-seams-issue-1314).

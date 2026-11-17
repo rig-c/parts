@@ -54,6 +54,20 @@ export interface BehindSeamsCount {
   max_spatial_run_cells: number;
   samples: BehindSeamsSample[];
 }
+export type BehindSeamsEndpoint = [grid_x: number, grid_y: number, world_x: number, world_y: number, owner: number];
+export interface BehindSeamsUnreadCorridor {
+  axis: 'horizontal' | 'vertical';
+  /** Spatial order: left/right on a row, top/bottom on a column; owners are not inferred. */
+  endpoints: [BehindSeamsEndpoint, BehindSeamsEndpoint];
+  cells: Array<[number, number]>;
+  cell_count: number;
+}
+export interface BehindSeamsStanding extends BehindSeamsCount {
+  /** Distinct grid cells across all unread corridors, including cross-axis intersections. */
+  unread_cells?: number;
+  /** Omitted, together with unread_cells, when every corridor's endpoints are readable. */
+  unread_corridors?: BehindSeamsUnreadCorridor[];
+}
 export interface BehindSeamsFrame {
   animation: 'idle' | null;
   index: number;
@@ -61,7 +75,7 @@ export interface BehindSeamsFrame {
   behind_slots: string[];
   grid: SeamGrid | null;
   motion_opened: BehindSeamsCount;
-  standing: BehindSeamsCount;
+  standing: BehindSeamsStanding;
 }
 export interface BehindSeamsHit {
   index: number;
@@ -231,7 +245,7 @@ function readBehindFrame(api: BehindSeamsApi, input: BehindSeamsFramesInput, pai
     const owner = (k: number): number => A.alpha[k] >= half ? B.alpha[k] >= half ? 3 : 1 : B.alpha[k] >= half ? 2 : 0;
     const corridors = new Map<number, Corridor>();
     const support = new Set<number>();
-    let ambiguous = false;
+    const unreadCells = new Set<number>(), unreadCorridors: BehindSeamsUnreadCorridor[] = [];
     // A measured overlap is support even when the opening population is empty.
     for (let k = 0; k < n; k++) if (owner(k) === 3) support.add(k);
     for (const [length, lines, step, start] of [[width, height, 1, width], [height, width, width, 1]]) for (let l = 0; l < lines; l++) {
@@ -247,7 +261,17 @@ function readBehindFrame(api: BehindSeamsApi, input: BehindSeamsFramesInput, pai
         if (first === 0 || j === length) continue; // outer silhouette, never a bracketed opening
         const left = l * start + (first - 1) * step, right = l * start + j * step;
         const a = owner(left), b = owner(right);
-        if (a === 0 || b === 0 || a === 3 || b === 3) { ambiguous = true; continue; }
+        if (a === 0 || b === 0 || a === 3 || b === 3) {
+          const endpoint = (at: number, owner: number): BehindSeamsEndpoint => [at % width, Math.floor(at / width), ...centre(grid, at), owner];
+          const cells: Array<[number, number]> = [];
+          for (let t = first; t < j; t++) {
+            const at = l * start + t * step;
+            unreadCells.add(at); cells.push(centre(grid, at));
+          }
+          unreadCorridors.push({ ...checkRow('BEHIND_PART_SEAMS.unread_corridors', 'pair', false, [pair.a, pair.b]),
+            axis: step === 1 ? 'horizontal' : 'vertical', endpoints: [endpoint(left, a), endpoint(right, b)], cells, cell_count: cells.length });
+          continue;
+        }
         if (a === b) continue;
         support.add(left); support.add(right);
         const endpoints: [number, number] = a === 1 ? [left, right] : [right, left];
@@ -259,6 +283,10 @@ function readBehindFrame(api: BehindSeamsApi, input: BehindSeamsFramesInput, pai
       }
     }
     row.standing.boundary_cells = support.size;
+    if (unreadCorridors.length > 0) {
+      row.standing.unread_cells = unreadCells.size;
+      row.standing.unread_corridors = unreadCorridors;
+    }
     let motionReadable = setup;
     const motionCells = new Map<number, SeamCell>();
     if (!setup) {
@@ -320,9 +348,10 @@ function readBehindFrame(api: BehindSeamsApi, input: BehindSeamsFramesInput, pai
         contributors: row.behind_slots.filter(slot => (weights.get(k)?.get(slot) ?? 0) > 0).map(slot => ({ ...checkRow('BEHIND_PART_SEAMS.contributors', 'pair', false, [pair.a, pair.b]), slot, weight: weights.get(k)!.get(slot)! })), distances, counted: counts };
     };
     const standingHits = new Set<number>(), motionHits = new Set<number>();
+    let standingUnderflow = false;
     for (const [k, corridor] of corridors) {
       if (!surviving.has(k)) continue;
-      if (rear.alpha[k] <= 0 || underflow.has(k)) { unread(label, 'positive symbolic rear contribution underflowed its numeric colour weight'); ambiguous = true; continue; }
+      if (rear.alpha[k] <= 0 || underflow.has(k)) { unread(label, 'positive symbolic rear contribution underflowed its numeric colour weight'); standingUnderflow = true; continue; }
       row.standing.geometric_px++;
       let chosen: [number, number] | null = null, raw = false, qualifies = false;
       for (const [a, b] of corridor.endpoints) {
@@ -336,7 +365,12 @@ function readBehindFrame(api: BehindSeamsApi, input: BehindSeamsFramesInput, pai
       row.standing.samples.push(sample(k, chosen, qualifies));
     }
     counted(row.standing, standingHits, grid, allowance);
-    if (support.size === 0 || ambiguous) { row.standing.status = 'SKIP'; unread(label, ambiguous ? 'standing endpoints include ambiguous half-alpha owners; unread corridors are not zero' : 'no A/B boundary support was measured (no overlap, contact or bracketed corridor)'); }
+    // Incomplete coverage cannot certify PASS, but cannot hide a measured failure.
+    if (support.size === 0 || unreadCorridors.length > 0 || standingUnderflow) {
+      if (row.standing.status !== 'FAIL') row.standing.status = 'SKIP';
+      if (unreadCorridors.length > 0) unread(label, 'standing endpoints include ambiguous half-alpha owners; unread corridors are not zero');
+      else if (support.size === 0) unread(label, 'no A/B boundary support was measured (no overlap, contact or bracketed corridor)');
+    }
     for (const k of motionCells.keys()) {
       if (rasters.hidden.data[k * 4 + 3] !== 0 || rasters.full.data[k * 4 + 3] === 0 || !surviving.has(k)) continue;
       // Stock gapCovered already transports the A/B setup-overlap material.
@@ -446,7 +480,8 @@ export function measureBehindSeamFrames(api: BehindSeamsApi, input: BehindSeamsF
       }
     }
     const failed = motion.status === 'FAIL' || standing.status === 'FAIL' || line.unmeasured.some(u => u.pair === pair.pair && threshold !== null);
-    const readFrames = frames.filter(f => f.motion_opened.status !== 'SKIP' && f.standing.status !== 'SKIP').length;
+    const readFrames = frames.filter(f => f.motion_opened.status !== 'SKIP' && f.standing.status !== 'SKIP' &&
+      (f.standing.unread_corridors?.length ?? 0) === 0 && !line.unmeasured.some(u => u.pair === pair.pair && u.frame === `idle frame ${f.index}`)).length;
     line.pairs.push({ ...checkRow('BEHIND_PART_SEAMS.pairs', 'pair', failed, parts), animation: 'idle', pair: pair.pair, parts, declared: [...pair.declared], threshold, allowance, setup, frames, motion_opened: motion, standing,
       sampled_frames: input.idle.length, read_frames: readFrames, unmeasured_frames: input.idle.length - readFrames });
   }
