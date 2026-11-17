@@ -242,6 +242,32 @@ also answers to the alias `spine-parts` as long as the install keeps it
 `--help` and `--version`. The flags' meanings are `rig-parts --help`'s; their
 defaults are the help's too, and none is guessed from the art.
 
+The check diagnostic vocabulary adds the following refusal (issue #1308):
+
+- `CHECK_CARRIER_NOT_EXCITED` — the measured root-to-carrier chain, including
+  the carrier, is static during idle. Its check output row adds `carrier_chain`
+  (a string array in root-to-carrier order) and `measured_driver: "none"`. A
+  declared requirement for this cloth to move remains FAIL; it is not relaxed
+  to WARNING.
+
+Carrier excitation is measured from idle transforms, including inherited and
+physics-driven movement, rather than an authored-key scan. Below-floor
+`UNMEASURED` diagnostics retain actual root and tip travel in rig px, the
+unchanged 0.5 rig px floor, and the additive `measured_driver` field: the nearest
+world-moving bone on the root-to-carrier chain (including the carrier),
+`"none"` when the chain is measured still, or `"unavailable"` for missing or
+unusable geometry. Unknown movement does not establish a static chain. The
+nearest moving bone is an observation, not causal attribution to authored keys.
+The helper reads world-origin span and both affine columns rounded to three
+decimal places, without changing public thresholds.
+The reading stays `UNMEASURED` under the existing SKIP and mixed-line verdict
+policy; it does not automatically make the generic check FAIL. A separately
+declared requirement for measurable movement is not satisfied by that reading.
+Drive the carrier, or remove the requirement for this cloth to move on idle
+when still cloth is intended. These diagnostics change no threshold or gate
+and do not certify visibility. See the
+[carrier excitation diagnostics](AUTHORING.md#CHECK_CARRIER_NOT_EXCITED).
+
 <!-- stable:commands -->
 | command | flags |
 | --- | --- |
