@@ -46,6 +46,14 @@ use. Three things we learned the hard way are built into that path:
   `median`) and how deep its own shape is (its `relief`) are declared in rig
   pixels, and the tool never guesses them.
 
+Surfaces in one turn group share one depth reference: the first surface's
+opaque-art median, preferring the face in a head group. With both eye landmarks,
+the head instead anchors to their mean depth on that primary surface. A surface
+keeps the depth encoded from its declared `median` relative to this shared
+anchor; its own median is not subtracted again. Thus two touching parts retain
+their declared depth difference when they turn. Head and body groups have
+separate anchors, and this applies to generated grids and authored meshes alike.
+
 See-through, the layer decomposition this package reads, also writes a per-layer
 depth sheet, and a config can register those directly (`config.depth`,
 [Per-layer depth sheets](AUTHORING.md#per-layer-depth-sheets-773)). In

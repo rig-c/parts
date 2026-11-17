@@ -5,7 +5,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { weightedSurfaceEarFixture, weightedSurfaceFixture } from '../fixtures/turn_surface.ts';
+import { abuttingSurfaceFixture, weightedSurfaceEarFixture, weightedSurfaceFixture } from '../fixtures/turn_surface.ts';
 import { explicitFixture, explicitIslandsFixture } from '../fixtures/explicitmesh.ts';
 import { block, rigImages, rigParts } from '../fixtures/rig.ts';
 import { parseConfig } from '../src/config.ts';
@@ -17,6 +17,7 @@ import { writePng } from '../src/raster/png.ts';
 import { PartsError } from '../src/errors.ts';
 import { pyRound } from '../src/round.ts';
 import type { Raster } from '../src/raster/types.ts';
+import { evaluateDeformTransform, type DeformTransform } from '@rig-c/core/deformgen';
 
 type Say = (name: string, ok: boolean, detail: string) => void;
 type Deform = { slot: string; attachment: string; keys: Array<{ t: number; vertices?: number[] }> };
@@ -48,7 +49,8 @@ function displacementError(built: RigOutput, plant: 'none' | 'plate' | 'weight-t
     for (const name of names) {
       const partIndex = fixture.parts.parts.findIndex(p => p.name === name), p = fixture.parts.parts[partIndex], att = meshOf(built, name);
       const deform = anim.deform.find(d => d.slot === name)!;
-      const zRef = pyRound((60 + 25 * partIndex + (p.w - 1) / 2 + (p.h - 1) / 2) * 40 / 255, 4);
+      const primaryIndex = animName === 'body_turn' ? 2 : 0, primary = fixture.parts.parts[primaryIndex];
+      const zRef = pyRound((60 + 25 * primaryIndex + (primary.w - 1) / 2 + (primary.h - 1) / 2) * 40 / 255, 4);
       for (const [keyIndex, deg] of [[0, -band], [4, band]] as const) {
         const run = deform.keys[keyIndex].vertices!;
         let at = 0, lo = Infinity, hi = -Infinity;
@@ -79,6 +81,7 @@ function displacementError(built: RigOutput, plant: 'none' | 'plate' | 'weight-t
 }
 
 export function runTurnSurfaceChecks(dir: string, say: Say): void {
+  runTurnSharedReferenceChecks(say);
   runTurnUnitChecks(say);
   runTurnCoverageChecks(say);
   const f = weightedSurfaceFixture(), before = JSON.stringify(f.config), built = buildRig(parseConfig(f.config), f.parts, f.images);
@@ -168,5 +171,78 @@ export function runTurnSurfaceChecks(dir: string, say: Say): void {
       const att = result.rig.skins.default[payload.slot][payload.slot] as MeshAttachment;
       return JSON.stringify(att.weights) === JSON.stringify(payload.weights) && JSON.stringify(att.uvs) === JSON.stringify(payload.uvs) && JSON.stringify(att.triangles) === JSON.stringify(payload.triangles) && att.hull === payload.hull && deforms.some(d => d.slot === payload.slot && d.attachment === payload.slot && d.keys[0].vertices?.length === 2 * att.weights.flat().length);
     }), `${payloads.length} explicit attachment(s); authored floats, hull, UVs, triangles, weight ordering unchanged; oversized turn.grid ignored for authored meshes`);
+  }
+}
+
+/** Read emitted bind-space offsets or Core's emitted grid transform plus carrier tracks. */
+export function sharedReferenceReadings(group: 'head' | 'body', authored: boolean, eyes = false, build: typeof buildRig = buildRig) {
+  const f = abuttingSurfaceFixture(group, authored, eyes), built = build(parseConfig(f.config), f.parts, f.images);
+  const world = computeWorldTransforms(built.rig.bones);
+  const reference = pyRound((eyes ? 56 : 70) * 40 / 255, 4);
+  const readings = [];
+  for (const [animName, band, axis] of group === 'head'
+    ? [['turn', 15, 0], ['tilt', 12, 1]] as const : [['body_turn', 15, 0]] as const) {
+    const anim = built.motion.animations[animName] as unknown as {
+      tracks: Array<{ bone?: string; property: string; keys: Array<{ derive?: { depth?: number }; v?: number[] }> }>;
+      deform: Array<{ slot: string; keys: Array<{ vertices?: number[]; transform?: DeformTransform }> }>;
+    };
+    for (const [ki, degrees] of [[0, -band], [4, band]] as const) {
+      const sides: number[][] = [], errors: number[] = [];
+      for (const [pi, p] of f.parts.parts.entries()) {
+        const key = anim.deform.find(d => d.slot === p.name)!.keys[ki];
+        const att = meshOf(built, p.name), values: number[] = [];
+        // At y=28 the two source edges are levels 100 and 104. A shared anchor
+        // cancels from their difference, leaving only that four-level step.
+        const level = pi === 0 ? 100 : 104;
+        const expected = -(20 + level * 40 / 255 - reference) * Math.sin(degrees * Math.PI / 180);
+        if (authored) {
+          let at = 0;
+          for (const row of att.weights) {
+            let wx = 0, wy = 0, dx = 0, dy = 0;
+            for (const w of row) {
+              const m = world.get(w.bone)!, [x, y] = toWorld(m, w.x, w.y);
+              wx += x * w.weight; wy += y * w.weight;
+              const vx = key.vertices![at++], vy = key.vertices![at++];
+              dx += (m.a * vx + m.b * vy) * w.weight; dy += (m.c * vx + m.d * vy) * w.weight;
+            }
+            const [cx, cy] = setupToPaintingPoint([wx, wy], [64, 64], [64, 64]);
+            if (Math.abs(cy - 28) < 0.000001 && cx >= p.x && cx <= p.x + p.w) values.push(axis === 0 ? dx : dy);
+          }
+        } else {
+          const shift = anim.tracks.filter(t => t.bone === `${p.name}_surface` || t.bone === (group === 'head' ? 'faceshift' : 'bodyshift'))
+            .reduce((sum, t) => sum - (t.keys[ki].derive?.depth ?? 0) * Math.sin(degrees * Math.PI / 180), 0);
+          const generator = att.generator!;
+          if (generator.kind !== 'grid' || generator.depth === undefined || key.transform === undefined) throw new Error('missing emitted depth grid');
+          const scalar = new Map(built.images).get(generator.depth.image)!;
+          // Actual emitted padded sheet at the adjacent opaque row, all columns.
+          for (let x = 0; x < p.w; x++) {
+            const y = pi === 0 ? p.h - 1 : 0;
+            const v = scalar.data[((y + 4) * scalar.width + x + 4) * 4];
+            const z = (generator.depth.near === 'white' ? v : 255 - v) * generator.depth.zScale / 255;
+            values.push(evaluateDeformTransform(key.transform, [0, 0], n => n, 'abutting grid', [z]).offsets[axis] + shift);
+          }
+        }
+        errors.push(...values.map(v => Math.abs(v - expected)));
+        sides.push(values);
+      }
+      const jumps = sides[0].flatMap(a => sides[1].map(b => Math.abs(a - b)));
+      const bound = 4 * 40 / 255 * Math.abs(Math.sin(degrees * Math.PI / 180));
+      readings.push({ animName, degrees, samples: sides.map(s => s.length), dx: sides.map(s => s[0]),
+        mean: jumps.reduce((a, b) => a + b, 0) / jumps.length, max: Math.max(...jumps), bound, error: Math.max(...errors) });
+    }
+  }
+  return { built, readings };
+}
+
+export function runTurnSharedReferenceChecks(say: Say, build: typeof buildRig = buildRig): void {
+  for (const group of ['body', 'head'] as const) for (const authored of [false, true]) {
+    const cases = group === 'head' ? [false, true] : [false];
+    const readings = cases.flatMap(eyes => sharedReferenceReadings(group, authored, eyes, build).readings.map(r => ({ eyes, ...r })));
+    // Authored offsets round each bind vector to six decimals. Two identity
+    // bindings differ by at most two half-units of that decimal grid.
+    const tolerance = 2 * 0.5 * 10 ** -6;
+    say(`WTS${group === 'body' ? (authored ? '19' : '18') : (authored ? '21' : '20')}_SHARED_REFERENCE_${group.toUpperCase()}_${authored ? 'AUTHORED' : 'GRID'}`,
+      readings.every(r => r.samples.every(n => n > 0) && r.max <= r.bound + tolerance && r.error <= tolerance),
+      JSON.stringify(readings));
   }
 }

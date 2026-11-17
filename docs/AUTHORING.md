@@ -8276,6 +8276,16 @@ parents and stops keep their emitted names; Core creates the draw bones later.
 A name ending in `_d` alone is not an alias: a missing non-stop bone still
 raises `RIG_TURN_SURFACE_MESH_BINDINGS`. No new config field is required.
 
+All surfaces in one turn group share the reference already used by its sampled
+units: the first surface's opaque-art depth median, with `face` preferred for
+the head. When both eye landmarks exist, the head uses their mean depth sampled
+on that primary surface instead. Generated grids and authored weighted meshes
+both move by `-(pivot + z - zRef) * sin(angle)` along the active axis. Each
+surface samples its own sheet for `z`; it does not subtract its own median or
+eye samples. The depth recipe's `median` is encoded upstream in that sheet,
+so relative placements between surfaces survive the turn. Each group keeps
+its own reference; a single surface keeps its existing motion bytes.
+
 Depth-turn `"surface"` parts may use authored weighted `grid`, `contour`,
 `influence` or `explicit` meshes, or the turn-generated grid when attached as
 a region. `auto` cannot combine with `"surface"` in either `turn.roles` or
