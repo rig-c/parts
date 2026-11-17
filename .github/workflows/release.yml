@@ -141,7 +141,7 @@ jobs:
             local spec="$1" reply value
             if reply="$(npm view "$spec" version --json 2>/dev/null)"; then
               if value="$(REGISTRY_REPLY="$reply" node -e '
-                try { const v = JSON.parse(process.env.REGISTRY_REPLY); if (typeof v !== "string" || !/^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?(\+[0-9A-Za-z.]+)?$/.test(v)) process.exit(1); process.stdout.write(v); } catch { process.exit(1); }
+                try { const raw = JSON.parse(process.env.REGISTRY_REPLY); const v = Array.isArray(raw) ? (raw.length === 1 ? raw[0] : null) : raw; if (typeof v !== "string" || !/^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?(\+[0-9A-Za-z.]+)?$/.test(v)) process.exit(1); process.stdout.write(v); } catch { process.exit(1); }
               ')"; then printf '%s' "$value"; return 0; fi
             else
               if REGISTRY_REPLY="$reply" node -e '
