@@ -604,8 +604,19 @@ export function behindSeamLines(line: BehindSeamsMeasured | null): string[] {
         const r = p[kind], w = r.worst;
         return `${BEHIND_SEAM_LINE}: pair "${p.pair}" ${kind} ${r.status} — ${r.hit_frames}/${p.frames.length} idle hit frames, sampled/read/unmeasured ${p.sampled_frames ?? p.frames.length}/${p.read_frames ?? 0}/${p.unmeasured_frames ?? 0}, max_px ${r.max_px}, max_run ${r.max_run.frames} frames (${r.max_run.seconds} s), max_spatial_run_cells ${r.max_spatial_run_cells} (${r.max_spatial_run_world} world units), earliest worst ${w === null ? 'none' : `frame ${w.index} t ${w.time}, cell ${w.cell}, box [${w.box.join(', ')}]`}; threshold ${p.threshold === null ? 'undeclared' : p.threshold}, allowance ${p.allowance}`;
       };
-      return [summary('motion_opened'), summary('standing'), `${BEHIND_SEAM_LINE}: pair "${p.pair}" setup ${setup === null ? 'SKIP — HOLE: setup not read' : `standing ${setup.standing.status}, ${setup.standing.px} cells; motion_opened ${setup.motion_opened.status}, ${setup.motion_opened.px} cells; behind [${setup.behind_slots.join(', ')}]`}`];
+      const setupStanding = setup === null ? '' : setup.standing.px > 0 && setup.standing.status === 'SKIP' ? `${setup.standing.px} cells` : `${setup.standing.status}, ${setup.standing.px} cells`;
+      return [summary('motion_opened'), summary('standing'), `${BEHIND_SEAM_LINE}: pair "${p.pair}" setup ${setup === null ? 'SKIP — HOLE: setup not read' : `standing ${setupStanding}; motion_opened ${setup.motion_opened.status}, ${setup.motion_opened.px} cells; behind [${setup.behind_slots.join(', ')}]`}`];
     }),
-    ...line.unmeasured.map(u => `${BEHIND_SEAM_LINE}: ${u.pair === null ? 'rig' : `pair "${u.pair}"`} ${u.frame} SKIP — ${u.reason}`),
+    ...line.unmeasured.map(u => {
+      const target = u.pair === null ? 'rig' : `pair "${u.pair}"`;
+      const pair = u.pair === null ? undefined : line.pairs.find(p => p.pair === u.pair);
+      const frame = pair === undefined ? undefined : u.frame === 'setup' ? pair.setup ?? undefined : pair.frames.find(f => `idle frame ${f.index}` === u.frame);
+      const corridors = frame?.standing.unread_corridors;
+      if (frame !== undefined && frame.standing.px > 0 && corridors !== undefined && corridors.length > 0 && u.reason.includes('unread corridors')) {
+        const status = frame.standing.status === 'FAIL' ? `FAIL, ${frame.standing.px} cells` : `${frame.standing.px} cells`;
+        return `${BEHIND_SEAM_LINE}: ${target} ${u.frame} standing ${status} — unread corridors: ${corridors.length} (cells ${frame.standing.unread_cells ?? 0}); ${u.reason}`;
+      }
+      return `${BEHIND_SEAM_LINE}: ${target} ${u.frame} SKIP — ${u.reason}`;
+    }),
   ];
 }

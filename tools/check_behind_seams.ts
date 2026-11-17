@@ -570,6 +570,7 @@ function runBehindSeamPrimitiveChecks(say: Say): void {
     const onlyUnread = measured(behindAmbiguousFixture(owner, side), { threshold: 40 });
     const expectedOwners = side === 'left' ? [owner, 2] : [1, owner];
     const rows = [onlyUnread.pair.setup!, ...onlyUnread.pair.frames];
+    const frameSkipLines = onlyUnread.lines.filter(line => line.includes('idle frame ') && line.includes('unread corridors are not zero'));
     say(`BHS46_ONLY_AMBIGUOUS_OWNER_IS_UNREAD_WITHOUT_INFERENCE[${owner},${side}]`,
       rows.every(row => row.standing.status === 'SKIP' && row.standing.px === 0 && row.standing.samples.length === 0 &&
         row.standing.unread_cells === 4 && row.standing.unread_corridors?.length === 4 &&
@@ -578,9 +579,39 @@ function runBehindSeamPrimitiveChecks(say: Say): void {
         equal(row.standing.unread_corridors.map(corridor => corridor.cells), [[[4.5, 3.5]], [[4.5, 2.5]], [[4.5, 1.5]], [[4.5, 0.5]]])) &&
         onlyUnread.pair.standing.status === 'SKIP' && onlyUnread.pair.read_frames === 0 && onlyUnread.pair.unmeasured_frames === 3 &&
         onlyUnread.reading.status === 'FAIL' && onlyUnread.problems.some(problem => problem.code === BEHIND_SEAM_UNMEASURED_CODE) &&
-        !onlyUnread.problems.some(problem => problem.code === BEHIND_SEAM_CODE),
-      JSON.stringify({ owner, side, reading: summary(onlyUnread.reading), unread: onlyUnread.pair.setup!.standing.unread_corridors }));
+        !onlyUnread.problems.some(problem => problem.code === BEHIND_SEAM_CODE) &&
+        frameSkipLines.length === 3 && frameSkipLines.every((line, i) =>
+          line === `${BEHIND_SEAM_LINE}: pair "a|b" idle frame ${i} SKIP — HOLE: standing endpoints include ambiguous half-alpha owners; unread corridors are not zero`),
+      JSON.stringify({ owner, side, reading: summary(onlyUnread.reading), unread: onlyUnread.pair.setup!.standing.unread_corridors, frameSkipLines }));
   }
+
+  const withinBarMixed = measured(ambiguousMixed, { threshold: 40, allowance: 3 });
+  const fullyUnread = measured(behindAmbiguousFixture(3, 'left', false), { threshold: 40 });
+  const mixedLogVerdict = (failLines: readonly string[], allowedLines: readonly string[], unreadLines: readonly string[]): boolean => {
+    const failFrames = failLines.filter(line => line.includes('idle frame '));
+    const allowedFrames = allowedLines.filter(line => line.includes('idle frame '));
+    const unreadFrames = unreadLines.filter(line => line.includes('idle frame '));
+    return failFrames.length === 3 && allowedFrames.length === 3 && unreadFrames.length === 3 &&
+      failFrames.every((line, i) => !line.includes('SKIP') &&
+        line.includes(`idle frame ${i} standing FAIL, 3 cells — unread corridors: 1 (cells 1); HOLE:`)) &&
+      allowedFrames.every((line, i) => !line.includes('SKIP') &&
+        line.includes(`idle frame ${i} standing 3 cells — unread corridors: 1 (cells 1); HOLE:`)) &&
+      !failLines.some(line => line.includes('setup') && line.includes('SKIP')) &&
+      !allowedLines.some(line => line.includes('setup') && line.includes('SKIP')) &&
+      unreadFrames.every((line, i) => line === `${BEHIND_SEAM_LINE}: pair "a|b" idle frame ${i} SKIP — HOLE: standing endpoints include ambiguous half-alpha owners; unread corridors are not zero`);
+  };
+  const oldTextMutant = localised.reading.unmeasured.map(u =>
+    `${BEHIND_SEAM_LINE}: ${u.pair === null ? 'rig' : `pair "${u.pair}"`} ${u.frame} SKIP — ${u.reason}`);
+  const mixedJsonBefore = JSON.stringify(localised.reading);
+  say('BHS50_MIXED_FRAME_LOG_LINE_REPORTS_COUNTED_STATUS_AND_UNREAD_CORRIDOR_CLAUSE',
+    mixedLogVerdict(localised.lines, withinBarMixed.lines, fullyUnread.lines) &&
+      !mixedLogVerdict(oldTextMutant, withinBarMixed.lines, fullyUnread.lines) &&
+      !mixedLogVerdict(localised.lines, oldTextMutant, fullyUnread.lines) &&
+      mixedJsonBefore === JSON.stringify(measured(ambiguousMixed, { threshold: 40 }).reading),
+    JSON.stringify({ failFrame0: localised.lines.find(line => line.includes('idle frame 0')),
+      allowedFrame0: withinBarMixed.lines.find(line => line.includes('idle frame 0')),
+      unreadFrame0: fullyUnread.lines.find(line => line.includes('idle frame 0')),
+      mutantRejected: !mixedLogVerdict(oldTextMutant, withinBarMixed.lines, fullyUnread.lines) }));
 
   const crossUnread = behindCrossFixture();
   crossUnread.pages.get('b')!.set(1, 2, [...FRONT, 255]);
