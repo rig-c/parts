@@ -327,7 +327,8 @@ export function runEditedReferenceCwdChecks(dir: string, say: Say): void {
   const scratchOut = join(dir, 'scratch-output'); run(input, scratchOut, scratchFile);
   say('CWD_DEEP_SCRATCH_CONFIG_ROUNDTRIPS_AND_ASSEMBLES_EXACT_PNG_BYTES',
     scratchTargets.every(t => posix.normalize(t).split('/').findIndex(s => s !== '..') > cwdDepth) &&
-    (assembly(scratchRaw).edited_parts as Block).dir === block.dir &&
+    (assembly(scratchRaw).edited_parts as Block).dir === relative(scratchDir, resolve(dirname(file), block.dir)).replaceAll('\\', '/') &&
+    JSON.stringify((assembly(scratchRaw).edited_parts as Block).receipts.map(r => r.file)) === JSON.stringify(block.receipts.map(r => r.file)) &&
     JSON.stringify(scratchRefs.map(r => r.value)) === JSON.stringify(scratchTargets) &&
     block.receipts.every((r, i) => readFileSync(join(scratchOut, 'parts', r.part + '.png')).equals(readFileSync(expected[i]))),
     JSON.stringify({ cwdDepth, targets: scratchTargets, values: scratchRefs.map(r => r.value) }));
@@ -400,9 +401,10 @@ function checkFileReferences(dir: string, input: Input, baseline: string, bodyBy
   const scratch = json(scratchFile), scratchRefs = configFileReferences(scratch);
   const scratchOut = join(dir, 'scratch-output'); run(input, scratchOut, scratchFile);
   say('SCRATCH_CONFIG_RESOLVES_ORIGINAL_FILES_AND_ASSEMBLES_EXACT_BYTES',
-    (assembly(scratch).edited_parts as Block).dir === block.dir &&
+    (assembly(scratch).edited_parts as Block).dir === relative(scratchDir, resolve(dirname(file), block.dir)).replaceAll('\\', '/') &&
+    JSON.stringify((assembly(scratch).edited_parts as Block).receipts.map(r => r.file)) === JSON.stringify(block.receipts.map(r => r.file)) &&
     JSON.stringify(scratchRefs.map(r => resolve(dirname(scratchFile), r.value))) === JSON.stringify(declared) && exact(scratchOut),
-    'production scratchConfig shared by mesh-draft and remesh keeps the shared dir and exact original file targets');
+    'production scratchConfig shared by mesh-draft and remesh rebases the shared dir while retaining receipt filename bytes and exact original file targets');
   const broken = structuredClone(raw);
   for (const ref of configFileReferences(broken)) ref.set(resolve(source, ref.value));
   say('OLD_ABSOLUTE_SCRATCH_RELOCATION_IS_REFUSED', problems(() => parseEarlyConfig(broken, 'assemble')).includes('CONFIG_FIELD_TYPE'),

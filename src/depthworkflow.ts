@@ -5,7 +5,8 @@
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
-import { configFileReferences, loadConfigAndAnimations, parseConfig } from './config.ts';
+import { loadConfigAndAnimations, parseConfig } from './config.ts';
+import { relocateConfigReferences } from './configrelocation.ts';
 import { depthReading, readSourceDepth } from './depthsheets.ts';
 import { alphaSupport, depthMapFail as fail, floatBox, integrateNormals, mapToSheet, readNumericMap, type NumericMap } from './depthmaps.ts';
 import { depthImageReference, partImageReference, readParts } from './parts.ts';
@@ -229,9 +230,7 @@ export function applyDepth(input: { parts: string; manifest: string; config: str
     if (group.unitDepths !== undefined) target.unitDepths = group.unitDepths;
   }
   // Keep relative paths portable when relocating the output directory with its inputs.
-  for (const ref of configFileReferences(raw)) {
-    ref.set(relative(resolve(input.out), resolve(dirname(input.rigConfig), ref.value)));
-  }
+  relocateConfigReferences(raw, dirname(input.rigConfig), input.out, 'relative');
   parseConfig(raw);
   const warnings: string[] = [];
   const writes = new Map<string, Uint8Array>(), rows: Obj[] = [], recs = rawParts.parts as Obj[];
