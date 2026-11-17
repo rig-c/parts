@@ -44357,6 +44357,10 @@ function runPushProvenanceControls(say: (name: string, ok: boolean, detail: stri
     { name: 'partial prerelease below stable latest', event: 'workflow_dispatch', present: names.slice(0, 2), inputTag: 'v1.2.3-rc.1', latest: '1.2.3', rule: 'RELEASE_TAG_BELOW_LATEST' },
     { name: 'partial prerelease numeric ordering', event: 'workflow_dispatch', present: names.slice(0, 2), inputTag: 'v1.2.3-rc.10', latest: '1.2.3-rc.2' },
     { name: 'canonical latest absent', event: 'workflow_dispatch', querySpec: '@rig-c/parts', queryReply: '{"error":{"code":"E404"}}', queryExit: '1' },
+    { name: 'npm 11 string view served', event: 'workflow_dispatch', present: [names[0]], querySpec: `${names[0]}@1.2.3`, queryReply: '"1.2.3"', queryExit: '0' },
+    ...names.map(name => ({ name: `${name} npm 12 one-element array served`, event: 'workflow_dispatch', present: [name], querySpec: `${name}@1.2.3`, queryReply: '["1.2.3"]', queryExit: '0' })),
+    { name: 'latest npm 12 one-element array', event: 'workflow_dispatch', present: names.slice(0, 2), querySpec: '@rig-c/parts', queryReply: '["1.2.2"]', queryExit: '0' },
+    { name: 'below latest npm 12 one-element array refuses', event: 'workflow_dispatch', present: names.slice(0, 2), querySpec: '@rig-c/parts', queryReply: '["1.2.4"]', queryExit: '0', rule: 'RELEASE_TAG_BELOW_LATEST' },
     ...names.flatMap(name => [
       ...['EAI_AGAIN', 'ENOTFOUND', 'E401', 'E403', 'E500'].map(code => ({
         name: `${name} registry ${code} is not absent`, event: 'workflow_dispatch', present: names.filter(n => n !== name),
@@ -44367,7 +44371,7 @@ function runPushProvenanceControls(say: (name: string, ok: boolean, detail: stri
         { label: 'E500 mentions E404', reply: '{"error":{"code":"E500","summary":"E404"}}', exit: '1' },
         { label: 'malformed success', reply: '{', exit: '0' },
         { label: 'wrong version', reply: '"1.2.2"', exit: '0' },
-        { label: 'array success', reply: '["1.2.3"]', exit: '0' },
+        { label: 'two-element array', reply: '["1.2.3","1.2.4"]', exit: '0' },
         { label: 'success with error body', reply: '{"error":{"code":"E404"}}', exit: '0' },
       ].map(response => ({
         name: `${name} ${response.label} is not absent`, event: 'workflow_dispatch', present: names.filter(n => n !== name),
@@ -44377,6 +44381,11 @@ function runPushProvenanceControls(say: (name: string, ok: boolean, detail: stri
     ...[
       { label: 'transport', reply: '{"error":{"code":"EAI_AGAIN"}}', exit: '1' },
       { label: 'malformed', reply: 'not JSON', exit: '0' },
+      { label: 'two-element array', reply: '["1.2.2","1.2.3"]', exit: '0' },
+      { label: 'empty array', reply: '[]', exit: '0' },
+      { label: 'non-string array element', reply: '[123]', exit: '0' },
+      { label: 'wrong array version', reply: '["not-semver"]', exit: '0' },
+      { label: 'object shape', reply: '{"version":"1.2.2"}', exit: '0' },
     ].map(response => ({ name: `latest ${response.label} is not absent`, event: 'workflow_dispatch', querySpec: '@rig-c/parts', queryReply: response.reply, queryExit: response.exit, rule: 'RELEASE_REGISTRY_QUERY' })),
 
   ];
@@ -44512,6 +44521,8 @@ function runPushProvenanceControls(say: (name: string, ok: boolean, detail: stri
       { what: 'canonical pack writes another destination', text: change('npm pack . --pack-destination .', 'npm pack . --pack-destination elsewhere') },
       { what: 'alias plan fields swapped', text: change('PUBLISH_NAME: ${{ needs.target.outputs.rig_parts }}', 'PUBLISH_NAME: ${{ needs.target.outputs.spine_parts }}') },
       { what: 'registry failure accepted as absent', text: change('process.exit(v?.error?.code === "E404" ? 0 : 1);', 'process.exit(0);') },
+      { what: 'registry version string-only parser rejects npm 12 array', text: change('const raw = JSON.parse(process.env.REGISTRY_REPLY); const v = Array.isArray(raw) ? (raw.length === 1 ? raw[0] : null) : raw;', 'const v = JSON.parse(process.env.REGISTRY_REPLY);') },
+      { what: 'registry version multi-element array takes first element', text: change('raw.length === 1 ? raw[0] : null', 'raw[0]') },
       { what: 'checkout SHA omitted', text: change('; echo "sha=$tag_sha" >> "$GITHUB_OUTPUT"', '') },
     ];
     const probes: string[] = [];
