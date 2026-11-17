@@ -733,7 +733,7 @@ execution in historical evidence is inferred from a current export.
 | `input-check.json` | `remesh --record-input-check`, `retune --record-input-check` | spec `rig-parts-input-check/1` (issue #617, additive): `versions` (`parts`, `rigc` — `rigc --version`'s whole output), `options` (`page_edges`, `pack_shape`, `page_size` when `--page-size` is given, `requirements` — null, or `path` as resolved and `sha256`), `rig` and `parts` (`dir` as resolved, `files` — `path`, `bytes`, `sha256` per file: every file under `--rig`; `parts.json` and every file under `parts/`), `check` (the input's check side as `remesh.json` carries it); `--input-check` reads it back, and either command's serves the other |
 | the scene report | `compose` | spec `spine-parts-scene-report/1`; the plate block carries `sha256` of the plate PNG's bytes after `size` (issue #1183, additive under *What "stable" means here*: a new report key in a minor version, so the spec stays `/1`) |
 | `idle.png`, `idle-indexed.png`, `idle.gif` | `loop`, `build --loop` | APNG and GIF encodings of the rendered idle |
-| `run.json` | `rig`, `assemble` | spec `rig-run/1` (issue #1165, additive): `spec`, `package` (`name`, `version`), `command` (`"rig"` or `"assemble"`), `started_at` and `finished_at` (UTC ISO-8601 millisecond timestamps ending in `Z`, read in the CLI layer), `config` (`path` relative to `--out`, `sha256` of the config file on disk), and `outputs` (`path` relative to `--out`, `sha256` of each written output file on disk, sorted by `path` in code-unit order and excluding `run.json` itself); written only after the command's gate is green |
+| `run.json` | `rig`, `assemble` | spec `rig-run/1` (issue #1165, additive): `spec`, `package` (`name`, `version`), `command` (`"rig"` or `"assemble"`), `started_at` and `finished_at` (UTC ISO-8601 millisecond timestamps ending in `Z`, read in the CLI layer), `config` (`path` relative to `--out`, `sha256` of the config file on disk), `inputs` on `assemble` (issue #1316, additive: one `{role, path, sha256}` entry for each of `--source`, `--full` and `--head` that was given, in that order, with `path` relative to the run's cwd and `sha256` of the file or of the directory's `layers.json`), and `outputs` (`path` relative to `--out`, `sha256` of each written output file on disk, sorted by `path` in code-unit order and excluding `run.json` itself); written only after the command's gate is green |
 | the difference inventory (`--out`) | `diff-components` | spec `rig-parts-diff-components/1` by default (issue #1005: `stack`, `painting`, `definition`, `error_px`, `uncovered_error_px`, `components` — each `id`, `px`, `box`, `coverage`, `uncovered_px`, `borders` — and `below_floor`, byte-identical to 2.38.1), and spec `rig-parts-diff-components/2` under `--owners` (issue #1291: adds `owners` — each `{part, px}`, the topmost `parts.json` part above `COVERED_ALPHA` per covered pixel, back to front — before `borders` on every component); `--verify` verifies both `/1` and `/2` reports (with `--owners`, `/2` is required), while a `/1`-only reader (`readDiffComponents(text, input, [DIFF_COMPONENTS_SPEC])`) refuses `/2` by name |
 
 Issue #705 pins setup-seam acceptance to one source-relative scale1 union U of the authored stage and all actual drawn base/checked-set still vertices. U is snapped relative to the source origin, including odd-width half phase.
@@ -858,7 +858,13 @@ after all stage gates pass and all other output files are on disk:
 Key order is fixed as shown; `outputs` is sorted by `/`-separated `path` in UTF-16
 code-unit order. Every `path` in `config` and `outputs` is relative to the `--out`
 directory (`../`-prefixed when `--config` sits outside `--out`; never an absolute or
-home path). Every `sha256` is computed from the bytes on disk after writing. A refused
+home path). On `assemble`, `inputs` sits between `config` and `outputs` (issue #1316,
+additive): one `{ "role", "path", "sha256" }` entry (keys in that order) for each of
+`--source`, `--full` and `--head` that was given, in the fixed order `source`, `full`,
+`head` (an input not given is absent from the list, never `null` or guessed), with
+`/`-separated `path` relative to the run's working directory and `sha256` of the file
+on disk, or of `<dir>/layers.json` when the input is a directory; `rig` writes no
+`inputs` key. Every `sha256` is computed from the bytes on disk after writing. A refused
 run writes no `run.json`. By default, `started_at` and `finished_at` record wall-clock
 time read in `cli.ts` (`src/` remains pure). With that default, `run.json` is outside
 the byte-for-byte

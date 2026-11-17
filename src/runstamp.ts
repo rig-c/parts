@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join, relative, resolve, sep } from 'node:path';
 import { type AssembleResult, FIGURE_MASK_FILE } from './assemble.ts';
 import { ERROR_MAP_FILE } from './build.ts';
@@ -16,8 +16,10 @@ import { SUPPORT_DOMAINS_FILE } from './supportdomains.ts';
 
 export const RUN_STAMP_SPEC = 'rig-run/1' as const;
 export const RUN_STAMP_FILE = 'run.json' as const;
+export const RUN_STAMP_INPUT_ROLES = ['source', 'full', 'head'] as const;
 
 export type RunStampCommand = 'rig' | 'assemble';
+export type RunStampInputRole = (typeof RUN_STAMP_INPUT_ROLES)[number];
 
 export interface RunStampPackage {
   name: string;
@@ -29,6 +31,19 @@ export interface RunStampFileEntry {
   sha256: string;
 }
 
+export interface RunStampInputEntry {
+  role: RunStampInputRole;
+  path: string;
+  sha256: string;
+}
+
+export interface RunStampAssembleInputs {
+  cwd?: string;
+  source: string;
+  full: string;
+  head?: string | null;
+}
+
 export interface RunStamp {
   spec: typeof RUN_STAMP_SPEC;
   package: RunStampPackage;
@@ -36,6 +51,7 @@ export interface RunStamp {
   started_at: string;
   finished_at: string;
   config: RunStampFileEntry;
+  inputs?: RunStampInputEntry[];
   outputs: RunStampFileEntry[];
 }
 
@@ -46,6 +62,7 @@ export interface RunStampInput {
   finishedAt: string;
   outDir: string;
   configPath: string;
+  inputs?: RunStampAssembleInputs;
   outputPaths: readonly string[];
 }
 
@@ -57,6 +74,40 @@ function relativeToOutRoot(outDir: string, targetPath: string): string {
   const realOut = realpathSync(resolve(outDir));
   const realTarget = realpathSync(resolve(targetPath));
   return relative(realOut, realTarget).split(sep).join('/');
+}
+
+function relativeToCwd(cwd: string, targetPath: string): string {
+  const rel = relative(resolve(cwd), resolve(cwd, targetPath)).split(sep).join('/');
+  return rel === '' ? '.' : rel;
+}
+
+function inputSha256OnDisk(cwd: string, targetPath: string): string {
+  const resolved = resolve(cwd, targetPath);
+  const filePath = statSync(resolved).isDirectory() ? join(resolved, 'layers.json') : resolved;
+  return sha256OnDisk(filePath);
+}
+
+/**
+ * Build the ordered `inputs` list (`source`, `full`, and `head` when given) for an `assemble` run stamp:
+ * each entry records `role`, `path` relative to `cwd`, and `sha256` of the file or of `<dir>/layers.json`.
+ */
+export function buildAssembleInputs(inputs: RunStampAssembleInputs): RunStampInputEntry[] {
+  const cwd = inputs.cwd ?? process.cwd();
+  const raw: ReadonlyArray<readonly [RunStampInputRole, string | null | undefined]> = [
+    ['source', inputs.source],
+    ['full', inputs.full],
+    ['head', inputs.head],
+  ];
+  const entries: RunStampInputEntry[] = [];
+  for (const [role, given] of raw) {
+    if (given === undefined || given === null) continue;
+    entries.push({
+      role,
+      path: relativeToCwd(cwd, given),
+      sha256: inputSha256OnDisk(cwd, given),
+    });
+  }
+  return entries;
 }
 
 function sortCodeUnits(paths: readonly string[]): string[] {
@@ -158,6 +209,7 @@ export function buildRunStamp(input: RunStampInput): RunStamp {
     path: rel,
     sha256: sha256OnDisk(join(input.outDir, ...rel.split('/'))),
   }));
+  const inputs = input.inputs === undefined ? undefined : buildAssembleInputs(input.inputs);
   return {
     spec: RUN_STAMP_SPEC,
     package: {
@@ -171,6 +223,7 @@ export function buildRunStamp(input: RunStampInput): RunStamp {
       path: relativeToOutRoot(input.outDir, input.configPath),
       sha256: sha256OnDisk(input.configPath),
     },
+    ...(inputs === undefined ? {} : { inputs }),
     outputs,
   };
 }

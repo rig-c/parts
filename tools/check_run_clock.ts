@@ -40,12 +40,17 @@ mock.module(modulePath, () => ({ ...real,
 }));
 `);
 const config = join(work, 'config.json');
+const source = join(work, 'unused.png');
+const full = join(work, 'unused');
 writeFileSync(config, '{}\n');
+writeFileSync(source, 'png\n');
+mkdirSync(full, { recursive: true });
+writeFileSync(join(full, 'layers.json'), '{}\n');
 async function run(command: 'rig' | 'assemble', out: string, epoch?: string): Promise<{ code: number; text: string }> {
   const env = { ...process.env };
   delete env.SOURCE_DATE_EPOCH;
   if (epoch !== undefined) env.SOURCE_DATE_EPOCH = epoch;
-  const args = command === 'rig' ? ['--parts', work] : ['--source', 'unused.png', '--full', 'unused'];
+  const args = command === 'rig' ? ['--parts', work] : ['--source', source, '--full', full];
   const child = Bun.spawn([process.execPath, '--preload', preload, join(root, 'cli.ts'), command,
     '--config', config, '--out', out, ...args], { env, stdout: 'pipe', stderr: 'pipe' });
   const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
@@ -73,6 +78,7 @@ try {
     const unset = readStamp(out);
     const expected = buildRunStamp({ pkg: unset.stamp.package, command, startedAt: unset.stamp.started_at,
       finishedAt: unset.stamp.finished_at, outDir: out, configPath: config,
+      ...(command === 'assemble' ? { inputs: { source, full } } : {}),
       outputPaths: first.stamp.outputs.map(file => file.path) });
     const blank = (stamp: RunStamp): string => JSON.stringify({ ...stamp, started_at: '', finished_at: '' });
     check(`${command}_UNSET_PARITY`, wall.code === 0 && unset.raw === rigJsonText(expected) && blank(unset.stamp) === blank(first.stamp) &&
