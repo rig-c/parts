@@ -1624,6 +1624,11 @@ function buildDepth25DTurnGroup(
   if (problems.length > startProblems) return;
 
   const primarySurface = (group.useEyeLandmarksForZRef ? surfaceSheets.get('face') : undefined) ?? [...surfaceSheets.values()][0];
+  // Units already use this anchor. Surfaces must share it too: subtracting
+  // each sheet's own eye sample or median erases their relative placement.
+  if (primarySurface !== undefined) {
+    for (const sheet of surfaceSheets.values()) sheet.zRef = primarySurface.zRef;
+  }
   const pivot = pyRound(group.pivot, 4);
   const counter = group.counter;
   const rearDepth = pyRound(-counter * pivot, 4);

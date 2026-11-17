@@ -69,3 +69,36 @@ export function weightedSurfaceEarFixture(earsAfterFace = false) {
   turn.roles.face = 'surface'; turn.roles.ear_r = 'unit'; turn.roles.ear_l = 'unit'; turn.unitDepths = { ear_r: -4, ear_l: -4 };
   return f;
 }
+
+/** Abutting opaque rectangles: levels 40..100 and 104..164, medians 70 and 134. */
+export function abuttingSurfaceFixture(group: 'head' | 'body', authored: boolean, eyes = false) {
+  const f = weightedSurfaceFixture();
+  const names = group === 'head' ? ['face', 'hair_front'] : ['topwear', 'bottomwear'];
+  const bone = group === 'head' ? 'head' : 'chest';
+  f.parts.parts = names.map((name, i) => ({ ...f.parts.parts[0], name,
+    from: `${group === 'head' ? 'head' : 'full'}:${name === 'hair_front' ? 'front hair' : name}`,
+    x: 16, y: 12 + i * 16, w: 32, h: 16, opaque_px: 32 * 16 }));
+  f.images.clear();
+  for (const [i, p] of f.parts.parts.entries()) {
+    const art = block(p.w, p.h), scalar = newRaster(p.w, p.h);
+    for (let y = 0; y < p.h; y++) for (let x = 0; x < p.w; x++) {
+      const v = 40 + 64 * i + 4 * y;
+      scalar.data.set([v, v, v, 255], (y * p.w + x) * 4);
+    }
+    p.depth = { image: `${p.name}_depth.png`, near: 'white', zScale: 40,
+      sources: [{ from: p.from, image: 'scalar.png', sha256: createHash('sha256').update(encodePngBytes(scalar)).digest('hex'), crop: [p.x, p.y, p.x + p.w, p.y + p.h], reading: depthReading(scalar, art, null) }] };
+    f.images.set(p.name, art); f.images.set(p.depth.image, scalar);
+  }
+  (f.config.assemble as Record<string, unknown>).plan = f.parts.parts.map(p => [p.name, p.from.split(':')[0], p.from.split(':')[1]]);
+  f.config.regions = authored ? {} : Object.fromEntries(names.map(name => [name, bone]));
+  f.config.meshes = authored ? Object.fromEntries(names.map(name => [name,
+    { grid: 4, r: 20, segments: [[bone, [32, 44], [32, 12]]] }])) : {};
+  // Reverse declaration order in the head: face preference must beat first surface.
+  const roles = Object.fromEntries((group === 'head' ? [...names].reverse() : names).map(name => [name, 'surface']));
+  f.config.turn = group === 'head' ? { pivot: 20, grid: [5, 5], roles } : { body: { pivot: 20, grid: [5, 5], roles } };
+  if (eyes) (f.config.bones as unknown[]).push(
+    { name: 'eye_r', parent: 'head', at: [24, 16] },
+    { name: 'eye_l', parent: 'head', at: [40, 16] },
+  );
+  return f;
+}
