@@ -8,7 +8,7 @@ import { readMaterialSources } from './cutmaterialio.ts';
 import { CUT_MATERIAL_LINE, checkJointMaterial, type MaterialLine } from './cutmaterial.ts';
 import { ART_JOINT_LINE, artJointLine, type ArtJointLine } from './artjoints.ts';
 import { BOUNDARY_COLOUR_LINE, BOUNDARY_COLOUR_UNMEASURED_CODE, BOUNDARY_COLOUR_UNMEASURED_SUFFIX, measureBoundaryColour, type BoundaryColourMeasured } from './boundarycolour.ts';
-import { BEHIND_SEAM_LINE, measureBehindSeams, type BehindSeamsMeasured } from './behindseams.ts';
+import { BEHIND_SEAM_LINE, behindTurnAnimations, measureBehindSeams, type BehindSeamsMeasured } from './behindseams.ts';
 import { baseAnchorMoves, type AnchorRegion } from './baseanchor.ts';
 /**
  * The check stage: build a rig through rig-c, gate it under both
@@ -7477,10 +7477,46 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     ...(set === undefined ? [] : ['--set skin binding is not measured']),
     ...(allSets ? ['--all-sets skin binding is not measured'] : []),
   ];
-  const behindSeams = behindDeclared === undefined ? null : measureBehindSeams(officialRenderer(), {
-    build: buildDir, rig: inp.rig, pairs: behindPairs, stockDir: behindStockDir, fps: IDLE_FPS,
-    ...(behindUnsupported.length === 0 ? {} : { unsupported: behindUnsupported.join('; ') }),
-  }, behindDeclared, problems);
+  let behindSeams: BehindSeamsMeasured | null = null;
+  if (behindDeclared !== undefined) {
+    const turnDir = join(out, '_behind_seams_turn');
+    let turnScratch = false;
+    let turnBuild: { build?: string; reason?: string } | undefined;
+    try {
+      const active = behindDeclared.threshold !== undefined || behindDeclared.pairs?.some(p => p.threshold !== undefined) === true;
+      if (behindDeclared.turn === true && active && behindUnsupported.length === 0) {
+        const animations = behindTurnAnimations(inp.rig);
+        if (Object.keys(animations).length > 0) {
+          const original = inp.motion.animations;
+          if (original === null || typeof original !== 'object' || Array.isArray(original)) turnBuild = { reason: 'turn copy requires the accepted motion animation record' };
+          else if (Object.keys(animations).some(name => Object.hasOwn(original, name))) turnBuild = { reason: 'turn sample animation name collides with an accepted animation; no animation is replaced' };
+          else {
+            try {
+              turnScratch = true;
+              rmSync(turnDir, { recursive: true, force: true });
+              mkdirSync(turnDir, { recursive: true });
+              const images = typeof inp.rig.images === 'string' ? resolve(inp.rigDir, inp.rig.images) : inp.rig.images;
+              // Keep setup, constraints and sliders; append only the pose timelines.
+              writeFileSync(join(turnDir, 'rig.json'), JSON.stringify({ ...inp.rig, images }));
+              writeFileSync(join(turnDir, 'motion.json'), JSON.stringify({ ...inp.motion, animations: { ...original, ...animations } }));
+              const build = join(turnDir, 'build');
+              const built = rigc(['build', '--rig', join(turnDir, 'rig.json'), '--motion', join(turnDir, 'motion.json'), '--out', build, ...packedBuildArgs(mode)]);
+              const errors = buildGateLines(built.out).filter(line => line.includes('FAIL') || line.includes('compile error'));
+              const detail = (errors.length > 0 ? errors.join('; ') : built.out.trim() || 'no gate diagnostic returned').slice(0, 1200);
+              turnBuild = built.status === 0 ? { build } : { reason: `gated turn copy build refused (exit ${built.status}): ${detail}; no turn sample is available` };
+            } catch (e) { turnBuild = { reason: `gated turn copy unavailable: ${e instanceof Error ? e.message : String(e)}` }; }
+          }
+        }
+      }
+      behindSeams = measureBehindSeams(officialRenderer(), {
+        build: buildDir, rig: inp.rig, pairs: behindPairs, stockDir: behindStockDir, fps: IDLE_FPS,
+        ...(turnBuild === undefined ? {} : { turnBuild }),
+        ...(behindUnsupported.length === 0 ? {} : { unsupported: behindUnsupported.join('; ') }),
+      }, behindDeclared, problems);
+    } finally {
+      if (turnScratch) rmSync(turnDir, { recursive: true, force: true });
+    }
+  }
 
   // 5. the scene's declared requirements (issue #93), only under --requirements
   const reqProblems: Problem[] = [];

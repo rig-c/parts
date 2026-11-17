@@ -1227,7 +1227,7 @@ existing emitted turn slider ranges, never a second range declaration. Without
 this key no turn rows are written and existing `check.json` bytes are unchanged.
 With it, `BEHIND_PART_SEAMS.turn` records named independent reset poses: each
 dial's declared `from` and `max` with other dials at setup, then every full
-min/max corner, deduplicated in that order. It records dial values, per-pair
+min/max corner, deduplicated in that order. It records planned and observed dial locals and observed slider mapped times, per-pair
 `frames`, `sampled_poses`, `read_poses`, `unmeasured_poses`, and separate
 `motion_opened` / `standing` status and maximum counts. There are no temporal
 spans: pose indices are sample identities, and time is 0 for every reset.
@@ -1238,8 +1238,18 @@ to turn standing rows. No declared dial persists turn SKIP and a named HOLE;
 an effective authored T makes that missing required reading a
 `CHECK_BEHIND_PART_SEAMS_UNMEASURED` failure. Legacy `turn.x` has no declared
 finite range and is explicitly unread, never given a guessed range. The
-existing official Spine turn/slider poser supplies reset geometry; an unavailable
-poser or source is a HOLE. Other animations, between-sample turns and alternate
+official facade supplies geometry from one throwaway gated build that appends
+one duration-0 pose animation per selected endpoint/corner, retaining setup,
+sliders, original animations, profile and pack flags. Timeline properties are
+`rotate` / `translatex` / `translatey`, with offsets from setup. Actual local
+channels (after constraints) must match planned locals at float32 precision;
+slider mapped times are also retained. Actual poser, atlas text, decoded pages
+and setup geometry must match the accepted build, or turn is a named HOLE.
+Build refusal also leaves unrelated readings available, with scratch cleanup
+in all cases. The original skeleton SHA-256 is recorded once in turn limitations.
+Without opt-in there is no scratch copy or extra build. Missing effective T for
+one pair is optional SKIP even when another pair has a required override.
+An unavailable poser or source is a HOLE. Other animations, between-sample turns and alternate
 skins remain unmeasured.
 
 Issue #1325 adds the following optional evidence fields to

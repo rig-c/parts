@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import type { Plate } from '@rig-c/core/plate';
 import type { AttachmentRest, Frame } from '@rig-c/core/render-shared';
@@ -40,7 +40,12 @@ export interface BehindSeamsFramesInput {
   fps: number;
   turn?: BehindSeamsTurnInput;
 }
-export interface BehindSeamsTurnPose { name: string; values: Record<string, number> }
+export interface BehindSeamsTurnPose {
+  name: string;
+  values: Record<string, number>;
+  observed_values?: Record<string, number>;
+  slider_times?: Record<string, number>;
+}
 export interface BehindSeamsTurnInput {
   poses: BehindSeamsTurnPose[];
   frames: Array<Frame | null>;
@@ -48,6 +53,8 @@ export interface BehindSeamsTurnInput {
   rest: readonly AttachmentRest[];
   stock: readonly BehindSeamsStockPair[] | null;
   reason?: string;
+  sourceSkeletonSha256?: string;
+  poser?: string;
 }
 export interface BehindSeamsTurnPair {
   pair: string;
@@ -105,6 +112,8 @@ export interface BehindSeamsFrame {
   animation: 'idle' | 'turn' | null;
   pose?: string;
   values?: Record<string, number>;
+  observed_values?: Record<string, number>;
+  slider_times?: Record<string, number>;
   index: number;
   time: number;
   behind_slots: string[];
@@ -165,6 +174,7 @@ export interface BehindSeamsInput {
   stockDir: string | null;
   fps: number;
   unsupported?: string;
+  turnBuild?: { build?: string; reason?: string };
 }
 
 const LIMITATIONS = 'setup and every idle frame; motion uses transported setup-overlap support; standing certifies horizontal and vertical bracketed runs, not all curved or diagonal openings; rear-set attribution is not individual-slot blame; other animations and alternate skins are not measured';
@@ -255,7 +265,7 @@ function readBehindFrame(api: BehindSeamsApi, input: BehindSeamsFramesInput, pai
   cache: Map<Frame, Map<string, RasterCache>>, pose?: BehindSeamsTurnPose): BehindSeamsFrame {
   const label = pose !== undefined ? `turn ${pose.name}` : setup ? 'setup' : `idle frame ${frame.index}`;
   const family = pose !== undefined ? 'BEHIND_PART_SEAMS.turn.pairs[].frames' : setup ? 'BEHIND_PART_SEAMS.pairs[].setup' : 'BEHIND_PART_SEAMS.pairs[].frames';
-  const row: BehindSeamsFrame = { ...checkRow(family, 'pair', false, [pair.a, pair.b]), animation: pose !== undefined ? 'turn' : setup ? null : 'idle', index: frame.index, time: frame.time, ...(pose === undefined ? {} : { pose: pose.name, values: { ...pose.values } }), behind_slots: [], grid: null, motion_opened: emptyCount(), standing: emptyCount() };
+  const row: BehindSeamsFrame = { ...checkRow(family, 'pair', false, [pair.a, pair.b]), animation: pose !== undefined ? 'turn' : setup ? null : 'idle', index: frame.index, time: frame.time, ...(pose === undefined ? {} : { pose: pose.name, values: { ...pose.values }, ...(pose.observed_values === undefined ? {} : { observed_values: pose.observed_values, slider_times: pose.slider_times }) }), behind_slots: [], grid: null, motion_opened: emptyCount(), standing: emptyCount() };
   const fail = (reason: string): BehindSeamsFrame => { unread(label, reason); return row; };
   if (pair.unread !== undefined) return fail(pair.unread);
   if (frame.attachments === undefined) return fail('draw order/whole attachment geometry is unavailable');
@@ -532,14 +542,18 @@ export function measureBehindSeamFrames(api: BehindSeamsApi, input: BehindSeamsF
   return line;
 }
 
-/** Turn observations are independent reset poses, never animation frames or spans. */
+/** Turn observations are independent t=0 reset samples, never temporal spans. */
 function measureBehindTurnFrames(api: BehindSeamsApi, input: BehindSeamsFramesInput, declared: BehindSeams, problems: Problem[]): BehindSeamsTurnMeasured {
   const turn = input.turn;
   const result: BehindSeamsTurnMeasured = { status: 'SKIP', poses: turn?.poses.map(p => p.name) ?? [], pairs: [], unmeasured: [],
     limitations: 'independent setup-reset turn endpoints and full range corners only; no sweep, idle motion, temporal spans or alternate skins; standing and transported setup-overlap are separate' };
+  if (turn?.poser !== undefined) result.limitations += `; poser ${turn.poser}`;
+  if (turn?.sourceSkeletonSha256 !== undefined) result.limitations += `; original skeleton sha256 ${turn.sourceSkeletonSha256}`;
   const required = declared.threshold !== undefined || declared.pairs?.some(p => p.threshold !== undefined) === true;
+  let mandatoryUnread = false;
   const unread = (pair: MotionSeamPair | null, frame: string, reason: string, mandatory: boolean): void => {
     result.unmeasured.push({ ...checkRow('BEHIND_PART_SEAMS.turn.unmeasured', pair === null ? 'rig' : 'pair', mandatory, pair === null ? [] : [pair.a, pair.b]), pair: pair?.pair ?? null, frame, reason: `HOLE: ${reason}` });
+    if (mandatory) mandatoryUnread = true;
     if (mandatory) problems.push({ code: BEHIND_SEAM_UNMEASURED_CODE, object: `${pair?.pair ?? BEHIND_SEAM_LINE} (${frame})`, detail: `HOLE: ${reason}; required turn reading cannot pass unmeasured` });
   };
   if (turn === undefined || turn.poses.length === 0) {
@@ -593,7 +607,7 @@ function measureBehindTurnFrames(api: BehindSeamsApi, input: BehindSeamsFramesIn
       motion_opened: motion, standing });
   }
   if (input.pairs.length === 0) unread(null, 'turn selection', 'no selected seam pair; turn boundary population is unavailable', required);
-  result.status = result.pairs.some(p => p.motion_opened.status === 'FAIL' || p.standing.status === 'FAIL') || result.unmeasured.length > 0 && required ? 'FAIL'
+  result.status = result.pairs.some(p => p.motion_opened.status === 'FAIL' || p.standing.status === 'FAIL') || mandatoryUnread ? 'FAIL'
     : result.pairs.length === 0 || result.pairs.some(p => p.motion_opened.status === 'SKIP' || p.standing.status === 'SKIP') ? 'SKIP' : 'PASS';
   return result;
 }
@@ -633,36 +647,83 @@ export function behindTurnPlan(rig: Record<string, unknown>): { dials: BehindTur
   return { dials, poses };
 }
 
-/** Reuse rigc's existing turn/slider poser. Only detached in-memory dial locals
- * change; constraints, projection, skinning and physics reset stay rigc's. */
-function sampleBehindTurn(api: typeof import('@rig-c/core/render-shared'), input: BehindSeamsInput): BehindSeamsTurnInput {
+/** One gated copy can carry every selected pose. Motion keys are offsets from
+ * setup, so convert planned absolute locals to the public timeline schema. */
+export function behindTurnAnimations(rig: Record<string, unknown>): Record<string, { duration: number; tracks: Array<{ bone: string; property: string; keys: Array<{ t: number; v: number[] }> }> }> {
+  const plan = behindTurnPlan(rig);
+  return Object.fromEntries(plan.poses.map(pose => [behindTurnAnimationName(pose.name), {
+    duration: 0,
+    tracks: plan.dials.map(d => ({ bone: d.bone, property: d.field === 'rotation' ? 'rotate' : d.field === 'x' ? 'translatex' : 'translatey',
+      keys: [{ t: 0, v: [pose.values[d.bone] - d.setup] }] })),
+  }]));
+}
+/** Injective safe encoding of the pose name, including every UTF-16 code unit;
+ * no index, truncation or per-pose digest can hide a sample identity. */
+export function behindTurnAnimationName(name: string): string {
+  return `_behind_seams_turn_${name.split('').map(c => c.charCodeAt(0).toString(16).padStart(4, '0')).join('')}`;
+}
+
+/** Read the throwaway gated copy through the same public facade as idle.
+ * No skeleton, model, setup or poser implementation is changed here. */
+function sampleBehindTurn(api: typeof import('@rig-c/core/render-shared'), input: BehindSeamsInput,
+  accepted: ReturnType<typeof api.loadCandidate>, acceptedSetup: Frame | null, acceptedPoser: string): BehindSeamsTurnInput {
   const plan = behindTurnPlan(input.rig);
   const empty: BehindSeamsTurnInput = { poses: plan.poses, frames: [], setup: null, rest: [], stock: null };
   if (plan.reason !== undefined) return { ...empty, reason: plan.reason };
   try {
-    const renderer = createRequire(import.meta.url)('@rig-c/core/render') as typeof import('@rig-c/core/render');
-    const candidate = renderer.posableFromText(readFileSync(join(input.build, 'skeleton.json'), 'utf8'), readFileSync(join(input.build, 'skeleton.atlas'), 'utf8'), input.build);
-    const poser = renderer.spinePoser(candidate.data), opts = { geometry: true, texture: true };
-    const setup = api.sampleSetupPose(poser, opts)[0];
-    const frames = plan.poses.map((pose, index) => {
-      for (const dial of plan.dials) {
-        const bone = candidate.data.bones.filter(b => b.name === dial.bone);
-        if (bone.length !== 1) throw new Error(`declared turn dial "${dial.bone}" is not unique in the accepted skeleton`);
-        bone[0].setupPose[dial.field] = pose.values[dial.bone];
-      }
-      return { ...api.sampleSetupPose(poser, opts)[0], index, time: 0 };
+    empty.sourceSkeletonSha256 = createHash('sha256').update(readFileSync(join(input.build, 'skeleton.json'))).digest('hex');
+    if (input.turnBuild?.reason !== undefined) throw new Error(input.turnBuild.reason);
+    const build = input.turnBuild?.build;
+    if (build === undefined) throw new Error('gated turn animation copy is unavailable');
+    const skeleton = join(build, 'skeleton.json'), atlas = join(build, 'skeleton.atlas');
+    const atlasText = readFileSync(atlas, 'utf8');
+    if (atlasText !== readFileSync(join(input.build, 'skeleton.atlas'), 'utf8')) throw new Error('turn copy atlas text differs from accepted build');
+    const candidate = api.loadCandidate({ skeletonText: readFileSync(skeleton, 'utf8'), atlasText, atlasDir: build, label: 'behind seams turn samples' }, { skeleton, atlas }, undefined);
+    if (candidate.pages.size !== accepted.pages.size || [...accepted.pages].some(([name, page]) => {
+      const other = candidate.pages.get(name);
+      return other === undefined || other.width !== page.width || other.height !== page.height || !Buffer.from(other.data).equals(Buffer.from(page.data));
+    })) throw new Error('turn copy decoded atlas pages differ from accepted build');
+    const observed = api.throughPoser(candidate.choice, poser => {
+      const opts = { geometry: true, texture: true };
+      const setup = api.sampleSetupPose(poser, opts)[0] ?? null;
+      if (setup === null || JSON.stringify(setup) !== JSON.stringify(acceptedSetup)) throw new Error('turn copy setup geometry differs from accepted build');
+      const poses: BehindSeamsTurnPose[] = [];
+      const frames = plan.poses.map((pose, index) => {
+        const name = behindTurnAnimationName(pose.name);
+        const samples = api.sampleAnimation(poser, name, input.fps, { ...opts, channels: true });
+        if (samples.length !== 1 || samples[0].time !== 0) throw new Error(`turn ${pose.name}: animation "${name}" does not supply exactly one t=0 sample`);
+        const frame = samples[0];
+        if (frame.channelError !== undefined || frame.channels === undefined) throw new Error(`turn ${pose.name}: dial channels unavailable`);
+        const observed_values: Record<string, number> = {}, slider_times: Record<string, number> = {};
+        for (const dial of plan.dials) {
+          const property = dial.field === 'rotation' ? 'rotate' : `translate.${dial.field}`;
+          const local = frame.channels.filter(c => JSON.stringify(c.path) === JSON.stringify(['bone', dial.bone, property]));
+          const want = pose.values[dial.bone];
+          // The compiler stores float32 keys; compare at that declared precision.
+          if (local.length !== 1 || !Number.isFinite(local[0].value) || Math.fround(local[0].value) !== Math.fround(want)) throw new Error(`turn ${pose.name}: dial "${dial.bone}" did not reach planned local ${want}`);
+          observed_values[dial.bone] = local[0].value;
+          const slider = (Array.isArray(input.rig.constraints) ? input.rig.constraints : []).filter(record).find(c => c.type === 'slider' && c.bone === dial.bone);
+          const times = frame.channels.filter(c => JSON.stringify(c.path) === JSON.stringify(['slider', slider?.name, 'mapped-time']));
+          if (times.length !== 1 || !Number.isFinite(times[0].value)) throw new Error(`turn ${pose.name}: slider on "${dial.bone}" has no finite mapped-time observation`);
+          slider_times[String(slider!.name)] = times[0].value;
+        }
+        poses.push({ ...pose, observed_values, slider_times });
+        return { ...frame, index, time: 0 };
+      });
+      const rest = poser.rest(undefined, [setup.attachments ?? [], ...frames.map(f => f.attachments ?? [])]);
+      return { poses, frames, setup, rest };
     });
-    for (const dial of plan.dials) candidate.data.bones.find(b => b.name === dial.bone)!.setupPose[dial.field] = dial.setup;
-    const rest = poser.rest(undefined, [setup.attachments ?? [], ...frames.map(f => f.attachments ?? [])]);
+    if (observed.poser !== acceptedPoser) throw new Error(`turn copy poser "${observed.poser}" differs from accepted "${acceptedPoser}"`);
+    const { poses, frames, setup, rest } = observed.value;
     const sources = sourceProblems(input.rig, [setup, ...frames]);
-    if (sources.length > 0) return { ...empty, reason: sources.join('; ') };
+    if (sources.length > 0) throw new Error(sources.join('; '));
     const pairs = input.pairs.filter(p => p.unread === undefined);
     const stock = seamsOf(pairs, rest, frames.map(f => ({ ...f, attachments: f.attachments ?? [] })), candidate.pages, {},
       { cells: setupCellReader(() => setup.pieces, candidate.pages) }).map((read, i) => ({ pair: pairs[i].pair,
         frames: frames.length, drawn: read.drawn, banded: read.banded,
         gapCovered: read.gapCovered.frames.map(hit => ({ index: hit.index, time: hit.time, cell: hit.cell, cells: hit.cells ?? [] })) }));
-    return { poses: plan.poses, frames, setup, rest, stock };
-  } catch (e) { return { ...empty, reason: `official turn poser/source unavailable: ${e instanceof Error ? e.message : String(e)}` }; }
+    return { poses, frames, setup, rest, stock, sourceSkeletonSha256: empty.sourceSkeletonSha256, poser: observed.poser };
+  } catch (e) { return { ...empty, reason: `official turn copy unread: ${e instanceof Error ? e.message : String(e)}` }; }
 }
 
 function jsonAt(path: string): Record<string, unknown> {
@@ -749,16 +810,19 @@ export function measureBehindSeams(api: typeof import('@rig-c/core/render-shared
   if (input.unsupported !== undefined) return fail(input.unsupported);
   let candidate: ReturnType<typeof api.loadCandidate>;
   let sampled: { setup: Frame | null; idle: Frame[]; rest: AttachmentRest[] };
+  let acceptedPoser: string;
   try {
     const skeleton = join(input.build, 'skeleton.json'), atlas = join(input.build, 'skeleton.atlas');
     candidate = api.loadCandidate({ skeletonText: readFileSync(skeleton, 'utf8'), atlasText: readFileSync(atlas, 'utf8'), atlasDir: input.build, label: 'behind-part seams' }, { skeleton, atlas }, undefined);
-    sampled = api.throughPoser(candidate.choice, p => {
+    const observed = api.throughPoser(candidate.choice, p => {
       const opts = { geometry: true, texture: true };
       const setup = api.sampleSetupPose(p, opts)[0] ?? null;
       const idle = p.animations.some(a => a.name === 'idle') ? api.sampleAnimation(p, 'idle', input.fps, opts) : [];
       const rest = p.rest(undefined, [...(setup?.attachments === undefined ? [] : [setup.attachments]), ...idle.map(f => f.attachments ?? [])]);
       return { setup, idle, rest };
-    }).value;
+    });
+    sampled = observed.value;
+    acceptedPoser = observed.poser;
     const sources = sourceProblems(input.rig, [...(sampled.setup === null ? [] : [sampled.setup]), ...sampled.idle]);
     if (sources.length > 0) return fail(sources.join('; '));
   } catch (e) { return fail(`official renderer/source unavailable: ${e instanceof Error ? e.message : String(e)}`); }
@@ -768,7 +832,7 @@ export function measureBehindSeams(api: typeof import('@rig-c/core/render-shared
     stock = stockOf(input.stockDir, input.pairs.filter(p => p.unread === undefined), input.fps, sampled.setup, sampled.idle, sampled.rest);
   } catch (e) { stockError = e instanceof Error ? e.message : String(e); }
   const line = measureBehindSeamFrames(api, { ...sampled, pairs: input.pairs, pages: candidate.pages, stock, fps: input.fps,
-    ...(declared.turn === true ? { turn: sampleBehindTurn(api, input) } : {}) }, declared, problems);
+    ...(declared.turn === true ? { turn: sampleBehindTurn(api, input, candidate, sampled.setup, acceptedPoser) } : {}) }, declared, problems);
   if (stockError !== null) {
     line.status = 'FAIL';
     line.unmeasured.push({ ...checkRow('BEHIND_PART_SEAMS.unmeasured', 'rig', true, []), pair: null, frame: 'stock render', reason: `HOLE: ${stockError}` });
