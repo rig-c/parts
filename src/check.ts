@@ -100,7 +100,7 @@ import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep 
 import { measureRecomposite, type RecompositeFigures, recompositeRecord, scenePhrase, sourceInRig, figureSilhouette } from './assemble.ts';
 import { type BoneTransform, computeExactFrameTransforms, cropToSpineY, normaliseDegrees, toBoneLocal } from './coords.ts';
 import { capBox, inDisc } from './limbs.ts';
-import { motionSeamProblems } from './motionseams.ts';
+import { motionSeamProblems, type MotionSeamDeclaration } from './motionseams.ts';
 import { seamPoseFrame, seamStaticRange, type SeamPoseAtWorst } from './motionseampose.ts';
 import { coreCompileGuideLine, PartsError, type Problem, refuseIfAny } from './errors.ts';
 import { framesInside, IDLE_FPS, TIME_SLACK } from './motion.ts';
@@ -4805,15 +4805,15 @@ export function motionSeamRequiredLine(r: MotionSeamRequired): string {
 /**
  * The neighbour pairs the inputs declare, in their order: each limb's
  * consecutive segments (`parts.json`'s limb records, by segment), then each
- * `seam` requirement's part and neighbour, then proven roots when rig.json is supplied. A pair named twice, in either
+ * `seam` requirement's part and neighbour, then explicit parts and requirements motion_seams, then proven roots when rig.json is supplied. A pair named twice, in either
  * order, is one pair with both declarations.
  */
-export function motionSeamPairs(parts: PartsFile, seams: ReadonlyArray<{ name: string; part: string; neighbour: string }>, rig?: Record<string, unknown>, readSetup?: (candidates: readonly MotionSeamPair[]) => readonly MotionRootSetupRow[]): MotionSeamPair[] {
-  return motionSeamSelection(parts, seams, rig, readSetup).pairs;
+export function motionSeamPairs(parts: PartsFile, seams: ReadonlyArray<{ name: string; part: string; neighbour: string }>, rig?: Record<string, unknown>, readSetup?: (candidates: readonly MotionSeamPair[]) => readonly MotionRootSetupRow[], requirementsMotionSeams?: readonly MotionSeamDeclaration[]): MotionSeamPair[] {
+  return motionSeamSelection(parts, seams, rig, readSetup, requirementsMotionSeams).pairs;
 }
 
 /** Complete selection: a valid zero setup band is named separately, never a fabricated pair or PASS. */
-export function motionSeamSelection(parts: PartsFile, seams: ReadonlyArray<{ name: string; part: string; neighbour: string }>, rig?: Record<string, unknown>, readSetup?: (candidates: readonly MotionSeamPair[]) => readonly MotionRootSetupRow[]): MotionSeamSelection {
+export function motionSeamSelection(parts: PartsFile, seams: ReadonlyArray<{ name: string; part: string; neighbour: string }>, rig?: Record<string, unknown>, readSetup?: (candidates: readonly MotionSeamPair[]) => readonly MotionRootSetupRow[], requirementsMotionSeams?: readonly MotionSeamDeclaration[]): MotionSeamSelection {
   const out: MotionSeamPair[] = [];
   const unmeasuredRoots: MotionUnmeasuredRoot[] = [];
   const add = (a: string, b: string, declared: string, joint?: string): void => {
@@ -4836,6 +4836,10 @@ export function motionSeamSelection(parts: PartsFile, seams: ReadonlyArray<{ nam
   if (parts.motion_seams !== undefined) {
     refuseIfAny(motionSeamProblems(parts.motion_seams, new Set(parts.parts.map(p => p.name)), 'parts.json motion_seams', 'CHECK_MOTION_SEAM_DECLARATION'));
     parts.motion_seams.forEach((r, i) => add(r.part, r.neighbour, `motion_seams[${i}]`));
+  }
+  if (requirementsMotionSeams !== undefined) {
+    refuseIfAny(motionSeamProblems(requirementsMotionSeams, new Set(parts.parts.map(p => p.name)), 'requirements.motion_seams', 'REQUIREMENTS_RESOLVES'));
+    requirementsMotionSeams.forEach((r, i) => add(r.part, r.neighbour, `requirements.motion_seams[${i}]`));
   }
   const candidates = rig === undefined ? [] : motionRootCandidates(parts, rig);
   const selected: MotionSeamPair[] = [];
@@ -6693,7 +6697,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     }
     take(() => refuseIfAny(exceptionProblems(file, ready.parts, ready.noParts)));
     // A seam's pairs are read off parts.json's art (issue #111); both resolvers' problems are named in one refusal.
-    if (file.requirements.some((r) => r.kind === 'seam')) {
+    if (file.requirements.some((r) => r.kind === 'seam') || file.motion_seams !== undefined) {
       const parts = ready.parts;
       seams = take(() => resolveSeams(file, parts === null ? null : parts.parts.map((p) => p.name), ready.noParts, (n) => {
         const rec = (parts as PartsFile).parts.find((p) => p.name === n) as PartRecord;
@@ -7171,7 +7175,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
         if (rendered.status !== 0) refuseIfAny(rigcFailed('render --seam (body-root setup observation)', rendered, rendered.out.split('\n').filter(line => line.includes('FAIL') || line.includes('rigc:'))));
         return readMotionRootSetup(renderDir, fps, candidates);
       } finally { rmSync(setupDir, { recursive: true, force: true }); }
-    });
+    }, reqFile?.motion_seams);
     const { pairs, unmeasuredRoots } = selection;
     behindPairs = pairs;
     const slotNames = new Set((Array.isArray(inp.rig.slots) ? inp.rig.slots : []).filter(isRecord).map((sl) => String(sl.name)));
@@ -8428,7 +8432,7 @@ function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems
     }
     // Issue #349: a limb segment is rigid on its one bone and turns at its joint; it does not hang, so no tip trails a root.
     if (p.limb !== undefined) {
-      rows.push({ ...checkRow('TIP_OVER_ROOT.parts', 'part', false, [p.name]), part: p.name, unmeasured: p.limb.band !== undefined ? `a hybrid joint band (config.limbs.${p.limb.name}): it bends between adjacent carriers, does not hang, and is not held to a trailing-tip bar` : `a limb segment (config.limbs.${p.limb.name}), rigid on its one bone "${p.limb.bone}": it turns at its joint and does not hang, so it is not held to the bar` });
+      rows.push({ ...checkRow('TIP_OVER_ROOT.parts', 'part', false, [p.name]), part: p.name, unmeasured: p.limb.band !== undefined ? `a hybrid joint band (config.limbs.${p.limb.name}): it bends between adjacent carriers, does not hang, and is not held to the tip-over-root bar` : `a limb segment (config.limbs.${p.limb.name}), rigid on its one bone "${p.limb.bone}": it turns at its joint and does not hang, so it is not held to the bar` });
       continue;
     }
     const rises = excepted.rises.includes(p.name);
