@@ -8428,7 +8428,7 @@ function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems
     }
     // Issue #349: a limb segment is rigid on its one bone and turns at its joint; it does not hang, so no tip trails a root.
     if (p.limb !== undefined) {
-      rows.push({ ...checkRow('TIP_OVER_ROOT.parts', 'part', false, [p.name]), part: p.name, unmeasured: p.limb.band !== undefined ? `a hybrid joint band (config.limbs.${p.limb.name}): it bends between adjacent carriers, does not hang, and is not held to a trailing-tip bar` : `a limb segment (config.limbs.${p.limb.name}), rigid on its one bone "${p.limb.bone}": it turns at its joint and does not hang, so it is not held to the bar` });
+      rows.push({ ...checkRow('TIP_OVER_ROOT.parts', 'part', false, [p.name]), part: p.name, unmeasured: p.limb.band !== undefined ? `a hybrid joint band (config.limbs.${p.limb.name}): it bends between adjacent carriers, does not hang, and is not held to the tip-over-root bar` : `a limb segment (config.limbs.${p.limb.name}), rigid on its one bone "${p.limb.bone}": it turns at its joint and does not hang, so it is not held to the bar` });
       continue;
     }
     const rises = excepted.rises.includes(p.name);
