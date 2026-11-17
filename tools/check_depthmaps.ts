@@ -6,12 +6,14 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { writeEditorReceiptFixture } from '../fixtures/editor_receipts.ts';
 import { rigParts } from '../fixtures/rig.ts';
 import { PartsError } from '../src/errors.ts';
+import { configFileReferences } from '../src/config.ts';
 import { alphaSupport, floatBox, integrateNormals, mapToSheet, readNumericMap, type NumericMap } from '../src/depthmaps.ts';
 import { applyDepth, bindDepthMap, parseDepthRecipe, prepareDepth } from '../src/depthworkflow.ts';
 import { depthImageReference, readParts, writeParts } from '../src/parts.ts';
 import { assembleStage, readRigInputs } from '../src/build.ts';
 import { depthReading } from '../src/depthsheets.ts';
 import { type EditedPartReceipt } from '../src/editedparts.ts';
+import { scratchConfig } from '../src/meshdraft.ts';
 import { isSkeletonName, KEYPOINT_NAMES } from '../src/skeleton.ts';
 import { encodePngBytes, readPng, writePng } from '../src/raster/png.ts';
 import { newRaster } from '../src/raster/types.ts';
@@ -30,6 +32,14 @@ function files(dir: string, prefix = ''): Record<string, string> {
 const sha256 = (bytes: Uint8Array | string): string => createHash('sha256').update(bytes).digest('hex');
 const pretty = (raw: unknown): string => JSON.stringify(raw, null, 2) + '\n';
 type Obj = Record<string, unknown>;
+type EditedBlock = { dir: string; receipts: EditedPartReceipt[] };
+
+/** #1311: file identity is authored; only the shared directory may move. */
+function canonicalEditedBlock(block: EditedBlock, original: EditedBlock, expectedDir: string): boolean {
+  return block.dir === expectedDir && block.receipts.length === original.receipts.length &&
+    block.receipts.every((receipt, i) => Object.entries(original.receipts[i]).every(([key, value]) =>
+      receipt[key as keyof EditedPartReceipt] === value));
+}
 
 /** The pre-#1283 private list, retained as an independent output oracle and bug plant. */
 function legacyDepthConfig(raw: Obj, rigConfig: string, out: string, pivot: number): Obj {
@@ -146,7 +156,7 @@ export function runDepthRelocationChecks(dir: string, say: Say): void {
   applyDepth({ parts: built, manifest: join(editedPrepared, 'manifest.json'), config: recipePath, rigConfig: editedPath, out: depthOut });
   const emitted = JSON.parse(readFileSync(join(depthOut, 'config.json'), 'utf8')) as typeof edited;
   const relocated = emitted.assemble.edited_parts;
-  say('DMP1283_TWO_RECEIPTS_RELATIVE_POSIX_AND_SAME_FILES', relocated.dir === 'edits' && relocated.receipts.length === 2 &&
+  say('DMP1283_TWO_RECEIPTS_RELATIVE_POSIX_AND_SAME_FILES', canonicalEditedBlock(relocated, edited.assemble.edited_parts, '../input/edits') &&
     relocated.receipts.every((r, i) => !isAbsolute(r.file) && !r.file.includes('\\') &&
       readFileSync(resolve(depthOut, relocated.dir, r.file)).equals(readFileSync(join(edits, receipts[i].file)))),
     JSON.stringify(relocated));
@@ -154,6 +164,90 @@ export function runDepthRelocationChecks(dir: string, say: Say): void {
   const exact = (out: string): boolean => receipts.every(r => readFileSync(join(out, 'parts', r.part + '.png')).equals(readFileSync(join(edits, r.file))));
   say('DMP1283_EDITED_BUILD_DEPTH_REASSEMBLE_RECEIPT_BYTES', exact(built) && exact(depthOut) && exact(reassembled),
     'two distinct edited PNGs, including ancillary encoding, survive full build, depth-prepare, depth-apply and real reassembly');
+
+  // Reuse the same core-gated build, edited PNGs and prepare manifest. No new full build.
+  const base = join(dir, 'nested-base'), configDir = join(base, 'configs/a/b'), receiptDir = join(base, 'inputs/set');
+  mkdirSync(configDir, { recursive: true }); mkdirSync(receiptDir, { recursive: true });
+  const nestedBlock: EditedBlock = { dir: '../../../inputs/set', receipts: receipts.map((r, i) => {
+    const file = i === 0 ? 'hair_back.png' : 'body.png';
+    writeFileSync(join(receiptDir, file), readFileSync(join(edits, r.file)));
+    return { ...r, file };
+  }) };
+  const nestedRaw = { ...config, assemble: { ...(config.assemble as Obj), edited_parts: nestedBlock } };
+  const nestedConfig = join(configDir, 'config.json'); json(nestedConfig, nestedRaw);
+  const sourceConfigBytes = readFileSync(nestedConfig);
+  const sourceBytes = nestedBlock.receipts.map(r => readFileSync(join(receiptDir, r.file)));
+  const nestedOut = join(configDir, 'mapped'), expectedDir = '../../../../inputs/set';
+  applyDepth({ parts: built, manifest: join(editedPrepared, 'manifest.json'), config: recipePath, rigConfig: nestedConfig, out: nestedOut });
+  const readBlock = (file: string): EditedBlock =>
+    (JSON.parse(readFileSync(file, 'utf8')) as { assemble: { edited_parts: EditedBlock } }).assemble.edited_parts;
+  const nestedEmitted = readBlock(join(nestedOut, 'config.json'));
+  const canonicalName = 'DMP1311_INSIDE_CONFIG_CANONICAL_RECEIPTS';
+  const checkCanonical = (block: EditedBlock, report: Say): void =>
+    report(canonicalName, canonicalEditedBlock(block, nestedBlock, expectedDir),
+      'dir ../../../../inputs/set; original hair_back.png and body.png receipts unchanged');
+  checkCanonical(nestedEmitted, say);
+  const nestedReassembled = join(dir, 'nested-reassembled'); assemble(join(nestedOut, 'config.json'), nestedReassembled);
+  const receiptBytesMatch = (block: EditedBlock, configAt: string, assembled: string): boolean =>
+    block.receipts.length === sourceBytes.length && block.receipts.every((r, i) => {
+      const resolved = resolve(configAt, block.dir, r.file), emittedPart = join(assembled, 'parts', r.part + '.png');
+      const hash = sha256(sourceBytes[i]);
+      return hash === nestedBlock.receipts[i].sha256 && sha256(readFileSync(join(receiptDir, nestedBlock.receipts[i].file))) === hash &&
+        existsSync(resolved) && sha256(readFileSync(resolved)) === hash &&
+        existsSync(emittedPart) && sha256(readFileSync(emittedPart)) === hash;
+    });
+  say('DMP1311_INSIDE_CONFIG_SOURCE_RESOLVED_REASSEMBLED_HASHES',
+    receiptBytesMatch(nestedEmitted, nestedOut, nestedReassembled) &&
+    receiptBytesMatch(nestedEmitted, nestedOut, nestedOut),
+    'both source, resolved receipt, depth output and reassembled PNG SHA-256 equal the authored receipt');
+  const rigImageHashesMatch = (out: string): boolean => {
+    const rig = readRigInputs(join(out, 'config.json'), out);
+    return nestedBlock.receipts.every(r => {
+      const image = rig.images.get(r.part);
+      return image !== undefined && sha256(Buffer.from(image.data)) ===
+        sha256(Buffer.from(readPng(join(receiptDir, r.file)).data));
+    });
+  };
+  say('DMP1311_INSIDE_CONFIG_RIG_READER_IMAGE_HASHES', rigImageHashesMatch(nestedOut),
+    'actual rig reader has both part images; decoded pixel SHA-256 equals each source receipt PNG');
+
+  const otherOut = join(base, 'output/deeper');
+  applyDepth({ parts: built, manifest: join(editedPrepared, 'manifest.json'), config: recipePath, rigConfig: nestedConfig, out: otherOut });
+  const otherEmitted = readBlock(join(otherOut, 'config.json'));
+  say('DMP1311_OTHER_DEPTH_CANONICAL_RECEIPTS', canonicalEditedBlock(otherEmitted, nestedBlock, '../../inputs/set'),
+    'same configs/a/b input, output/deeper destination; dir ../../inputs/set and original receipt files unchanged');
+  const otherReassembled = join(dir, 'other-depth-reassembled'); assemble(join(otherOut, 'config.json'), otherReassembled);
+  say('DMP1311_OTHER_DEPTH_SOURCE_RESOLVED_REASSEMBLED_HASHES',
+    receiptBytesMatch(otherEmitted, otherOut, otherReassembled) && receiptBytesMatch(otherEmitted, otherOut, otherOut),
+    'both source, resolved receipt, other-depth output and reassembled PNG SHA-256 equal the authored receipt');
+  say('DMP1311_OTHER_DEPTH_RIG_READER_IMAGE_HASHES', rigImageHashesMatch(otherOut),
+    'actual rig reader has both part images; decoded pixel SHA-256 equals each source receipt PNG');
+
+  // Restore the old caller's folding using the unchanged public setter on a clone.
+  // Enumerate once: every reference retains its pre-rewrite value and setter closure.
+  const plantedRaw = structuredClone(nestedRaw), refs = configFileReferences(plantedRaw);
+  for (const ref of refs) ref.set(relative(resolve(nestedOut), resolve(configDir, ref.value)));
+  const planted = plantedRaw.assemble.edited_parts;
+  const plantResults: { name: string; ok: boolean }[] = [];
+  const plantSay: Say = (name, ok) => { plantResults.push({ name, ok }); };
+  checkCanonical(planted, plantSay);
+  say('DMP1311_OLD_CALLER_FOLDING_NAMED_FAIL_NOT_CRASH', plantResults.length === 1 &&
+    plantResults[0].name === canonicalName && !plantResults[0].ok && planted.dir === nestedBlock.dir &&
+    planted.receipts[0].file === '../../../inputs/set/hair_back.png' &&
+    receiptBytesMatch(planted, nestedOut, nestedReassembled),
+    'captured FAIL DMP1311_INSIDE_CONFIG_CANONICAL_RECEIPTS; old caller folding still resolves the same PNG hashes');
+
+  const scratchDir = join(configDir, 'mesh-draft');
+  const scratchFile = scratchConfig(nestedConfig, sourceConfigBytes.toString('utf8'), scratchDir, new Map());
+  const scratchBlock = readBlock(scratchFile), scratchAssembled = join(dir, 'scratch-reassembled');
+  say('DMP1311_MESH_DRAFT_INSIDE_CONFIG_CANONICAL_RECEIPTS', canonicalEditedBlock(scratchBlock, nestedBlock, expectedDir),
+    'production scratchConfig rebases the shared dir and retains both original receipt files');
+  assemble(scratchFile, scratchAssembled);
+  say('DMP1311_MESH_DRAFT_SOURCE_RESOLVED_REASSEMBLED_HASHES', receiptBytesMatch(scratchBlock, scratchDir, scratchAssembled),
+    'both scratch receipt targets and reassembled PNG SHA-256 equal the original source receipts');
+  say('DMP1311_SOURCE_CONFIG_AND_RECEIPTS_UNCHANGED', readFileSync(nestedConfig).equals(sourceConfigBytes) &&
+    nestedBlock.receipts.every((r, i) => readFileSync(join(receiptDir, r.file)).equals(sourceBytes[i])),
+    'inside/other-depth apply, rig readers, cloned setter plant and mesh scratch leave source config and PNG bytes untouched');
   const plantedConfig = join(depthOut, 'legacy-config.json');
   json(plantedConfig, legacyDepthConfig(edited, editedPath, depthOut, 31));
   const refusedOut = join(dir, 'legacy-refused'), refused = codes(() => assemble(plantedConfig, refusedOut));
