@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.43.0 (2026-11-18)
+
+### Features
+
+* **check:** add the opt-in `requirements.behind_seams.turn: true`, which reads `BEHIND_PART_SEAMS` at the rig's declared turn extremes as well as setup and idle: each dial's min and max from the emitted slider constraints, then every min/max corner, posed by the existing poser at time 0. The existing thresholds, allowances and unread rules apply. Without the key no turn rows are written and `check.json` bytes are unchanged; opted in with no dial, the reading is a named SKIP and HOLE, and with an authored allowance a `CHECK_BEHIND_PART_SEAMS_UNMEASURED` failure (`#1323`, `#1334`, `90eaacc`).
+
+### Bug Fixes
+
+* **turn:** every `surface` part in a 2.5D turn group now shares the group's primary depth reference (the body group's first surface; in the head group the face, at its eye-landmark mean when both eyes exist) instead of its own. Before, each surface's declared `median` cancelled out and abutting surfaces moved in opposite directions at their shared boundary. **This changes built `motion.json` bytes for any rig with more than one surface in a turn group**; rigs with a single surface per group build byte-identical output, and `rig.json` is unchanged. AUTHORING and DEPTH state what `median` does under a turn (`#1335`, `#1336`, `348e468`).
+
 ## 2.42.0 (2026-11-17)
 
 ### Features
