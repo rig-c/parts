@@ -77,9 +77,7 @@ function relativeToOutRoot(outDir: string, targetPath: string): string {
 }
 
 function relativeToCwd(cwd: string, targetPath: string): string {
-  const realCwd = realpathSync(resolve(cwd));
-  const realTarget = realpathSync(resolve(cwd, targetPath));
-  const rel = relative(realCwd, realTarget).split(sep).join('/');
+  const rel = relative(resolve(cwd), resolve(cwd, targetPath)).split(sep).join('/');
   return rel === '' ? '.' : rel;
 }
 

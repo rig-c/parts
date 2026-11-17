@@ -36058,20 +36058,73 @@ function runAssembleSuite(): number {
             { ...asSingleStamp, inputs: [...asSingleStamp.inputs, { role: 'head', path: 'art.psd', sha256: expectedSingleInputs[1].sha256 }] },
             ['source', 'full'],
           );
+    const asSharedManifestDir = join(dir, 'shared');
+    const asSymlinkFullDir = join(dir, 'symlink-full');
+    mkdirSync(asSharedManifestDir, { recursive: true });
+    mkdirSync(asSymlinkFullDir, { recursive: true });
+    copyFileSync(join(dir, 'full', 'layers.json'), join(asSharedManifestDir, 'manifest.json'));
+    for (const entry of readdirSync(join(dir, 'full'))) {
+      if (entry !== 'layers.json') cpSync(join(dir, 'full', entry), join(asSymlinkFullDir, entry), { recursive: true });
+    }
+    symlinkSync('../shared/manifest.json', join(asSymlinkFullDir, 'layers.json'));
+    const asSymlinkOut = join(dir, 'stamp-symlink', 'out');
+    const rInputsSymlink = runCliInCwd(dir, ['assemble', '--source', 'painting.png', '--full', 'symlink-full/layers.json', '--head', 'head', '--config', 'config.json', '--out', 'stamp-symlink/out']);
+    const asSymlinkStamp = existsSync(join(asSymlinkOut, RUN_STAMP_FILE))
+      ? (JSON.parse(readFileSync(join(asSymlinkOut, RUN_STAMP_FILE), 'utf8')) as RunStamp)
+      : null;
+    const expectedSymlinkInputs = [
+      { role: 'source', path: 'painting.png', sha256: asSha256(join(dir, 'painting.png')) },
+      { role: 'full', path: 'symlink-full/layers.json', sha256: asSha256(join(asSharedManifestDir, 'manifest.json')) },
+      { role: 'head', path: 'head', sha256: asSha256(join(dir, 'head', 'layers.json')) },
+    ];
+    const asSymlinkRebuildOut = join(dir, 'stamp-symlink', 'rebuilt');
+    const symlinkRebuildArgs =
+      asSymlinkStamp?.inputs === undefined
+        ? []
+        : [
+            'assemble',
+            ...asSymlinkStamp.inputs.flatMap((entry) => [`--${entry.role}`, entry.path]),
+            '--config',
+            join('stamp-symlink/out', ...asSymlinkStamp.config.path.split('/')),
+            '--out',
+            'stamp-symlink/rebuilt',
+          ];
+    const rSymlinkRebuild = symlinkRebuildArgs.length === 0 ? { status: 1, out: 'no inputs' } : runCliInCwd(dir, symlinkRebuildArgs);
+    const asSymlinkFiles = existsSync(asSymlinkOut) ? filesUnder(asSymlinkOut) : [];
+    const asSymlinkRebuildFiles = existsSync(asSymlinkRebuildOut) ? filesUnder(asSymlinkRebuildOut) : [];
+    const asSymlinkRebuildIdentical =
+      rInputsSymlink.status === 0 &&
+      rSymlinkRebuild.status === 0 &&
+      asSymlinkFiles.length > 0 &&
+      asSymlinkFiles.join(',') === asSymlinkRebuildFiles.join(',') &&
+      asSymlinkFiles.every((f) => Buffer.compare(readFileSync(join(asSymlinkOut, f)), readFileSync(join(asSymlinkRebuildOut, f))) === 0);
+    const symlinkInputFaults = asStampInputFaults(dir, asSymlinkStamp, ['source', 'full', 'head']);
+    const realpathMutantFullPath = relative(realpathSync(resolve(dir)), realpathSync(resolve(dir, 'symlink-full/layers.json'))).split(sep).join('/');
+    const rRealpathMutantRebuild = runCliInCwd(dir, ['assemble', '--source', 'painting.png', '--full', realpathMutantFullPath, '--head', 'head', '--config', 'config.json', '--out', 'stamp-symlink/mutant-out']);
+    const realpathMutantFails =
+      realpathMutantFullPath === 'shared/manifest.json' &&
+      realpathMutantFullPath !== asSymlinkStamp?.inputs?.[1]?.path &&
+      rRealpathMutantRebuild.status === 1 &&
+      rRealpathMutantRebuild.out.includes('LAYERS_INPUT_KIND:') &&
+      !existsSync(join(dir, 'stamp-symlink', 'mutant-out'));
     say(
       'AS1316_ASSEMBLE_RUN_STAMP_RECORDS_CWD_RELATIVE_INPUTS_OMITS_ABSENT_HEAD_AND_REPRODUCES_OUTPUTS_ON_RERUN',
       threeInputFaults.length === 0 &&
         singleInputFaults.length === 0 &&
+        symlinkInputFaults.length === 0 &&
         JSON.stringify(asInputsStamp?.inputs) === JSON.stringify(expectedThreeInputs) &&
         JSON.stringify(asSingleStamp?.inputs) === JSON.stringify(expectedSingleInputs) &&
+        JSON.stringify(asSymlinkStamp?.inputs) === JSON.stringify(expectedSymlinkInputs) &&
         asRebuildIdentical &&
+        asSymlinkRebuildIdentical &&
+        realpathMutantFails &&
         plantedWrongInputHash.length === 1 &&
         plantedWrongInputHash[0].startsWith('inputs[1] (full): sha256 is 0000000000000000000000000000000000000000000000000000000000000000; disk has ') &&
         plantedMissingInput.join(';') === 'inputs roles are source,full; expected source,full,head' &&
         plantedSwappedInputOrder.join(';') === 'inputs roles are full,source,head; expected source,full,head' &&
         plantedGuessedHead.join(';') === 'inputs roles are source,full,head; expected source,full',
-      `3-input stamp inputs=${JSON.stringify(asInputsStamp?.inputs ?? null)} (faults: ${threeInputFaults.join('; ') || 'none'}); 2-input (no --head) inputs=${JSON.stringify(asSingleStamp?.inputs ?? null)} (faults: ${singleInputFaults.join('; ') || 'none'}); rebuild from recorded inputs byte-identical across ${asInputsFiles.length} file(s) (incl. ${RUN_STAMP_FILE}): ${asRebuildIdentical}; planted wrong full hash -> "${plantedWrongInputHash.join(';')}", planted missing head -> "${plantedMissingInput.join(';')}", planted swapped order -> "${plantedSwappedInputOrder.join(';')}", planted guessed head -> "${plantedGuessedHead.join(';')}"`,
-      'issue #1316: assemble run.json records inputs (source, full, and head when given) in fixed order with cwd-relative paths and file or layers.json sha256 hashes, omits an ungiven input, and rerunning assemble from the recorded inputs reproduces every output byte for byte',
+      `3-input stamp inputs=${JSON.stringify(asInputsStamp?.inputs ?? null)} (faults: ${threeInputFaults.join('; ') || 'none'}); 2-input (no --head) inputs=${JSON.stringify(asSingleStamp?.inputs ?? null)} (faults: ${singleInputFaults.join('; ') || 'none'}); symlinked layers.json inputs[1]=${JSON.stringify(asSymlinkStamp?.inputs?.[1] ?? null)} (rebuild byte-identical across ${asSymlinkFiles.length} file(s): ${asSymlinkRebuildIdentical}; realpath mutant "${realpathMutantFullPath}" fails LAYERS_INPUT_KIND exit ${rRealpathMutantRebuild.status}: ${realpathMutantFails}); rebuild from recorded inputs byte-identical across ${asInputsFiles.length} file(s) (incl. ${RUN_STAMP_FILE}): ${asRebuildIdentical}; planted wrong full hash -> "${plantedWrongInputHash.join(';')}", planted missing head -> "${plantedMissingInput.join(';')}", planted swapped order -> "${plantedSwappedInputOrder.join(';')}", planted guessed head -> "${plantedGuessedHead.join(';')}"`,
+      'issue #1316: assemble run.json records inputs (source, full, and head when given) in fixed order with lexical cwd-relative paths (preserving symlinked input spellings) and file or layers.json sha256 hashes, omits an ungiven input, and rerunning assemble from the recorded inputs reproduces every output byte for byte',
     );
 
     // Issue #233: a full-run body no planned part covers is named, by the proposer and by the assemble summary
