@@ -25,6 +25,10 @@ export const CHECK_ROW_PATHS = {
     'BEHIND_PART_SEAMS.pairs[].motion_opened.worst', 'BEHIND_PART_SEAMS.pairs[].standing.worst',
   ],
   'BEHIND_PART_SEAMS.spans': ['BEHIND_PART_SEAMS.pairs[].motion_opened.spans', 'BEHIND_PART_SEAMS.pairs[].standing.spans'],
+  'BEHIND_PART_SEAMS.unread_corridors': [
+    'BEHIND_PART_SEAMS.pairs[].setup.standing.unread_corridors',
+    'BEHIND_PART_SEAMS.pairs[].frames[].standing.unread_corridors',
+  ],
   'BEHIND_PART_SEAMS.unmeasured': ['BEHIND_PART_SEAMS.unmeasured'],
   'CLOTH_SETTLES.rows': ['CLOTH_SETTLES.rows'],
   'CUT_JOINT_MATERIAL.rows': ['CUT_JOINT_MATERIAL.rows'],

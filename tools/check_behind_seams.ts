@@ -13,6 +13,7 @@ import { readRequirements } from '../src/requirements.ts';
 import { checkStage } from '../src/build.ts';
 import { CHECK_PARTS, writeCheckRig } from '../fixtures/checkrig.ts';
 import { cropToSpineY } from '../src/coords.ts';
+import { CHECK_ROW_FAMILY } from '../src/checkrow.ts';
 import { readParts, serializeParts } from '../src/parts.ts';
 import { writePng } from '../src/raster/png.ts';
 import { newRaster } from '../src/raster/types.ts';
@@ -121,6 +122,24 @@ export function behindCrossFixture(): BehindSeamFixture {
   base.pages.set('a', pa); base.pages.set('b', pb);
   const setup = [base.setup.pieces[0], a, b];
   return fixture(base.pages, setup, [setup, setup, setup]);
+}
+
+/** Four one-cell row gaps. An owner-0/3 endpoint makes one or all rows unread. */
+function behindAmbiguousFixture(owner: 0 | 3, side: 'left' | 'right', mixed = false): BehindSeamFixture {
+  const rear = rectangle('rear', -1, -1, 12, 6);
+  const a = rectangle('a', 0, 0, 9, 4), b = rectangle('b', 0, 0, 9, 4);
+  const pa = new Plate(9, 4), pb = new Plate(9, 4);
+  for (let y = 0; y < 4; y++) {
+    for (let x = 0; x < 4; x++) pa.set(x, y, [...FRONT, 255]);
+    for (let x = 5; x < 9; x++) pb.set(x, y, [...FRONT, 255]);
+    if (!mixed || y === 0) {
+      // Two 96/255 alphas composite above half, although neither alone reaches it.
+      const alpha = owner === 0 ? 96 : 255, x = side === 'left' ? 3 : 5;
+      pa.set(x, y, [...FRONT, alpha]); pb.set(x, y, [...FRONT, alpha]);
+    }
+  }
+  const setup = [rear, a, b];
+  return fixture(new Map([['rear', plate(12, 6, REAR)], ['a', pa], ['b', pb]]), setup, [setup, setup, setup]);
 }
 
 /** Change actual frame order: rear, then intervening, then in front of both. */
@@ -515,6 +534,90 @@ function runBehindSeamPrimitiveChecks(say: Say): void {
       opened.lines.some(line => /motion[_ -]opened/i.test(line)) && opened.lines.some(line => /standing/i.test(line)),
     JSON.stringify({ line_count: opened.lines.length, has_pair: opened.lines.some(line => line.includes('a|b')),
       has_motion: opened.lines.some(line => /motion[_ -]opened/i.test(line)), has_standing: opened.lines.some(line => /standing/i.test(line)) }));
+
+  const ambiguousMixed = behindAmbiguousFixture(3, 'left', true);
+  const localised = measured(ambiguousMixed, { threshold: 40 });
+  const mixedRows = [localised.pair.setup!, ...localised.pair.frames];
+  say('BHS44_MIXED_UNREAD_CORRIDOR_RETAINS_MEASURED_FAILURE',
+    mixedRows.every(row => row.standing.status === 'FAIL' && row.standing.px === 3 &&
+      row.standing.geometric_px === 3 && row.standing.raw_px === 3 && row.standing.samples.length === 3 &&
+      row.standing.unread_cells === 1 && row.standing.unread_corridors?.length === 1) &&
+      localised.pair.standing.status === 'FAIL' && localised.pair.standing.max_px === 3 &&
+      localised.pair.frames.every(row => row.motion_opened.status === 'PASS') &&
+      localised.pair.sampled_frames === 3 && localised.pair.read_frames === 0 && localised.pair.unmeasured_frames === 3 &&
+      localised.reading.status === 'FAIL' &&
+      localised.problems.some(problem => problem.code === BEHIND_SEAM_CODE && problem.object === 'pair "a|b" standing' && problem.detail.includes('3 cells')) &&
+      localised.problems.some(problem => problem.code === BEHIND_SEAM_UNMEASURED_CODE) &&
+      localised.reading.unmeasured.some(row => row.reason.includes('ambiguous half-alpha owners')),
+    JSON.stringify({ measured: summary(localised.reading), problems: localised.problems,
+      unread: localised.pair.setup!.standing.unread_corridors,
+      read_frames: localised.pair.read_frames, unmeasured_frames: localised.pair.unmeasured_frames }));
+
+  const mixedCorridor = localised.pair.setup!.standing.unread_corridors?.[0];
+  // Native unit grid is padded one cell: x starts at -1 and top y is 5.
+  say('BHS45_UNREAD_CORRIDOR_NAMES_ENDPOINT_GRID_WORLD_OWNERS_AND_CELL_CENTRES',
+    mixedCorridor?.axis === 'horizontal' && mixedCorridor.cell_count === 1 &&
+      equal(mixedCorridor.endpoints, [[4, 1, 3.5, 3.5, 3], [6, 1, 5.5, 3.5, 2]]) &&
+      equal(mixedCorridor.cells, [[4.5, 3.5]]) &&
+      CHECK_ROW_FAMILY in mixedCorridor && mixedCorridor[CHECK_ROW_FAMILY] === 'BEHIND_PART_SEAMS.unread_corridors' &&
+      'row_scope' in mixedCorridor && mixedCorridor.row_scope === 'pair' &&
+      'row_kind' in mixedCorridor && mixedCorridor.row_kind === 'evidence' &&
+      'row_subjects' in mixedCorridor && equal(mixedCorridor.row_subjects, ['a', 'b']) &&
+      equal(localised.reading, measured(ambiguousMixed, { threshold: 40 }).reading),
+    JSON.stringify({ corridor: mixedCorridor, grid: localised.pair.setup!.grid }));
+
+  for (const owner of [0, 3] as const) for (const side of ['left', 'right'] as const) {
+    const onlyUnread = measured(behindAmbiguousFixture(owner, side), { threshold: 40 });
+    const expectedOwners = side === 'left' ? [owner, 2] : [1, owner];
+    const rows = [onlyUnread.pair.setup!, ...onlyUnread.pair.frames];
+    say(`BHS46_ONLY_AMBIGUOUS_OWNER_IS_UNREAD_WITHOUT_INFERENCE[${owner},${side}]`,
+      rows.every(row => row.standing.status === 'SKIP' && row.standing.px === 0 && row.standing.samples.length === 0 &&
+        row.standing.unread_cells === 4 && row.standing.unread_corridors?.length === 4 &&
+        row.standing.unread_corridors.every(corridor => corridor.axis === 'horizontal' && corridor.cell_count === 1 &&
+          equal(corridor.endpoints.map(endpoint => endpoint[4]), expectedOwners)) &&
+        equal(row.standing.unread_corridors.map(corridor => corridor.cells), [[[4.5, 3.5]], [[4.5, 2.5]], [[4.5, 1.5]], [[4.5, 0.5]]])) &&
+        onlyUnread.pair.standing.status === 'SKIP' && onlyUnread.pair.read_frames === 0 && onlyUnread.pair.unmeasured_frames === 3 &&
+        onlyUnread.reading.status === 'FAIL' && onlyUnread.problems.some(problem => problem.code === BEHIND_SEAM_UNMEASURED_CODE) &&
+        !onlyUnread.problems.some(problem => problem.code === BEHIND_SEAM_CODE),
+      JSON.stringify({ owner, side, reading: summary(onlyUnread.reading), unread: onlyUnread.pair.setup!.standing.unread_corridors }));
+  }
+
+  const crossUnread = behindCrossFixture();
+  crossUnread.pages.get('b')!.set(1, 2, [...FRONT, 255]);
+  crossUnread.pages.get('b')!.set(2, 1, [...FRONT, 255]);
+  const unreadCross = measured(crossUnread, { threshold: 40 });
+  say('BHS47_CROSS_AXIS_UNREAD_CELL_UNION_COUNTS_CENTRE_ONCE',
+    [unreadCross.pair.setup!, ...unreadCross.pair.frames].every(row => row.standing.status === 'SKIP' &&
+      row.standing.px === 0 && row.standing.unread_cells === 1 && row.standing.unread_corridors?.length === 2 &&
+      equal(row.standing.unread_corridors.map(corridor => [corridor.axis, corridor.cell_count, corridor.cells]),
+        [['horizontal', 1, [[2.5, 2.5]]], ['vertical', 1, [[2.5, 2.5]]]]) &&
+      equal(row.standing.unread_corridors.map(corridor => corridor.endpoints),
+        [[[2, 3, 1.5, 2.5, 3], [4, 3, 3.5, 2.5, 2]], [[3, 2, 2.5, 3.5, 3], [3, 4, 2.5, 1.5, 2]]])) &&
+      unreadCross.reading.status === 'FAIL' && unreadCross.problems.some(problem => problem.code === BEHIND_SEAM_UNMEASURED_CODE),
+    JSON.stringify({ unread: unreadCross.pair.setup!.standing.unread_corridors,
+      distinct: unreadCross.pair.setup!.standing.unread_cells, status: unreadCross.reading.status }));
+
+  say('BHS48_UNAMBIGUOUS_OFFICIAL_OUTPUTS_OMIT_UNREAD_EXTENSION_FIELDS',
+    [closed, opened, touching, cross].every(result =>
+      [result.pair.setup!, ...result.pair.frames].every(row => [row.standing, row.motion_opened].every(count =>
+        !Object.hasOwn(count, 'unread_cells') && !Object.hasOwn(count, 'unread_corridors'))) &&
+      !JSON.stringify(result.reading).includes('"unread_cells"') && !JSON.stringify(result.reading).includes('"unread_corridors"')),
+    'Official shared-translation, moving-opening, touching and cross fixtures omit both optional fields in setup and idle JSON.');
+
+  const underflowFixture = behindStandingFixture();
+  // (1 - 254/255)^140 underflows float64 while symbolic rear survival stays positive.
+  underflowFixture.pages.set('veil', plate(12, 6, FRONT, 254));
+  const veils = Array.from({ length: 140 }, (_, i) => ({ ...rectangle(`veil-${i}`, -1, -1, 12, 6), page: 'veil' }));
+  underflowFixture.setup = frame([...underflowFixture.setup.pieces, ...veils], 0);
+  underflowFixture.frames = underflowFixture.frames.map(pose => frame([...pose.pieces, ...veils], pose.index));
+  const numericUnread = measured(underflowFixture, { threshold: 40 });
+  say('BHS49_NUMERIC_REAR_UNDERFLOW_REMAINS_UNMEASURED_WITHOUT_ENDPOINT_AMBIGUITY',
+    [numericUnread.pair.setup!, ...numericUnread.pair.frames].every(row => row.standing.status === 'SKIP' && row.standing.px === 0 &&
+      !Object.hasOwn(row.standing, 'unread_cells') && !Object.hasOwn(row.standing, 'unread_corridors')) &&
+      numericUnread.pair.read_frames === 0 && numericUnread.pair.unmeasured_frames === 3 &&
+      numericUnread.reading.status === 'FAIL' && numericUnread.problems.some(problem => problem.code === BEHIND_SEAM_UNMEASURED_CODE &&
+        problem.detail.includes('underflowed its numeric colour weight')),
+    brief(numericUnread));
 }
 
 function runBehindSeamRequirementChecks(dir: string, say: Say): void {
