@@ -1159,7 +1159,7 @@ rig-parts edited-part --config draft/config.json --part sleeve_r --file retouche
 CLI paths resolve from the working directory; the stored `file` resolves from
 each config's own `edited_parts.dir`. The writer hashes the encoded PNG bytes,
 checks that both files decode and have equal dimensions, and validates every
-candidate config before writing either. It replaces the existing row for that
+candidate config before writing either destination. It replaces the existing row for that
 part or appends at the array's length. New rows use key order `part`, `file`,
 `sha256`, `from_sha256`, `editor`; other rows and unrelated config bytes retain
 their original spelling and whitespace. No matching config is discovered.
@@ -1167,9 +1167,18 @@ their original spelling and whitespace. No matching config is discovered.
 The writer never reassembles or certifies the baseline. A wrong same-size
 `--from` is recorded; the next build refuses `ASSEMBLE_EDITED_PART_BASELINE`,
 naming the current assembled hash and the recorded hash. Supply the exact PNG
-from a normal build of this config. A successful writer prints one line with
-the part, both hashes and the declared editor; it does not prove which editor
-was used. Validation refusals leave all named configs byte-identical.
+from a normal build of this config. A successful writer prints one stdout line
+with the part, both hashes and the declared editor; it does not prove which
+editor was used. The shared writer prints `config <path>: added/replaced
+assemble.edited_parts.receipts[index]` or `config <path>: unchanged` on stderr.
+Validation refusals leave all named configs byte-identical.
+
+Receipt updates use the same staged config writer as other config commands.
+The full loader validates each same-directory staged file, including relative
+motion sidecars. All configs stage before any commits. The shared batch helper
+restores earlier original configs if a later commit fails; a restoration
+failure names the retained original backup. A backup-cleanup failure can be
+reported after both complete configs are published; inspect its named path.
 
 | Rule | What was found | What is required |
 | --- | --- | --- |

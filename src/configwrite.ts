@@ -11,14 +11,16 @@
 import type { PlanProposal } from './assemble.ts';
 import type { HeadBoxProposal } from './headbox.ts';
 import type { CharacterConfig } from './config.ts';
+import type { EditedPartReceipt } from './editedparts.ts';
 import type { Proposal, PROPOSAL_CONFIG_SECTIONS } from './propose.ts';
 import { PartsError } from './errors.ts';
-import { parseProposalSections } from './config.ts';
+import { parseConfig, parseProposalSections } from './config.ts';
 import type { ConfigEdit } from './meshdraft.ts';
 
 export type ConfigJson = null | boolean | number | string | ConfigJson[] | ConfigObject;
 export interface ConfigObject { [key: string]: ConfigJson }
 export type ConfigWritePatch =
+  | { kind: 'edited-part-receipt'; receipt: EditedPartReceipt }
   | { kind: 'neck-unit'; config: CharacterConfig }
   | { kind: 'head-box'; head_box: HeadBoxProposal['head_box'] }
   | { kind: 'assemble-plan'; plan: PlanProposal['plan']; extend_below_crop: PlanProposal['extend_below_crop'] }
@@ -93,6 +95,22 @@ export function mergeConfigProposal(raw: unknown, patch: ConfigWritePatch): Conf
   const config = clone(before, 'config') as ConfigObject;
   const edits: ConfigEdit[] = [];
   switch (patch.kind) {
+    case 'edited-part-receipt': {
+      const checked = parseConfig(before);
+      const spec = checked.assemble.edited_parts;
+      if (spec === undefined) throw new PartsError([{ code: 'EDITED_PART_BLOCK', object: 'config.assemble.edited_parts', detail: 'has no assemble.edited_parts; declare {dir, receipts: []} before recording an edited part' }]);
+      const { part, file, sha256, from_sha256, editor } = patch.receipt;
+      if (!checked.assemble.plan.some(([name]) => name === part)) throw new PartsError([{ code: 'ASSEMBLE_EDITED_PART_UNKNOWN', object: part, detail: 'is not in assemble.plan; an existing plan part is required' }]);
+      const found = spec.receipts.findIndex(row => row.part === part);
+      const index = found === -1 ? spec.receipts.length : found;
+      const value = clone({ part, file, sha256, from_sha256, editor }, 'receipt');
+      const receipts = ((config.assemble as ConfigObject).edited_parts as ConfigObject).receipts as ConfigJson[];
+      if (found !== -1 && equal(receipts[index], value)) return { config, changes: [], edits: [] };
+      receipts[index] = value;
+      // This patch owns one row, never the ledger or the whole assemble block.
+      return { config, changes: [{ path: `assemble.edited_parts.receipts[${index}]`, kind: found === -1 ? 'added' : 'replaced' }],
+        edits: [{ path: ['assemble', 'edited_parts', 'receipts', index], value, insert: found === -1 }] };
+    }
     case 'neck-unit': {
       const values = { bones: patch.config.bones, meshes: patch.config.meshes, regions: patch.config.regions, turn: patch.config.turn };
       for (const [key, value] of Object.entries(values)) {
@@ -211,7 +229,7 @@ export function mergeConfigProposal(raw: unknown, patch: ConfigWritePatch): Conf
       }
       return { config, changes: added, edits };
     }
-    default: return refuse('write-config', 'has no supported operation; head-box, assemble-plan, proposal or proposal-missing is required');
+    default: return refuse('write-config', 'has no supported operation; edited-part-receipt, neck-unit, head-box, assemble-plan, proposal or proposal-missing is required');
   }
   return { config, changes: changes(before, config), edits };
 }

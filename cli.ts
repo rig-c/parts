@@ -2543,7 +2543,8 @@ function cmdEditedPart(args: string[]): number {
   const f = flags(args, 'edited-part', ['--config', '--part', '--file', '--from', '--editor']);
   if (typeof f === 'string') return usage(f);
   try {
-    const receipt = writeEditedPart({ config: f.get('--config')!, part: f.get('--part')!, file: f.get('--file')!, from: f.get('--from')!, editor: f.get('--editor')!, rigConfig: f.get('--rig-config') });
+    const { receipt, writes } = writeEditedPart({ config: f.get('--config')!, part: f.get('--part')!, file: f.get('--file')!, from: f.get('--from')!, editor: f.get('--editor')!, rigConfig: f.get('--rig-config') });
+    for (const { target, changes } of writes) for (const line of configWriteLines(target, changes)) console.error(line);
     console.log(`edited-part: part ${JSON.stringify(receipt.part)} sha256=${receipt.sha256} from_sha256=${receipt.from_sha256} editor=${JSON.stringify(receipt.editor)}`);
     return EXIT_OK;
   } catch (error) { return printRefusal(error); }

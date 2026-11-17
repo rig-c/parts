@@ -55,19 +55,20 @@ export function runEditedPartWriterChecks(dir: string, say: Say): void {
   const seed = text(config).replace('"duration": 1', '"duration" : 1e0').replace('"editor": "untouched declaration"', '"editor"  :  "untouched declaration"');
   writeFileSync(config, seed);
   const editor = 'fixture editor\nsecond line';
-  const cli = (args: string[]): { status: number | null; out: string } => {
+  const cli = (args: string[]): { status: number | null; out: string; stdout: string; stderr: string } => {
     const result = spawnSync(process.execPath, [join(import.meta.dir, '..', 'cli.ts'), 'edited-part', ...args], { encoding: 'utf8', cwd: dir });
     if (result.error) throw result.error;
-    return { status: result.status, out: result.stdout + result.stderr };
+    return { status: result.status, out: result.stdout + result.stderr, stdout: result.stdout, stderr: result.stderr };
   };
   const args = ['--config', config, '--part', 'body', '--file', file, '--from', from, '--editor', editor];
   const replace = (flag: string, value: string): string[] => args.map((arg, i) => args[i - 1] === flag ? value : arg);
   const appended = cli(args), afterInsert = text(config), rows = block(config).receipts;
   const expected: EditedPartReceipt = { part: 'body', file: 'edited.png', sha256: sha(readFileSync(file)), from_sha256: sha(readFileSync(from)), editor };
   say('APPEND_HASHES_AND_ONE_ESCAPED_LOG_LINE', appended.status === 0 && rows.length === 2 &&
-    JSON.stringify(rows[1]) === JSON.stringify(expected) && appended.out.trimEnd() ===
-    `edited-part: part "body" sha256=${expected.sha256} from_sha256=${expected.from_sha256} editor=${JSON.stringify(editor)}`,
-    `exit ${appended.status}; encoded byte hashes, fixed key order, editor escaped on one line`);
+    JSON.stringify(rows[1]) === JSON.stringify(expected) && appended.stdout.trimEnd() ===
+    `edited-part: part "body" sha256=${expected.sha256} from_sha256=${expected.from_sha256} editor=${JSON.stringify(editor)}` &&
+    appended.stderr === `config ${resolve(config)}: added assemble.edited_parts.receipts[1]\n`,
+    `exit ${appended.status}; encoded byte hashes, fixed key order, editor escaped on one stdout line; shared change line on stderr`);
   const insertPoint = jsonValueSpan(seed, [...receiptPath, 0]).end;
   const insertedEnd = jsonValueSpan(afterInsert, [...receiptPath, 1]).end;
   say('APPEND_PRESERVES_EVERY_PREEXISTING_BYTE', afterInsert.slice(0, insertPoint) + afterInsert.slice(insertedEnd) === seed &&
@@ -75,7 +76,8 @@ export function runEditedPartWriterChecks(dir: string, say: Say): void {
   const replaced = cli(replace('--editor', 'replacement editor')), afterReplace = text(config);
   say('REPLACE_NO_DUPLICATE_AND_OTHER_BYTES_IDENTICAL', replaced.status === 0 && block(config).receipts.filter(r => r.part === 'body').length === 1 &&
     block(config).receipts.length === 2 && withoutRow(afterInsert, 1) === withoutRow(afterReplace, 1) &&
-    valueBytes(afterReplace, 0) === valueBytes(seed, 0), `exit ${replaced.status}; only the body row changes`);
+    valueBytes(afterReplace, 0) === valueBytes(seed, 0) && replaced.stderr === `config ${resolve(config)}: replaced assemble.edited_parts.receipts[1]\n`,
+    `exit ${replaced.status}; only the body row changes, reported by the shared writer`);
   const checked = loadConfig(config), editedSpec = checked.assemble.edited_parts!;
   const verified = readEditedParts(editedSpec, config, checked.assemble.plan);
   const legacy = readEditorReceipts({ receipts: editedSpec.receipts.map(r => ({ ...r, file: relative(dirname(config), resolve(dirname(config), editedSpec.dir, r.file)).replaceAll('\\', '/') })) }, config);
@@ -123,16 +125,26 @@ export function runEditedPartWriterChecks(dir: string, say: Say): void {
   say('SECOND_CONFIG_VALIDATED_BEFORE_EITHER_WRITE', refusedPair.status === 1 && refusedPair.out.includes('CONFIG_FIELD_PRESENT:') &&
     text(config) === beforePair[0] && text(rigConfig) === beforePair[1], `exit ${refusedPair.status}; invalid second full config leaves both unchanged`);
   secondary.motion = raw(config).motion; save(rigConfig, secondary);
+  (secondary.motion as Record<string, unknown>).animations_from = 'missing-animations.json'; save(rigConfig, secondary);
+  const sidecarBefore = [text(config), text(rigConfig)], missingSidecar = cli([...args, '--rig-config', rigConfig]);
+  say('SECOND_FULL_LOADER_REFUSAL_CANCELS_EVERY_STAGE', missingSidecar.status === 1 && missingSidecar.out.includes('CONFIG_FILE_PRESENT:') &&
+    text(config) === sidecarBefore[0] && text(rigConfig) === sidecarBefore[1] &&
+    [dir, rigDir].every(at => readdirSync(at).every(name => !name.includes('.rig-parts-'))),
+    `exit ${missingSidecar.status}; full staged loader resolves motion sidecar; both configs and staging cleanup preserved`);
+  delete (secondary.motion as Record<string, unknown>).animations_from; save(rigConfig, secondary);
   const explicit = cli([...args, '--rig-config', rigConfig]);
   say('EXPLICIT_SECOND_CONFIG_AND_ITS_OWN_RELATIVE_PATH', explicit.status === 0 && block(rigConfig).receipts.length === 1 &&
-    JSON.stringify(block(rigConfig).receipts[0]) === JSON.stringify(expected), `exit ${explicit.status}; distinct config directory and edited_parts.dir resolve the same PNG`);
+    JSON.stringify(block(rigConfig).receipts[0]) === JSON.stringify(expected) &&
+    explicit.stderr.split('\n').filter(Boolean).length === 2 && explicit.stderr.includes(`config ${resolve(rigConfig)}: added assemble.edited_parts.receipts[0]`),
+    `exit ${explicit.status}; distinct config directory and edited_parts.dir resolve the same PNG; one shared change line per config`);
   const undiscovered = join(dir, 'rig-config.json'); save(undiscovered, secondary); const undiscoveredBefore = text(undiscovered);
   const noDiscovery = cli(args);
   say('NO_CONFIG_FILENAME_DISCOVERY', noDiscovery.status === 0 && text(undiscovered) === undiscoveredBefore,
     'planted rig-config.json remains byte-identical when --rig-config is absent');
   const beforeRepeat = text(config), repeat = cli(args);
   say('EMPTY_ARRAY_INSERTION_AND_REPEAT_ARE_DETERMINISTIC', explicit.status === 0 && noDiscovery.status === 0 &&
-    repeat.status === 0 && text(config) === beforeRepeat && block(rigConfig).receipts.length === 1,
+    repeat.status === 0 && text(config) === beforeRepeat && block(rigConfig).receipts.length === 1 &&
+    repeat.stderr === `config ${resolve(config)}: unchanged\n`,
     'empty second ledger gains one row; repeated writer is byte-identical');
 
   // The real build wrapper and real assemble own the baseline decision. The rig
@@ -159,6 +171,6 @@ export function runEditedPartWriterChecks(dir: string, say: Say): void {
     !correctBuild.lines.some(line => line.includes('ASSEMBLE_EDITED_PART_BASELINE:')) &&
     readFileSync(join(dir, 'correct-build', 'parts', 'body.png')).equals(readFileSync(file)),
     `writer exit ${correctWriter.status}; real build/assemble accepts receipt and emits exact edited bytes, then reaches injected rig sentinel`);
-  say('NO_STAGED_FILES_LEFT', [dir, rigDir].every(at => readdirSync(at).every(name => !name.includes('.edited-part-'))),
+  say('NO_STAGED_FILES_LEFT', [dir, rigDir].every(at => readdirSync(at).every(name => !name.includes('.edited-part-') && !name.includes('.rig-parts-'))),
     'successful writes and validation refusals leave no staging files');
 }
