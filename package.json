@@ -40,6 +40,7 @@
     "bin/rig-parts.cjs",
     "cli.ts",
     "tools/configwrite.ts",
+    "tools/edited-part-cli.ts",
     "tools/build-process.ts",
     "tools/alternate-cli.ts",
     "tools/neck-propose.ts",

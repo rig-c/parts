@@ -5,7 +5,7 @@
 import { closeSync, fchmodSync, linkSync, mkdirSync, lstatSync, openSync, readFileSync, realpathSync, statSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { basename, dirname, join, resolve } from 'node:path';
-import { loadConfigAndAnimations, loadEarlyConfig, repeatedKeys } from '../src/config.ts';
+import { loadConfigAndAnimations, loadEarlyConfig, parseConfig, parseEarlyConfig, repeatedKeys } from '../src/config.ts';
 import { mergeConfigProposal, type ConfigWriteChange, type ConfigWritePatch } from '../src/configwrite.ts';
 import { PartsError, type Problem } from '../src/errors.ts';
 import { splicedEdits } from '../src/meshdraft.ts';
@@ -18,6 +18,8 @@ export interface ConfigWriteFiles {
   replace?: (from: string, to: string) => void;
   remove?: (path: string) => void;
   publish?: (from: string, to: string) => void;
+  /** Batch rollback is independent of the replacement failure being controlled. */
+  restore?: (from: string, to: string) => void;
 }
 export interface StagedConfigWrite {
   changes: readonly ConfigWriteChange[];
@@ -200,4 +202,84 @@ export function stageConfigWrite(target: ConfigWriteTarget | FreshConfigWrite, p
 /** Print to stderr so proposal JSON on stdout remains machine-readable. */
 export function configWriteLines(target: ConfigWriteTarget, changes: readonly ConfigWriteChange[]): string[] {
   return changes.length === 0 ? [`config ${target.path}: unchanged`] : changes.map((c) => `config ${target.path}: ${c.kind} ${c.path}${c.value === undefined ? '' : ` ${c.value}`}`);
+}
+
+export interface ConfigWriteRequest { target: ConfigWriteTarget; patch: ConfigWritePatch }
+export interface StagedConfigWriteBatch {
+  writes: ReadonlyArray<{ target: ConfigWriteTarget; changes: readonly ConfigWriteChange[] }>;
+  commit(): void;
+  cancel(): void;
+}
+/** Existing configs only: every candidate stages through stageConfigWrite before
+ * any destination commits. A later commit failure restores earlier originals.
+ * Backups whose restoration fails are retained and named, never deleted.
+ */
+export function stageConfigWriteBatch(requests: readonly ConfigWriteRequest[], files: ConfigWriteFiles = {}): StagedConfigWriteBatch {
+  const entries: Array<{ target: ConfigWriteTarget; staged: StagedConfigWrite; backup: string | null; committed: boolean; restoreFailed: boolean }> = [];
+  const problemsOf = (error: unknown, path: string, action: string): Problem[] => error instanceof PartsError ? [...error.problems] : [ioProblem(path, action, error)];
+  const cancelAll = (): Problem[] => entries.flatMap(({ target, staged }) => {
+    try { staged.cancel(); return []; }
+    catch (error) { return problemsOf(error, target.path, 'removing the staged config failed'); }
+  });
+  try {
+    // Two names for one inode cannot be independent members of a write batch.
+    const identities = new Set<string>();
+    for (const { target } of requests) {
+      const stat = statSync(target.path), identity = `${stat.dev}:${stat.ino}`;
+      if (identities.has(identity)) refusal('CONFIG_WRITE_TARGET', target.path, 'names another config in the batch; distinct existing config files are required');
+      identities.add(identity);
+    }
+    // Candidate shape refusals precede even temporary writes. The existing
+    // stage loader then validates each real same-directory staged file, including
+    // relative sidecars. Edited receipts are full-config updates, not early drafts.
+    for (const { target, patch } of requests) {
+      const candidate = mergeConfigProposal(target.raw, patch).config;
+      if (patch.kind === 'head-box') parseEarlyConfig(candidate, 'layers');
+      else if (patch.kind === 'assemble-plan') parseEarlyConfig(candidate, 'assemble');
+      else parseConfig(candidate);
+    }
+    for (const { target, patch } of requests) entries.push({ target, staged: stageConfigWrite(target, patch, files), backup: null, committed: false, restoreFailed: false });
+  } catch (error) {
+    throw new PartsError([...problemsOf(error, 'config batch', 'staging configs failed'), ...cancelAll()]);
+  }
+  return {
+    writes: entries.map(({ target, staged }) => ({ target, changes: staged.changes })),
+    cancel(): void {
+      const problems = cancelAll();
+      if (problems.length > 0) throw new PartsError(problems);
+    },
+    commit(): void {
+      let problems: Problem[] = [];
+      try {
+        for (const entry of entries) {
+          unchanged(entry.target);
+          if (entry.staged.changes.length === 0) continue;
+          const path = entry.target.path;
+          const backup = join(dirname(path), `.${basename(path)}.rig-parts-${randomBytes(8).toString('hex')}.bak`);
+          linkSync(path, backup);
+          entry.backup = backup;
+        }
+        for (const entry of entries) {
+          entry.staged.commit();
+          entry.committed = entry.staged.changes.length > 0;
+        }
+      } catch (error) {
+        problems = problemsOf(error, 'config batch', 'committing configs failed');
+        for (const entry of entries.toReversed()) if (entry.committed && entry.backup !== null) {
+          try { (files.restore ?? renameSync)(entry.backup, entry.target.path); entry.backup = null; entry.committed = false; }
+          catch (restore) {
+            entry.restoreFailed = true;
+            problems.push(ioProblem(entry.target.path, `restoring original config failed; original retained at ${entry.backup}`, restore));
+          }
+        }
+        problems.push(...cancelAll());
+      }
+      for (const entry of entries) if (entry.backup !== null && !entry.restoreFailed) {
+        const backup = entry.backup;
+        try { (files.remove ?? ((path: string) => rmSync(path, { force: true })))(backup); entry.backup = null; }
+        catch (error) { problems.push(ioProblem(backup, 'removing the original-config backup failed', error)); }
+      }
+      if (problems.length > 0) throw new PartsError(problems);
+    },
+  };
 }

@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /** #356 pure merge + real filesystem/CLI controls; run with Bun, never bundled. */
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { isDeepStrictEqual as same } from 'node:util';
@@ -17,7 +17,7 @@ import { KEYPOINTS_SPEC } from '../src/keypoints.ts';
 import { PROPOSAL_CONFIG_SECTIONS } from '../src/propose.ts';
 import { KEYPOINT_NAMES } from '../src/skeleton.ts';
 import { encodePngBytes, readPng } from '../src/raster/png.ts';
-import { configWriteLines, readConfigWriteTarget, stageConfigWrite } from './configwrite.ts';
+import { configWriteLines, readConfigWriteTarget, stageConfigWrite, stageConfigWriteBatch } from './configwrite.ts';
 
 const ROOT = resolve(import.meta.dir, '..');
 /** Run the existing controls explicitly; the caller owns this directory and reporting. */
@@ -73,6 +73,17 @@ export function runConfigWriteChecks(dir: string, report: (name: string, ok: boo
   expectedProposal.proposed_rig_scale = 0.5;
   check('CW_PROPOSAL', same(applied.config, expectedProposal) && !('notes' in applied.config) && applied.changes.some(c => c.path === 'motion.animations_from' && c.kind === 'removed'), 'whole-section replacement removes unproposed motion subfields; optional absent sections kept; notes excluded; scale saved');
   check('CW_NOOP', mergeConfigProposal(head.config, headPatch).changes.length === 0, 'identical patch has no semantic changes');
+  const receiptInput = structuredClone(baseline);
+  (receiptInput.assemble as Record<string, unknown>).edited_parts = { dir: '.', receipts: [] };
+  const receiptPart = parseConfig(receiptInput).assemble.plan[0][0];
+  const receiptPatch: ConfigWritePatch = { kind: 'edited-part-receipt', receipt: {
+    part: receiptPart, file: 'edited.png', sha256: '1'.repeat(64), from_sha256: '2'.repeat(64), editor: 'fixture editor',
+  } };
+  const receiptAdded = mergeConfigProposal(receiptInput, receiptPatch);
+  check('CW_EDITED_RECEIPT_SINGLE_ROW', same(receiptAdded.edits, [{ path: ['assemble', 'edited_parts', 'receipts', 0], value: receiptPatch.receipt, insert: true }]) &&
+    same(receiptAdded.changes, [{ path: 'assemble.edited_parts.receipts[0]', kind: 'added' }]) &&
+    mergeConfigProposal(receiptAdded.config, receiptPatch).changes.length === 0 && typeof parseConfig(receiptAdded.config).key === 'string',
+    'receipt patch owns one array element and a repeated semantic value is a byte-preserving no-op');
   const reordered = mergeConfigProposal(initial, { kind: 'head-box', head_box: [0, 0, 8, 8] });
   check('CW_PURE', same(initial, baseline) && reordered.changes.length === 0 && applied.config.constraints !== inputMotion.constraints, 'frozen source untouched; output owns a separate JSON copy');
   check('CW_ROOT', rejected(() => mergeConfigProposal([], headPatch), 'CONFIG_FIELD_TYPE', 'config'), 'non-object destination refused');
@@ -103,6 +114,43 @@ export function runConfigWriteChecks(dir: string, report: (name: string, ok: boo
   const renameBefore = readFileSync(renamePath, 'utf8');
   const renameFailed = stageConfigWrite(readConfigWriteTarget(renamePath), headPatch, { replace: () => { throw new Error('injected replace failure'); } });
   check('CW_RENAME_FAILURE', rejected(() => renameFailed.commit(), 'CONFIG_WRITE_FAILED') && readFileSync(renamePath, 'utf8') === renameBefore && temporaryCount() === 0, 'replace-operation failure keeps original and removes only staged file');
+  const batchPaths = [join(dir, 'batch-first.json'), join(dir, 'batch-second.json')];
+  const resetBatch = (): void => { for (const path of batchPaths) { save(path, configWriteFixture()); chmodSync(path, 0o640); } };
+  const batchRequests = () => batchPaths.map(path => ({ target: readConfigWriteTarget(path), patch: headPatch }));
+  resetBatch();
+  const batchBefore = batchPaths.map(path => readFileSync(path, 'utf8'));
+  const batch = stageConfigWriteBatch(batchRequests());
+  check('CW_BATCH_ALL_STAGED', batchPaths.every((path, i) => readFileSync(path, 'utf8') === batchBefore[i]) && temporaryCount() === 2,
+    'every config stages through the sole adapter before either destination changes');
+  batch.commit();
+  check('CW_BATCH_COMMIT', batchPaths.every(path => same(read(path), expectedHead) && (statSync(path).mode & 0o777) === 0o640) && temporaryCount() === 0,
+    'shared batch commits both complete configs, preserves modes and removes stages/backups');
+  resetBatch();
+  let batchReplacements = 0;
+  const failingBatch = stageConfigWriteBatch(batchRequests(), { replace: (from, to) => {
+    if (++batchReplacements === 2) throw new Error('injected second config commit failure');
+    renameSync(from, to);
+  } });
+  check('CW_BATCH_SECOND_COMMIT_ROLLBACK', rejected(() => failingBatch.commit(), 'CONFIG_WRITE_FAILED', undefined, 'injected second config commit failure') &&
+    batchReplacements === 2 && batchPaths.every((path, i) => readFileSync(path, 'utf8') === batchBefore[i] && (statSync(path).mode & 0o777) === 0o640) && temporaryCount() === 0,
+    'second rename failure is injected after the first succeeds; shared helper restores first original bytes/mode and cancels all stages');
+  const invalidBatchRequests = batchRequests(); invalidBatchRequests[1].patch = { kind: 'head-box', head_box: [0, 0, 8, 9] };
+  check('CW_BATCH_INVALID_CANDIDATE', rejected(() => stageConfigWriteBatch(invalidBatchRequests), 'CONFIG_HEAD_BOX_SQUARE') &&
+    batchPaths.every((path, i) => readFileSync(path, 'utf8') === batchBefore[i]) && temporaryCount() === 0,
+    'invalid second candidate is refused before any destination changes or stage is retained');
+  let restoreFailureReplacements = 0;
+  const restoreFailure = stageConfigWriteBatch(batchRequests(), {
+    replace: (from, to) => { if (++restoreFailureReplacements === 2) throw new Error('second commit failure'); renameSync(from, to); },
+    restore: () => { throw new Error('injected restoration failure'); },
+  });
+  let restoreError: PartsError | null = null;
+  try { restoreFailure.commit(); } catch (error) { if (error instanceof PartsError) restoreError = error; else throw error; }
+  const retained = readdirSync(dir).filter(name => name.includes('.rig-parts-') && name.endsWith('.bak'));
+  check('CW_BATCH_RESTORE_FAILURE_RETAINS_ORIGINAL', restoreError !== null && retained.length === 1 &&
+    restoreError.problems.some(p => p.detail.includes('injected restoration failure') && p.detail.includes(join(dir, retained[0]))) &&
+    readFileSync(join(dir, retained[0]), 'utf8') === batchBefore[0] && readFileSync(batchPaths[1], 'utf8') === batchBefore[1],
+    'failed restoration preserves and names the exact original backup instead of deleting the only recovery bytes');
+  for (const name of retained) renameSync(join(dir, name), batchPaths[0]);
   const deniedDir = join(dir, 'cleanup-denied'); mkdirSync(deniedDir);
   const deniedPath = join(deniedDir, 'config.json'); save(deniedPath, configWriteFixture());
   const deniedBefore = readFileSync(deniedPath, 'utf8');
