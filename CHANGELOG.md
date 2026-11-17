@@ -1,5 +1,32 @@
 # Changelog
 
+## 2.42.0 (2026-11-17)
+
+### Features
+
+* **check:** add the authored `requirements.behind_seams` requirement, which counts where another part shows through a moving seam or a standing boundary line on core's shared seam grid, at setup and over every idle frame, independently. With no threshold declared it reports SKIP and a HOLE; the allowance is 0 unless authored per pair; a count over it fails by name as `CHECK_BEHIND_PART_SEAMS`. A requirements file without `behind_seams` writes the same `check.json` bytes as before. Pins `@rig-c/core` 3.8.0 (`#1314`, `#1319`, `9d63927`).
+* **check:** read a bar-free `motion_seams: [{part, neighbour}]` from the requirements file, unioned with the pairs from `parts.json` and from `seam` requirements, so frozen parts can declare motion-seam coverage without rewriting `parts.json`. Pairs are validated with the existing `REQUIREMENTS_*` codes; there is no new code (`#1269`, `#1322`, `e757245`).
+* **check:** when a part reads rigid 0 / 0 and its whole root-to-carrier chain is static over the sampled idle frames, report `CHECK_CARRIER_NOT_EXCITED` instead of `CHECK_TIP_OVER_ROOT`; the finding still fails. Below-floor `UNMEASURED` rows now carry `measured_driver`. The bar is unchanged (`#1308`, `#1317`, `c52e0ee`).
+* **edited-part:** add `rig-parts edited-part --config <config> --part <name> --file <edited.png> --from <assembled.png> --editor <text> [--rig-config <config>]`, which writes or replaces the part's row in `assemble.edited_parts.receipts[]` with both files' hashes through the shared config writer. Other rows and the rest of the file stay byte-identical; every refusal happens before any write (`#1328`, `#1329`, `921a9cb`).
+* **assemble:** `run.json` (`rig-run/1`) records an `inputs` list for the `--source`, `--full` and `--head` it ran with: `role`, `path` relative to the run's cwd, and `sha256` of the file or of the directory's `layers.json`. Additive; an input not given is left out, and every existing field keeps its bytes (`#1316`, `#1324`, `3d400a5`).
+* **pack:** `--page-size <px>` is passed through to packed rigc builds by `rig`, `check`, `build`, `mesh-draft`, `remesh` and `retune`; a value that is not a positive integer refuses as `PACK_PAGE_SIZE` before any build. `check.json` records `pack_mode.page_size` only when the flag is given (`#1273`, `#1313`, `d9a8232`).
+* **rig:** when rigc refuses a generated contour `body_turn`, add `RIG_CONTOUR_BODY_TURN_WINDING` naming the part, key/time, triangle, signed areas and reversal count, with the contour settings to change. The core refusal is unchanged (`#1306`, `#1309`, `693ca25`).
+
+### Bug Fixes
+
+* **check:** an ambiguous standing-corridor endpoint no longer overwrites a measured FAIL with SKIP. Each unread corridor is written as `standing.unread_corridors[]` (axis, both endpoints, interior cell centres) with `standing.unread_cells`; both are omitted when every corridor is read, so a fully read frame keeps its bytes (`#1325`, `#1326`, `fe6293f`).
+* **check:** behind-seam frame log lines report the counted cells and the unread corridors together instead of `SKIP — HOLE` when a frame counted cells; console text only (`#1331`, `#1332`, `1e82814`).
+* **depth-apply:** relocating a config rebases `assemble.edited_parts.dir` once and leaves every receipt's `file` byte-identical, so `file` no longer climbs above the project when the output sits inside the config's directory; `mesh-draft`'s scratch config gets the same fix (`#1311`, `#1315`, `2414e21`).
+* **release:** `release.yml` accepts the one-element array npm 12 returns from `npm view <spec> version --json`; any other shape still refuses as `RELEASE_REGISTRY_QUERY` (`#1272`, `#1321`, `75359e0`).
+
+### Documentation
+
+* **authoring:** recommend `--project visible`, plus `assemble.ground: busy` over a busy opaque backdrop, for a painted source, with the measured cost on the public `demo` example. The default stays `core` (`#1275`, `#1312`, `95f4763`).
+
+### Tooling
+
+* **scripts:** `bun run verify:nova` submits a selftest to the remote pool at the clean `HEAD` and reports `green`, `green-partial`, `red` or `refused` from the run's inner exit code. Repository tooling only; nothing in the published package changes (`#1327`, `#1330`, `697d020`).
+
 ## 2.41.0 (2026-11-17)
 
 ### Features
