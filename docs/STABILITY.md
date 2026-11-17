@@ -1200,7 +1200,7 @@ route. See [Background over every frame](AUTHORING.md#background-over-every-fram
 The optional `behind_seams` key in `spine-parts-requirements/1` (issue #1314,
 additive) declares the required `BEHIND_PART_SEAMS` check, independently of the
 existing requirement kinds and without a new CLI flag. Its optional fields are
-`threshold`, `allowance` and `pairs`; pair entries require distinct nonempty
+`threshold`, `allowance`, `pairs` and `turn`; pair entries require distinct nonempty
 `part` and `neighbour` names and may override `threshold` and `allowance`.
 Names must resolve to known parts and an already selected pair; duplicate
 pairs, including reversed pairs, are invalid. Shape errors use `REQUIREMENTS_FIELD`.
@@ -1221,6 +1221,36 @@ allowance uses `CHECK_BEHIND_PART_SEAMS`; a mandatory unread population uses
 motion support, boundary population or verified render evidence is a HOLE,
 not a zero PASS. Existing render/sidecar refusals remain refusals. The standing
 bracketed-run definition does not certify curved or diagonal openings.
+
+Issue #1323 adds `behind_seams.turn: true` as an explicit opt-in. It references
+existing emitted turn slider ranges, never a second range declaration. Without
+this key no turn rows are written and existing `check.json` bytes are unchanged.
+With it, `BEHIND_PART_SEAMS.turn` records named independent reset poses: each
+dial's declared `from` and `max` with other dials at setup, then every full
+min/max corner, deduplicated in that order. It records planned and observed dial locals and observed slider mapped times, per-pair
+`frames`, `sampled_poses`, `read_poses`, `unmeasured_poses`, and separate
+`motion_opened` / `standing` status and maximum counts. There are no temporal
+spans: pose indices are sample identities, and time is 0 for every reset.
+Turn uses its own setup, rest geometry and transported stock seam evidence;
+idle stock and idle counts are unchanged. The same thresholds, allowances,
+rear-set and unread rules apply. Optional unread-corridor evidence also applies
+to turn standing rows. No declared dial persists turn SKIP and a named HOLE;
+an effective authored T makes that missing required reading a
+`CHECK_BEHIND_PART_SEAMS_UNMEASURED` failure. Legacy `turn.x` has no declared
+finite range and is explicitly unread, never given a guessed range. The
+official facade supplies geometry from one throwaway gated build that appends
+one duration-0 pose animation per selected endpoint/corner, retaining setup,
+sliders, original animations, profile and pack flags. Timeline properties are
+`rotate` / `translatex` / `translatey`, with offsets from setup. Actual local
+channels (after constraints) must match planned locals at float32 precision;
+slider mapped times are also retained. Actual poser, atlas text, decoded pages
+and setup geometry must match the accepted build, or turn is a named HOLE.
+Build refusal also leaves unrelated readings available, with scratch cleanup
+in all cases. The original skeleton SHA-256 is recorded once in turn limitations.
+Without opt-in there is no scratch copy or extra build. Missing effective T for
+one pair is optional SKIP even when another pair has a required override.
+An unavailable poser or source is a HOLE. Other animations, between-sample turns and alternate
+skins remain unmeasured.
 
 Issue #1325 adds the following optional evidence fields to
 `BEHIND_PART_SEAMS.pairs[].setup.standing` and
