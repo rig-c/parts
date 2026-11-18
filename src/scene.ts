@@ -1085,10 +1085,17 @@ export function composeScene(
     ...b.rig.slots.map(x => prefixed(b.id, x.name)),
     ...Object.keys(b.motion.animations).map(n => prefixed(b.id, n)),
   ])]);
+  const refusedLayerNames = new Set<string>();
   layers.forEach((p, i) => {
     const where = `scene.plates[${i}] (${show(p.name)})`;
-    if (reserved.has(p.name)) fail('SCENE_PLATE_NAME_FREE', `${where}.name`, `is ${show(p.name)}, reserved by the shared root, legacy plate, character id, bone, slot or animation; a distinct name is required`);
-    if (layers.findIndex(q => q.name === p.name) !== i) fail('SCENE_PLATE_NAME_UNIQUE', `${where}.name`, `is ${show(p.name)}, already declared; every plate has one name`);
+    if (reserved.has(p.name)) {
+      refusedLayerNames.add(p.name);
+      fail('SCENE_PLATE_NAME_FREE', `${where}.name`, `is ${show(p.name)}, reserved by the shared root, legacy plate, character id, bone, slot or animation; a distinct name is required`);
+    }
+    if (layers.findIndex(q => q.name === p.name) !== i) {
+      refusedLayerNames.add(p.name);
+      fail('SCENE_PLATE_NAME_UNIQUE', `${where}.name`, `is ${show(p.name)}, already declared; every plate has one name`);
+    }
     if (!(Array.isArray(p.at) && p.at.length === 2 && p.at.every(v => Number.isFinite(v) && Number.isInteger(v)))) fail('SCENE_PLATE_AT', `${where}.at`, `is ${show(p.at)}; two finite integers of canvas pixels locating the image top-left are required`);
     const img = plateLayers[i];
     if (img === undefined || img === null) {
@@ -1163,7 +1170,8 @@ export function composeScene(
   const layerAt = new Map<string, number>();
   scene.order.forEach((e, i) => {
     const at = `scene.order[${i}]`;
-    if (layerNames.has(e)) {
+    const isCharOrSlot = ids.includes(e) || (e.includes(PREFIX_SEP) && ids.includes(e.slice(0, e.indexOf(PREFIX_SEP))));
+    if (layerNames.has(e) && !(refusedLayerNames.has(e) && isCharOrSlot)) {
       const first = layerAt.get(e);
       if (first !== undefined) fail('SCENE_ORDER_ONCE', at, `names the plate ${show(e)} again (first at scene.order[${first}]); every plate slot is drawn exactly once`);
       else layerAt.set(e, i);
@@ -1204,7 +1212,7 @@ export function composeScene(
       fail('SCENE_ORDER_COMPLETE', `scene.order (character "${id}")`, `names ${missing.length} of the ${own.length} slot(s) of "${id}" nowhere: ${missing.map((s) => `"${prefixed(id, s)}"`).join(', ')}; every slot is drawn exactly once — name "${id}" (its remaining slots, in its own order) or each slot`);
     }
   }
-  for (const p of layers) if (!layerAt.has(p.name)) fail('SCENE_ORDER_COMPLETE', 'scene.order', `names plate ${show(p.name)} nowhere; every plate slot is drawn exactly once`);
+  for (const p of layers) if (!refusedLayerNames.has(p.name) && !layerAt.has(p.name)) fail('SCENE_ORDER_COMPLETE', 'scene.order', `names plate ${show(p.name)} nowhere; every plate slot is drawn exactly once`);
   const drawn: string[] = [];
   for (const e of scene.order) {
     if (layerNames.has(e)) { drawn.push(e); continue; }
@@ -1821,7 +1829,16 @@ export function composeStage(input: ComposeInput, run: ComposeRunners, log: Log)
   }
   const r = composed.report;
   r.scene = input.scene;
-  say(`${r.characters.length} character(s) on a ${r.canvas.width}x${r.canvas.height} canvas, rig "${r.rig_name}"${r.plate === null ? ', no plate' : `, plate ${r.plate.image} (provenance ${r.plate.provenance}, judged by nothing)`}`);
+  const namedPlates = r.plates ?? [];
+  const plateClause =
+    r.plate !== null && namedPlates.length > 0
+      ? `, plate ${r.plate.image} (provenance ${r.plate.provenance}, judged by nothing), ${namedPlates.length} named plate(s): ${namedPlates.map((p) => p.name).join(', ')}`
+      : r.plate !== null
+        ? `, plate ${r.plate.image} (provenance ${r.plate.provenance}, judged by nothing)`
+        : namedPlates.length > 0
+          ? `, ${namedPlates.length} named plate(s): ${namedPlates.map((p) => p.name).join(', ')}`
+          : ', no plate';
+  say(`${r.characters.length} character(s) on a ${r.canvas.width}x${r.canvas.height} canvas, rig "${r.rig_name}"${plateClause}`);
   for (const c of r.characters) {
     say(`  ${c.id}: ${c.build} at offset [${c.offset.join(', ')}], scale ${c.scale ?? 1}, bounds [${c.bounds.join(', ')}], shift [${c.shift.join(', ')}] on ${c.shifted.bones.length} first-level bone(s), ${c.shifted.root_regions.length} region(s) on root and ${c.shifted.root_weights} weight(s) bound to root; ${c.bones} bone(s), ${c.slots} slot(s), ${c.tracks} track(s), ${c.constraints} constraint(s), rig_scale ${c.rig_scale}, idle ${c.idle_duration} s${c.accepted === undefined ? '' : `; its own check FAILED ${c.accepted.join(', ')}, accepted — the scene is for looking, not shipping`}`);
   }

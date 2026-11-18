@@ -5907,7 +5907,7 @@ recorded transform. The record fields and sampling formula are specified in
 | <a id="KEYPOINTS_JOINT_KNOWN"></a><a id="KEYPOINTS_JOINT_STATE"></a><a id="KEYPOINTS_POSITION_STATED"></a><a id="KEYPOINTS_POSITION_INSIDE"></a>`KEYPOINTS_JOINT_KNOWN`, `KEYPOINTS_JOINT_STATE`, `KEYPOINTS_POSITION_STATED`, `KEYPOINTS_POSITION_INSIDE` | a joint name outside body-18, a state outside observed / occluded / missing, an observed joint with no `at` or a missing one with one, or a position outside the `width`x`height` image | that joint |
 | <a id="KEYPOINTS_PERSON_UNIQUE"></a><a id="KEYPOINTS_PERSON_CHOSEN"></a>`KEYPOINTS_PERSON_UNIQUE`, `KEYPOINTS_PERSON_CHOSEN` | two people share an id; or the file holds more than one person and no `--person` names one, or `--person` names none of them (the message lists the ids) | `--person <id>` |
 | <a id="KEYPOINTS_IMAGE_SIZE"></a>`KEYPOINTS_IMAGE_SIZE` | the file's `width`x`height` is not the `--source` painting's | a file measured on this painting |
-| <a id="PARTS_PAINTING_PRESENT"></a>`PARTS_PAINTING_PRESENT` | The declared rig-resolution painting cannot be read. | Re-run assemble; restore the declared file and manifest together. |
+| <a id="PARTS_PAINTING_PRESENT"></a>`PARTS_PAINTING_PRESENT` | The declared rig-resolution painting (`painting_in_rig.png`, beside `parts.json`) cannot be read. `check --parts <build>` reads the complete assemble output folder beside `parts.json`, not `parts.json` copied alone. | Re-run assemble, or copy/keep the complete assemble folder (`parts.json`, `parts/*.png`, `painting_in_rig.png`, and any sidecars assemble wrote) together in `<build>`. |
 | <a id="PARTS_PAINTING_SHA256"></a>`PARTS_PAINTING_SHA256` | The declared rig-resolution painting does not match its SHA-256. | Re-run assemble; restore the declared file and manifest together. |
 | <a id="PARTS_PAINTING_PNG"></a>`PARTS_PAINTING_PNG` | The declared rig-resolution painting is not a decodable PNG. | Re-run assemble; restore the declared file and manifest together. |
 | <a id="PARTS_PAINTING_SIZE"></a>`PARTS_PAINTING_SIZE` | The declared rig-resolution painting dimensions differ from rig_size. | Re-run assemble; restore the declared file and manifest together. |
@@ -6421,8 +6421,8 @@ and stay absent).
 | <a id="SCENE_PLATE_PROVENANCE"></a><a id="SCENE_PLATE_PRESENT"></a><a id="SCENE_PLATE_SIZE"></a>`SCENE_PLATE_PROVENANCE`, `SCENE_PLATE_PRESENT`, `SCENE_PLATE_SIZE` | the plate's `provenance` is not `observed`, `generated` or `unknown`; its image is missing or not a PNG; it is not the canvas's size (it is drawn at canvas (0, 0) and never scaled) | the plate |
 | <a id="SCENE_BUILD_PRESENT"></a>`SCENE_BUILD_PRESENT` | a build directory, or a file `build` writes in it (`parts.json`, `rig/rig.json`, `rig/motion.json` with an `idle`, an image its skin names, `check/check.json`), is missing | run `build` for that character |
 | <a id="SCENE_PLATE_AT"></a>`SCENE_PLATE_AT` | a named layer's `at` is missing or not two finite integers | declare the image top-left in canvas pixels, y down; negative/outside coordinates are allowed |
-| <a id="SCENE_PLATE_NAME_UNIQUE"></a><a id="SCENE_PLATE_NAME_FREE"></a>`SCENE_PLATE_NAME_UNIQUE`, `SCENE_PLATE_NAME_FREE` | duplicate plate name or a collision with root, legacy plate, character id, bone, slot or animation | a distinct name and its exact once-only order token |
-| <a id="SCENE_PLATE_BACKDROP_SIZE"></a>`SCENE_PLATE_BACKDROP_SIZE` | an opaque declared backdrop is smaller than the composed stage in either width or height; the refusal names the layer, found dimensions and both required dimensions | use alpha or a backdrop meeting both canvas dimensions, which equal the stage; positioning outside the canvas does not relax the size floor |
+| <a id="SCENE_PLATE_NAME_UNIQUE"></a><a id="SCENE_PLATE_NAME_FREE"></a>`SCENE_PLATE_NAME_UNIQUE`, `SCENE_PLATE_NAME_FREE` | duplicate plate name or a collision with root, legacy plate, character id, bone, slot or animation (a plate whose name is refused here does not also draw a cascaded `SCENE_ORDER_COMPLETE`) | a distinct name and its exact once-only order token |
+| <a id="SCENE_PLATE_BACKDROP_SIZE"></a>`SCENE_PLATE_BACKDROP_SIZE` | an opaque declared backdrop is smaller than the composed stage in either width or height; the refusal names the layer, found dimensions and both required dimensions. `opaque_backdrop` is checked for image size only, not for whether `at: [x, y]` covers the stage | use alpha or a backdrop meeting both canvas dimensions, which equal the stage; positioning the backdrop to cover the stage is the scene author's job |
 | <a id="SCENE_PLATE_ALPHA"></a>`SCENE_PLATE_ALPHA` | a named layer is opaque in every decoded texel without its own `opaque_backdrop: true` declaration | export the intended transparency or explicitly declare that layer's backdrop role; rigc A19 is still enforced |
 | <a id="SCENE_BUILD_GREEN"></a>`SCENE_BUILD_GREEN` | the build's own `check/check.json` does not say `PASS` and `gate_spine_html_green`; under an accept list (`--accept`, `characters[].accept`), it failed a bar the list does not name, its gate is red, a declared requirement is not PASS, or it names no failing bar — the bars not met and the ones accepted are listed | finish that character first: compose binds finished characters. To look at the scene meanwhile, name the failing bars (§7, *Composing several characters*) |
 | <a id="SCENE_ACCEPT_KNOWN"></a>`SCENE_ACCEPT_KNOWN` | an `--accept` name, or one in a character's `accept`, is not a bar `check` holds a build to: a problem code (`CHECK_LOOP_CLOSES`) where the bar's name (`loop`) belongs, a misspelling, or `gate`, which is rig-c's and never accepted | one of the names the message lists |
@@ -7200,10 +7200,10 @@ single-character path (§4, steps 0–9) on its own, already isolated input to a
 | `canvas` | the shared stage, canvas px, y down. The composed rig's stage is the canvas, `root` at its bottom centre, as a single character's is its own |
 | `plate` | optional. `image` (relative to the scene file) is a PNG of exactly the canvas's size; `provenance` is `observed` (the painting's own pixels), `generated` or `unknown` (a residual after the people were removed is `unknown` where they stood, and the author says so); `note` is free text. `provenance` and `note` are copied into `scene.json` and **judged by nothing**. Optional `editor_receipts` uses the [editor receipt ledger](#scene-plate-editor-receipts-issue-966), with paths relative to the scene file and verified file hashes; `required: true` demands a matching plate receipt |
 | `characters[].id` | the prefix: every bone, slot, attachment (skin entry), constraint (its name, and every bone and path slot it names), `stops` entry (its `chain`, `links` and `against`, issue #431), `invariants.detached` bone, track, group and easing of that character is renamed `<id>:<name>`. `root` is the one shared root. A name resolves to exactly one character, and nothing resolves across characters without its prefix |
-| `characters[].build` | a `build --out` directory (relative to the scene file) whose own `check/check.json` is green. After `rig` plus `rigc build`, run `rig-parts check --rig <build>/rig --parts <assembled-inputs> --out <build>/check`; retain its named SKIPs |
+| `characters[].build` | a character build directory (relative to the scene file) holding `<build>/parts.json`, `<build>/rig/` and a green `<build>/check/check.json`. When built with standalone `assemble` and `rig` instead of `build`, place the complete assemble folder at `<build>/` beside `<build>/rig/` and run the canonical pre-compose check `rig-parts check --rig <build>/rig --parts <build> --source <painting.png> --requirements <requirements.json> --out <build>/check` (see *Input layout and the pre-compose check* below) |
 | `characters[].offset` | `[x, y]`, a translation from the build's rig px to canvas px. Every character is built at one `assemble.rig_scale`, so its rig px are canvas px at scale 1 |
-| `plates` | optional list of named layers (issue #1345); may coexist with legacy `plate`. Every layer requires `name`, `image`, `provenance` and `at: [x, y]`. `image` resolves against the scene file and keeps its native dimensions and PNG bytes, with no scale or canvas containment requirement. `at` is two finite integers locating the image **top-left in canvas pixels, y down, origin top-left**; negative/outside positions are allowed. Missing, fractional and nonfinite placement is `SCENE_PLATE_AT`. Optional `note` and `editor_receipts` have the legacy plate meanings; every ledger is verified independently. `opaque_backdrop: true` exempts only that declared layer from compose's alpha requirement; otherwise at least one decoded texel must have alpha below 255 (`SCENE_PLATE_ALPHA`), even for an oversized image. An opaque declared backdrop must also have width at least `canvas.width` **and** height at least `canvas.height`, the composed rig's stage dimensions, matching core 3.8.0 A19's rig-spec size inference. A smaller opaque backdrop is refused before output by `SCENE_PLATE_BACKDROP_SIZE`; a transparent layer has no size floor. rigc's A19 remains enabled |
-| `plates[].name` | the layer's bone, slot and attachment name and exact `order` token. Names must be unique, nonempty and distinct from `root`, legacy `plate`, shared `idle`, every character id and every prefixed character bone/slot/animation (`SCENE_PLATE_NAME_UNIQUE`, `SCENE_PLATE_NAME_FREE`). Images use `scene-plate.<declaration-index>.png`, separately from character images; any collision is `SCENE_IMAGE_NAME_FREE` |
+| `plates` | optional list of named layers (issue #1345); may coexist with legacy `plate`. Every layer requires `name`, `image`, `provenance` and `at: [x, y]`. `image` resolves against the scene file and keeps its native dimensions and PNG bytes, with no scale or canvas containment requirement. `at` is two finite integers locating the image **top-left in canvas pixels, y down, origin top-left**; negative/outside positions are allowed. Missing, fractional and nonfinite placement is `SCENE_PLATE_AT`. Optional `note` and `editor_receipts` have the legacy plate meanings; every ledger is verified independently. `opaque_backdrop: true` exempts only that declared layer from compose's alpha requirement; otherwise at least one decoded texel must have alpha below 255 (`SCENE_PLATE_ALPHA`), even for an oversized image. An opaque declared backdrop must also have width at least `canvas.width` **and** height at least `canvas.height`, the composed rig's stage dimensions, matching core 3.8.0 A19's rig-spec size inference. A smaller opaque backdrop is refused before output by `SCENE_PLATE_BACKDROP_SIZE`; a transparent layer has no size floor. **Size is the only check on `opaque_backdrop`:** whether `at: [x, y]` positions the backdrop to cover the stage is the scene author's job (a canvas-sized backdrop at `[400, 0]` passes size while leaving part of the stage uncovered). rigc's A19 remains enabled |
+| `plates[].name` | the layer's bone, slot and attachment name and exact `order` token. Names must be unique, nonempty and distinct from `root`, legacy `plate`, shared `idle`, every character id and every prefixed character bone/slot/animation (`SCENE_PLATE_NAME_UNIQUE`, `SCENE_PLATE_NAME_FREE`; a name refused by either does not also draw a cascaded `SCENE_ORDER_COMPLETE`). Emitted image files and packed atlas regions are named by 0-based declaration index (`scene-plate.<index>.png`, atlas region `scene-plate.<index>`, Spine attachment `path: "scene-plate.<index>"`), separately from character images (`SCENE_IMAGE_NAME_FREE` on any collision) — so **reordering `plates[]` renames the `scene-plate.<index>` atlas regions** even when `plates[].name` and `order` are unchanged |
 | `characters[].scale` | optional, a positive number; absent is 1, and 1 composes to the bytes a scene without the key writes. The character's size on the canvas, about its stage's top-left corner: a rig px `p` lands at canvas px `scale * p + offset` (issue #197). A character scaled up past its art is drawn soft — the art is not resampled; rebuild it at a higher `assemble.rig_scale` if that matters |
 | `characters[].accept` | optional, a list of bar names: the bars this character's own check may have failed and still be composed (issue #203). `compose --accept <bar>[,<bar>…]` is the same list for every character; the two are joined, so the command line applies to every character and a character's list adds to it. Each name is one of the bars `check`'s summary names, less the gate — `loop`, `seam`, `BREATH_VISIBLE`, `BLINK_NO_HOLE`, `CHAIN_LAG`, `TIP_OVER_ROOT`, `STILL_REGIONS_DARK`, `TEXTURE_STRETCH`, `ANIMATIONS_DO_NOT_FOLD` (issue #320), `STRESS_OFF_CHAIN` (issue #347), `SEAM_OVER_MOTION` (the body-root bar, issue #686); anything else is `SCENE_ACCEPT_KNOWN`. A build is taken when every bar its `check.json` failed is named; its gate red, a declared requirement not PASS, or a bar not named is `SCENE_BUILD_GREEN` as before. **It is for looking, not for shipping:** the `[compose]` line says which failing bars were accepted, `scene.json` records them as the character's `accepted`, the composed rig's own check measures them again and reports them as it finds them, and the run exits 1 even when that check is PASS (a composed rig has no `parts.json`, so the seam and four judgement lines say SKIP there). A list that accepts nothing — every build green — composes to the bytes a scene without one writes |
 | `animations` | optional map by scene clip name, each value a rigc `MotionAnimation` (`duration`, `tracks`, optional `loop`, `note`, and core timeline collections). Names resolve against the final scene without another prefix or unit conversion: `plate`, declared named plate bones and `<id>:<bone>`, including generated dials. A new name adds; `idle` appends tracks/timelines to the composed idle, preserving its metadata and every existing character track, deform and physics constraint. Its duration must exactly equal the composed idle (`SCENE_DURATION_AGREES`); no retiming. An imported animation name cannot be replaced (`SCENE_ANIMATION_NAME_FREE`). Absent declaration preserves legacy bytes and output paths (issue #1346) |
@@ -7383,25 +7383,60 @@ What is composed:
   declared per-mesh ceilings and actual maxima of members with none. These
   counts come from emitted weighted triangles or declared grid dimensions;
   scenes with no declared budget gain no budget field.
-- **A rig gate is not the character's check.** `rig-parts rig --out <build>/rig`
-  followed by `rigc build` does not create `<build>/check/check.json` and remains
-  `SCENE_BUILD_PRESENT`, even if the rigc gate is green. Keep `parts.json` beside
-  `rig/`, then run `rig-parts check --rig <build>/rig --parts <build> --out <build>/check`
-  before composing. Only a standalone rig with no manifest in its own or parent
-  directory may omit `--parts`; its parts-dependent lines retain named SKIPs. The check must
-  report both `PASS: true` and `gate_spine_html_green: true`; named accepted
-  failing bars keep the existing preview-only semantics. No alternate gated-only
-  admission is implied by the turn contract.
-- **Gated as `rig` gates its own:** `rigc build --profile rig-play --pack`, the
+- **Input layout and the pre-compose `check` (issue #1350).** `compose` expects each
+  character's `build` directory to hold `<build>/parts.json` (with the complete
+  assemble folder beside it), `<build>/rig/` (`rig.json`, `motion.json`, `images/`),
+  and `<build>/check/check.json` in one folder. `rig-parts build --out <build>` writes
+  that layout directly. When a consumer ran `assemble` and `rig` into separate folders
+  (for example `assemble --out work`, which writes `work/rig/parts.json`,
+  `work/rig/parts/*.png` and `work/rig/painting_in_rig.png`, and `rig --out <build>/rig`),
+  `rig-parts rig --out <build>/rig` followed by `rigc build` does not create
+  `<build>/check/check.json` and remains `SCENE_BUILD_PRESENT`, even if the rigc gate
+  is green. Put the **complete assemble folder** at `<build>/` beside `<build>/rig/`
+  — `parts.json`, `parts/<name>.png` (and any alternate/depth PNGs),
+  `painting_in_rig.png`, and any sidecars assemble wrote (`figure_rig.png`,
+  `cut_material_sources.json`, `part_support_domains.json`); copying `parts.json`
+  alone fails `PARTS_PAINTING_PRESENT` on `painting_in_rig.png` and `PARTS_FILE_PRESENT`
+  on `parts/*.png` — then run the one canonical pre-compose check command:
+  `rig-parts check --rig <build>/rig --parts <build> --source <painting.png> --requirements <requirements.json> --out <build>/check`
+  before composing. Standalone `check` does not read `config.requirements`;
+  `--requirements <requirements.json>` and `--source <painting.png>` are its only
+  doors. **Why `SKIP` is not "checked":** `check.json` sets `PASS: true` when every
+  bar that actually measured passed, so a bar or requirement that printed `SKIP` was
+  not measured, not passed. Without `--requirements`, `check.json` writes no
+  `requirements` block at all — every declared requirement (`contact`, `follow`, `aim`,
+  `range`, `stretch`, `seam`) and requirements-driven bar (`setup_painting`,
+  `boundary_colour`, `behind_seams`, `seam_over_motion.required`, `cut_material`,
+  `fixed_skeleton`, `may_fold`, `motion_seams`, `not_planted`, `not_swinging`,
+  `rises`, `rests`) goes unmeasured, `BOUNDARY_COLOUR_STEP` prints
+  `SKIP — not measured, not a pass: no requirements file declares boundary_colour; declare {"boundary_colour": {"max_step_excess": <0-255>}} in the --requirements file (config.requirements under build) to hold every part boundary of the setup and every idle frame to the rig's own pieces`,
+  `BEHIND_PART_SEAMS` prints
+  `SKIP — HOLE: no requirements.behind_seams declares an authored threshold T; not measured, never a pass`,
+  `SEAM_OVER_MOTION` prints
+  `SKIP — no neighbour pair is declared: parts.json holds no limb segment below a joint (config.limbs) and no --requirements seam names two parts`
+  when `parts.json` has no limb segments, and with `--source` alone
+  `SETUP_MATCHES_PAINTING` prints
+  `SKIP — setup_painting is undeclared; setup-to-painting was not measured. To measure it, give --requirements <file> declaring setup_painting.rgb_tolerance and setup_painting.regions with name, box and authored max_pixels limits`.
+  Without `--source`, `SETUP_POSE_VS_SOURCE` is omitted (and a requirements file
+  declaring `setup_painting` is refused as `CHECK_SETUP_PAINTING_SOURCE`). Only a
+  standalone rig with no manifest in its own or parent directory may omit `--parts`;
+  its parts-dependent lines retain named SKIPs. The check must report both
+  `PASS: true` and `gate_spine_html_green: true`; named accepted failing bars keep
+  the existing preview-only semantics. No alternate gated-only admission is implied
+  by the turn contract.
+- **Gated as `rig` gates its own, and where outputs are written:** `rigc build --profile rig-play --pack`, the
   compile and the packed pages on disk, in a scratch directory; `--out` receives
-  `rig/` (`rig.json`, `motion.json`, `images/`) and `scene.json` only when it is
+  `rig/` (`rig.json`, `motion.json`, `images/` — the composed rig spec, not the
+  compiled Spine skeleton) and `scene.json` only when it is
   green. `--page-size <px>` (a positive integer, refused as `PACK_PAGE_SIZE`
   otherwise; issue #1352) is forwarded to both packed builds and recorded as
   `pack_mode.page_size` in `scene.json` and `check/check.json` only when given;
   without it, rigc's default 2048 px page and padding 2 on each side bound any
   plate or region side to at most 2044 px before `CE_ATLAS_REGION_EXCEEDS_PAGE`
   (`COMPOSE_RIGC_GREEN`). Then `check` runs over `rig/` into `check/`, as on any rig it did not
-  build: without a `parts.json` the seam, `BREATH_VISIBLE`, `BLINK_NO_HOLE`,
+  build: **the compiled Spine model and packed atlas (`skeleton.json`,
+  `skeleton.model.json`, `skeleton.atlas`, `skeleton.png`) are written only under
+  `<out>/check/build/`** (there is no `<out>/build/` at the root). Without a `parts.json` the seam, `BREATH_VISIBLE`, `BLINK_NO_HOLE`,
   `TIP_OVER_ROOT`, `STILL_REGIONS_DARK` and `RECOMPOSITE_HOLES` say SKIP and why,
   and the gate, the loop, `CHAIN_LAG` and `TEXTURE_STRETCH` measure.
   `--requirements` is forwarded, and its names are `<id>:<name>`. Every bar and
@@ -7410,10 +7445,13 @@ What is composed:
   (`CHAIN_LAG`, a `range` in degrees) does not move with it, while a requirement's
   px figures and its px bar are canvas px — a character composed at 0.5 shows half
   the px its own `build` measured.
-- **`scene.json`** (`spine-parts-scene-report/1`): the scene file's path as given,
+- **`scene.json`** (`spine-parts-scene-report/1`, written at `<out>/scene.json` —
+  **the same filename as a typical input `--scene scene.json` file**, so write `--out`
+  to a separate output directory rather than the directory holding the input scene
+  file): the scene file's path as given,
   the canvas, the rig's name (the ids joined by `+`), the pack flags, the plate (its
   image, provenance, note, bone, slot, size, `sha256` of the PNG's bytes as compose read them — issue #1183, additive —
-  and `judged_by: "nothing"`), per character
+  and `judged_by: "nothing"`), `plates` when `scene.plates` is declared (each named plate's declaration, bone, slot, size, `sha256` and `judged_by: "nothing"`; the `[compose]` header line also names them in declaration order as `<N> named plate(s): <name>, ...`, and prints `no plate` only when neither `plate` nor `plates[]` is present), per character
   its build, offset, `scale` (only when it is not 1), `rig_size`, `rig_scale`, placed bounds (the union of its part
   boxes, canvas px), shift and what it moved (`shifted`: the first-level bones, the
   regions on `root`, the count of weights bound to `root`), its counts and `accepted`

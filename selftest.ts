@@ -64,7 +64,7 @@ import { holeBox as pinholeBox944, measurePinholes, PINHOLES_RULE, sourceInRig a
 import { singleRunPadRecord } from './src/assemble.ts';
 import { readSource as readSource944 } from './src/build.ts';
 import { pinholesRequired, REQUIREMENTS_SPEC } from './src/requirements.ts';
-import { SETUP_PAINTING_LINE as SETUP_PAINTING_LINE978 } from './src/setuppainting.ts';
+import { SETUP_PAINTING_LINE as SETUP_PAINTING_LINE978, UNDECLARED_SETUP_PAINTING_REASON } from './src/setuppainting.ts';
 import { softTrailBounds, cleanedOccluderFixture, softOccluderFixture, softTrailDiff, yieldLimbCoverFixture, SOFT_SKIN } from './fixtures/soft_occluder.ts';
 import { runYieldContourChecks } from './tools/check_yield_contour.ts';
 import { yieldRimFixture, rimCount, rimPixel } from './fixtures/yield_rim.ts';
@@ -48540,6 +48540,230 @@ function runSceneSuite(): number {
           twicePs.out.includes('USAGE: --page-size is given twice'),
         `${badRuns.map((b) => `${JSON.stringify(b.val)}:exit=${b.r.status}`).join(', ')}; composeStage(pageSize:0): ${codes(stageBadErr)}; bare: exit ${barePs.status}; twice: exit ${twicePs.status}`,
         why,
+      );
+
+      // Issue #1350: consumer path controls (SC117–SC121).
+      const req1350 = join(dir, 'req-1350.json');
+      writeRequirements(req1350, {
+        requirements: [
+          { name: 'SWAY', kind: 'range', animation: 'idle', bone: 'body', lo_degrees: -5, hi_degrees: 5 },
+        ],
+        motion_seams: [{ part: 'cloth', neighbour: 'eye' }],
+        boundary_colour: { max_step_excess: 255 },
+        behind_seams: { threshold: 255, allowance: 100, pairs: [{ part: 'cloth', neighbour: 'eye' }] },
+      });
+      const checkBuild1350 = writeSceneBuild(join(dir, 'check-1350-build'), 'plain');
+      const incompletePartsErr = refusals(() =>
+        checkStage(
+          { rig: join(checkBuild1350, 'rig'), parts: checkBuild1350, out: join(dir, 'check-1350-incomplete'), noExtremes: true },
+          rigcRunnerAt(bin, spawnRigc),
+          bin,
+          () => {},
+        ),
+      );
+      mkdirSync(join(checkBuild1350, 'parts'), { recursive: true });
+      for (const [name, img] of rigImages()) {
+        writeFileSync(join(checkBuild1350, 'parts', `${name}.png`), encodePngBytes(img));
+      }
+      const noReqLines: string[] = [];
+      const noReqOut = join(dir, 'check-1350-no-req');
+      const noReqReport = checkStage(
+        { rig: join(checkBuild1350, 'rig'), parts: checkBuild1350, out: noReqOut, noExtremes: true },
+        rigcRunnerAt(bin, spawnRigc),
+        bin,
+        (l) => noReqLines.push(l),
+      );
+      const withReqLines: string[] = [];
+      const withReqOut = join(dir, 'check-1350-with-req');
+      const withReqReport = checkStage(
+        { rig: join(checkBuild1350, 'rig'), parts: checkBuild1350, requirements: req1350, out: withReqOut, noExtremes: true },
+        rigcRunnerAt(bin, spawnRigc),
+        bin,
+        (l) => withReqLines.push(l),
+      );
+      const authoring1350 = readFileSync(join(ROOT, 'docs/AUTHORING.md'), 'utf8');
+      const stability1350 = readFileSync(join(ROOT, 'docs/STABILITY.md'), 'utf8');
+      const canonicalCheckCmd = 'rig-parts check --rig <build>/rig --parts <build> --source <painting.png> --requirements <requirements.json> --out <build>/check';
+      const seamMotionSkipLine = 'SEAM_OVER_MOTION: SKIP — no neighbour pair is declared: parts.json holds no limb segment below a joint (config.limbs) and no --requirements seam names two parts';
+      const docsMatch1350 =
+        authoring1350.includes(canonicalCheckCmd) &&
+        !authoring1350.includes('--parts <assembled-inputs>') &&
+        authoring1350.includes(UNDECLARED_BOUNDARY_COLOUR_REASON) &&
+        authoring1350.includes(UNDECLARED_BEHIND_SEAM_REASON) &&
+        authoring1350.includes(UNDECLARED_SETUP_PAINTING_REASON) &&
+        authoring1350.includes('no neighbour pair is declared: parts.json holds no limb segment below a joint (config.limbs) and no --requirements seam names two parts') &&
+        authoring1350.includes('complete assemble folder') &&
+        authoring1350.includes('<out>/check/build/') &&
+        authoring1350.includes('the same filename as a typical input `--scene scene.json` file') &&
+        authoring1350.includes('Size is the only check on `opaque_backdrop`') &&
+        authoring1350.includes('reordering `plates[]` renames the `scene-plate.<index>` atlas regions') &&
+        stability1350.includes('<N> named plate(s): <name>, ...');
+      say(
+        'SC117_PRE_COMPOSE_CHECK_WITHOUT_REQUIREMENTS_SKIPS_DECLARED_REQUIREMENTS_WITH_DOCUMENTED_REASONS',
+        has(incompletePartsErr, 'CHECK_PART_PNG_PRESENT', 'cloth.png') &&
+          noReqReport.requirements === null &&
+          noReqReport.figures.requirements === undefined &&
+          noReqReport.boundaryColour === null &&
+          noReqReport.behindSeams === null &&
+          noReqReport.motionSeam.status === 'SKIP' &&
+          noReqLines.includes(`  ${BOUNDARY_COLOUR_LINE}: SKIP — ${UNDECLARED_BOUNDARY_COLOUR_REASON}`) &&
+          noReqLines.includes(`  ${BEHIND_SEAM_LINE}: SKIP — ${UNDECLARED_BEHIND_SEAM_REASON}`) &&
+          noReqLines.includes(`  ${seamMotionSkipLine}`) &&
+          withReqReport.requirements !== null &&
+          withReqReport.requirements.lines.SWAY?.status === 'PASS' &&
+          withReqReport.boundaryColour !== null &&
+          withReqReport.behindSeams !== null &&
+          withReqReport.motionSeam.pairs.length === 1 &&
+          withReqLines.some((l) => l.startsWith(`  ${BOUNDARY_COLOUR_LINE}: PASS`)) &&
+          withReqLines.some((l) => l.startsWith(`  ${BEHIND_SEAM_LINE}: FAIL`)) &&
+          docsMatch1350,
+        `incomplete folder: ${codes(incompletePartsErr)}; without --requirements: requirements=${String(noReqReport.requirements)}, boundaryColour=${String(noReqReport.boundaryColour)}, behindSeams=${String(noReqReport.behindSeams)}, motionSeam=${noReqReport.motionSeam.status}; with --requirements: requirements=${Object.keys(withReqReport.requirements?.lines ?? {}).join(',')}, boundaryColour=${withReqReport.boundaryColour?.status}, behindSeams=${withReqReport.behindSeams?.status}, motionSeamPairs=${withReqReport.motionSeam.pairs.length}; docsMatch=${docsMatch1350}`,
+        'issue #1350 items 1–2: check needs the assemble folder beside parts.json, and without --requirements skips declared requirements and prints the documented SKIP reasons; AUTHORING gives one canonical pre-compose check command',
+      );
+
+      const composeHelp = runCli(['compose', '--help']);
+      const composeShortHelp = runCli(['compose', '-h']);
+      const composeBogus = runCli(['compose', '--bogus']);
+      const composeHelpBogus = runCli(['compose', '--help', '--bogus']);
+      say(
+        'SC118_COMPOSE_HELP_EXITS_ZERO_WITH_USAGE_AND_BOGUS_FLAG_STILL_EXITS_TWO',
+        composeHelp.status === 0 &&
+          composeShortHelp.status === 0 &&
+          composeHelp.out === composeShortHelp.out &&
+          composeHelp.out.startsWith('  rig-parts compose --scene <scene.json> --out <dir> [--requirements <file.json>] [--accept <bar>[,<bar>...]] [--page-size <px>]\n') &&
+          composeHelp.out.trimEnd().endsWith('Exit 0 when the check is PASS and nothing was accepted, 1 otherwise.') &&
+          composeBogus.status === 2 &&
+          composeBogus.out.includes('FAIL  USAGE: compose does not take "--bogus"; it takes --scene, --out, --requirements, --accept, --page-size, --help (see rig-parts guide USAGE)') &&
+          composeHelpBogus.status === 2 &&
+          composeHelpBogus.out.includes('FAIL  USAGE: compose does not take "--bogus"'),
+        `--help exit ${composeHelp.status} (${composeHelp.out.split('\n').length} lines); -h exit ${composeShortHelp.status} (equal=${composeHelp.out === composeShortHelp.out}); --bogus exit ${composeBogus.status} "${composeBogus.out.split('\n')[0]?.trim() ?? ''}"`,
+        'issue #1350 item 7: compose --help and -h exit 0 and print compose usage; an unknown flag still exits 2 as a usage error',
+      );
+
+      const headerOf = (sceneBody: Record<string, unknown>, tag: string): string => {
+        const lines: string[] = [];
+        const rejectGate: RigcRunner = () => ({ status: 1, out: 'planted header stop' });
+        composeStage(
+          { scene: scene(sceneBody), out: join(dir, `header-1350-${tag}`) },
+          { rig: rejectGate, check: rejectGate, checkBin: bin, scratch: join(dir, `header-1350-scratch-${tag}`) },
+          (l) => lines.push(l),
+        );
+        return lines.find((l) => l.startsWith('[compose] ') && l.includes('character(s) on a')) ?? '';
+      };
+      const noPlateBody = two();
+      delete noPlateBody.plate;
+      const namedOnlyBody = {
+        ...noPlateBody,
+        plates: [
+          { name: 'backdrop', image: 'oversize.png', provenance: 'generated', at: [-10, -10], opaque_backdrop: true },
+          { name: 'middle', image: 'middle.png', provenance: 'observed', at: [40, 18] },
+          { name: 'foreground', image: 'front.png', provenance: 'unknown', at: [-30, 4] },
+        ],
+        order: ['backdrop', 'plain', 'middle', 'reach', 'foreground'],
+      };
+      const bothPlatesBody = two({
+        plates: [
+          { name: 'backdrop', image: 'oversize.png', provenance: 'generated', at: [-10, -10], opaque_backdrop: true },
+          { name: 'middle', image: 'middle.png', provenance: 'observed', at: [40, 18] },
+        ],
+        order: ['backdrop', 'plain', 'middle', 'reach'],
+      });
+      const headerNamed = headerOf(namedOnlyBody, 'named');
+      const headerNone = headerOf(noPlateBody, 'none');
+      const headerLegacy = headerOf(two(), 'legacy');
+      const headerBoth = headerOf(bothPlatesBody, 'both');
+      const wantHeaderNamed = '[compose] 2 character(s) on a 100x60 canvas, rig "plain+reach", 3 named plate(s): backdrop, middle, foreground';
+      const wantHeaderNone = '[compose] 2 character(s) on a 100x60 canvas, rig "plain+reach", no plate';
+      const wantHeaderLegacy = '[compose] 2 character(s) on a 100x60 canvas, rig "plain+reach", plate plate.png (provenance generated, judged by nothing)';
+      const wantHeaderBoth = '[compose] 2 character(s) on a 100x60 canvas, rig "plain+reach", plate plate.png (provenance generated, judged by nothing), 2 named plate(s): backdrop, middle';
+      say(
+        'SC119_COMPOSE_HEADER_NAMES_DECLARED_PLATES_IN_ORDER_AND_PRINTS_NO_PLATE_WHEN_ABSENT',
+        headerNamed === wantHeaderNamed &&
+          headerNone === wantHeaderNone &&
+          headerLegacy === wantHeaderLegacy &&
+          headerBoth === wantHeaderBoth,
+        `named="${headerNamed}"; none="${headerNone}"; legacy="${headerLegacy}"; both="${headerBoth}"`,
+        'issue #1350 item 8: the [compose] header names composed plates[] in declaration order and prints "no plate" only when neither plate nor plates[] is present',
+      );
+
+      const collideIdOrder = compose({
+        ...noPlateBody,
+        plates: [{ name: 'plain', image: 'oversize.png', provenance: 'generated', at: [-10, -10], opaque_backdrop: true }],
+        order: ['plain', 'reach'],
+      });
+      const collideIdExplicitSlots = compose({
+        ...noPlateBody,
+        plates: [{ name: 'plain', image: 'oversize.png', provenance: 'generated', at: [-10, -10], opaque_backdrop: true }],
+        order: ['plain:cloth', 'plain:eye', 'reach'],
+      });
+      const collideSlotOrder = compose({
+        ...noPlateBody,
+        plates: [{ name: 'plain:cloth', image: 'oversize.png', provenance: 'generated', at: [-10, -10], opaque_backdrop: true }],
+        order: ['plain:cloth', 'plain:eye', 'reach'],
+      });
+      const duplicatePlateOmittedOrder = compose({
+        ...noPlateBody,
+        plates: [
+          { name: 'backdrop', image: 'oversize.png', provenance: 'generated', at: [-10, -10], opaque_backdrop: true },
+          { name: 'backdrop', image: 'oversize.png', provenance: 'generated', at: [-10, -10], opaque_backdrop: true },
+        ],
+        order: ['plain', 'reach'],
+      });
+      const validPlateOmittedOrder = compose({
+        ...noPlateBody,
+        plates: [{ name: 'backdrop', image: 'oversize.png', provenance: 'generated', at: [-10, -10], opaque_backdrop: true }],
+        order: ['plain', 'reach'],
+      });
+      const validPlatePresentOrder = compose({
+        ...noPlateBody,
+        plates: [{ name: 'backdrop', image: 'oversize.png', provenance: 'generated', at: [-10, -10], opaque_backdrop: true }],
+        order: ['backdrop', 'plain', 'reach'],
+      });
+      say(
+        'SC120_PLATE_NAMED_LIKE_CHARACTER_ID_YIELDS_EXACTLY_ONE_SCENE_PLATE_NAME_FREE_REFUSAL',
+        collideIdOrder.err !== null &&
+          collideIdOrder.err.problems.length === 1 &&
+          collideIdOrder.err.problems[0].code === 'SCENE_PLATE_NAME_FREE' &&
+          !has(collideIdOrder.err, 'SCENE_ORDER_COMPLETE') &&
+          collideIdExplicitSlots.err !== null &&
+          collideIdExplicitSlots.err.problems.length === 1 &&
+          collideIdExplicitSlots.err.problems[0].code === 'SCENE_PLATE_NAME_FREE' &&
+          !has(collideIdExplicitSlots.err, 'SCENE_ORDER_COMPLETE') &&
+          collideSlotOrder.err !== null &&
+          collideSlotOrder.err.problems.length === 1 &&
+          collideSlotOrder.err.problems[0].code === 'SCENE_PLATE_NAME_FREE' &&
+          !has(collideSlotOrder.err, 'SCENE_ORDER_COMPLETE') &&
+          has(duplicatePlateOmittedOrder.err, 'SCENE_PLATE_NAME_UNIQUE') &&
+          !has(duplicatePlateOmittedOrder.err, 'SCENE_ORDER_COMPLETE') &&
+          validPlateOmittedOrder.err !== null &&
+          validPlateOmittedOrder.err.problems.length === 1 &&
+          validPlateOmittedOrder.err.problems[0].code === 'SCENE_ORDER_COMPLETE' &&
+          validPlatePresentOrder.err === null,
+        `id collision (order ['plain','reach']): ${codes(collideIdOrder.err)} (${collideIdOrder.err?.problems.length ?? 0}); id collision (explicit slots): ${codes(collideIdExplicitSlots.err)} (${collideIdExplicitSlots.err?.problems.length ?? 0}); slot collision: ${codes(collideSlotOrder.err)} (${collideSlotOrder.err?.problems.length ?? 0}); duplicate plate omitted: ${codes(duplicatePlateOmittedOrder.err)}; valid plate omitted: ${codes(validPlateOmittedOrder.err)}; valid plate present: ${codes(validPlatePresentOrder.err)}`,
+        'issue #1350 item 9: a plate name refused by SCENE_PLATE_NAME_FREE or SCENE_PLATE_NAME_UNIQUE suppresses the cascaded SCENE_ORDER_COMPLETE',
+      );
+
+      const namedOutDir = join(dir, 'named-plates-out');
+      const namedSnapshot = new Map(sceneOutputFiles(namedOutDir).map((p) => [p, readFileSync(join(namedOutDir, p))]));
+      composeStage(
+        { scene: scene(namedOnlyBody), out: namedOutDir },
+        { rig: rigcRunnerAt(bin, spawnRigc), check: rigcRunnerAt(bin, spawnRigc), checkBin: bin, scratch: join(dir, 'named-plates-rerun-scratch') },
+        () => {},
+      );
+      const namedAfter = new Map(sceneOutputFiles(namedOutDir).map((p) => [p, readFileSync(join(namedOutDir, p))]));
+      // scene.json and compose-run.json record the scene file's path; normalise the fresh scene filename before comparing bytes.
+      const prevNamedScene = (JSON.parse(namedSnapshot.get(SCENE_REPORT_FILE)!.toString('utf8')) as { scene: string }).scene;
+      const nextNamedScene = (JSON.parse(namedAfter.get(SCENE_REPORT_FILE)!.toString('utf8')) as { scene: string }).scene;
+      for (const f of [SCENE_REPORT_FILE, COMPOSE_RUN_FILE]) {
+        const buf = namedAfter.get(f);
+        if (buf !== undefined) namedAfter.set(f, Buffer.from(buf.toString('utf8').replaceAll(nextNamedScene, prevNamedScene)));
+      }
+      const namedParity = compareSceneBytes(namedSnapshot, namedAfter);
+      say(
+        'SC121_EXISTING_COMPOSE_CONTROLS_WRITE_BYTE_IDENTICAL_OUTPUTS',
+        byteMatches && namedParity.stableEqual && namedSnapshot.size > 0,
+        `SC20 byteMatches=${byteMatches} (${relFiles.length} files); SC64 named-plates files=${namedSnapshot.size}, stableEqual=${namedParity.stableEqual}, differences=${JSON.stringify(namedParity.differences)}`,
+        'issue #1350 bar 4: built bytes of existing scenes do not move',
       );
     }
   } finally {
