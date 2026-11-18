@@ -521,6 +521,73 @@ See [boundary authoring](AUTHORING.md#declared-boundary-depths-1342).
 
 ## Files this package writes
 
+### Diagnostic path segments
+
+Issue #1362 changes name-derived diagnostic paths written by `check`, including
+the check inside `build` and `compose`. The one mapping is
+`diagnosticSegment` in `src/outputpaths.ts`: read original UTF-16 code units
+left to right. An ASCII unit in `[A-Za-z0-9_@+.-]` stays literal; every
+other unit becomes `~` followed by exactly four lowercase hexadecimal digits.
+Unicode units (including each surrogate), punctuation outside that alphabet
+and `~` itself are escaped. Uppercase ASCII letters stay literal. No normalization or case conversion
+is applied. A left-to-right decoder copies each literal and consumes exactly
+four hex digits after each `~`, recovering the original code units; escape-like
+input names therefore cannot collide with an escaped name.
+
+Two positional/whole-name hazards override literal units. Escape the final dot
+if present, which also covers `.` and `..`. After that unit encoding, if the
+emitted basename before its first dot matches `con`, `prn`, `aux`, `nul`,
+`com1` through `com9`, or `lpt1` through `lpt9` without regard to ASCII case,
+escape its first unit. Thus `idle`
+stays `idle`, `a:turn` becomes `a~003aturn`, `..` becomes `.~002e`, `tail.`
+becomes `tail~002e`, `con.txt` becomes `~0063on.txt`, and `con.` needs only
+`con~002e`. Trailing spaces are already escaped as unsafe units. Distinct
+names have distinct case-sensitive mapped segments; all emitted units are ASCII,
+so Unicode normalization does not change them. Windows punctuation, C0 controls,
+device basenames and trailing dots/spaces cannot occur in the mapped segment.
+
+ASCII-case aliases are refused rather than renamed: `Idle` and `idle` each map
+literally, but cannot be siblings. `diagnosticSiblings` checks the entire sibling
+scope before its writes, using the mapped folders' ASCII lowercase spellings.
+A collision raises `DIAGNOSTIC_PATH_SEGMENT` naming both original inputs,
+both folder spellings and their shared case-folded folder. Scopes are extremes
+animations, retained render sets, selected alternate-set folders, and each of
+`requirements/as-declared`, `requirements/released` and `requirements/full`.
+Check preflights all known scopes before creating or clearing its output;
+requirement measurement also preflights before cleanup, and retained copies
+validate every set before creating a destination. The retained reference-world
+publisher validates all worlds before staging them. Safe uppercase names such as
+`VANE_HALF` and `RIDER_HALF` keep their existing paths.
+
+An empty original name, or a resulting segment longer than 255 ASCII characters
+including a fixed filename/rate suffix, is refused as `DIAGNOSTIC_PATH_SEGMENT`,
+naming the original input and the required bound. No truncation or hashing is
+applied. The suffix is appended after unit mapping and included in that length
+check; it does not change the name's encoding.
+
+`extremes/<segment>/` uses the original animation name. Retained render sets
+use its mapped animation name plus `@<fps>fps` only outside the protocol
+12 fps, with `frames.json`'s `sets[].dir` updated to the actual directory.
+A setup-only set maps its renderer directory instead. The original animation
+fields, including `extremes.json`, and the public `<id>:<name>` animation
+names stay unchanged. Readers follow `sets[].dir` rather than reconstructing
+a folder from `animation`. Safe unchanged indexes retain their original bytes.
+Fixed root sidecar names and bytes are copied verbatim; only the frame index
+may change its set directory references.
+
+The same mapping applies to alternate-set folders in `setup_still/`,
+`setup_still_auto/` and `seam/`, the complete ranked seam-picture filename stem,
+and animation/requirement folders in `requirements/{as-declared,released,full}`.
+The retained seam reference worlds under `seam_motion/{default,still}` use
+the mapped render indexes. Loop output filenames are fixed; fold, loop,
+stress, sweep and wind-band render scratch is removed rather than published.
+Source part/image references retain their separate asset contracts.
+
+The mapping lives in this package's retention step. Core's `frameSetDir`
+still writes original names in staging before that step; this layout fix
+does not certify native Windows rendering or repair staging collisions on a
+filesystem that already aliases two original names.
+
 `depth-bind` writes `<map>.binding.json` beside the numeric map, spec
 `rig-parts-depth-map-binding/1`, with `spec`, `part`, `mapSha256`, `inputSha256`
 in that order. Hashes are computed from current map and input PNG bytes.
