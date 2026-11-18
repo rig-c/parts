@@ -753,7 +753,7 @@ import { block, constraintConfig, dustImages, dustParts, FACE_EXPECT, faceConfig
 import { FORK_SMOOTH_MAX_INFLUENCES, smoothForkShares } from './src/rig.ts';
 import { type AttachmentSetsFile, blinkHoldProblems, buildRig as originalBuildRig, influenceReachHolds, DEFAULT_IDLE_KEYS, expandSetAttachmentKeys, FACE_TIPS_AXIS_NAME, HEAD_UP_BONE, flattenRig, IDLE_DRIVES_MESHES_WHY, type MeshAttachment, PAD, type RegionAttachment, rigJsonText, type RigOutput, type RigSpec, roundShares, tipRoundingBound, writtenShares } from './src/rig.ts';
 import { readEditorReceipts } from './src/editreceipt.ts';
-import { type ComposedScene, composeFromFiles, IMAGE_SEP, PLATE, PLATE_IMAGE, PREFIX_SEP, SCENE_REPORT_FILE, SCENE_SPEC, scaledConstraint, scaledStop, unprefixedNames, plateImageName } from './src/scene.ts';
+import { type ComposedScene, composeFromFiles, composeStage, IMAGE_SEP, PLATE, PLATE_IMAGE, PREFIX_SEP, SCENE_REPORT_FILE, SCENE_SPEC, scaledConstraint, scaledStop, unprefixedNames, plateImageName } from './src/scene.ts';
 import { sceneCharacterRig, sceneText, writeFlatPlate, writeSceneBuild, writeTurnSceneBuild, sceneTurnFixture, sceneFoldProducerFixture, writeSceneProducerInput } from './fixtures/scene.ts';
 import { localInfluences, regionWeight } from './src/localweights.ts';
 import { boneHeat as solveBoneHeat, HEAT_MAX_ITERATIONS, HEAT_SOURCE_BAND, HEAT_TOLERANCE, latticeSilhouette } from './src/heat.ts';
@@ -47701,6 +47701,147 @@ function runSceneSuite(): number {
         `rig ${folded.status}; check ${foldCheck.status}; refusal ${codes(permitted.err)}; exemption ${JSON.stringify(permitted.ok?.rig.invariants?.deformMayFold)}`,
         'issue #1344: the actual automatic mesh producer emits inherit and the declared fold exemption; no input rig is hand patched');
 
+    }
+    // #1352: compose accepts --page-size <px>, forwards it to both packed rigc builds, records pack_mode.page_size
+    // only when given, and leaves argv and output bytes unchanged when absent.
+    {
+      const why = 'issue #1352: compose accepts --page-size <px>, forwards it to rigc build --pack in both the compose gate and check, records pack_mode.page_size in scene.json and check/check.json only when given, and preserves every argv and output byte when absent';
+      const widePng = 'wide-plate-2100.png';
+      writeFlatPlate(join(dir, widePng), 2100, 60, [48, 64, 80]);
+      const wideBody = two();
+      delete wideBody.plate;
+      const wideScene = scene({
+        ...wideBody,
+        plates: [{ name: 'backdrop', image: widePng, provenance: 'generated', at: [0, 0], opaque_backdrop: true }],
+        order: ['backdrop', 'plain', 'reach'],
+      });
+      const wideRedOut = join(dir, 'wide-red');
+      const wideRed = runCli(['compose', '--scene', wideScene, '--out', wideRedOut]);
+      const wideGreenOut = join(dir, 'wide-green-4096');
+      const wideGreen = runCli(['compose', '--scene', wideScene, '--out', wideGreenOut, '--page-size', '4096']);
+      const wideSceneReport = readJsonFile(join(wideGreenOut, SCENE_REPORT_FILE));
+      const wideCheckReport = readJsonFile(join(wideGreenOut, 'check', 'check.json'));
+      say(
+        'SC97_OVERSIZED_NAMED_PLATE_REFUSES_AT_DEFAULT_PAGE_AND_COMPOSES_WITH_PAGE_SIZE',
+        wideRed.status === 1 &&
+          composeFail(wideRed.out, 'COMPOSE_RIGC_GREEN') !== null &&
+          wideRed.out.includes('CE_ATLAS_REGION_EXCEEDS_PAGE') &&
+          !existsSync(join(wideRedOut, 'rig')) &&
+          !existsSync(join(wideRedOut, SCENE_REPORT_FILE)) &&
+          !existsSync(join(wideRedOut, 'check')) &&
+          wideGreen.status === 0 &&
+          wideCheckReport?.gate_spine_html_green === true &&
+          wideCheckReport?.PASS === true &&
+          JSON.stringify(wideSceneReport?.pack_mode) === '{"page_edges":"free","pack_shape":"polygon","page_size":4096}' &&
+          JSON.stringify(wideCheckReport?.pack_mode) === '{"page_edges":"free","pack_shape":"polygon","page_size":4096}',
+        `2100x60 plate without --page-size -> exit ${wideRed.status}, ${(composeFail(wideRed.out, 'COMPOSE_RIGC_GREEN') ?? '').slice(0, 180)}; with --page-size 4096 -> exit ${wideGreen.status}, scene.json pack_mode=${JSON.stringify(wideSceneReport?.pack_mode)}, check.json pack_mode=${JSON.stringify(wideCheckReport?.pack_mode)}, PASS=${String(wideCheckReport?.PASS)}`,
+        why,
+      );
+
+      const bin = suiteRigc();
+      const runRecordedCompose = (pageSize?: number): { rigArgv: string[][]; checkArgv: string[][]; outDir: string; result: ReturnType<typeof composeStage> } => {
+        const rigArgv: string[][] = [];
+        const checkArgv: string[][] = [];
+        const rec = (sink: string[][]): RigcRunner =>
+          rigcRunnerAt(bin, (b, a) => {
+            if (a[0] === 'build' && a.includes('--pack')) sink.push([...a]);
+            return spawnRigc(b, a);
+          });
+        const outDir = join(dir, `compose-ps-${pageSize ?? 'default'}`);
+        const scratchDir = join(dir, `compose-ps-scratch-${pageSize ?? 'default'}`);
+        const result = composeStage(
+          { scene: sceneFile, out: outDir, ...(pageSize === undefined ? {} : { pageSize }) },
+          { rig: rec(rigArgv), check: rec(checkArgv), checkBin: bin, scratch: scratchDir },
+          () => {},
+        );
+        return { rigArgv, checkArgv, outDir, result };
+      };
+      const withoutPs = runRecordedCompose(undefined);
+      const withPs4096 = runRecordedCompose(4096);
+      const tailWithout = ['--profile', GATE_PROFILE, '--pack', '--page-edges', 'free', '--pack-shape', 'polygon'];
+      const tailWith = [...tailWithout, '--page-size', '4096'];
+      const stripPaths = (a: readonly string[]): string[] => a.map((x, i) => (a[i - 1] === '--out' || a[i - 1] === '--rig' || a[i - 1] === '--motion' ? '<path>' : x));
+      say(
+        'SC98_COMPOSE_STAGE_THREADS_PAGE_SIZE_TO_RIGC_ARGV_AND_OMITS_IT_WHEN_ABSENT',
+        withoutPs.result.stoppedAt === null &&
+          withPs4096.result.stoppedAt === null &&
+          withoutPs.rigArgv.length === 1 &&
+          withoutPs.checkArgv.length === 1 &&
+          [...withoutPs.rigArgv, ...withoutPs.checkArgv].every((a) => !a.includes('--page-size') && JSON.stringify(a.slice(-tailWithout.length)) === JSON.stringify(tailWithout)) &&
+          withPs4096.rigArgv.length === 1 &&
+          withPs4096.checkArgv.length === 1 &&
+          [...withPs4096.rigArgv, ...withPs4096.checkArgv].every((a) => JSON.stringify(a.slice(-tailWith.length)) === JSON.stringify(tailWith)) &&
+          withoutPs.rigArgv.every((a, i) => JSON.stringify([...stripPaths(a), '--page-size', '4096']) === JSON.stringify(stripPaths(withPs4096.rigArgv[i]))) &&
+          withoutPs.checkArgv.every((a, i) => JSON.stringify([...stripPaths(a), '--page-size', '4096']) === JSON.stringify(stripPaths(withPs4096.checkArgv[i]))) &&
+          JSON.stringify(withoutPs.result.composed?.report.pack_mode) === '{"page_edges":"free","pack_shape":"polygon"}' &&
+          !('page_size' in (withoutPs.result.composed?.report.pack_mode ?? {})) &&
+          JSON.stringify(withPs4096.result.composed?.report.pack_mode) === '{"page_edges":"free","pack_shape":"polygon","page_size":4096}' &&
+          JSON.stringify(withoutPs.result.check?.figures.pack_mode) === '{"page_edges":"free","pack_shape":"polygon"}' &&
+          JSON.stringify(withPs4096.result.check?.figures.pack_mode) === '{"page_edges":"free","pack_shape":"polygon","page_size":4096}',
+        `without flag (rig ${withoutPs.rigArgv.length}, check ${withoutPs.checkArgv.length}): tail ${JSON.stringify(withoutPs.rigArgv[0]?.slice(-tailWithout.length))}; with --page-size 4096 (rig ${withPs4096.rigArgv.length}, check ${withPs4096.checkArgv.length}): tail ${JSON.stringify(withPs4096.rigArgv[0]?.slice(-tailWith.length))}; scene.json pack_mode without=${JSON.stringify(withoutPs.result.composed?.report.pack_mode)}, with=${JSON.stringify(withPs4096.result.composed?.report.pack_mode)}`,
+        why,
+      );
+
+      const relFiles = [
+        'rig/rig.json',
+        'rig/motion.json',
+        ...readdirSync(join(out, 'rig', 'images')).sort().map((f) => `rig/images/${f}`),
+        SCENE_REPORT_FILE,
+        'check/check.json',
+        'check/build/skeleton.json',
+        'check/build/skeleton.atlas',
+        'check/build/skeleton.png',
+      ];
+      const sc20Snapshot = new Map(relFiles.map((rel) => [rel, readFileSync(join(out, rel))]));
+      const sameAtOtherOut = relFiles.every((rel) => {
+        if (!existsSync(join(withoutPs.outDir, rel))) return false;
+        if (rel === 'check/check.json') {
+          return readFileSync(join(withoutPs.outDir, rel), 'utf8').replaceAll(withoutPs.outDir, out) === sc20Snapshot.get(rel)?.toString('utf8');
+        }
+        return readFileSync(join(withoutPs.outDir, rel)).equals(sc20Snapshot.get(rel)!);
+      });
+      composeStage(
+        { scene: sceneFile, out },
+        { rig: rigcRunnerAt(bin, spawnRigc), check: rigcRunnerAt(bin, spawnRigc), checkBin: bin, scratch: join(dir, 'compose-ps-same-out-scratch') },
+        () => {},
+      );
+      const byteMatches = sameAtOtherOut && relFiles.every((rel) => existsSync(join(out, rel)) && readFileSync(join(out, rel)).equals(sc20Snapshot.get(rel)!));
+      say(
+        'SC99_COMPOSE_WITHOUT_PAGE_SIZE_WRITES_BYTE_IDENTICAL_OUTPUTS',
+        byteMatches && !readFileSync(join(withoutPs.outDir, SCENE_REPORT_FILE), 'utf8').includes('"page_size"') && !readFileSync(join(withoutPs.outDir, 'check', 'check.json'), 'utf8').includes('"page_size"'),
+        `checked ${relFiles.length} output files (${relFiles.join(', ')}) against SC20 baseline: byte-identical=${byteMatches}`,
+        why,
+      );
+
+      const badVals = ['0', 'abc', '-1', '1.5', ''] as const;
+      const badRuns = badVals.map((val, i) => {
+        const badOut = join(dir, `compose-bad-ps-${i}`);
+        const r = runCli(['compose', '--scene', sceneFile, '--out', badOut, '--page-size', val]);
+        const wantLine = `  FAIL  ${PACK_PAGE_SIZE}: --page-size — ${JSON.stringify(val)} found; a positive integer is required (see rig-parts guide ${PACK_PAGE_SIZE})`;
+        return { val, r, badOut, wantLine, ok: r.status === 1 && r.out.split('\n').includes(wantLine) && !existsSync(badOut) };
+      });
+      const stageBadOut = join(dir, 'compose-bad-stage-0');
+      const stageBadErr = refusals(() =>
+        composeStage(
+          { scene: sceneFile, out: stageBadOut, pageSize: 0 },
+          { rig: rigcRunnerAt(bin, spawnRigc), check: rigcRunnerAt(bin, spawnRigc), checkBin: bin, scratch: join(dir, 'compose-bad-stage-scratch') },
+          () => {},
+        ),
+      );
+      const barePs = runCli(['compose', '--scene', sceneFile, '--out', join(dir, 'compose-bare-ps'), '--page-size']);
+      const twicePs = runCli(['compose', '--scene', sceneFile, '--out', join(dir, 'compose-twice-ps'), '--page-size', '1024', '--page-size', '2048']);
+      say(
+        'SC100_BAD_PAGE_SIZE_IS_REFUSED_AS_PACK_PAGE_SIZE_THROUGH_COMPOSE',
+        badRuns.every((b) => b.ok) &&
+          has(stageBadErr, PACK_PAGE_SIZE, '0 found; a positive integer is required') &&
+          !existsSync(stageBadOut) &&
+          barePs.status === 2 &&
+          barePs.out.includes('USAGE: --page-size needs a value') &&
+          twicePs.status === 2 &&
+          twicePs.out.includes('USAGE: --page-size is given twice'),
+        `${badRuns.map((b) => `${JSON.stringify(b.val)}:exit=${b.r.status}`).join(', ')}; composeStage(pageSize:0): ${codes(stageBadErr)}; bare: exit ${barePs.status}; twice: exit ${twicePs.status}`,
+        why,
+      );
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });

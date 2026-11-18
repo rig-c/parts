@@ -4443,7 +4443,7 @@ existing hardlinks are refused before artifact output; the ordinary mode names
 | `check --rig --out [--parts] [--source] [--requirements]` | build packed, gated under `rig-play`, render the idle, measure seam, loop and the six judgement lines (mesh texture stretch among them, from the idle's `render --geometry`), and report the recomposite's holes from `parts.json`; on a rig spec with no `parts.json` or no `idle` (a merged rig, issue #77) the gate still runs and every line that needs the missing input says SKIP by name; `--source <painting.png>` adds `SETUP_POSE_VS_SOURCE`, the setup pose against the painting by assemble's recomposite figures; `--requirements <scene.json>` measures what a scene declares of the motion — a contact, a follow fraction, an aim, a joint range, a mesh's stretch, the seam between two parts over the motion — each against the author's own bar, from rig-c's posed frames, one line each, PASS, FAIL or NOT MEASURABLE (AUTHORING §7, *Declared requirements*) |
 | `loop --frames <dir> --out <file.gif \| file.png> [--palette]` | encode a rendered idle as a looping GIF, lossless APNG, or indexed APNG (`--palette`) |
 | `build --config --source --full --head --out [--seam] [--project] [--loop] [--lead-in <periods>] [--requirements] [--seam-pairs] [--keep-stills] [--idle-keys ctl\|direct]` | assemble, rig and check in one process, stopping at the first refusal; `--requirements`, `--seam-pairs` and `--keep-stills` are forwarded to check, `--idle-keys` to rig; `--lead-in` (with `--loop`) encodes the loop from the last of n + 1 idle periods played back to back, for a rig whose physics does not end where the render starts it |
-| `compose --scene <scene.json> --out [--requirements] [--accept]` | bind several characters' green builds into one rig (or, under `--accept`, builds failing only the bars named — for looking, not shipping): every name prefixed `<id>:` under one shared root, each character's offset added at its first-level bones, an optional background plate (its provenance recorded, judged by nothing) drawn first, and the draw order between the characters' slots as the scene file declares it — nothing inferred, nothing scaled; gated through rig-c as `rig` is, then checked ([AUTHORING §7](AUTHORING.md), *Composing several characters*) |
+| `compose --scene <scene.json> --out [--requirements] [--accept] [--page-size]` | bind several characters' green builds into one rig (or, under `--accept`, builds failing only the bars named — for looking, not shipping): every name prefixed `<id>:` under one shared root, each character's offset added at its first-level bones, an optional background plate (its provenance recorded, judged by nothing) drawn first, and the draw order between the characters' slots as the scene file declares it — nothing inferred, nothing scaled; gated through rig-c as `rig` is, then checked ([AUTHORING §7](AUTHORING.md), *Composing several characters*) |
 | `mesh-draft --config <json> --parts <dir> --out <dir>` | draft contour meshes for configured lattices, keeping each only where it holds against its lattice through rig-c; write the revised config and measurement report |
 | `mesh-stats --config <json> --parts <dir>` | print each configured mesh's vertex and triangle counts and their total through the rig stage's construction; write nothing |
 | `painting --keypoints <json> [--person <id>] [--form standee\|illustration] <png>` | before See-through, read the painting against its declared joints (`standee` by default, or `illustration` for a framed illustration where standee border, 8-joint and gap rules report `SKIP`) and refuse named problems; write nothing |
@@ -7173,7 +7173,7 @@ rig directory, copied away from its `parts.json`, reads `5 of 10`: the gate, the
 
 ### Composing several characters (`compose`, issue #74)
 
-`rig-parts compose --scene <scene.json> --out <dir> [--requirements <file.json>] [--accept <bar>[,<bar>…]]`
+`rig-parts compose --scene <scene.json> --out <dir> [--requirements <file.json>] [--accept <bar>[,<bar>…]] [--page-size <px>]`
 binds characters this package already built into one rig. Each character runs the
 single-character path (§4, steps 0–9) on its own, already isolated input to a green
 `build` first; compose reads what that build wrote and changes nothing in it.
@@ -7301,7 +7301,12 @@ What is composed:
 - **Gated as `rig` gates its own:** `rigc build --profile rig-play --pack`, the
   compile and the packed pages on disk, in a scratch directory; `--out` receives
   `rig/` (`rig.json`, `motion.json`, `images/`) and `scene.json` only when it is
-  green. Then `check` runs over `rig/` into `check/`, as on any rig it did not
+  green. `--page-size <px>` (a positive integer, refused as `PACK_PAGE_SIZE`
+  otherwise; issue #1352) is forwarded to both packed builds and recorded as
+  `pack_mode.page_size` in `scene.json` and `check/check.json` only when given;
+  without it, rigc's default 2048 px page and padding 2 on each side bound any
+  plate or region side to at most 2044 px before `CE_ATLAS_REGION_EXCEEDS_PAGE`
+  (`COMPOSE_RIGC_GREEN`). Then `check` runs over `rig/` into `check/`, as on any rig it did not
   build: without a `parts.json` the seam, `BREATH_VISIBLE`, `BLINK_NO_HOLE`,
   `TIP_OVER_ROOT`, `STILL_REGIONS_DARK` and `RECOMPOSITE_HOLES` say SKIP and why,
   and the gate, the loop, `CHAIN_LAG` and `TEXTURE_STRETCH` measure.
