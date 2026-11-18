@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.44.0 (2026-11-18)
+
+`compose` now takes turn and depth producer rigs, named scene plate layers, scene-level named animations and `--page-size`, and writes a deterministic input record. A scene that declares none of these writes the same bytes as 2.43.0 at the same paths, plus the one new file below.
+
+**Read before upgrading:**
+
+* **`compose` writes a new file, `compose-run.json`, at the `--out` root** (spec `rig-compose-run/1`, a stable contract as of this version). It is written only after the gate and check are green and no accepted failing character remains, so an `--accept` preview writes none.
+* **`compose` now owns the name `compose-run.json`.** A file of that name at the `--out` root is deleted at the start of every compose, including one that is then refused. Keep your own files under another name.
+* **Turn and depth rigs that `compose` refused before now compose, with two limits.** A generated image-sized depth grid at a character scale other than 1 is refused as `SCENE_SCALE_EXACT`; rebuild it at another `assemble.rig_scale`. A build made with `rig` plus `rigc build` and no `check/check.json` is still refused as `SCENE_BUILD_PRESENT`; run `rig-parts check` into `<build>/check` first.
+* **Three generated dial bone names are now promised**: `<id>:yaw_dial`, `<id>:pitch_dial` and `<id>:<turn.body.slider>`, which is `<id>:body_yaw_dial` by default. Renaming them needs a major version. A dial exists only when its character's producer generated it.
+* **`SCENE_DURATION_AGREES` has one more case**: a declared `scene.animations.idle.duration` that differs from the composed idle. A scene without `animations` cannot meet it.
+* **Without `--page-size`, any plate or region side is bounded to 2044 px** (rigc's default 2048 px page with padding 2 on each side) before `CE_ATLAS_REGION_EXCEEDS_PAGE`. The behaviour is unchanged; it is now documented, and `--page-size` lifts it.
+
+### Features
+
+* **compose:** admit turn and depth producer rigs: yaw/pitch derive maps, turn deform offsets and transforms, depth-grid generator images, bone inherit modes and producer mesh/fold invariants. Every embedded reference is prefixed except the shared default skin; declared mesh-slot ceilings sum and per-mesh triangle ceilings take the maximum. Previously passing scenes build byte-identical output (`#1344`, `#1349`, `da6fa33`).
+* **compose:** add optional named scene plate layers, `plates[]`, each with `name`, `image`, `provenance` and `at: [x, y]` (image top-left in canvas pixels, y down). Each layer's name is its bone, slot, attachment and its once-only `order` token. A layer needs some transparency unless it declares `opaque_backdrop: true`, and an opaque declared backdrop must cover the canvas in both dimensions (`SCENE_PLATE_AT`, `SCENE_PLATE_NAME_UNIQUE`, `SCENE_PLATE_NAME_FREE`, `SCENE_PLATE_ALPHA`, `SCENE_PLATE_BACKDROP_SIZE`). The scene report gains a `plates` array only when layers are declared (`#1345`, `#1351`, `adf54df`).
+* **compose:** add optional `scene.animations`, a map of named rigc animations resolved against the final scene. A new name adds a clip at its own duration; `idle` appends timelines to the composed idle and keeps every character track, deform and physics constraint. Keys on a generated dial must be explicit numbers inside that slider's declared range (`SCENE_DIAL_KEY_RANGE`, `SCENE_DIAL_RANGE_DECLARED`, `SCENE_DIAL_KEY_DECLARED`), an imported clip name cannot be replaced (`SCENE_ANIMATION_NAME_FREE`), and every declared clip's posed samples at 0 and at its duration must agree before anything is emitted (`SCENE_ANIMATION_LOOP_CLOSES`, `SCENE_ANIMATION_POSE_READABLE`) (`#1346`, `#1353`, `f3858d5`).
+* **compose:** accept `--page-size <px>` like the other build commands. It is forwarded to both packed builds and recorded as `pack_mode.page_size` in `scene.json` and `check/check.json` only when given; a value that is not a positive integer refuses as `PACK_PAGE_SIZE` (`#1352`, `#1354`, `18eddb4`).
+* **compose:** write `compose-run.json` (spec `rig-compose-run/1`): the scene file, each character's `check/check.json`, `parts.json`, `rig/rig.json`, `rig/motion.json` and default-skin images, the legacy plate and every named plate, each with the sha256 of the raw bytes compose consumed. Fixed key order, sorted entries, no clocks: identical inputs at identical paths give identical record bytes. STABILITY states the contract (`#1348`, `#1356`, `0299ef8`).
+
+### Documentation
+
+* **turn:** AUTHORING and DEPTH state how to author boundary depths for abutting surfaces under the shared group reference, and how mixed depth and normals sources share one depth space; controls hold both behaviours. No build output changes (`#1337`, `#1340`, `#1341`, `c0ae58d`, `a5ae400`).
+
 ## 2.43.0 (2026-11-18)
 
 ### Features
