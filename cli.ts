@@ -1190,33 +1190,33 @@ function printLayerTable(set: LayerSet): void {
  * no row; `layers` takes one positional path beside its flags (issue #359).
  */
 const TAKES = {
-  'edited-part': { valued: ['--config', '--part', '--file', '--from', '--editor', '--rig-config'], switches: [] },
-  'check-parts': { valued: ['--parts', '--out'], switches: ['--json'] },
-  'diff-components': { valued: ['--stack', '--painting', '--parts', '--figure', '--floor', '--threshold', '--out', '--verify'], switches: ['--owners'] },
-  'depth-bind': { valued: ['--map', '--input', '--part'], switches: [] },
-  'depth-prepare': { valued: ['--parts', '--config', '--out'], switches: [] },
-  'depth-apply': { valued: ['--parts', '--manifest', '--config', '--rig-config', '--out'], switches: [] },
-  layers: { valued: ['--export', '--template', '--canvas', '--full', '--source', '--config'], switches: [] },
-  sheet: { valued: ['--source', '--layers', '--out', '--cell', '--cols'], switches: [] },
-  rig: { valued: ['--config', '--parts', '--out', '--idle-keys', '--page-edges', '--pack-shape', '--page-size'], switches: [] },
-  propose: { valued: ['--parts', '--source', '--out', '--from-config', '--compare', '--full', '--head', '--canvas', '--keypoints', '--person', '--wrist-snap', '--grid-rule', '--cloth', '--write-config', '--from', '--bust-landmarks', '--no-bust'], switches: ['--head-box', '--no-back-hair', '--only-missing'] },
-  compare: { valued: ['--left', '--right', '--map'], switches: [] },
-  check: { valued: ['--rig', '--out', '--parts', '--source', '--page-edges', '--pack-shape', '--page-size', '--requirements', '--set', '--environment', '--wind-band'], switches: ['--seam-pairs', '--keep-stills', '--all-sets', '--no-extremes', '--json'] },
-  loop: { valued: ['--frames', '--out'], switches: ['--palette'] },
-  assemble: { valued: ['--source', '--full', '--head', '--config', '--out', '--emit-fill-masks', '--seam', '--project', '--alt', '--write-config', '--requirements'], switches: ['--propose-plan'] },
-  'comfy seethrough': { valued: ['--image', '--out', '--resolution', '--steps', '--seed', '--prefix', '--host', '--wait', '--timeout', '--poll', '--config', '--depth-run'], switches: ['--offload', '--no-offload', '--lama', '--nf4'] },
-  'comfy paint': { valued: ['--config', '--out', '--seeds', '--seed0', '--host', '--wait', '--timeout', '--poll'], switches: [] },
-  'comfy matte': { valued: ['--painting', '--out', '--node', '--model', '--checkpoint-sha256', '--resolution', '--threshold', '--host', '--wait', '--timeout', '--poll'], switches: [] },
-  'comfy plate': { valued: ['--mode', '--painting', '--mask-from', '--occluder', '--out', '--graph', '--model', '--checkpoint-sha256', '--seed', '--grow', '--steps', '--cfg', '--prompt', '--negative', '--host', '--wait', '--timeout', '--poll'], switches: ['--holes'] },
-  inputs: { valued: ['--source', '--config', '--out'], switches: [] },
-  build: { valued: ['--config', '--source', '--full', '--head', '--out', '--seam', '--project', '--page-edges', '--pack-shape', '--page-size', '--requirements', '--idle-keys', '--lead-in', '--alt', '--set', '--environment', '--wind-band'], switches: ['--loop', '--seam-pairs', '--keep-stills', '--all-sets', '--no-extremes'] },
+  'edited-part': { valued: ['--config', '--part', '--file', '--from', '--editor', '--rig-config'], switches: ['--help'] },
+  'check-parts': { valued: ['--parts', '--out'], switches: ['--json', '--help'] },
+  'diff-components': { valued: ['--stack', '--painting', '--parts', '--figure', '--floor', '--threshold', '--out', '--verify'], switches: ['--owners', '--help'] },
+  'depth-bind': { valued: ['--map', '--input', '--part'], switches: ['--help'] },
+  'depth-prepare': { valued: ['--parts', '--config', '--out'], switches: ['--help'] },
+  'depth-apply': { valued: ['--parts', '--manifest', '--config', '--rig-config', '--out'], switches: ['--help'] },
+  layers: { valued: ['--export', '--template', '--canvas', '--full', '--source', '--config'], switches: ['--help'] },
+  sheet: { valued: ['--source', '--layers', '--out', '--cell', '--cols'], switches: ['--help'] },
+  rig: { valued: ['--config', '--parts', '--out', '--idle-keys', '--page-edges', '--pack-shape', '--page-size'], switches: ['--help'] },
+  propose: { valued: ['--parts', '--source', '--out', '--from-config', '--compare', '--full', '--head', '--canvas', '--keypoints', '--person', '--wrist-snap', '--grid-rule', '--cloth', '--write-config', '--from', '--bust-landmarks', '--no-bust'], switches: ['--head-box', '--no-back-hair', '--only-missing', '--help'] },
+  compare: { valued: ['--left', '--right', '--map'], switches: ['--help'] },
+  check: { valued: ['--rig', '--out', '--parts', '--source', '--page-edges', '--pack-shape', '--page-size', '--requirements', '--set', '--environment', '--wind-band'], switches: ['--seam-pairs', '--keep-stills', '--all-sets', '--no-extremes', '--json', '--help'] },
+  loop: { valued: ['--frames', '--out'], switches: ['--palette', '--help'] },
+  assemble: { valued: ['--source', '--full', '--head', '--config', '--out', '--emit-fill-masks', '--seam', '--project', '--alt', '--write-config', '--requirements'], switches: ['--propose-plan', '--help'] },
+  'comfy seethrough': { valued: ['--image', '--out', '--resolution', '--steps', '--seed', '--prefix', '--host', '--wait', '--timeout', '--poll', '--config', '--depth-run'], switches: ['--offload', '--no-offload', '--lama', '--nf4', '--help'] },
+  'comfy paint': { valued: ['--config', '--out', '--seeds', '--seed0', '--host', '--wait', '--timeout', '--poll'], switches: ['--help'] },
+  'comfy matte': { valued: ['--painting', '--out', '--node', '--model', '--checkpoint-sha256', '--resolution', '--threshold', '--host', '--wait', '--timeout', '--poll'], switches: ['--help'] },
+  'comfy plate': { valued: ['--mode', '--painting', '--mask-from', '--occluder', '--out', '--graph', '--model', '--checkpoint-sha256', '--seed', '--grow', '--steps', '--cfg', '--prompt', '--negative', '--host', '--wait', '--timeout', '--poll'], switches: ['--holes', '--help'] },
+  inputs: { valued: ['--source', '--config', '--out'], switches: ['--help'] },
+  build: { valued: ['--config', '--source', '--full', '--head', '--out', '--seam', '--project', '--page-edges', '--pack-shape', '--page-size', '--requirements', '--idle-keys', '--lead-in', '--alt', '--set', '--environment', '--wind-band'], switches: ['--loop', '--seam-pairs', '--keep-stills', '--all-sets', '--no-extremes', '--help'] },
   compose: { valued: ['--scene', '--out', '--requirements', '--accept', '--page-size'], switches: ['--help'] },
-  'mesh-draft': { valued: ['--config', '--parts', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape', '--page-size'], switches: ['--more-triangles'] },
-  'mesh-stats': { valued: ['--config', '--parts'], switches: [] },
-  remesh: { valued: ['--rig', '--config', '--parts', '--part', '--mesh', '--delta', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape', '--page-size', '--input-check'], switches: ['--record-input-check'] },
-  retune: { valued: ['--rig', '--config', '--parts', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape', '--page-size', '--input-check'], switches: ['--record-input-check'] },
-  'head-crop-preflight': { valued: ['--full', '--canvas', '--head-box'], switches: [] },
-  painting: { valued: ['--keypoints', '--person', '--form'], switches: [] },
+  'mesh-draft': { valued: ['--config', '--parts', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape', '--page-size'], switches: ['--more-triangles', '--help'] },
+  'mesh-stats': { valued: ['--config', '--parts'], switches: ['--help'] },
+  remesh: { valued: ['--rig', '--config', '--parts', '--part', '--mesh', '--delta', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape', '--page-size', '--input-check'], switches: ['--record-input-check', '--help'] },
+  retune: { valued: ['--rig', '--config', '--parts', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape', '--page-size', '--input-check'], switches: ['--record-input-check', '--help'] },
+  'head-crop-preflight': { valued: ['--full', '--canvas', '--head-box'], switches: ['--help'] },
+  painting: { valued: ['--keypoints', '--person', '--form'], switches: ['--help'] },
 } as const satisfies Record<string, { valued: readonly string[]; switches: readonly string[] }>;
 
 type Command = keyof typeof TAKES;
@@ -1226,10 +1226,73 @@ function takesValued(command: Command, flag: string): boolean {
   return (TAKES[command].valued as readonly string[]).includes(flag);
 }
 
-/** The unknown-flag refusal: the flag, and every flag the command's {@link TAKES} row holds, valued then bare. */
+/** The unknown-flag refusal: the flag, and every flag the command's {@link TAKES} row holds, valued then bare (keeping `--help` out of non-compose refusals so no non-help output byte changes, issue #1360). */
 function notTaken(command: Command, flag: string): string {
   const row = TAKES[command];
-  return `${command} does not take "${flag}"; it takes ${[...row.valued, ...row.switches].join(', ')}`;
+  const switches = command === 'compose' ? row.switches : row.switches.filter((f) => f !== '--help');
+  return `${command} does not take "${flag}"; it takes ${[...row.valued, ...switches].join(', ')}`;
+}
+
+/** One command's (or comfy subcommand's) own usage section from {@link HELP}. */
+function commandUsage(target: string): string | null {
+  const end = HELP.indexOf('\n  rig-parts --version');
+  const lines = (end < 0 ? HELP : HELP.slice(0, end)).split('\n');
+  const head = `  rig-parts ${target} `;
+  const from = lines.findIndex((l) => l.startsWith(head));
+  if (from < 0) return null;
+  let to = lines.length;
+  for (let i = from + 1; i < lines.length; i++) {
+    if (lines[i].startsWith('  rig-parts ') && !lines[i].startsWith(head)) {
+      to = i;
+      break;
+    }
+  }
+  while (to > from && lines[to - 1] === '') to--;
+  return lines.slice(from, to).join('\n');
+}
+
+/** Shared `--help` / `-h` path taken before any command's own flag parsing (issue #1360). */
+function maybeCommandHelp(command: string, args: readonly string[]): number | null {
+  if (!args.includes('--help') && !args.includes('-h')) return null;
+  if (command === 'guide') {
+    if (args.length === 1 && (args[0] === '--help' || args[0] === '-h')) {
+      console.log(commandUsage('guide'));
+      return EXIT_OK;
+    }
+    return null;
+  }
+  if (command === 'comfy' && (args[0] === '--help' || args[0] === '-h')) {
+    if (args.filter((a) => a === '--help' || a === '-h').length > 1) return usage('--help is given twice');
+    const extra = args.find((a) => a !== '--help' && a !== '-h');
+    if (extra !== undefined) return usage(`comfy takes seethrough, paint, plate or matte; got "${extra}"`);
+    console.log(commandUsage('comfy'));
+    return EXIT_OK;
+  }
+  const target: Command | null =
+    command === 'comfy'
+      ? args[0] === 'seethrough' || args[0] === 'paint' || args[0] === 'plate' || args[0] === 'matte'
+        ? `comfy ${args[0]}`
+        : null
+      : Object.hasOwn(TAKES, command)
+        ? (command as Command)
+        : null;
+  if (target === null) return null;
+  const cmdArgs = command === 'comfy' ? args.slice(1) : args;
+  const help = cmdArgs.filter((a) => a === '--help' || a === '-h').length;
+  if (help === 0) return null;
+  if (help > 1) return usage('--help is given twice');
+  const rest = cmdArgs.filter((a) => a !== '--help' && a !== '-h');
+  const switches = (TAKES[target].switches as readonly string[]).filter((f) => f !== '--help');
+  for (let i = 0; i < rest.length; i++) {
+    const flag = rest[i];
+    if (switches.includes(flag)) continue;
+    if ((target === 'layers' || target === 'painting') && !flag.startsWith('--')) continue;
+    if (!takesValued(target, flag)) return usage(notTaken(target, flag));
+    if (rest[i + 1] === undefined) return usage(`${flag} needs a value`);
+    i++;
+  }
+  console.log(commandUsage(target));
+  return EXIT_OK;
 }
 
 
@@ -2293,17 +2356,6 @@ function cmdBuild(args: string[]): number {
 }
 
 function cmdCompose(args: string[]): number {
-  const help = args.filter((a) => a === '--help' || a === '-h').length;
-  if (help > 1) return usage('--help is given twice');
-  if (help === 1) {
-    const rest = args.filter((a) => a !== '--help' && a !== '-h');
-    for (let i = 0; i < rest.length; i += 2) {
-      if (!takesValued('compose', rest[i])) return usage(notTaken('compose', rest[i]));
-      if (rest[i + 1] === undefined) return usage(`${rest[i]} needs a value`);
-    }
-    console.log(HELP.slice(HELP.indexOf('  rig-parts compose '), HELP.indexOf('\n\n  rig-parts painting ')));
-    return EXIT_OK;
-  }
   const f = flags(args, 'compose', ['--scene', '--out']);
   if (typeof f === 'string') return usage(f);
   const out = f.get('--out') as string;
@@ -2598,6 +2650,8 @@ function main(argv: string[]): number | Promise<number> {
     console.log(version());
     return EXIT_OK;
   }
+  const helped = maybeCommandHelp(command, rest);
+  if (helped !== null) return helped;
   if (command === 'diff-components') return cmdDiffComponents(rest);
   if (command === 'layers') return cmdLayers(rest);
   if (command === 'depth-prepare') return cmdDepthPrepare(rest);

@@ -5965,7 +5965,7 @@ function usageDrift(run: (args: string[]) => { status: number; out: string }, su
     const m = new RegExp(`^ {2}FAIL {2}USAGE: ${command} does not take "${bogus}"; it takes (.+) \\(see rig-parts guide USAGE\\)$`, 'm').exec(r.out);
     if (r.status !== 2 || m === null) faults.push(`${command} ${bogus} -> exit ${r.status}, "${r.out.split('\n')[0].trim()}"; a refusal listing the flags it takes was required`);
     const listed = m === null ? [] : m[1].split(', ');
-    const accepted = surface.flags.filter((f) => !run([...cmd, f]).out.includes(`does not take "${f}"`));
+    const accepted = surface.flags.filter((f) => (f !== '--help' || command === 'compose') && !run([...cmd, f]).out.includes(`does not take "${f}"`));
     faults.push(...listDrift(command, listed, accepted));
     return { command, listed, accepted };
   });
@@ -6567,6 +6567,8 @@ function runCliSuite(): number {
   const g7 = runCli(['guide', `§6.${sixSubs.length + 1}`]);
   const g8 = runCli(['guide']);
   const g9 = runCli(['guide', '--rule']);
+  const gHelp = runCli(['guide', '--help']);
+  const gShortHelp = runCli(['guide', '-h']);
   const g12 = runCli(['guide', '§0']);
   const sixHeading = guideLines.find((l) => l.startsWith('## 6. ')) ?? '(no ## 6.)';
   const okVerbatim =
@@ -6589,13 +6591,19 @@ function runCliSuite(): number {
   const okUnknown =
     g4.status === 1 && g4Fail.length === 1 && g4Split.stdout === '' &&
     /^ {2}FAIL {2}GUIDE_RULE_KNOWN: "CHECK_LOOP_CLOSE" — no row in docs\/AUTHORING\.md names it; the nearest: CHECK_LOOP_CLOSES, [A-Z_]+, [A-Z_]+ \(see rig-parts guide GUIDE_RULE_KNOWN\)$/.test(g4Fail[0]);
-  const okSections = okDeep && okVerbatim && g5.status === 0 && sixSubs.length > 0 && g5Listed.join('\n') === sixSubs.join('\n') && g6.status === 0 && g6.out.includes(`\n### ${sixSubs[sixSubs.length - 1]}\n`) && g7.status === 1 && g7.out.includes(`GUIDE_SECTION_KNOWN: "§6.${sixSubs.length + 1}" — no such section; the deepest that exists is §6 "`) && g8.status === 2 && g9.status === 2 && g9.out.includes('guide takes no flag');
+  const okGuideHelp =
+    gHelp.status === 0 &&
+    gShortHelp.status === 0 &&
+    gHelp.out === gShortHelp.out &&
+    gHelp.out.startsWith('  rig-parts guide <RULE | §<n> | §<n>.<m> | §<n>.<m>.<k>>\n') &&
+    gHelp.out.trimEnd().endsWith('Exit 0 printed, 1\n      refused, 2 usage.');
+  const okSections = okDeep && okVerbatim && g5.status === 0 && sixSubs.length > 0 && g5Listed.join('\n') === sixSubs.join('\n') && g6.status === 0 && g6.out.includes(`\n### ${sixSubs[sixSubs.length - 1]}\n`) && g7.status === 1 && g7.out.includes(`GUIDE_SECTION_KNOWN: "§6.${sixSubs.length + 1}" — no such section; the deepest that exists is §6 "`) && g8.status === 2 && g9.status === 2 && g9.out.includes('guide takes no flag') && okGuideHelp;
   const okPlants = 'lines' in plantedRow && plantedRow.lines.some((l) => l.includes('PLANTED WORDS')) && 'lines' in plantedSection && plantedSection.lines.join('\n').split('\n').includes(sixOne.trimEnd()) && near.length <= NEAREST_LISTED && near[0] === 'CHECK_LOOP_CLOSES';
   say(
     'CL167_GUIDE_PRINTS_THE_ONE_ROW_A_RULE_NAMES_ITS_PAIR_AND_SECTIONS_READ_FROM_THE_GUIDE_AT_CALL_TIME',
     okRow && okPair && okUnknown && okSections && okPlants,
     `guide CHECK_LOOP_CLOSES -> exit ${g1.status}, ${okRow ? 'where it is, then the row as the file holds it' : `"${g1.out.split('\n')[0]}"`}; CHECK_BREATH_VISIBLE and BREATH_VISIBLE -> exit ${g2.status}, ${g3.status}, ${okPair ? "each one's own row first, then \"paired with\" and its pair's" : 'NOT in that order or form'}` +
-      `; CHECK_LOOP_CLOSE -> exit ${g4.status}, stdout ${g4Split.stdout === '' ? 'empty' : 'NOT empty'}, ${(g4Fail[0] ?? 'no FAIL line').trim().slice(0, 200)}; §6 -> exit ${g5.status}, ${g5Listed.length} subsection(s) listed of the ${sixSubs.length} ### heading(s) under ## 6.; §6.${sixSubs.length} -> exit ${g6.status}; §6.${sixSubs.length + 1} -> exit ${g7.status}; no argument -> exit ${g8.status}; a flag -> exit ${g9.status}; §6's header carries its heading verbatim and §0 names the guide itself: ${okVerbatim}; the first #### by hand, ${deep === null ? 'none found' : `§${deep.address}`} -> exit ${g10?.status ?? '-'}, and its ### lists it: ${okDeep}` +
+      `; CHECK_LOOP_CLOSE -> exit ${g4.status}, stdout ${g4Split.stdout === '' ? 'empty' : 'NOT empty'}, ${(g4Fail[0] ?? 'no FAIL line').trim().slice(0, 200)}; §6 -> exit ${g5.status}, ${g5Listed.length} subsection(s) listed of the ${sixSubs.length} ### heading(s) under ## 6.; §6.${sixSubs.length} -> exit ${g6.status}; §6.${sixSubs.length + 1} -> exit ${g7.status}; no argument -> exit ${g8.status}; a flag -> exit ${g9.status}; --help/-h -> exit ${gHelp.status}/${gShortHelp.status} (equal=${gHelp.out === gShortHelp.out}); §6's header carries its heading verbatim and §0 names the guide itself: ${okVerbatim}; the first #### by hand, ${deep === null ? 'none found' : `§${deep.address}`} -> exit ${g10?.status ?? '-'}, and its ### lists it: ${okDeep}` +
       `; planted: words in the row -> ${okPlants ? 'printed' : 'NOT printed'}, a ### inserted before §6.1 -> the old §6.1 is §6.2; nearest to "check_loop_close": ${near.join(', ')}`,
     "issue #343: an agent reads a failure line and needs exactly the row that line names; the guide is one ledger, so every answer is a slice of the installed file taken when the command runs, and a name it does not hold is refused with real names, never a substitute row",
   );
@@ -6610,6 +6618,97 @@ function runCliSuite(): number {
     refusalLines.length === refusals.length && pointed.every((c) => c !== null) && answered.length > 0 && answered.every(({ r }) => r.status === 0) && !/\(see rig-parts guide [A-Z_]+\)$/.test('  FAIL  X_Y: o — d'),
     `${refusalLines.length} FAIL line(s) from ${refusals.length} refusing call(s): ${refusalLines.map((l, i) => `${pointed[i] === null ? 'NO POINTER' : 'pointer'} "${l.trim().slice(0, 90)}…"`).join(' | ')}; guide on each rule -> ${answered.map(({ c, r }) => `${c} exit ${r.status}`).join(', ')}`,
     "issue #343, in the form rig-c/core#1397 shares: a production consumer lost its time searching the guide for what a line's row already said (#321, #325); the line now says which command prints that row, and the command answers",
+  );
+
+  // CL227 — issue #1360: every command in cli.ts (and comfy with each of its subcommands) answers --help and -h with its own usage section.
+  const helpSurface1360 = cliSurface(readFileSync(join(ROOT, 'cli.ts'), 'utf8'));
+  const comfySubs1360 = /comfy takes ((?:[a-z]+, )*[a-z]+) or ([a-z]+);/.exec(runCli(['comfy']).out);
+  const helpTargets1360: string[][] = [
+    ...helpSurface1360.commands.map((c) => [c]),
+    ...(comfySubs1360 === null ? [] : [...comfySubs1360[1].split(', '), comfySubs1360[2]].map((s) => ['comfy', s])),
+  ];
+  const expectedSection1360 = (target: string): string => {
+    const end = helpText.indexOf('\n  rig-parts --version');
+    const lines = (end < 0 ? helpText : helpText.slice(0, end)).split('\n');
+    const head = `  rig-parts ${target} `;
+    const from = lines.findIndex((l) => l.startsWith(head));
+    if (from < 0) return '';
+    let to = lines.length;
+    for (let i = from + 1; i < lines.length; i++) {
+      if (lines[i].startsWith('  rig-parts ') && !lines[i].startsWith(head)) {
+        to = i;
+        break;
+      }
+    }
+    while (to > from && lines[to - 1] === '') to--;
+    return `${lines.slice(from, to).join('\n')}\n`;
+  };
+  const auditCommandHelp1360 = (runner: (args: string[]) => { status: number; out: string }): string[] => {
+    const faults: string[] = [];
+    for (const cmd of helpTargets1360) {
+      const name = cmd.join(' ');
+      const want = expectedSection1360(name);
+      if (want === '') {
+        faults.push(`${name}: no usage section in HELP`);
+        continue;
+      }
+      for (const flag of ['--help', '-h'] as const) {
+        const res = runner([...cmd, flag]);
+        if (res.status !== 0 || res.out !== want) {
+          faults.push(`${name} ${flag} -> exit ${res.status} (${res.out === want ? 'section matched' : `unexpected output "${res.out.split('\n')[0]?.trim() ?? ''}"`})`);
+        }
+      }
+    }
+    return faults;
+  };
+  const helpFaults1360 = auditCommandHelp1360((args) => runCli(args));
+  const plantedHelpFaults1360 = auditCommandHelp1360((args) =>
+    args[0] === 'check' ? { status: 2, out: '  FAIL  USAGE: check does not take "--help"\n' } : runCli(args),
+  );
+  say(
+    'CL227_EVERY_COMMAND_AND_COMFY_SUBCOMMAND_ANSWERS_HELP_AND_SHORT_H_WITH_ITS_OWN_USAGE_SECTION',
+    comfySubs1360 !== null &&
+      helpTargets1360.length === helpSurface1360.commands.length + 4 &&
+      helpFaults1360.length === 0 &&
+      plantedHelpFaults1360.length === 2 &&
+      plantedHelpFaults1360[0].startsWith('check --help -> exit 2') &&
+      plantedHelpFaults1360[1].startsWith('check -h -> exit 2'),
+    `${helpTargets1360.length} command target(s) (${helpSurface1360.commands.length} top-level + 4 comfy subcommands), both --help and -h: ${helpFaults1360.length === 0 ? 'all exit 0 with their own usage section' : helpFaults1360.join('; ')}; planted: check missing from the shared help path -> ${plantedHelpFaults1360.join(' | ')}`,
+    'issue #1360: one shared help path prints each command\'s own usage section and exits 0 on --help and -h before per-command flag parsing; a command missing from that path fails the loop on both spellings',
+  );
+
+  // CL228 — issue #1360: layers and painting treat -h as help even when a file literally named -h sits in cwd; ./-h reaches the file.
+  const dashHDir = join(dir, 'dash-h-1360');
+  const dashHLayers = join(dashHDir, 'layers-cwd');
+  const dashHPaint = join(dashHDir, 'paint-cwd');
+  mkdirSync(dashHLayers, { recursive: true });
+  mkdirSync(dashHPaint, { recursive: true });
+  writeWrapperFixture(join(dashHLayers, '-h'));
+  writeFileSync(join(dashHPaint, '-h'), encodePngBytes(paintFigure(PAINT_FIGURE)));
+  writeFileSync(join(dashHPaint, 'kp.json'), JSON.stringify(paintKeypointFile(paintJoints())));
+  const runInCwd1360 = (cwd: string, args: string[]): { status: number; out: string } => {
+    const r = spawnSync('bun', [join(ROOT, 'cli.ts'), ...args], { cwd, encoding: 'utf8' });
+    return { status: r.status ?? 1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+  };
+  const layersShortH = runInCwd1360(dashHLayers, ['layers', '-h']);
+  const layersDotSlash = runInCwd1360(dashHLayers, ['layers', './-h']);
+  const paintShortH = runInCwd1360(dashHPaint, ['painting', '-h']);
+  const paintWithKpShortH = runInCwd1360(dashHPaint, ['painting', '--keypoints', 'kp.json', '-h']);
+  const paintDotSlash = runInCwd1360(dashHPaint, ['painting', '--keypoints', 'kp.json', './-h']);
+  say(
+    'CL228_LAYERS_AND_PAINTING_TREAT_SHORT_H_AS_HELP_AND_REACH_A_LITERAL_DASH_H_FILE_VIA_DOT_SLASH',
+    layersShortH.status === 0 &&
+      layersShortH.out === expectedSection1360('layers') &&
+      layersDotSlash.status === 0 &&
+      layersDotSlash.out.includes('rig-parts layers: ComfyUI wrapper form, ./-h/layers.json') &&
+      paintShortH.status === 0 &&
+      paintShortH.out === expectedSection1360('painting') &&
+      paintWithKpShortH.status === 0 &&
+      paintWithKpShortH.out === expectedSection1360('painting') &&
+      paintDotSlash.status === 0 &&
+      paintDotSlash.out.includes('  PASS  the painting holds every requirement'),
+    `layers -h -> exit ${layersShortH.status} (usage=${layersShortH.out === expectedSection1360('layers')}); layers ./-h -> exit ${layersDotSlash.status} "${layersDotSlash.out.split('\n')[0]?.trim() ?? ''}"; painting -h -> exit ${paintShortH.status} (usage=${paintShortH.out === expectedSection1360('painting')}); painting --keypoints kp.json -h -> exit ${paintWithKpShortH.status}; painting --keypoints kp.json ./-h -> exit ${paintDotSlash.status}`,
+    'issue #1360: -h is help on every command, including layers and painting when a literal "-h" exists in the working directory; the literal path is reached as ./-h',
   );
 
   // CL169 — issue #359: the artist route from the command line. `layers --export` writes the wrapper form and says it
