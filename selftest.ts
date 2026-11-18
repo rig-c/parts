@@ -47497,6 +47497,24 @@ function runSceneSuite(): number {
         `wrong member ${codes(mismatch.err)}; input hashes unchanged ${JSON.stringify(before) === JSON.stringify(after)}`,
         'issue #1344: a bone existing elsewhere is not a member of this track, and composition never mutates its checked input');
     }
+    // #1344 review regression: idle is shared, including when a slider targets it.
+    {
+      writeSceneBuild(join(dir, 'idle-slider'), 'plain', { rig: r => {
+        r.constraints = [{ type: 'slider', name: 'idle_dial', animation: 'idle', bone: 'body', property: 'rotate', from: 0, to: 1, local: true }];
+      } });
+      const body = two({ characters: [{ id: 'plain', build: 'idle-slider', offset: [0, 20] }], order: ['plain'] });
+      const out = join(dir, 'idle-slider-out');
+      const run = runCli(['compose', '--scene', scene(body), '--out', out]);
+      const C = compose(body).ok;
+      const mutant = C === null ? null : structuredClone(C);
+      if (mutant !== null) (mutant.rig.constraints ?? []).find(c => c.type === 'slider')!.animation = 'bare_animation';
+      const caught = mutant === null ? [] : unprefixedNames(mutant.rig, mutant.motion, ['plain'], true);
+      say('SC63_SLIDER_IDLE_STAYS_SHARED_AND_COMPOSES_THROUGH_THE_GATE',
+        run.status === 0 && C !== null && (C.rig.constraints ?? []).find(c => c.type === 'slider')?.animation === 'idle' &&
+          Object.keys(C.motion.animations).join(',') === 'idle' && unprefixedNames(C.rig, C.motion, ['plain'], true).length === 0 && caught.some(x => x.includes('animation')),
+        `compose ${run.status}; slider ${String(C?.rig.constraints?.find(c => c.type === 'slider')?.animation)}; planted bare reference ${caught.join('; ')}; ${sceneBarLines(run.out, join(out, 'check'))}`,
+        'issue #1344: idle is the shared scene animation; only other animation names are prefixed, and a bare non-idle reference still fails totality');
+    }
     // #1344 widened: invoke the real rig command on the synthetic depth producer inputs.
     {
       const f = sceneTurnFixture(true);

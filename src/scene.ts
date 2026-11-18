@@ -1305,7 +1305,7 @@ export function composeScene(
         out[field] = arity === 'one' ? P(id, con[field] as string) : (con[field] as string[]).map((n) => P(id, n));
       }
       if (type === 'path' && typeof con.slot === 'string') out.slot = prefixed(id, con.slot);
-      if (type === 'slider' && typeof con.animation === 'string') out.animation = prefixed(id, con.animation);
+      if (type === 'slider' && typeof con.animation === 'string') out.animation = con.animation === 'idle' ? 'idle' : prefixed(id, con.animation);
       constraints.push(out);
     }
     for (const st of b.rig.stops ?? []) {
@@ -1511,7 +1511,7 @@ export function unprefixedNames(rig: RigSpec, motion: MotionSpec, ids: readonly 
       else if (Array.isArray(v)) for (const n of v) name(`constraint ${String(c.name)} ${field}`, n, false);
     }
     if (c.type === 'path') name(`constraint ${String(c.name)} slot`, c.slot, false);
-    if (c.type === 'slider') name(`constraint ${String(c.name)} animation`, c.animation, false);
+    if (c.type === 'slider' && c.animation !== 'idle') name(`constraint ${String(c.name)} animation`, c.animation, false);
   }
   for (const s of rig.stops ?? []) {
     name('stop chain', s.chain, false);
