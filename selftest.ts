@@ -8240,7 +8240,7 @@ export function runBoundaryDepthChecks(dir: string, say: (name: string, ok: bool
     const home = join(dir, label);
     const gate = spawnSync(process.execPath, [fileURLToPath(import.meta.resolve('@rig-c/core/cli')), 'build', '--rig', join(home, 'rig.json'), '--motion', join(home, 'motion.json'), '--out', join(home, 'built'), '--profile', 'rig-play'], { encoding: 'utf8', maxBuffer: 1 << 24 });
     writeFileSync(join(home, 'gate.log'), gate.stdout + gate.stderr);
-    say(`BD20_${label.toUpperCase().replaceAll('-', '_')}_EXISTING_GATE`, gate.status === 0, `exit ${gate.status}; ${gate.stdout}${gate.stderr}`);
+    say(`BD20_${label.toUpperCase().replaceAll('-', '_')}_EXISTING_GATE`, gate.status === 0, `exit ${gate.status}; ${(gate.stdout + gate.stderr).replace(/\s+/g, ' ').trim()}`);
   }
 }
 
