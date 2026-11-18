@@ -21,7 +21,7 @@
  *   `invariants.idleDrivesMeshes` and `invariants.detached`, every name kind
  *   compose has to prefix.
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseConfig } from '../src/config.ts';
 import { type PartsFile, serializeParts } from '../src/parts.ts';
@@ -134,4 +134,37 @@ export function writeFlatPlate(path: string, w: number, h: number, rgb: readonly
 /** A scene file's text: `spine-parts-scene/1` with the fields given, in the order the spec lists them. */
 export function sceneText(body: Record<string, unknown>): string {
   return `${JSON.stringify({ spec: 'spine-parts-scene/1', ...body }, null, 1)}\n`;
+}
+
+/** A real turn producer with a declared custom body dial and retained physics/deform idle payload. */
+export function writeSceneClipBuild(dir: string, bodySlider?: string): string {
+  const f = sceneTurnFixture();
+  if (bodySlider !== undefined) ((f.config.turn as { body: Record<string, unknown> }).body).slider = bodySlider;
+  f.config.constraints = [{ type: 'physics', name: 'cloth_physics', bone: 'cloth0', rotate: 1, inertia: 1, strength: 30, damping: 0.8, mass: 1, wind: 0, gravity: 0, mix: 1 }];
+  const out = buildRig(parseConfig(f.config), f.parts, f.images);
+  return writeSceneOutput(dir, out, f.parts, { motion: motion => {
+    const animations = motion.animations as Record<string, { duration: number; deform?: Array<{ slot: string; attachment: string; keys: Array<Record<string, unknown>> }> }>;
+    const deform = animations.turn.deform?.[0];
+    if (deform === undefined) throw new Error('scene clip fixture requires the real turn deform producer');
+    animations.idle.deform = [{ ...deform, keys: [
+      { t: 0, transform: { kind: 'yaw', degrees: 0, depth: true, narrowing: 0 } },
+      { t: animations.idle.duration, transform: { kind: 'yaw', degrees: 0, depth: true, narrowing: 0 } },
+    ] }];
+  } });
+}
+
+/** Authored schedules in final scene units: plate left/right/left and generated dials together. */
+export function sceneClip(duration: number, bodyDial = 'a:body_yaw_dial') {
+  return { duration, loop: true, tracks: [
+    { bone: 'plate', property: 'translate' as const, keys: [{ t: 0, v: [-3, 0] }, { t: duration / 2, v: [3, 0] }, { t: duration, v: [-3, 0] }] },
+    { bone: 'a:yaw_dial', property: 'rotate' as const, keys: [{ t: 0, v: [-4] }, { t: duration / 2, v: [4] }, { t: duration, v: [-4] }] },
+    { bone: bodyDial, property: 'rotate' as const, keys: [{ t: 0, v: [-2] }, { t: duration / 2, v: [2] }, { t: duration, v: [-2] }] },
+  ] };
+}
+
+/** Every emitted path under one fixed output root, for byte parity observations. */
+export function sceneOutputFiles(dir: string, prefix = ''): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(join(dir, prefix), { withFileTypes: true }).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+    .flatMap(e => e.isDirectory() ? sceneOutputFiles(dir, join(prefix, e.name)) : [join(prefix, e.name)]);
 }

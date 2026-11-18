@@ -754,7 +754,9 @@ import { FORK_SMOOTH_MAX_INFLUENCES, smoothForkShares } from './src/rig.ts';
 import { type AttachmentSetsFile, blinkHoldProblems, buildRig as originalBuildRig, influenceReachHolds, DEFAULT_IDLE_KEYS, expandSetAttachmentKeys, FACE_TIPS_AXIS_NAME, HEAD_UP_BONE, flattenRig, IDLE_DRIVES_MESHES_WHY, type MeshAttachment, PAD, type RegionAttachment, rigJsonText, type RigOutput, type RigSpec, roundShares, tipRoundingBound, writtenShares } from './src/rig.ts';
 import { readEditorReceipts } from './src/editreceipt.ts';
 import { type ComposedScene, composeFromFiles, composeStage, IMAGE_SEP, PLATE, PLATE_IMAGE, PREFIX_SEP, SCENE_REPORT_FILE, SCENE_SPEC, scaledConstraint, scaledStop, unprefixedNames, plateImageName } from './src/scene.ts';
-import { sceneCharacterRig, sceneText, writeFlatPlate, writeSceneBuild, writeTurnSceneBuild, sceneTurnFixture, sceneFoldProducerFixture, writeSceneProducerInput } from './fixtures/scene.ts';
+import { mergeSceneAnimations, readSceneAnimations, sceneClipLoopProblems, scenePoseState, sceneKeyedModel } from './src/sceneclips.ts';
+import { poseRawAnimation } from '@rig-c/core/core';
+import { sceneOutputFiles, sceneClip, writeSceneClipBuild, sceneCharacterRig, sceneText, writeFlatPlate, writeSceneBuild, writeTurnSceneBuild, sceneTurnFixture, sceneFoldProducerFixture, writeSceneProducerInput } from './fixtures/scene.ts';
 import { localInfluences, regionWeight } from './src/localweights.ts';
 import { boneHeat as solveBoneHeat, HEAT_MAX_ITERATIONS, HEAT_SOURCE_BAND, HEAT_TOLERANCE, latticeSilhouette } from './src/heat.ts';
 import { influences } from './src/weights.ts';
@@ -46442,6 +46444,230 @@ function runSceneSuite(): number {
       return { ok, err };
     };
     const has = (err: PartsError | null, code: string, text = ''): boolean => err !== null && err.problems.some((p) => p.code === code && problemLine(p).includes(text));
+
+    // Scene animation controls (#1346): names allocated after the live SC01..SC75 scan.
+    {
+      const why = 'issue #1346: declared final names, additive idle, Core refusals and posed endpoint closure before emission';
+      writeSceneClipBuild(join(dir, 'clip-character'));
+      writeSceneClipBuild(join(dir, 'custom-clip-character'), 'torso_control');
+      const body = (animations?: Record<string, unknown>, build = 'clip-character') => two({
+        canvas: { width: 100, height: 60 },
+        characters: [{ id: 'a', build, offset: [0, 0] }], order: ['a'],
+        ...(animations === undefined ? {} : { animations }),
+      });
+      const authored = sceneClip(2);
+      const baseline = compose(body()).ok;
+      const extended = compose(body({ idle: authored })).ok;
+      const separate = compose(body({ take: sceneClip(4) })).ok;
+      const out = join(dir, 'scene-clips-out');
+      // Real Core gate and packed model; keep both the idle extension and separate-duration clip.
+      const green = runCli(['compose', '--scene', scene(body({ idle: authored, take: sceneClip(4) })), '--out', out]);
+      const modelFile = join(out, 'check', 'build', 'skeleton.model.json');
+      const modelText = existsSync(modelFile) ? readFileSync(modelFile, 'utf8') : null;
+      const posed = modelText === null ? [] : poseRawAnimation(sceneKeyedModel(modelText).doc, 'take', [2, 2]);
+      const bone = (i: number, name: string) => posed[i]?.bones.find(b => b.name === name);
+      const angle = (i: number, name: string) => {
+        const b = bone(i, name); return b === undefined ? NaN : Math.atan2(b.c, b.a) * 180 / Math.PI;
+      };
+      const close = (a: number, b: number) => Math.abs(a - b) < 0.00001;
+      say('SC76_SCENE_KEYS_POSE_PLATE_AND_GENERATED_DIALS_AT_START_TURNAROUND_RETURN',
+        green.status === 0 && posed.length === 3 && [0, 1, 2].every(i =>
+          close(bone(i, 'plate')?.worldX ?? NaN, [-3, 3, -3][i]) &&
+          close(angle(i, 'a:yaw_dial'), [-4, 4, -4][i]) && close(angle(i, 'a:body_yaw_dial'), [-2, 2, -2][i])) &&
+          posed.map(p => p.animationTime).join(',') === '0,2,4',
+        `compose ${green.status}; samples ${posed.map(p => p.animationTime)}; plate ${posed.map((_, i) => bone(i, 'plate')?.worldX)}; yaw ${posed.map((_, i) => angle(i, 'a:yaw_dial'))}; body ${posed.map((_, i) => angle(i, 'a:body_yaw_dial'))}`, why);
+      const baseIdle = baseline?.motion.animations.idle as unknown as { tracks: unknown[]; deform?: unknown } | undefined;
+      const addedIdle = extended?.motion.animations.idle as unknown as { tracks: unknown[]; deform?: unknown } | undefined;
+      say('SC77_IDLE_APPENDS_WITHOUT_CHANGING_CHARACTER_TRACKS_DEFORMS_OR_PHYSICS',
+        baseline !== null && extended !== null && baseIdle !== undefined && addedIdle !== undefined &&
+          JSON.stringify(addedIdle.tracks.slice(0, baseIdle.tracks.length)) === JSON.stringify(baseIdle.tracks) &&
+          addedIdle.tracks.length === baseIdle.tracks.length + authored.tracks.length &&
+          JSON.stringify(addedIdle.deform) === JSON.stringify(baseIdle.deform) && baseIdle.deform !== undefined &&
+          rigJsonText(baseline.rig) === rigJsonText(extended.rig) && (extended.rig.constraints ?? []).some(c => c.type === 'physics'),
+        `original tracks ${baseIdle?.tracks.length}; extended ${addedIdle?.tracks.length}; deforms ${baseIdle?.deform !== undefined}; physics ${(extended?.rig.constraints ?? []).filter(c => c.type === 'physics').length}`, why);
+      say('SC78_NEW_SCENE_CLIP_KEEPS_ITS_OWN_DURATION_AND_CHARACTER_IDLE',
+        baseline !== null && separate !== null && rigJsonText(separate.motion.animations.idle) === rigJsonText(baseline.motion.animations.idle) &&
+          (separate.motion.animations.take as { duration: number }).duration === 4 && separate.motion.animations.idle.duration === 2 &&
+          modelText !== null && sceneClipLoopProblems(modelText, { take: sceneClip(4) }).length === 0 &&
+          posed.length === 3 && scenePoseState(posed[0]) === scenePoseState(posed[2]),
+        `idle ${separate?.motion.animations.idle.duration}; take ${(separate?.motion.animations.take as { duration?: number } | undefined)?.duration}; posed endpoints ${posed.length === 3 && scenePoseState(posed[0]) === scenePoseState(posed[2])}`, why);
+      const runRed = (key: string, animations: Record<string, unknown>, build?: string) => {
+        const target = join(dir, `clip-red-${key}`);
+        const run = runCli(['compose', '--scene', scene(body(animations, build)), '--out', target]);
+        return { ...run, empty: !existsSync(join(target, 'rig')) && !existsSync(join(target, SCENE_REPORT_FILE)) };
+      };
+      const nonclosing = sceneClip(2); nonclosing.tracks[0].keys[2].v = [1, 0];
+      const badIdle = runRed('idle-loop', { idle: nonclosing }), badTake = runRed('take-loop', { take: nonclosing });
+      say('SC79_BOTH_SCENE_CLIP_FORMS_REFUSE_NONCLOSING_POSED_ENDPOINTS_BEFORE_EMIT',
+        [badIdle, badTake].every(r => r.status === 1 && r.empty && r.out.includes('SCENE_ANIMATION_LOOP_CLOSES')) && green.status === 0,
+        `idle ${badIdle.status}/${badIdle.empty}; take ${badTake.status}/${badTake.empty}; positive ${green.status}`, why);
+      const absentDials = ['a:yaw_dial', 'a:pitch_dial', 'a:body_yaw_dial'].map((bone, i) => ({ bone,
+        run: runRed(`absent-dial-${i}`, { take: { duration: 2, tracks: [{ bone, property: 'rotate', keys: [{ t: 0, v: [0] }, { t: 2, v: [0] }] }] } }, 'plain'),
+      }));
+      const custom = compose(body({ take: sceneClip(2, 'a:torso_control') }, 'custom-clip-character'));
+      const customOut = join(dir, 'custom-clip-out');
+      const customRun = runCli(['compose', '--scene', scene(body({ take: sceneClip(2, 'a:torso_control') }, 'custom-clip-character')), '--out', customOut]);
+      say('SC80_ABSENT_DIAL_USES_CORE_UNKNOWN_BONE_AND_NAMES_CHARACTER_CUSTOM_DIAL_RESOLVES',
+        absentDials.every(({ bone, run }) => run.status === 1 && run.empty && run.out.includes('CE_COMPILE_ANIMATION_BONE_UNKNOWN') && run.out.includes(bone) && run.out.includes('character "a"')) && custom.err === null && customRun.status === 0,
+        `absent ${absentDials.map(({ bone, run }) => `${bone}:${run.status}/${run.empty}`).join(', ')}; custom ${customRun.status}/${codes(custom.err)}`, why);
+      const limits = baseline?.rig.constraints?.filter(c => c.type === 'slider' && ['a:yaw_dial', 'a:pitch_dial', 'a:body_yaw_dial'].includes(String(c.bone))) ?? [];
+      const rangePlants = limits.map(c => {
+        const track = (v: number) => ({ duration: 2, tracks: [{ bone: c.bone, property: c.property, keys: [{ t: 0, v: [v] }, { t: 2, v: [v] }] }] });
+        const low = compose(body({ take: track(c.from as number) })), high = compose(body({ take: track(c.max as number) }));
+        const red = compose(body({ take: track((c.max as number) + 1) }));
+        return low.err === null && high.err === null && has(red.err, 'SCENE_DIAL_KEY_RANGE', `value ${(c.max as number) + 1} is outside declared range [${String(c.from)}, ${String(c.max)}]`) && has(red.err, 'SCENE_DIAL_KEY_RANGE', String(c.bone));
+      });
+      say('SC81_EACH_GENERATED_DIAL_ACCEPTS_OWN_DECLARED_BOUNDS_AND_REFUSES_OUTSIDE_VALUES',
+        limits.length === 3 && rangePlants.every(Boolean), `sliders ${limits.map(c => `${String(c.bone)}=[${String(c.from)},${String(c.max)}]`).join('; ')}; paired controls ${rangePlants}`, why);
+      const missingRangeBuild = writeSceneBuild(join(dir, 'missing-range'), 'plain', { rig: r => {
+        (r.bones as Array<Record<string, unknown>>).push({ name: 'dial', parent: 'root' });
+        r.constraints = [{ type: 'slider', name: 'unbounded', bone: 'dial', property: 'rotate', animation: 'idle', from: -1 }];
+      } });
+      const missingRange = compose(body({ take: { duration: 2, tracks: [{ bone: 'a:dial', property: 'rotate', keys: [{ t: 0, v: [0] }, { t: 2, v: [0] }] }] } }, missingRangeBuild));
+      say('SC82_UNREADABLE_SLIDER_RANGE_REFUSES_WITHOUT_INVENTING_LIMITS', has(missingRange.err, 'SCENE_DIAL_RANGE_DECLARED', 'max undefined') && rangePlants.every(Boolean), codes(missingRange.err), why);
+      const duplicate = sceneClip(2); duplicate.tracks.push(structuredClone(duplicate.tracks[0]));
+      const duplicateRun = runRed('duplicate', { take: duplicate });
+      const collision = { duration: 2, tracks: [{ bone: 'a:head', property: 'rotate', keys: [{ t: 0, v: [0] }, { t: 2, v: [0] }] }] };
+      const idleCollision = runRed('idle-collision', { idle: collision });
+      say('SC83_DUPLICATE_AND_IMPORTED_IDLE_PROPERTY_COLLISIONS_KEEP_CORE_CODE',
+        [duplicateRun, idleCollision].every(r => r.status === 1 && r.empty && r.out.includes('CE_COMPILE_ANIMATION_TRACK_DUPLICATE')) && green.status === 0,
+        `duplicate ${duplicateRun.status}; idle collision ${idleCollision.status}; green ${green.status}`, why);
+      const badTime = sceneClip(2); badTime.tracks[0].keys[1].t = 3;
+      const timeRun = runRed('bad-time', { take: badTime });
+      const duration = compose(body({ idle: sceneClip(4) }));
+      say('SC84_BAD_TIMES_USE_CORE_REFUSAL_IDLE_DURATION_MISMATCH_NEVER_RETIMES',
+        timeRun.status === 1 && timeRun.empty && timeRun.out.includes('CE_COMPILE_KEY_AFTER_DURATION') && has(duration.err, 'SCENE_DURATION_AGREES', 'is 4; composed idle declares 2') && extended !== null,
+        `bad time ${timeRun.status}; mismatch ${codes(duration.err)}; positive idle ${extended !== null}`, why);
+      writeSceneBuild(join(dir, 'unknown-animation'), 'plain', { rig: r => {
+        r.constraints = [{ type: 'slider', name: 'test_slider', animation: 'ghost_animation', bone: 'body', property: 'rotate', from: -1, max: 1 }];
+      } });
+      // The existing character admission also resolves this reference; Core's code is tested on the final rig below.
+      const referenceRig = baseline === null ? null : structuredClone(baseline.rig);
+      if (referenceRig !== null) (referenceRig.constraints ?? []).find(c => c.type === 'slider')!.animation = 'ghost_animation';
+      const referenceLines: string[] = [];
+      if (baseline !== null && referenceRig !== null) {
+        const ref = join(dir, 'reference-gate');
+        mkdirSync(join(ref, 'images'), { recursive: true });
+        for (const [name, bytes] of baseline.images) writeFileSync(join(ref, 'images', name), bytes);
+        writeFileSync(join(ref, 'rig.json'), rigJsonText(referenceRig)); writeFileSync(join(ref, 'motion.json'), rigJsonText(baseline.motion));
+        referenceLines.push(rigcRunnerAt(suiteRigc(), spawnRigc)(['build', '--rig', join(ref, 'rig.json'), '--motion', join(ref, 'motion.json'), '--out', join(ref, 'build'), '--profile', 'rig-play']).out);
+      }
+      const unknownReference = compose(body({ take: sceneClip(2) }, 'unknown-animation'));
+      say('SC85_UNKNOWN_ANIMATION_REFERENCES_ARE_NAMED_WITH_POSITIVE_COMPANION',
+        has(unknownReference.err, 'SCENE_NAME_RESOLVES', 'ghost_animation') && referenceLines.some(l => l.includes('CE_COMPILE_SLIDER_ANIMATION_UNKNOWN') && l.includes('ghost_animation')) && green.status === 0,
+        `reader ${codes(unknownReference.err)}; Core ${referenceLines.some(l => l.includes('CE_COMPILE_SLIDER_ANIMATION_UNKNOWN'))}; green ${green.status}`, why);
+      const invalid = [
+        { take: { tracks: [] } }, { take: { duration: 2 } },
+        { take: { duration: 2, tracks: [{ bone: 'plate', property: 'translate' }] } },
+        { take: { duration: 2, tracks: [{ bone: 'plate', property: 'translate', keys: [{ v: [0, 0] }] }] } },
+      ].map(animations => compose(body(animations)));
+      const missingValue = runRed('missing-value', { take: { duration: 2, tracks: [{ bone: 'plate', property: 'translate', keys: [{ t: 0 }, { t: 2, v: [0, 0] }] }] } });
+      say('SC86_MISSING_DURATION_KEYS_VALUES_AND_TIMES_ARE_CORE_NAMED_REFUSALS',
+        invalid.every(r => r.err !== null && r.err.problems.some(p => p.code === 'CE_MOTION_FIELD_SHAPE')) && missingValue.status === 1 && missingValue.empty && missingValue.out.includes('CE_COMPILE_TIMELINE_VALUE_CHANNEL_COUNT') && separate !== null,
+        invalid.map(r => codes(r.err)).join('; ') + `; missing value ${missingValue.status}`, why);
+      const legacyPath = scene(body()); const legacyOut = join(dir, 'clips-legacy-parity');
+      const first = runCli(['compose', '--scene', legacyPath, '--out', legacyOut]);
+
+      const files = sceneOutputFiles(legacyOut);
+      const firstBytes = files.map(p => readFileSync(join(legacyOut, p)));
+      writeFileSync(legacyPath, sceneText(body({})));
+      const again = runCli(['compose', '--scene', legacyPath, '--out', legacyOut]);
+      const same = files.length > 0 && JSON.stringify(files) === JSON.stringify(sceneOutputFiles(legacyOut)) && files.every((p, i) => firstBytes[i].equals(readFileSync(join(legacyOut, p))));
+      say('SC87_ABSENT_DECLARATION_RETAINS_SAME_PATH_OUTPUT_BYTES_AND_PREFIX_AUDIT',
+        first.status === 0 && again.status === 0 && same && extended !== null &&
+          unprefixedNames(extended.rig, extended.motion, ['a'], true, [], ['idle']).length === 0 &&
+          separate !== null && unprefixedNames(separate.rig, separate.motion, ['a'], true, [], ['take']).length === 0,
+        `legacy ${first.status}/${again.status}; files ${files.length}; byte equal ${same}`, why);
+      say('SC88_SCENE_CLIP_CANNOT_REPLACE_IMPORTED_ANIMATION',
+        has(compose(body({ 'a:turn': sceneClip(2) })).err, 'SCENE_ANIMATION_NAME_FREE', 'a:turn') && separate !== null,
+        'imported clip name refused; separate scene name accepted', why);
+      const delayed = { duration: 2, loop: false, tracks: [{ bone: 'plate', property: 'translatex', keys: [{ t: 0.5, v: [3] }, { t: 2, v: [3] }] }] };
+      const delayedRun = runRed('delayed-start', { take: delayed });
+      say('SC89_CLOSURE_READS_POSES_BEFORE_FIRST_KEY_AND_LOOP_FALSE_DOES_NOT_BYPASS',
+        delayedRun.status === 1 && delayedRun.empty && delayedRun.out.includes('SCENE_ANIMATION_LOOP_CLOSES') && green.status === 0,
+        `equal raw key values; delayed-start exit ${delayedRun.status}; no emission ${delayedRun.empty}; positive ${green.status}`, why);
+      const authoringClips = readFileSync(join(ROOT, 'docs/AUTHORING.md'), 'utf8');
+      const stabilityClips = readFileSync(join(ROOT, 'docs/STABILITY.md'), 'utf8');
+      say('SC90_AUTHORING_AND_STABILITY_PROMISE_GENERATED_NAMES_WITH_MAJOR_RENAME',
+        [authoringClips, stabilityClips].every(text => ['<id>:yaw_dial', '<id>:pitch_dial', '<id>:<turn.body.slider>', '<id>:body_yaw_dial', 'SCENE_DIAL_KEY_RANGE', 'SCENE_ANIMATION_LOOP_CLOSES'].every(token => text.includes(token)) && /renaming[\s\S]{0,60}major/.test(text)),
+        'both feature rows describe final names, declared bounds and posed closure', why);
+      const unreadable = modelText === null ? [] : sceneClipLoopProblems(modelText, { absent_animation: sceneClip(2) });
+      say('SC91_UNREADABLE_CORE_POSE_REFUSES_BY_NAME_WITH_READABLE_COMPANION',
+        unreadable.some(p => p.code === 'SCENE_ANIMATION_POSE_READABLE' && p.detail.includes('absent_animation')) &&
+          modelText !== null && sceneClipLoopProblems(modelText, { take: sceneClip(4) }).length === 0,
+        `unreadable ${unreadable.map(p => p.code).join(',')}; readable model ${modelText !== null}`, why);
+      const idlePoses = modelText === null ? [] : poseRawAnimation(sceneKeyedModel(modelText).doc, 'idle', [1, 1]);
+      const idleBone = (i: number, name: string) => idlePoses[i]?.bones.find(b => b.name === name);
+      const idleAngle = (i: number, name: string) => {
+        const b = idleBone(i, name); return b === undefined ? NaN : Math.atan2(b.c, b.a) * 180 / Math.PI;
+      };
+      say('SC92_EXTENDED_IDLE_POSES_MATCH_AUTHORED_PLATE_AND_DIAL_KEYS',
+        idlePoses.length === 3 && [0, 1, 2].every(i =>
+          close(idleBone(i, 'plate')?.worldX ?? NaN, [-3, 3, -3][i]) &&
+          close(idleAngle(i, 'a:yaw_dial'), [-4, 4, -4][i]) && close(idleAngle(i, 'a:body_yaw_dial'), [-2, 2, -2][i])) &&
+          idlePoses.map(p => p.animationTime).join(',') === '0,1,2',
+        `idle samples ${idlePoses.map(p => p.animationTime)}; authored duration ${authored.duration}`, why);
+      const deriveDial = (withValue: boolean) => ({ duration: 2, tracks: [{ bone: 'a:yaw_dial', property: 'rotate', keys: [0, 2].map(t => ({
+        t, ...(withValue ? { v: [0] } : {}), derive: { kind: 'yaw', degrees: 90, depth: 100 },
+      })) }] });
+      const derivedDials = [false, true].map(withValue => compose(body({ take: deriveDial(withValue) })));
+      say('SC93_DIAL_DERIVE_IS_NAMED_UNSUPPORTED_EVEN_WITH_IN_RANGE_RAW_VALUE',
+        derivedDials.every(r => has(r.err, 'SCENE_DIAL_KEY_DECLARED', 'a:yaw_dial') && has(r.err, 'SCENE_DIAL_KEY_DECLARED', 'explicit numeric v')) && separate !== null,
+        `derive alone / derive plus v: ${derivedDials.map(r => codes(r.err)).join('; ')}; numeric companion ${separate !== null}`, why);
+      const groupedDial = (value: number, derive = false) => {
+        if (baseline === null) return null;
+        const candidate = structuredClone(baseline);
+        candidate.motion.groups['a:scene_dials'] = ['a:yaw_dial'];
+        return refusals(() => mergeSceneAnimations(candidate.rig, candidate.motion, readSceneAnimations({ take: { duration: 2, tracks: [{
+          group: 'a:scene_dials', property: 'rotate', keys: [0, 2].map(t => ({ t, v: { 'a:yaw_dial': [value] },
+            ...(derive ? { derive: { kind: 'yaw', degrees: 90, depth: { 'a:yaw_dial': 100 } } } : {}),
+          })),
+        }] } }, 'synthetic scene')));
+      };
+      const yawBounds = limits.find(c => c.bone === 'a:yaw_dial');
+      const groupRed = yawBounds === undefined ? null : groupedDial((yawBounds.max as number) + 1);
+      const groupGreen = yawBounds === undefined ? null : groupedDial(yawBounds.max as number);
+      say('SC94_KNOWN_DIAL_GROUP_CHECKS_MEMBER_RANGE_AND_REFUSES_DERIVE_WITH_POSITIVE',
+        baseline !== null && yawBounds !== undefined && groupGreen === null && has(groupRed, 'SCENE_DIAL_KEY_RANGE', 'a:yaw_dial') &&
+          has(groupedDial(0, true), 'SCENE_DIAL_KEY_DECLARED', 'a:yaw_dial'),
+        `group range ${codes(groupRed)}; numeric ${codes(groupGreen)}; derived ${codes(groupedDial(0, true))}`, why);
+
+      const groupMisses = ['constructor', 'toString', '__proto__', 'absent_group'].map(group => ({ group, result: compose(body({ take: { duration: 2, tracks: [{
+        group, property: 'rotate', keys: [{ t: 0, v: [0] }, { t: 2, v: [0] }],
+      }] } })) }));
+      say('SC95_INHERITED_AND_UNKNOWN_GROUP_NAMES_REFUSE_WITH_CORE_CODE',
+        groupMisses.every(({ group, result }) => has(result.err, 'CE_COMPILE_ANIMATION_GROUP_UNKNOWN', `unknown group "${group}"`)) &&
+          baseline !== null && groupGreen === null,
+        `misses ${groupMisses.map(({ group, result }) => `${group}:${codes(result.err)}`).join('; ')}; own group numeric ${codes(groupGreen)}`, why);
+      const channels = [
+        ['rotate', 'rotate', 0, 1], ['x', 'translatex', 0, 1], ['x', 'translate', 0, 2],
+        ['y', 'translatey', 0, 1], ['y', 'translate', 1, 2],
+        ['scaleX', 'scalex', 0, 1], ['scaleX', 'scale', 0, 2],
+        ['scaleY', 'scaley', 0, 1], ['scaleY', 'scale', 1, 2],
+        ['shearY', 'sheary', 0, 1], ['shearY', 'shear', 1, 2],
+      ] as const;
+      const channelReadings = channels.map(([source, property, channel, width]) => {
+        const probe = (value: number, derive = false) => {
+          if (baseline === null) return null;
+          const candidate = structuredClone(baseline);
+          candidate.rig.constraints ??= [];
+          candidate.rig.constraints.push({ type: 'slider', name: 'a:range_probe', bone: 'a:yaw_dial', property: source, from: -2, max: 2, animation: 'a:turn', local: true });
+          const values = Array.from({ length: width }, (_, i) => i === channel ? value : 99);
+          return refusals(() => mergeSceneAnimations(candidate.rig, candidate.motion, readSceneAnimations({ take: { duration: 2, tracks: [{
+            bone: 'a:yaw_dial', property, keys: [0, 2].map(t => ({ t, v: values, ...(derive ? { derive: { kind: 'yaw', degrees: 90, depth: 100 } } : {}) })),
+          }] } }, 'synthetic scene')));
+        };
+        const low = probe(-2), high = probe(2), below = probe(-3), above = probe(3), derived = probe(0, true);
+        return { source, property, channel, ok: baseline !== null && low === null && high === null &&
+          has(below, 'SCENE_DIAL_KEY_RANGE', 'value -3 is outside declared range [-2, 2]') &&
+          has(above, 'SCENE_DIAL_KEY_RANGE', 'value 3 is outside declared range [-2, 2]') &&
+          has(derived, 'SCENE_DIAL_KEY_DECLARED', 'a:range_probe') };
+      });
+      say('SC96_ALL_SLIDER_INPUT_CHANNELS_CHECK_OWN_BOUNDS_AND_REFUSE_DERIVE',
+        channelReadings.every(r => r.ok), channelReadings.map(r => `${r.source}/${r.property}[${r.channel}]:${r.ok}`).join('; '), why);
+
+
+    }
 
     // BEGIN named plate controls (#1345); also extracted unchanged for the narrow pool sample.
     {

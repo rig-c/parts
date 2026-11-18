@@ -6429,7 +6429,14 @@ and stay absent).
 | <a id="SCENE_BUILD_FIELD_KNOWN"></a>`SCENE_BUILD_FIELD_KNOWN` | a build's `rig.json` or `motion.json` carries a key compose does not know how to prefix or place, or a root with a transform of its own | a rig `build` wrote; a rig written by something else is `check`'s to measure (§7, *Measuring a rig rig-parts did not assemble*), not compose's to merge |
 | <a id="SCENE_RIG_SCALE_AGREES"></a>`SCENE_RIG_SCALE_AGREES` | the characters' `parts.json` `scale_rig_per_source` differ (each named) | one `assemble.rig_scale` for every character; `characters[].scale` sizes a placed character, it does not make two `rig_scale`s one |
 | <a id="SCENE_SCALE_EXACT"></a>`SCENE_SCALE_EXACT` | a character at a `scale` other than 1 carries something no per-character value can scale: a physics constraint with a nonzero `wind` or `gravity` (Spine applies both through the skeleton's `referenceScale`, which the composed skeleton holds once for every character), a track whose `property` compose does not know to be a length or not, or a translate key whose `v` is neither a list of numbers nor a map of them | `scale` 1 for that character, or rebuild it at another `assemble.rig_scale` |
-| <a id="SCENE_DURATION_AGREES"></a>`SCENE_DURATION_AGREES` | the characters' idles are of different durations (each named) | one `motion.duration` |
+| <a id="SCENE_DURATION_AGREES"></a>`SCENE_DURATION_AGREES` | the characters' idles are of different durations (each named), or `scene.animations.idle.duration` differs from the composed idle | declare the same duration; compose never stretches or retimes either side |
+| <a id="CE_COMPILE_ANIMATION_GROUP_UNKNOWN"></a>`CE_COMPILE_ANIMATION_GROUP_UNKNOWN` | a scene track names no own declared group, including inherited object names such as `constructor` | name an explicitly declared final group; prototype properties are not groups |
+| <a id="SCENE_ANIMATION_NAME_FREE"></a>`SCENE_ANIMATION_NAME_FREE` | a scene clip name already belongs to an imported character animation | choose a new name; only shared `idle` can be extended |
+| <a id="SCENE_DIAL_RANGE_DECLARED"></a>`SCENE_DIAL_RANGE_DECLARED` | a keyed slider has no readable explicit `from` and `max` bounds, or its bounds are reversed; the bone and slider are named | declare both finite bounds with `from <= max`; no limits are invented |
+| <a id="SCENE_DIAL_KEY_RANGE"></a>`SCENE_DIAL_KEY_RANGE` | a scene key on a slider input is outside that slider's declared range; the message names the bone, slider, key time, found value and range | author the value inside its own declared `[from, max]` bounds |
+| <a id="SCENE_DIAL_KEY_DECLARED"></a>`SCENE_DIAL_KEY_DECLARED` | a scene key uses `derive` on a slider's input property, including one that also carries a raw `v`; derived slider inputs are not a supported scene dial dialect | declare an explicit numeric `v` for the named dial, within the named slider's own range; group member values are checked separately |
+| <a id="SCENE_ANIMATION_LOOP_CLOSES"></a>`SCENE_ANIMATION_LOOP_CLOSES` | the gated posed samples at 0 and the scene clip's declared duration differ, for a new clip or an idle extension | close the posed bone, slot, geometry, alpha, clip and draw-order state; comparison omits physics simulation only and never wraps the endpoint to zero |
+| <a id="SCENE_ANIMATION_POSE_READABLE"></a>`SCENE_ANIMATION_POSE_READABLE` | Core cannot read or pose the compiled scene clip for its endpoint comparison | correct the construct named by Core; unreadable poses never count as closed and no scene is emitted |
 | <a id="SCENE_CHARACTER_INSIDE_CANVAS"></a>`SCENE_CHARACTER_INSIDE_CANVAS` | a character's part boxes, placed at its offset, leave the canvas (the boxes and the canvas px quoted) | the offset, or the canvas |
 | <a id="SCENE_ORDER_RESOLVES"></a>`SCENE_ORDER_RESOLVES` | an order entry names no character, or `<id>:<slot>` names a slot that character does not have (its slots listed) | the entry |
 | <a id="SCENE_ORDER_ONCE"></a><a id="SCENE_ORDER_COMPLETE"></a>`SCENE_ORDER_ONCE`, `SCENE_ORDER_COMPLETE` | a slot is drawn twice (a slot entry repeated, or an id listed twice), or never (the character's id is absent and some of its slots are named nowhere — they are listed) | name each slot once, or the id for the slots not named elsewhere |
@@ -7199,6 +7206,7 @@ single-character path (§4, steps 0–9) on its own, already isolated input to a
 | `plates[].name` | the layer's bone, slot and attachment name and exact `order` token. Names must be unique, nonempty and distinct from `root`, legacy `plate`, shared `idle`, every character id and every prefixed character bone/slot/animation (`SCENE_PLATE_NAME_UNIQUE`, `SCENE_PLATE_NAME_FREE`). Images use `scene-plate.<declaration-index>.png`, separately from character images; any collision is `SCENE_IMAGE_NAME_FREE` |
 | `characters[].scale` | optional, a positive number; absent is 1, and 1 composes to the bytes a scene without the key writes. The character's size on the canvas, about its stage's top-left corner: a rig px `p` lands at canvas px `scale * p + offset` (issue #197). A character scaled up past its art is drawn soft — the art is not resampled; rebuild it at a higher `assemble.rig_scale` if that matters |
 | `characters[].accept` | optional, a list of bar names: the bars this character's own check may have failed and still be composed (issue #203). `compose --accept <bar>[,<bar>…]` is the same list for every character; the two are joined, so the command line applies to every character and a character's list adds to it. Each name is one of the bars `check`'s summary names, less the gate — `loop`, `seam`, `BREATH_VISIBLE`, `BLINK_NO_HOLE`, `CHAIN_LAG`, `TIP_OVER_ROOT`, `STILL_REGIONS_DARK`, `TEXTURE_STRETCH`, `ANIMATIONS_DO_NOT_FOLD` (issue #320), `STRESS_OFF_CHAIN` (issue #347), `SEAM_OVER_MOTION` (the body-root bar, issue #686); anything else is `SCENE_ACCEPT_KNOWN`. A build is taken when every bar its `check.json` failed is named; its gate red, a declared requirement not PASS, or a bar not named is `SCENE_BUILD_GREEN` as before. **It is for looking, not for shipping:** the `[compose]` line says which failing bars were accepted, `scene.json` records them as the character's `accepted`, the composed rig's own check measures them again and reports them as it finds them, and the run exits 1 even when that check is PASS (a composed rig has no `parts.json`, so the seam and four judgement lines say SKIP there). A list that accepts nothing — every build green — composes to the bytes a scene without one writes |
+| `animations` | optional map by scene clip name, each value a rigc `MotionAnimation` (`duration`, `tracks`, optional `loop`, `note`, and core timeline collections). Names resolve against the final scene without another prefix or unit conversion: `plate`, declared named plate bones and `<id>:<bone>`, including generated dials. A new name adds; `idle` appends tracks/timelines to the composed idle, preserving its metadata and every existing character track, deform and physics constraint. Its duration must exactly equal the composed idle (`SCENE_DURATION_AGREES`); no retiming. An imported animation name cannot be replaced (`SCENE_ANIMATION_NAME_FREE`). Absent declaration preserves legacy bytes and output paths (issue #1346) |
 | `order` | the draw order, back to front: a character id (its slots not named elsewhere, in its own order) or one `<id>:<slot>`. Every slot of every character is drawn exactly once. Interleaving is written by naming slots: `["a", "b:arm_l", "b"]` draws `b`'s left arm between `a` and the rest of `b` |
 
 Named plates join `order` exactly once, wherever their tokens occur: for example
@@ -7217,6 +7225,60 @@ image, provenance, note, `at`, `opaque_backdrop`, bone, slot, native size and PN
 SHA-256, with `judged_by: "nothing"` for the pixel-origin declaration. Absent
 `plates` adds no report key and preserves existing output bytes. Plate motion
 and depth-derived parallax are not introduced by this declaration.
+
+Scene animation values use rigc's motion units: translations are offsets in the
+final bone's local frame (rig pixels, y up); rotations are degrees added to setup.
+Durations, key times and values are required declarations. Core parses the clip
+and resolves targets, groups and easings against the composed rig/motion, using
+its existing named refusals, including `CE_COMPILE_ANIMATION_BONE_UNKNOWN`,
+`CE_COMPILE_ANIMATION_TRACK_DUPLICATE`, `CE_COMPILE_KEY_AFTER_DURATION` and
+`CE_COMPILE_SLIDER_ANIMATION_UNKNOWN`. A missing prefixed bone also names its
+character ID; no alternate bone is selected. Groups/easings reference the final
+prefixed definitions already in the scene; this field adds no definitions.
+
+Generated dial names are stable: `<id>:yaw_dial`, `<id>:pitch_dial`, and
+`<id>:<turn.body.slider>` (default `<id>:body_yaw_dial`); renaming these is a major
+change. They exist only when that character's producer generated them. Dial
+rotation keys must lie in their own slider's explicitly declared `[from, max]`
+range. `SCENE_DIAL_KEY_RANGE` names the bone, slider, time, found value and range;
+`SCENE_DIAL_RANGE_DECLARED` refuses unreadable bounds instead of inventing limits.
+Keys on a slider input must state numeric `v` values. `derive` there is refused
+by `SCENE_DIAL_KEY_DECLARED`, even alongside a raw `v`, because derived inputs
+are not a supported scene dial dialect. A group's explicit values are checked
+against each member dial's own declared range.
+Slider source properties resolve to their numeric timeline channels: `x/y` read
+`translatex/translatey` or the respective `translate` channel; `scaleX/scaleY`
+read `scalex/scaley` or the respective `scale` channel; `shearY` reads `sheary`
+or the second `shear` channel. Only the channel that drives that slider is
+compared to its bounds. Group names must be own declared keys; inherited object
+properties are refused with `CE_COMPILE_ANIMATION_GROUP_UNKNOWN`.
+
+For example, this declaration adds a plate take independently of character idle:
+
+```json
+"animations": {
+  "pan": {
+    "duration": 4,
+    "loop": true,
+    "tracks": [{
+      "bone": "plate", "property": "translate",
+      "keys": [{"t": 0, "v": [-3, 0]}, {"t": 2, "v": [3, 0]}, {"t": 4, "v": [-3, 0]}]
+    }]
+  }
+}
+```
+
+Every declared scene clip, including an `idle` extension, is sampled from the
+gated compiled model at `t=0` and its declared duration before any scene output
+is emitted. Bone transforms, drawn/deformed geometry, slots, alpha, clipping and
+draw order must be identical (`SCENE_ANIMATION_LOOP_CLOSES`). This observes posed
+samples, including interpolation and slider application, rather than comparing
+raw endpoint keys or wrapping the end back to zero. Physics simulation is left
+out of this keyed-closure observation, as in `check`'s loop bar; emitted physics
+constraints/tracks remain unchanged. Fired events are not pose state. `loop` is
+the core player hint; it does not waive this scene closure requirement. A new
+named clip does not layer character idle automatically; extend `idle` when its
+breathing/blink/deform/physics payload must remain in that take.
 
 What is composed:
 
