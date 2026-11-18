@@ -96,7 +96,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { dirname, join, resolve } from 'node:path';
 import type { RigStop } from '@rig-c/core/rig';
 import { checkStage, gateThroughRigc, type Log } from './build.ts';
-import { ACCEPTABLE_BARS, barsNotMet, type CheckReport, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, type PackMode, requirementsNotPass, type RigcRunner } from './check.ts';
+import { ACCEPTABLE_BARS, barsNotMet, type CheckReport, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, type PackMode, parsePageSize, requirementsNotPass, type RigcRunner } from './check.ts';
 import { CONSTRAINT_BONE_FIELDS, editorReceiptProblems, ROOT_BONE } from './config.ts';
 import { cropToSpineY } from './coords.ts';
 import { failLine, PartsError, type Problem, refuseIfAny } from './errors.ts';
@@ -987,7 +987,7 @@ export interface SceneReport {
   scene: string;
   canvas: { width: number; height: number };
   rig_name: string;
-  pack_mode: { page_edges: string; pack_shape: string };
+  pack_mode: { page_edges: string; pack_shape: string; page_size?: number };
   /** `sha256` (issue #1183) is of the plate PNG's bytes as compose read them, so a verdict can bind to them. */
   plate: { image: string; provenance: Provenance; note: string | null; bone: string; slot: string; size: [number, number]; sha256: string; judged_by: 'nothing' } | null;
   plates?: Array<{ name: string; image: string; provenance: Provenance; note: string | null; at: [number, number]; opaque_backdrop: boolean; bone: string; slot: string; size: [number, number]; sha256: string; judged_by: 'nothing' }>;
@@ -1030,6 +1030,7 @@ export function composeScene(
   requirements: RequirementsFile | null = null,
   plateLayers: ReadonlyArray<PlateImage | null> = [],
 ): ComposedScene {
+  const pageSize = parsePageSize(mode.pageSize);
   const fail = (code: string, object: string, detail: string): void => {
     problems.push({ code, object, detail });
   };
@@ -1492,7 +1493,7 @@ export function composeScene(
     scene: scene.path,
     canvas: { ...canvas },
     rig_name: name,
-    pack_mode: { page_edges: mode.pageEdges, pack_shape: mode.packShape },
+    pack_mode: { page_edges: mode.pageEdges, pack_shape: mode.packShape, ...(pageSize === undefined ? {} : { page_size: pageSize }) },
     plate: scene.plate === null || plate === null ? null : { image: scene.plate.image, provenance: scene.plate.provenance, note: scene.plate.note, bone: PLATE, slot: PLATE, size: [plate.width, plate.height], sha256: createHash('sha256').update(plate.bytes).digest('hex'), judged_by: 'nothing' },
     ...(scene.plates === undefined ? {} : { plates: layers.map((p, i) => {
       const img = plateLayers[i] as PlateImage;
@@ -1715,6 +1716,8 @@ export function composeFromFiles(scenePath: string, requirementsPath?: string, m
 export interface ComposeInput {
   scene: string;
   out: string;
+  /** The packed builds' `--page-size`; rigc's default when absent (issue #1352). */
+  pageSize?: number;
   requirements?: string;
   /** `--accept`: the bars every character's own check may fail and still be composed (issue #203). */
   accept?: readonly string[];
@@ -1757,9 +1760,10 @@ export function composeStage(input: ComposeInput, run: ComposeRunners, log: Log)
     log(`compose: stopped at ${stage}; nothing ${stage === 'compose' ? 'was written' : 'after the check was written'}`);
     return { stoppedAt: stage, composed, check: null };
   };
+  const pageSize = parsePageSize(input.pageSize);
   mkdirSync(input.out, { recursive: true });
   for (const p of COMPOSE_OWNS) rmSync(join(input.out, p), { recursive: true, force: true });
-  const mode: PackMode = { pageEdges: DEFAULT_PAGE_EDGES, packShape: DEFAULT_PACK_SHAPE };
+  const mode: PackMode = { pageEdges: DEFAULT_PAGE_EDGES, packShape: DEFAULT_PACK_SHAPE, ...(pageSize === undefined ? {} : { pageSize }) };
   log(`rig-parts compose: ${input.scene} -> ${input.out}, page edges ${mode.pageEdges}, pack shape ${mode.packShape}`);
   let composed: ComposedScene;
   try {
@@ -1804,7 +1808,7 @@ export function composeStage(input: ComposeInput, run: ComposeRunners, log: Log)
   say(`wrote ${join(rigDir, 'rig.json')}, motion.json and ${composed.images.length} image(s) under ${join(rigDir, 'images')}, and ${join(input.out, SCENE_REPORT_FILE)}`);
   let report: CheckReport;
   try {
-    report = checkStage({ rig: rigDir, out: join(input.out, 'check'), pageEdges: mode.pageEdges, packShape: mode.packShape, ...(input.requirements === undefined ? {} : { requirements: input.requirements }) }, run.check, run.checkBin, prefix('check'));
+    report = checkStage({ rig: rigDir, out: join(input.out, 'check'), pageEdges: mode.pageEdges, packShape: mode.packShape, ...(pageSize === undefined ? {} : { pageSize }), ...(input.requirements === undefined ? {} : { requirements: input.requirements }) }, run.check, run.checkBin, prefix('check'));
   } catch (err) {
     return refused('check', err, composed);
   }

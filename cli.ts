@@ -970,7 +970,7 @@ usage:
       rigc refuses the pair a control splits, and the RIG_RIGC_GREEN line
       names the flag on the command that ran.
 
-  rig-parts compose --scene <scene.json> --out <dir> [--requirements <file.json>] [--accept <bar>[,<bar>...]]
+  rig-parts compose --scene <scene.json> --out <dir> [--requirements <file.json>] [--accept <bar>[,<bar>...]] [--page-size <px>]
       Bind several finished characters into one rig. The scene file (spec
       "${SCENE_SPEC}") states the canvas {width, height}, an optional plate
       {image, provenance: ${PROVENANCES.join(' | ')}, note?}, the characters
@@ -1210,7 +1210,7 @@ const TAKES = {
   'comfy plate': { valued: ['--mode', '--painting', '--mask-from', '--occluder', '--out', '--graph', '--model', '--checkpoint-sha256', '--seed', '--grow', '--steps', '--cfg', '--prompt', '--negative', '--host', '--wait', '--timeout', '--poll'], switches: ['--holes'] },
   inputs: { valued: ['--source', '--config', '--out'], switches: [] },
   build: { valued: ['--config', '--source', '--full', '--head', '--out', '--seam', '--project', '--page-edges', '--pack-shape', '--page-size', '--requirements', '--idle-keys', '--lead-in', '--alt', '--set', '--environment', '--wind-band'], switches: ['--loop', '--seam-pairs', '--keep-stills', '--all-sets', '--no-extremes'] },
-  compose: { valued: ['--scene', '--out', '--requirements', '--accept'], switches: [] },
+  compose: { valued: ['--scene', '--out', '--requirements', '--accept', '--page-size'], switches: [] },
   'mesh-draft': { valued: ['--config', '--parts', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape', '--page-size'], switches: ['--more-triangles'] },
   'mesh-stats': { valued: ['--config', '--parts'], switches: [] },
   remesh: { valued: ['--rig', '--config', '--parts', '--part', '--mesh', '--delta', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape', '--page-size', '--input-check'], switches: ['--record-input-check'] },
@@ -2295,6 +2295,12 @@ function cmdBuild(args: string[]): number {
 function cmdCompose(args: string[]): number {
   const f = flags(args, 'compose', ['--scene', '--out']);
   if (typeof f === 'string') return usage(f);
+  let size: number | undefined;
+  try {
+    size = parsePageSize(f.get('--page-size'));
+  } catch (err) {
+    return printRefusal(err);
+  }
   let bin: string;
   try {
     bin = findRigc(import.meta.dir, process.env.PATH ?? '');
@@ -2306,7 +2312,7 @@ function cmdCompose(args: string[]): number {
     const req = f.get('--requirements');
     const accept = f.get('--accept');
     const r = composeStage(
-      { scene: f.get('--scene') as string, out: f.get('--out') as string, ...(req === undefined ? {} : { requirements: req }), ...(accept === undefined ? {} : { accept: accept.split(',') }) },
+      { scene: f.get('--scene') as string, out: f.get('--out') as string, ...(size === undefined ? {} : { pageSize: size }), ...(req === undefined ? {} : { requirements: req }), ...(accept === undefined ? {} : { accept: accept.split(',') }) },
       { rig: rigcRunner(bin), check: rigcRunner(bin), checkBin: bin, scratch: join(scratch, 'gate') },
       console.log,
     );
