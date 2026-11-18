@@ -5,7 +5,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { abuttingSurfaceFixture, weightedSurfaceEarFixture, weightedSurfaceFixture } from '../fixtures/turn_surface.ts';
+import { abuttingSurfaceFixture, mixedDepthSurfaceFixture, weightedSurfaceEarFixture, weightedSurfaceFixture } from '../fixtures/turn_surface.ts';
 import { explicitFixture, explicitIslandsFixture } from '../fixtures/explicitmesh.ts';
 import { block, rigImages, rigParts } from '../fixtures/rig.ts';
 import { parseConfig } from '../src/config.ts';
@@ -82,6 +82,7 @@ function displacementError(built: RigOutput, plant: 'none' | 'plate' | 'weight-t
 
 export function runTurnSurfaceChecks(dir: string, say: Say): void {
   runTurnSharedReferenceChecks(say);
+  runTurnMixedDepthChecks(say);
   runTurnUnitChecks(say);
   runTurnCoverageChecks(say);
   const f = weightedSurfaceFixture(), before = JSON.stringify(f.config), built = buildRig(parseConfig(f.config), f.parts, f.images);
@@ -244,5 +245,99 @@ export function runTurnSharedReferenceChecks(say: Say, build: typeof buildRig = 
     say(`WTS${group === 'body' ? (authored ? '19' : '18') : (authored ? '21' : '20')}_SHARED_REFERENCE_${group.toUpperCase()}_${authored ? 'AUTHORED' : 'GRID'}`,
       readings.every(r => r.samples.every(n => n > 0) && r.max <= r.bound + tolerance && r.error <= tolerance),
       JSON.stringify(readings));
+  }
+}
+
+/** Read the emitted head field, including grid carrier translations or every
+ * authored influence in its setup frame. Bounds use the encoded fixture's
+ * depth interval and the declared pivot, not a tuned travel threshold.
+ */
+export function mixedDepthReadings(authored: boolean, inFront = false, reparameterized = false, build: typeof buildRig = buildRig) {
+  const f = mixedDepthSurfaceFixture(authored, inFront, reparameterized), built = build(parseConfig(f.config), f.parts, f.images);
+  const world = computeWorldTransforms(built.rig.bones), face = f.parts.parts[0], levels: number[] = [];
+  const faceSheet = f.images.get(face.depth!.image)!;
+  for (let i = 0; i < face.w * face.h; i++) levels.push(faceSheet.data[i * 4]);
+  levels.sort((a, b) => a - b);
+  const zScale = face.depth!.zScale, pivot = zScale / 2;
+  const zRef = pyRound((levels[(levels.length - 1) >> 1] + levels[levels.length >> 1]) / 2 * zScale / 255, 4);
+  const readings = [];
+  for (const [animName, band, axis] of [['turn', 15, 0], ['tilt', 12, 1]] as const) {
+    const anim = built.motion.animations[animName] as unknown as {
+      tracks: Array<{ bone?: string; keys: Array<{ derive?: { depth?: number } }> }>;
+      deform: Array<{ slot: string; keys: Array<{ vertices?: number[]; transform?: DeformTransform }> }>;
+    };
+    for (const [ki, degrees] of [[0, -band], [4, band]] as const) {
+      const sine = Math.sin(degrees * Math.PI / 180), parts = [];
+      for (const p of f.parts.parts) {
+        const sheet = f.images.get(p.depth!.image)!, key = anim.deform.find(d => d.slot === p.name)!.keys[ki];
+        const att = meshOf(built, p.name), values: number[] = [], encoded: number[] = [];
+        for (let i = 0; i < p.w * p.h; i++) encoded.push(sheet.data[i * 4] * zScale / 255);
+        let error = 0;
+        if (authored) {
+          let at = 0;
+          for (const row of att.weights) {
+            let wx = 0, wy = 0, dx = 0, dy = 0;
+            for (const w of row) {
+              const m = world.get(w.bone)!, [x, y] = toWorld(m, w.x, w.y);
+              wx += x * w.weight; wy += y * w.weight;
+              const vx = key.vertices![at++], vy = key.vertices![at++];
+              dx += (m.a * vx + m.b * vy) * w.weight; dy += (m.c * vx + m.d * vy) * w.weight;
+            }
+            const [cx, cy] = setupToPaintingPoint([wx, wy], [64, 64], [64, 64]);
+            // Independent bilinear sample of the unpadded opaque rectangle.
+            const fx = cx - p.x - 0.5, fy = cy - p.y - 0.5, ix = Math.floor(fx), iy = Math.floor(fy), ax = fx - ix, ay = fy - iy;
+            const zAt = (x: number, y: number) => encoded[Math.max(0, Math.min(p.h - 1, y)) * p.w + Math.max(0, Math.min(p.w - 1, x))];
+            const z = (1 - ay) * ((1 - ax) * zAt(ix, iy) + ax * zAt(ix + 1, iy)) + ay * ((1 - ax) * zAt(ix, iy + 1) + ax * zAt(ix + 1, iy + 1));
+            const actual = axis === 0 ? dx : dy;
+            values.push(actual); error = Math.max(error, Math.abs(actual + (pivot + z - zRef) * sine));
+          }
+        } else {
+          const shift = anim.tracks.filter(t => t.bone === `${p.name}_surface` || t.bone === 'faceshift').reduce((sum, t) => sum - (t.keys[ki].derive?.depth ?? 0) * sine, 0);
+          const generator = att.generator!;
+          if (generator.kind !== 'grid' || generator.depth === undefined || key.transform === undefined) throw new Error('missing emitted mixed-source depth grid');
+          const emitted = new Map(built.images).get(generator.depth.image)!;
+          // All original opaque scalar texels in Core's emitted padded image.
+          const px = (emitted.width - p.w) / 2, py = (emitted.height - p.h) / 2;
+          for (let y = 0; y < p.h; y++) for (let x = 0; x < p.w; x++) {
+            const z = emitted.data[((y + py) * emitted.width + x + px) * 4] * generator.depth.zScale / 255;
+            const actual = evaluateDeformTransform(key.transform, [0, 0], n => n, 'mixed-source grid', [z]).offsets[axis] + shift;
+            values.push(actual); error = Math.max(error, Math.abs(actual + (pivot + encoded[y * p.w + x] - zRef) * sine));
+          }
+        }
+        const minZ = Math.min(...encoded), maxZ = Math.max(...encoded);
+        const bound = Math.max(Math.abs(pivot + minZ - zRef), Math.abs(pivot + maxZ - zRef)) * Math.abs(sine);
+        parts.push({ part: p.name, samples: values.length, minZ, maxZ, minTravel: Math.min(...values.map(Math.abs)), maxTravel: Math.max(...values.map(Math.abs)), meanTravel: values.reduce((s, v) => s + Math.abs(v), 0) / values.length, signed: [Math.min(...values), Math.max(...values)], bound, error });
+      }
+      const [front, back] = parts;
+      readings.push({ animName, degrees, parts, behind: back.maxZ < front.minZ, outruns: back.maxTravel > front.maxTravel });
+    }
+  }
+  return { built, declarations: f.declarations, zScale, zRef, readings };
+}
+
+export function runTurnMixedDepthChecks(say: Say): void {
+  // A world offset is rounded to six decimals once per authored influence.
+  const tolerance = 0.5 * 10 ** -6;
+  for (const authored of [false, true]) {
+    const base = mixedDepthReadings(authored), affine = mixedDepthReadings(authored, false, true), plant = mixedDepthReadings(authored, true);
+    let maxLevelDelta = 0;
+    const sameImages = base.built.images.length === affine.built.images.length && base.built.images.every(([name, image], i) => {
+      const [otherName, other] = affine.built.images[i];
+      if (name !== otherName || image.width !== other.width || image.height !== other.height) return false;
+      for (let j = 0; j < image.data.length; j++) maxLevelDelta = Math.max(maxLevelDelta, Math.abs(image.data[j] - other.data[j]));
+      return true;
+    });
+    // Floating arithmetic at an even rounding tie can change one encoded
+    // level. Propagate that measured quantum and the changed shared anchor.
+    const affineBounds = base.readings.map((r, i) => {
+      const bound = (maxLevelDelta * base.zScale / 255 + Math.abs(base.zRef - affine.zRef)) * Math.abs(Math.sin(r.degrees * Math.PI / 180)) + 2 * tolerance;
+      const delta = Math.max(...r.parts.flatMap((p, pi) => [Math.abs(p.meanTravel - affine.readings[i].parts[pi].meanTravel), ...p.signed.map((v, j) => Math.abs(v - affine.readings[i].parts[pi].signed[j]))]));
+      return { bound, delta };
+    });
+    const sameUnits = sameImages && maxLevelDelta <= 1 && affineBounds.every(r => r.delta <= r.bound);
+    const withinBounds = base.readings.every(r => r.behind && !r.outruns && r.parts.every(p => p.samples > 0 && p.maxTravel <= p.bound + tolerance && p.error <= tolerance));
+    const caughtPlant = plant.readings.every(r => !r.behind && r.outruns);
+    say(`WTS${authored ? '23' : '22'}_MIXED_SOURCE_HEAD_${authored ? 'AUTHORED' : 'GRID'}`, withinBounds && sameUnits && caughtPlant,
+      JSON.stringify({ declarations: base.declarations, zRef: base.zRef, maxLevelDelta, affineBounds, readings: base.readings, frontDeclarationPlant: plant.readings }));
   }
 }

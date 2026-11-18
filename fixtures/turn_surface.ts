@@ -2,6 +2,7 @@
 import { createHash } from 'node:crypto';
 import { block, rigParts } from './rig.ts';
 import { depthReading } from '../src/depthsheets.ts';
+import { floatBox, integrateNormals, mapToSheet } from '../src/depthmaps.ts';
 import { encodePngBytes } from '../src/raster/png.ts';
 import { newRaster, type Raster } from '../src/raster/types.ts';
 
@@ -101,4 +102,43 @@ export function abuttingSurfaceFixture(group: 'head' | 'body', authored: boolean
     { name: 'eye_l', parent: 'head', at: [40, 16] },
   );
   return f;
+}
+
+/** Mixed providers on the existing opaque rectangles; all calibration derives
+ * from their shared zScale. The face integrates a spherical normal field;
+ * back hair reads a scalar ramp in unrelated raw units. No private input.
+ */
+export function mixedDepthSurfaceFixture(authored: boolean, inFront = false, reparameterized = false) {
+  const f = abuttingSurfaceFixture('head', authored);
+  const back = f.parts.parts[1];
+  back.name = 'hair_back'; back.from = 'full:back hair';
+  const zScale = back.depth!.zScale, pivot = zScale / 2;
+  f.config.regions = authored ? {} : { face: 'head', hair_back: 'head' };
+  f.config.meshes = authored ? Object.fromEntries(['face', 'hair_back'].map(name => [name,
+    { grid: 4, r: 20, segments: [['head', [32, 44], [32, 12]]] }])) : {};
+  f.config.turn = { pivot, grid: [5, 5], roles: { hair_back: 'surface', face: 'surface' } };
+  (f.config.assemble as Record<string, unknown>).plan = f.parts.parts.map(p => [p.name, p.from.split(':')[0], p.from.split(':')[1]]);
+  f.images.clear();
+  const declarations = [];
+  for (const [i, p] of f.parts.parts.entries()) {
+    const art = block(p.w, p.h), raw: number[] = [];
+    for (let y = 0; y < p.h; y++) for (let x = 0; x < p.w; x++) {
+      if (i === 0) {
+        const nx = (x - p.w / 2) / p.w, ny = (y - p.h / 2) / p.w;
+        raw.push(nx, ny, Math.sqrt(1 - nx * nx - ny * ny));
+      } else raw.push((x + y) / zScale);
+    }
+    const integrated = i === 0 ? integrateNormals({ spec: 'rig-parts-map/1', width: p.w, height: p.h, channels: 3, data: raw }, art, p.name) : undefined;
+    // Every stride-two integration sample is supported: extension is identity.
+    let values: ArrayLike<number> = integrated === undefined ? raw : floatBox(integrated.data, Math.ceil(p.w / 2), Math.ceil(p.h / 2), p.w, p.h);
+    if (reparameterized) values = Array.from(values, v => v * zScale + p.w);
+    const median = i === 0 ? zScale * 3 / 4 : inFront ? zScale - zScale / 8 : zScale / 4;
+    const relief = zScale / 8;
+    const { sheet, reading } = mapToSheet(values, art, median, relief, 'white', zScale, p.name);
+    p.depth = { image: `${p.name}_depth.png`, near: 'white', zScale,
+      sources: [{ from: p.from, image: i === 0 ? 'normal-map.json' : 'scalar-map.json', sha256: createHash('sha256').update(JSON.stringify(raw)).digest('hex'), crop: [0, 0, p.w, p.h], reading: depthReading(sheet, art, null) }] };
+    f.images.set(p.name, art); f.images.set(p.depth.image, sheet);
+    declarations.push({ part: p.name, source: integrated === undefined ? 'depth' : 'normals', median, relief, ...reading });
+  }
+  return { ...f, declarations };
 }

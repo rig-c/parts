@@ -8286,6 +8286,23 @@ eye samples. The depth recipe's `median` is encoded upstream in that sheet,
 so relative placements between surfaces survive the turn. Each group keeps
 its own reference; a single surface keeps its existing motion bytes.
 
+Mixed depth and normals sources use this same coordinate space. Depth apply
+normalizes each raw field by its own median and percentile span, then encodes
+the declared `median + relief * u` in rig pixels. Raw model offsets and scales
+do not survive as a second turn scale. After decoding either `near` polarity,
+larger `z` means nearer and increases the signed depth `pivot + z - zRef`.
+Thus a back surface must declare smaller normalized depths than the face to
+sit behind it; draw order and a part's name do not calibrate its sheet.
+
+A smaller declared median alone does not order every point: relief can overlap
+the sheets' depth ranges, and clipping changes the encoded range. Compare
+decoded support ranges and the emitted travel at both dial extremes. Absolute
+travel is `abs(pivot + z - zRef) * abs(sin(angle))`; beyond the pivot a further
+point moves in the opposite direction and can travel more in absolute pixels.
+Correct the consumer's existing median/relief declarations when they encode the
+wrong placement. Turn does not invent source-specific offsets, rescale relief,
+or cap a back surface's travel to the face's.
+
 Depth-turn `"surface"` parts may use authored weighted `grid`, `contour`,
 `influence` or `explicit` meshes, or the turn-generated grid when attached as
 a region. `auto` cannot combine with `"surface"` in either `turn.roles` or
