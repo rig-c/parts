@@ -9,7 +9,7 @@ from the pull request that measured it.
 
 ## In one paragraph
 
-Issue #1362: consumers of check/build/compose diagnostic folders must use the [diagnostic path mapping](STABILITY.md#diagnostic-path-segments) and retained `frames.json` directories; unsafe part names also change seam-picture filenames and the corresponding `check.json` `picture` references; prefixed animation names and `extremes.json` animation fields are unchanged.
+Issue #1362: consumers of check/build/compose diagnostic folders must use the [diagnostic path mapping](STABILITY.md#diagnostic-path-segments) and retained `frames.json` directories; safe ASCII names, including uppercase requirement names, keep their paths; ASCII-case alias siblings now refuse by name; unsafe part names also change seam-picture filenames and the corresponding `check.json` `picture` references; prefixed animation names and `extremes.json` animation fields are unchanged.
 
 Install `@rig-c/parts` (the package's name after 1.5.3; *After 1.5.3* below). A
 config that built on 0.16.0 loads and builds unchanged: every config change since is

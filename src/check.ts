@@ -96,7 +96,7 @@ import { createRequire } from 'node:module';
 import type { Candidate, Piece, Viewport as RootCoverageViewport } from '@rig-c/core/render-shared';
 import { fillHoles } from './raster/morph.ts';
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { diagnosticSegment } from './outputpaths.ts';
+import { diagnosticSegment, diagnosticSiblings } from './outputpaths.ts';
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { measureRecomposite, type RecompositeFigures, recompositeRecord, scenePhrase, sourceInRig, figureSilhouette } from './assemble.ts';
 import { type BoneTransform, computeExactFrameTransforms, cropToSpineY, normaliseDegrees, toBoneLocal } from './coords.ts';
@@ -1063,14 +1063,15 @@ function sidecarProblem(object: string, detail: string): never {
   throw new Error('unreachable');
 }
 
-/** Copy a retained render and bind its index to portable set directories. */
-export function retainCheckRender(source: string, target: string): void {
+/** Read and validate a complete retained sibling scope without touching outputs. */
+function retainedCheckRenderPlan(source: string) {
   const index = join(source, 'frames.json');
   const bytes = readFileSync(index, 'utf8');
   const raw: unknown = JSON.parse(bytes);
   if (!isRecord(raw) || !Array.isArray(raw.sets)) return sidecarProblem(index, 'requires a frames.json sets array to retain a render');
   const seen = new Set<string>();
   const sourceDirs: string[] = [];
+  const names: Array<{ name: string; suffix?: string }> = [];
   const sets = raw.sets.map((set: unknown) => {
     if (!isRecord(set) || typeof set.dir !== 'string' || set.dir.length === 0 || isAbsolute(set.dir) || set.dir.split(/[\\/]/).includes('..')) return sidecarProblem(index, 'requires local set directories to retain a render');
     // One render samples every set at the same rate. Preserve the rate suffix
@@ -1080,8 +1081,16 @@ export function retainCheckRender(source: string, target: string): void {
     if (seen.has(dir)) return sidecarProblem(index, `retained set directory ${JSON.stringify(dir)} is repeated`);
     seen.add(dir);
     sourceDirs.push(set.dir);
+    names.push(typeof set.animation === 'string' ? { name: set.animation, suffix } : { name: set.dir });
     return { ...set, dir };
   });
+  diagnosticSiblings(names, 'retained render sets');
+  return { bytes, raw, sets, sourceDirs };
+}
+
+/** Copy a retained render and bind its index to portable set directories. */
+export function retainCheckRender(source: string, target: string): void {
+  const { bytes, raw, sets, sourceDirs } = retainedCheckRenderPlan(source);
   mkdirSync(target, { recursive: true });
   // Root sidecars and set-local filenames are fixed renderer protocol names.
   for (const entry of readdirSync(source, { withFileTypes: true })) {
@@ -5171,6 +5180,7 @@ export function publishMotionSeamWorlds(out: string, scratch: string, worlds: Mo
     }
   }
   refuseIfAny(problems);
+  for (const name of names) retainedCheckRenderPlan(join(scratch, name));
   const stage = join(scratch, '_publish');
   const previous = join(scratch, '_previous');
   const kept = join(out, MOTION_SEAM_DIR);
@@ -6601,6 +6611,7 @@ export function windBandLines(line: WindBandLine, plant: WindBandPlant = {}): st
  */
 function renderExtremes(build: string, out: string, animations: readonly string[], frames: unknown, frameSets: unknown, render: RigcRunner): string[] {
   if (animations.length === 0) return ['EXTREMES SKIP: CHECK_EXTREMES_NO_ANIMATIONS — no animation in motion.json'];
+  diagnosticSiblings(animations.map(name => ({ name })), 'extremes');
   const scratch = join(out, '_extremes');
   const dest = join(out, 'extremes');
   try {
@@ -6749,7 +6760,9 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const cutMaterialProblems: Problem[] = [];
   const cutMaterial = reqFile?.cut_material === undefined ? null : checkJointMaterial(reqFile.cut_material, inp.parts, name => readPng(join(dirname(inp.partsDir), partImageReference((inp.parts as PartsFile).parts.find(p => p.name === name) as PartRecord).path)), cutMaterialProblems, inp.parts === null ? undefined : readMaterialSources(dirname(inp.partsDir), inp.parts));
   const animationNames = isRecord(inp.motion.animations) ? Object.keys(inp.motion.animations) : [];
-  if (!noExtremes) for (const animation of animationNames) diagnosticSegment(animation);
+  const selectedAlts = inp.parts === null || (set === undefined && !allSets) ? []
+    : allSets ? inp.parts.alternates ?? [] : (inp.parts.alternates ?? []).filter(alt => alt.name === set);
+  preflightCheckPaths(animationNames, selectedAlts.map(alt => alt.name), reqFile, noExtremes);
   // A measured material failure is a check bar; unavailable data is a refusal.
   const rigcEntry = readRigcEntry(requireRigcVersion(rigc));
   /**
@@ -7350,8 +7363,6 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
       if (keepStills) retainCheckRender(join(stillDir, 'render'), inp.parts === null ? keptDir : join(out, 'setup_still_auto'));
       if (inp.parts !== null) {
         // Stage existing gated files, not decoded pages/poses. No second build or gate.
-        const selectedAlts = set !== undefined || allSets
-          ? (allSets ? (inp.parts.alternates ?? []) : (inp.parts.alternates ?? []).filter(a => a.name === set)) : [];
         const setStillAnimations: Record<string, unknown> = { still: animations.still };
         const setStillBase = { ...withoutSliders(inp.rig, setStillAnimations), images };
         const setsJsonPath = join(inp.rigDir, SETS_FILE);
@@ -7754,6 +7765,22 @@ export function inputFileRecord(bytes: Uint8Array, recorded: string): InputFileR
 /** The throwaway copies' specs and builds, under `--out`; removed before the stage returns. */
 const REQUIREMENTS_SCRATCH = '_requirements';
 
+/** All known name-derived sibling scopes, before check or requirement writes. */
+export function preflightCheckPaths(animations: readonly string[], alternateSets: readonly string[], requirements: RequirementsFile | null, noExtremes = false): void {
+  if (!noExtremes) diagnosticSiblings(animations.map(name => ({ name })), 'extremes');
+  diagnosticSiblings(animations.map(name => ({ name })), 'retained render sets');
+  diagnosticSiblings(alternateSets.map(name => ({ name })), 'alternate set folders');
+  if (requirements !== null) {
+    const declared = requirementAnimations(requirements.requirements).map(name => ({ name }));
+    diagnosticSiblings(declared, 'requirements/as-declared');
+    const suffix = typeof requirements.fps === 'number' && requirements.fps !== IDLE_FPS ? `@${requirements.fps}fps` : '';
+    diagnosticSiblings(declared.map(({ name }) => ({ name, suffix })), 'requirements retained render sets');
+    const follows = requirements.requirements.filter(requirement => requirement.kind === 'follow').map(requirement => ({ name: requirement.name }));
+    diagnosticSiblings(follows, 'requirements/released');
+    diagnosticSiblings(follows, 'requirements/full');
+  }
+}
+
 /**
  * Measure every requirement of a file {@link resolveRequirements} has passed.
  * Every pose is rig-c's: each animation a requirement names is rendered
@@ -7773,6 +7800,7 @@ const REQUIREMENTS_SCRATCH = '_requirements';
  * FAIL and NOT MEASURABLE into `problems`.
  */
 export function measureRequirements(inp: CheckInputs, file: RequirementsFile, buildDir: string, out: string, rigc: RigcRunner, problems: Problem[], seams: ReadonlyMap<string, readonly SeamPair[]> = new Map(), render: RigcRunner = rigc): Omit<RequirementsBlock, 'file'> {
+  preflightCheckPaths([], [], file, true);
   const reqDir = join(out, REQUIREMENTS_DIR);
   const scratch = join(out, REQUIREMENTS_SCRATCH);
   for (const d of [reqDir, scratch]) rmSync(d, { recursive: true, force: true });
