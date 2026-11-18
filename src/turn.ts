@@ -1634,7 +1634,10 @@ function buildDepth25DTurnGroup(
     for (const sheet of surfaceSheets.values()) sheet.zRef = primarySurface.zRef;
   }
   // Resolve on original sheets AFTER choosing the original shared anchor.
-  const boundarySamples = boundaryDepthSamplers(group.boundaryDepths, opts.parts, opts.images, group.roles, group.fieldPrefix);
+  const boundary = boundaryDepthSamplers(group.boundaryDepths, opts.parts, opts.images, group.roles, group.fieldPrefix);
+  problems.push(...boundary.problems);
+  if (problems.length > startProblems) return;
+  const boundarySamples = boundary.samplers;
   const pivot = pyRound(group.pivot, 4);
   const counter = group.counter;
   const rearDepth = pyRound(-counter * pivot, 4);

@@ -1,6 +1,6 @@
 /** Opt-in scalar boundary projection. No sheet, anchor or art is rewritten. */
 import { extendDepthSilhouette, sampleDepthFloat, type PartDepthReference } from './depthsheets.ts';
-import { PartsError } from './errors.ts';
+import type { Problem } from './errors.ts';
 import type { Raster } from './raster/types.ts';
 
 export type BoundaryDepths = Record<string, { neighbour: string; band: string }>;
@@ -19,12 +19,13 @@ export function boundaryDepthSamplers(
   images: ReadonlyMap<string, Raster>,
   roles: Readonly<Record<string, string>>,
   prefix: string,
-): Map<string, (x: number, y: number) => number> {
-  const result = new Map<string, (x: number, y: number) => number>();
+): { samplers: Map<string, (x: number, y: number) => number>; problems: Problem[] } {
+  const samplers = new Map<string, (x: number, y: number) => number>();
+  const problems: Problem[] = [], result = { samplers, problems };
   if (declarations === undefined || Object.keys(declarations).length === 0) return result;
   const records = new Map(parts.map(p => [p.name, p]));
-  const fail = (target: string, detail: string): never => {
-    throw new PartsError([{ code: 'RIG_TURN_BOUNDARY_DEPTH', object: `${prefix}.boundaryDepths.${target}`, detail }]);
+  const fail = (target: string, detail: string): void => {
+    problems.push({ code: 'RIG_TURN_BOUNDARY_DEPTH', object: `${prefix}.boundaryDepths.${target}`, detail });
   };
   const support = (p: Part, art: Raster, x: number, y: number): boolean => {
     const u = x - p.x, v = y - p.y;
@@ -34,45 +35,55 @@ export function boundaryDepthSamplers(
     for (const u of new Set([Math.floor(x), Math.ceil(x) - 1])) for (const v of new Set([Math.floor(y), Math.ceil(y) - 1])) if (support(p, art, u, v)) return true;
     return false;
   };
+  const cyclic = new Set<string>();
   for (const target of Object.keys(declarations)) {
     const seen = new Set<string>();
     for (let next: string | undefined = target; next !== undefined; next = declarations[next]?.neighbour) {
-      if (seen.has(next)) fail(target, `cycle reaches "${next}"; remove reciprocal or cyclic boundary declarations`);
+      if (seen.has(next)) { fail(target, `cycle reaches "${next}"; remove reciprocal or cyclic boundary declarations`); cyclic.add(target); break; }
       seen.add(next);
     }
   }
   for (const [target, declaration] of Object.entries(declarations)) {
+    const startProblems = problems.length;
     const p = records.get(target), n = records.get(declaration.neighbour), b = records.get(declaration.band);
     for (const [field, record] of [['target', p], ['neighbour', n], ['band', b]] as const) if (record === undefined) fail(target, `${field} "${field === 'target' ? target : declaration[field]}" names no parts.json part; use an exact existing part name`);
-    // The loop above has checked all three records; keep the type narrowing explicit.
-    if (p === undefined || n === undefined || b === undefined) continue;
-    if (target === n.name || roles[target] !== 'surface' || roles[n.name] !== 'surface') fail(target, `"${target}" and neighbour "${n.name}" require different surface parts in this same turn group`);
-    const pa = images.get(p.name), na = images.get(n.name), ba = images.get(b.name);
-    const ps = p.depth === undefined ? undefined : images.get(p.depth.image), ns = n.depth === undefined ? undefined : images.get(n.depth.image);
-    if (pa === undefined || na === undefined || ba === undefined || ps === undefined || ns === undefined || p.depth === undefined || n.depth === undefined) fail(target, `target "${target}", neighbour "${n.name}" and band "${b.name}" require resolved art and both original surface sheets`);
-    if (pa === undefined || na === undefined || ba === undefined || ps === undefined || ns === undefined || p.depth === undefined || n.depth === undefined) continue;
-    if (p.depth.near !== n.depth.near || p.depth.zScale !== n.depth.zScale) fail(target, `neighbour "${n.name}" requires the target's near and zScale in this turn group`);
+    if (p !== undefined && n !== undefined && (target === n.name || roles[target] !== 'surface' || roles[n.name] !== 'surface')) fail(target, `"${target}" and neighbour "${n.name}" require different surface parts in this same turn group`);
+    const pa = p === undefined ? undefined : images.get(p.name), na = n === undefined ? undefined : images.get(n.name), ba = b === undefined ? undefined : images.get(b.name);
+    const ps = p?.depth === undefined ? undefined : images.get(p.depth.image), ns = n?.depth === undefined ? undefined : images.get(n.depth.image);
+    if (p !== undefined && n !== undefined && b !== undefined && (pa === undefined || na === undefined || ba === undefined || ps === undefined || ns === undefined || p.depth === undefined || n.depth === undefined)) fail(target, `target "${target}", neighbour "${n.name}" and band "${b.name}" require resolved art and both original surface sheets`);
+    if (p?.depth !== undefined && n?.depth !== undefined && (p.depth.near !== n.depth.near || p.depth.zScale !== n.depth.zScale)) fail(target, `neighbour "${n.name}" requires the target's near and zScale in this turn group`);
     const edges: Edge[] = [];
     let overlap = false;
-    for (let y = p.y; y < p.y + p.h; y++) for (let x = p.x; x < p.x + p.w; x++) {
-      if (!support(p, pa, x, y)) continue;
-      if (support(n, na, x, y)) overlap = true;
-      if (support(n, na, x - 1, y)) edges.push([[x, y], [x, y + 1]]);
-      if (support(n, na, x + 1, y)) edges.push([[x + 1, y], [x + 1, y + 1]]);
-      if (support(n, na, x, y - 1)) edges.push([[x, y], [x + 1, y]]);
-      if (support(n, na, x, y + 1)) edges.push([[x, y + 1], [x + 1, y + 1]]);
+    const canAbut = p !== undefined && n !== undefined && pa !== undefined && na !== undefined;
+    if (canAbut) {
+      for (let y = p.y; y < p.y + p.h; y++) for (let x = p.x; x < p.x + p.w; x++) {
+        if (!support(p, pa, x, y)) continue;
+        if (support(n, na, x, y)) overlap = true;
+        if (support(n, na, x - 1, y)) edges.push([[x, y], [x, y + 1]]);
+        if (support(n, na, x + 1, y)) edges.push([[x + 1, y], [x + 1, y + 1]]);
+        if (support(n, na, x, y - 1)) edges.push([[x, y], [x + 1, y]]);
+        if (support(n, na, x, y + 1)) edges.push([[x, y + 1], [x + 1, y + 1]]);
+      }
+      if (overlap || edges.length === 0) fail(target, `neighbour "${n.name}" does not abut without overlap along opaque pixel-cell edges; declare an abutting surface`);
     }
-    if (overlap || edges.length === 0) fail(target, `neighbour "${n.name}" does not abut without overlap along opaque pixel-cell edges; declare an abutting surface`);
-    let count = 0;
-    for (let y = b.y; y < b.y + b.h; y++) for (let x = b.x; x < b.x + b.w; x++) if (support(b, ba, x, y)) {
-      count++;
-      if (!support(p, pa, x, y)) fail(target, `band "${b.name}" has support outside target "${target}" at [${x},${y}]; require contained alpha support`);
+    // Containment depends on target/band art, not on neighbour depth or abutment.
+    // Report the first outside cell once; the remaining declarations still run.
+    if (p !== undefined && b !== undefined && pa !== undefined && ba !== undefined) {
+      let count = 0, outside = false;
+      for (let y = b.y; y < b.y + b.h; y++) for (let x = b.x; x < b.x + b.w; x++) if (support(b, ba, x, y)) {
+        count++;
+        if (!outside && !support(p, pa, x, y)) { fail(target, `band "${b.name}" has support outside target "${target}" at [${x},${y}]; require contained alpha support`); outside = true; }
+      }
+      // A missing shared edge cannot establish whether an otherwise valid band
+      // reaches it; retain the abutment failure instead of cascading a refusal.
+      if (n !== undefined && (count === 0 || (canAbut && !overlap && edges.length > 0 && !edges.some(([a, z]) => contains(b, ba, (a[0] + z[0]) / 2, (a[1] + z[1]) / 2))))) fail(target, `band "${b.name}" is empty or does not reach the shared boundary with "${n.name}"; require a nonempty boundary-reaching band`);
     }
-    if (count === 0 || !edges.some(([a, z]) => contains(b, ba, (a[0] + z[0]) / 2, (a[1] + z[1]) / 2))) fail(target, `band "${b.name}" is empty or does not reach the shared boundary with "${n.name}"; require a nonempty boundary-reaching band`);
+    // Cycles prevent sampler emission, not independent declaration checks.
+    if (cyclic.has(target) || problems.length > startProblems || p === undefined || n === undefined || b === undefined || pa === undefined || na === undefined || ba === undefined || ps === undefined || ns === undefined || p.depth === undefined || n.depth === undefined) continue;
     const original = extendDepthSilhouette(ps, pa), neighbour = extendDepthSilhouette(ns, na);
     const seeds: Point[] = [];
     for (let y = p.y; y < p.y + p.h; y++) for (let x = p.x; x < p.x + p.w; x++) if (support(p, pa, x, y)) seeds.push([x + 0.5, y + 0.5]);
-    result.set(target, (x, y) => {
+    samplers.set(target, (x, y) => {
       const rawX = x, rawY = y;
       // Transparent silhouette/PAD samples inherit their nearest opaque target
       // cell, just as the original scalar extension does. This also retains
