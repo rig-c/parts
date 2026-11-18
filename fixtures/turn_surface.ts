@@ -142,3 +142,30 @@ export function mixedDepthSurfaceFixture(authored: boolean, inFront = false, rep
   }
   return { ...f, declarations };
 }
+
+/** Three abutting body sheets: an upper descending ramp and two ascending ramps.
+ * Upper/sleeve share a top level, sleeve/lower differ by one four-level step.
+ * All numbers are synthetic levels; no consumer art or measured depths enter here.
+ */
+export function sleeveSurfaceFixture(authored: boolean) {
+  const f = abuttingSurfaceFixture('body', authored);
+  const names = ['topwear', 'sleeve', 'bottomwear'];
+  f.parts.parts = names.map((name, i) => ({ ...f.parts.parts[0], name, from: `full:${name === 'sleeve' ? 'author:sleeve' : name}`, y: 12 + i * 16 }));
+  f.images.clear();
+  for (const [i, p] of f.parts.parts.entries()) {
+    const art = block(p.w, p.h), scalar = newRaster(p.w, p.h);
+    for (let y = 0; y < p.h; y++) for (let x = 0; x < p.w; x++) {
+      const v = i === 0 ? 104 - 4 * y : 40 + 64 * i + 4 * y;
+      scalar.data.set([v, v, v, 255], (y * p.w + x) * 4);
+    }
+    p.depth = { image: `${p.name}_depth.png`, near: 'white', zScale: 40,
+      sources: [{ from: p.from, image: 'scalar.png', sha256: createHash('sha256').update(encodePngBytes(scalar)).digest('hex'), crop: [p.x, p.y, p.x + p.w, p.y + p.h], reading: depthReading(scalar, art, null) }] };
+    f.images.set(p.name, art); f.images.set(p.depth.image, scalar);
+  }
+  (f.config.assemble as Record<string, unknown>).plan = names.map(name => [name, 'full', name === 'sleeve' ? 'author:sleeve' : name]);
+  f.config.regions = authored ? {} : Object.fromEntries(names.map(name => [name, 'chest']));
+  f.config.meshes = authored ? Object.fromEntries(names.map(name => [name,
+    { grid: 4, r: 20, segments: [['chest', [32, 44], [32, 12]]] }])) : {};
+  f.config.turn = { body: { pivot: 20, grid: [5, 5], roles: Object.fromEntries(names.map(name => [name, 'surface'])) } };
+  return f;
+}

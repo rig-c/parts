@@ -54,6 +54,20 @@ anchor; its own median is not subtracted again. Thus two touching parts retain
 their declared depth difference when they turn. Head and body groups have
 separate anchors, and this applies to generated grids and authored meshes alike.
 
+For an abutting body surface such as a sleeve, author the boundary depths in
+that same group space. At yaw angle `a`, the horizontal travel is
+`-(pivot + z - zRef) * sin(a)`, so the jump across a touching pair is
+`abs(zA - zB) * abs(sin(a))`: the common pivot and reference cancel.
+Matching medians does not match boundary depths when the relief differs.
+Conversely, replacing each surface's own median with the shared anchor adds
+`-(ownMedian - zRef) * sin(a)` uniformly to that surface; it can enlarge one
+seam while reducing another. This is placement, not a sleeve-specific scale.
+Where continuity is intended, adjust the declared `median` and `relief` so
+sampled depths meet at the shared boundary, then check both seams at both turn
+extremes. Choosing a different shared reference leaves the seam jump unchanged.
+Neither a per-sleeve pivot nor a guessed correction is inferred. A seam reading
+measures depth discontinuity, not composite visibility.
+
 See-through, the layer decomposition this package reads, also writes a per-layer
 depth sheet, and a config can register those directly (`config.depth`,
 [Per-layer depth sheets](AUTHORING.md#per-layer-depth-sheets-773)). In

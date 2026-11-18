@@ -5,7 +5,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { abuttingSurfaceFixture, mixedDepthSurfaceFixture, weightedSurfaceEarFixture, weightedSurfaceFixture } from '../fixtures/turn_surface.ts';
+import { abuttingSurfaceFixture, mixedDepthSurfaceFixture, sleeveSurfaceFixture, weightedSurfaceEarFixture, weightedSurfaceFixture } from '../fixtures/turn_surface.ts';
 import { explicitFixture, explicitIslandsFixture } from '../fixtures/explicitmesh.ts';
 import { block, rigImages, rigParts } from '../fixtures/rig.ts';
 import { parseConfig } from '../src/config.ts';
@@ -83,6 +83,7 @@ function displacementError(built: RigOutput, plant: 'none' | 'plate' | 'weight-t
 export function runTurnSurfaceChecks(dir: string, say: Say): void {
   runTurnSharedReferenceChecks(say);
   runTurnMixedDepthChecks(say);
+  runSleeveSurfaceChecks(say);
   runTurnUnitChecks(say);
   runTurnCoverageChecks(say);
   const f = weightedSurfaceFixture(), before = JSON.stringify(f.config), built = buildRig(parseConfig(f.config), f.parts, f.images);
@@ -339,5 +340,82 @@ export function runTurnMixedDepthChecks(say: Say): void {
     const caughtPlant = plant.readings.every(r => !r.behind && r.outruns);
     say(`WTS${authored ? '23' : '22'}_MIXED_SOURCE_HEAD_${authored ? 'AUTHORED' : 'GRID'}`, withinBounds && sameUnits && caughtPlant,
       JSON.stringify({ declarations: base.declarations, zRef: base.zRef, maxLevelDelta, affineBounds, readings: base.readings, frontDeclarationPlant: plant.readings }));
+  }
+}
+
+/** Measure emitted body keys; own-median readings emulate only the old anchor shift. */
+export function sleeveSurfaceReadings(authored: boolean, build: typeof buildRig = buildRig) {
+  const f = sleeveSurfaceFixture(authored), built = build(parseConfig(f.config), f.parts, f.images);
+  const world = computeWorldTransforms(built.rig.bones);
+  const medians = [74, 134, 198].map(v => pyRound(v * 40 / 255, 4));
+  const anim = built.motion.animations.body_turn as unknown as {
+    tracks: Array<{ bone?: string; keys: Array<{ derive?: { depth?: number } }> }>;
+    deform: Array<{ slot: string; keys: Array<{ vertices?: number[]; transform?: DeformTransform }> }>;
+  };
+  const readings = [];
+  for (const [ki, degrees] of [[0, -15], [4, 15]] as const) {
+    const sine = Math.sin(degrees * Math.PI / 180);
+    const surfaces = f.parts.parts.map((p, pi) => {
+      const key = anim.deform.find(d => d.slot === p.name)!.keys[ki], att = meshOf(built, p.name);
+      const samples: Array<{ y: number; dx: number }> = [];
+      if (authored) {
+        let at = 0;
+        for (const row of att.weights) {
+          let wx = 0, wy = 0, dx = 0;
+          for (const w of row) {
+            const m = world.get(w.bone)!, [x, y] = toWorld(m, w.x, w.y);
+            wx += x * w.weight; wy += y * w.weight;
+            const vx = key.vertices![at++], vy = key.vertices![at++];
+            dx += (m.a * vx + m.b * vy) * w.weight;
+          }
+          const [, y] = setupToPaintingPoint([wx, wy], [64, 64], [64, 64]);
+          samples.push({ y, dx });
+        }
+      } else {
+        const shift = anim.tracks.filter(t => t.bone === `${p.name}_surface` || t.bone === 'bodyshift')
+          .reduce((sum, t) => sum - (t.keys[ki].derive?.depth ?? 0) * sine, 0);
+        const generator = att.generator!;
+        if (generator.kind !== 'grid' || generator.depth === undefined || key.transform === undefined) throw new Error('missing emitted depth grid');
+        const scalar = new Map(built.images).get(generator.depth.image)!;
+        for (let y = 0; y < p.h; y++) {
+          const level = scalar.data[((y + 4) * scalar.width + 4) * 4];
+          const z = level * generator.depth.zScale / 255;
+          samples.push({ y: p.y + (y === p.h - 1 ? p.h : y), dx: evaluateDeformTransform(key.transform, [0, 0], n => n, 'body ramp', [z]).offsets[0] + shift });
+        }
+      }
+      const edge = (y: number) => samples.filter(s => Math.abs(s.y - y) < 1e-6).map(s => s.dx);
+      const ownShift = (medians[pi] - medians[0]) * sine;
+      const values = samples.map(s => s.dx);
+      return { part: p.name, samples: samples.length, meanDx: values.reduce((a, b) => a + b, 0) / values.length,
+        ownMedianMeanDx: values.reduce((a, b) => a + b, 0) / values.length + ownShift,
+        top: edge(p.y), bottom: edge(p.y + p.h), ownShift };
+    });
+    const seams = surfaces.slice(0, -1).map((a, i) => {
+      const b = surfaces[i + 1], jumps = a.bottom.flatMap(x => b.top.map(y => Math.abs(x - y)));
+      const own = a.bottom.flatMap(x => b.top.map(y => Math.abs(x + a.ownShift - y - b.ownShift)));
+      return { pair: [a.part, b.part], samples: jumps.length, sharedMax: Math.max(...jumps), ownMedianMax: Math.max(...own) };
+    });
+    readings.push({ degrees, surfaces, seams });
+  }
+  return { built, readings };
+}
+
+export function runSleeveSurfaceChecks(say: Say, build: typeof buildRig = buildRig): void {
+  for (const authored of [false, true]) {
+    const { readings } = sleeveSurfaceReadings(authored, build);
+    // Each authored offset rounds to six places: a seam subtracts two offsets.
+    const tolerance = 2 * 0.5 * 10 ** -6;
+    const sine = Math.sin(15 * Math.PI / 180);
+    say(`WTS${authored ? '25' : '24'}_SLEEVE_SHARED_REFERENCE_${authored ? 'AUTHORED' : 'GRID'}`,
+      readings.every(r => r.surfaces.every((s, i) => {
+        const z = [74, 134, 198][i] * 40 / 255, reference = pyRound(74 * 40 / 255, 4);
+        const expected = -(20 + z - reference) * Math.sin(r.degrees * Math.PI / 180);
+        return s.samples > 0 && s.top.length > 0 && s.bottom.length > 0 && Math.abs(s.meanDx - expected) <= tolerance;
+      }) &&
+        r.seams.every(s => s.samples > 0) &&
+        Math.abs(r.seams[0].sharedMax - 60 * 40 / 255 * sine) <= tolerance &&
+        r.seams[0].sharedMax > r.seams[0].ownMedianMax &&
+        Math.abs(r.seams[1].sharedMax - 4 * 40 / 255 * sine) <= tolerance &&
+        r.seams[1].sharedMax < r.seams[1].ownMedianMax), JSON.stringify(readings));
   }
 }
