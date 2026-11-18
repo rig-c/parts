@@ -46437,8 +46437,8 @@ function runSceneSuite(): number {
       order: ['plain', 'reach'],
       ...over,
     });
-    const compose = (body: Record<string, unknown>, req?: string): { ok: ComposedScene | null; err: PartsError | null } => {
-      let ok: ComposedScene | null = null;
+    const compose = (body: Record<string, unknown>, req?: string): { ok: ReturnType<typeof composeFromFiles> | null; err: PartsError | null } => {
+      let ok: ReturnType<typeof composeFromFiles> | null = null;
       const err = refusals(() => {
         ok = composeFromFiles(scene(body), req);
       });
@@ -47032,16 +47032,26 @@ function runSceneSuite(): number {
       'issue #966: a declared receipt is verified even without required');
     const matching = compose(receipted({ required: true, receipts: [receipt] }));
     const undeclared = compose(two());
-    // Each helper invocation has its own input filename, which the report records.
-    const matchingAtSamePath = matching.ok === null ? null : {
-      ...matching.ok,
-      report: { ...matching.ok.report, scene: undeclared.ok?.report.scene },
+    // Compare the legacy composition payload; each input has its own path and raw-byte binding.
+    const compositionPayload = (value: ReturnType<typeof composeFromFiles> | null): ComposedScene | null => {
+      if (value === null) return null;
+      const { runRecord: _runRecord, ...payload } = value;
+      return { ...payload, report: { ...payload.report, scene: undeclared.ok?.report.scene ?? payload.report.scene } };
     };
-    const receiptBytesEqual = rigJsonText(matchingAtSamePath) === rigJsonText(undeclared.ok);
+    const receiptBytesEqual = rigJsonText(compositionPayload(matching.ok)) === rigJsonText(compositionPayload(undeclared.ok));
+    const bindsSceneBytes = (binding: ComposeRun['scene']): boolean =>
+      binding.sha256 === createHash('sha256').update(readFileSync(binding.path)).digest('hex');
+    const matchingRecord = matching.ok?.runRecord, undeclaredRecord = undeclared.ok?.runRecord;
+    const distinctSceneBinding = matchingRecord !== undefined && undeclaredRecord !== undefined &&
+      matchingRecord.scene.path === matching.ok?.report.scene && undeclaredRecord.scene.path === undeclared.ok?.report.scene &&
+      matchingRecord.scene.path !== undeclaredRecord.scene.path && matchingRecord.scene.sha256 !== undeclaredRecord.scene.sha256 &&
+      bindsSceneBytes(matchingRecord.scene) && bindsSceneBytes(undeclaredRecord.scene) &&
+      !bindsSceneBytes({ ...matchingRecord.scene, sha256: undeclaredRecord.scene.sha256 }) &&
+      rigJsonText({ ...matchingRecord, scene: undeclaredRecord.scene }) === rigJsonText(undeclaredRecord);
     say('SC49_A_MATCHING_RECEIPT_PRESERVES_THE_UNDECLARED_COMPOSITION',
-      matching.err === null && matching.ok !== null && undeclared.err === null && undeclared.ok !== null && receiptBytesEqual,
-      `matching ${codes(matching.err)}; omitted ${codes(undeclared.err)}; composed bytes equal ${receiptBytesEqual}`,
-      'issue #966: provenance remains the pixel-origin declaration and receipt metadata does not change the report');
+      matching.err === null && matching.ok !== null && undeclared.err === null && undeclared.ok !== null && receiptBytesEqual && distinctSceneBinding,
+      `matching ${codes(matching.err)}; omitted ${codes(undeclared.err)}; legacy composed bytes equal ${receiptBytesEqual}; distinct exact scene binding ${distinctSceneBinding}`,
+      'issue #966/#1348: receipt metadata preserves the legacy composition, while each distinct scene input binds its own exact path and bytes; swapping its hash is a planted miss');
     const malformedReceipts = [null, { receipts: [{ ...receipt, from_sha256: plateSha }] }, { required: 'true', receipts: [] }, { receipts: [{ ...receipt, editor: '' }] }, { receipts: [receipt, receipt] }, { receipts: [{ ...receipt, sha256: 'bad' }] }].map((ledger) => compose(receipted(ledger)));
     say('SC50_MALFORMED_PLATE_RECEIPTS_USE_THE_SHARED_SHAPE_CHECKER',
       malformedReceipts.every((r) => has(r.err, 'SCENE_EDITOR_RECEIPT', 'scene.plate.editor_receipts')),
