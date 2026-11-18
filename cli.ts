@@ -1210,7 +1210,7 @@ const TAKES = {
   'comfy plate': { valued: ['--mode', '--painting', '--mask-from', '--occluder', '--out', '--graph', '--model', '--checkpoint-sha256', '--seed', '--grow', '--steps', '--cfg', '--prompt', '--negative', '--host', '--wait', '--timeout', '--poll'], switches: ['--holes'] },
   inputs: { valued: ['--source', '--config', '--out'], switches: [] },
   build: { valued: ['--config', '--source', '--full', '--head', '--out', '--seam', '--project', '--page-edges', '--pack-shape', '--page-size', '--requirements', '--idle-keys', '--lead-in', '--alt', '--set', '--environment', '--wind-band'], switches: ['--loop', '--seam-pairs', '--keep-stills', '--all-sets', '--no-extremes'] },
-  compose: { valued: ['--scene', '--out', '--requirements', '--accept', '--page-size'], switches: [] },
+  compose: { valued: ['--scene', '--out', '--requirements', '--accept', '--page-size'], switches: ['--help'] },
   'mesh-draft': { valued: ['--config', '--parts', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape', '--page-size'], switches: ['--more-triangles'] },
   'mesh-stats': { valued: ['--config', '--parts'], switches: [] },
   remesh: { valued: ['--rig', '--config', '--parts', '--part', '--mesh', '--delta', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape', '--page-size', '--input-check'], switches: ['--record-input-check'] },
@@ -2293,6 +2293,17 @@ function cmdBuild(args: string[]): number {
 }
 
 function cmdCompose(args: string[]): number {
+  const help = args.filter((a) => a === '--help' || a === '-h').length;
+  if (help > 1) return usage('--help is given twice');
+  if (help === 1) {
+    const rest = args.filter((a) => a !== '--help' && a !== '-h');
+    for (let i = 0; i < rest.length; i += 2) {
+      if (!takesValued('compose', rest[i])) return usage(notTaken('compose', rest[i]));
+      if (rest[i + 1] === undefined) return usage(`${rest[i]} needs a value`);
+    }
+    console.log(HELP.slice(HELP.indexOf('  rig-parts compose '), HELP.indexOf('\n\n  rig-parts painting ')));
+    return EXIT_OK;
+  }
   const f = flags(args, 'compose', ['--scene', '--out']);
   if (typeof f === 'string') return usage(f);
   const out = f.get('--out') as string;
