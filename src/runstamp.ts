@@ -16,6 +16,8 @@ import { SUPPORT_DOMAINS_FILE } from './supportdomains.ts';
 
 export const RUN_STAMP_SPEC = 'rig-run/1' as const;
 export const RUN_STAMP_FILE = 'run.json' as const;
+export const COMPOSE_RUN_SPEC = 'rig-compose-run/1' as const;
+export const COMPOSE_RUN_FILE = 'compose-run.json' as const;
 export const RUN_STAMP_INPUT_ROLES = ['source', 'full', 'head'] as const;
 
 export type RunStampCommand = 'rig' | 'assemble';
@@ -29,6 +31,15 @@ export interface RunStampPackage {
 export interface RunStampFileEntry {
   path: string;
   sha256: string;
+}
+
+/** Compose's consumed inputs, captured before its gate; no clock or output inventory. */
+export interface ComposeRun {
+  spec: typeof COMPOSE_RUN_SPEC;
+  scene: RunStampFileEntry;
+  characters: Array<{ id: string; build: string; files: RunStampFileEntry[] }>;
+  plate: RunStampFileEntry | null;
+  plates: Array<{ name: string; path: string; sha256: string }>;
 }
 
 export interface RunStampInputEntry {

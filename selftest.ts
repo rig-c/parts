@@ -95,7 +95,7 @@ import { readConfigWriteTarget, stageConfigWrite } from './tools/configwrite.ts'
 import { BLINK_ANIMATION } from './src/check.ts';
 import { runCorePointerChecks } from './tools/check_corepointer.ts';
 import { runLayerBoundsChecks } from './tools/check_layer_bounds.ts';
-import { readPackageIdentity, RUN_STAMP_FILE, RUN_STAMP_SPEC, type RunStamp } from './src/runstamp.ts';
+import { COMPOSE_RUN_FILE, COMPOSE_RUN_SPEC, type ComposeRun, readPackageIdentity, RUN_STAMP_FILE, RUN_STAMP_SPEC, type RunStamp } from './src/runstamp.ts';
 /**
  * rig-parts selftest — proof that every gate here can go RED.
  *
@@ -46446,6 +46446,139 @@ function runSceneSuite(): number {
     };
     const has = (err: PartsError | null, code: string, text = ''): boolean => err !== null && err.problems.some((p) => p.code === code && problemLine(p).includes(text));
 
+    // #1348: SC104 upward were unused in the tree before this block was added.
+    {
+      const why = 'issue #1348: exact consumed bytes, deterministic independent input hashes, no stale or refused receipt';
+      const source = scene(two({ plates: [
+        { name: 'z-layer', image: 'plate.png', provenance: 'generated', at: [0, 0], opaque_backdrop: true },
+        { name: 'a-layer', image: 'plate.png', provenance: 'generated', at: [0, 0], opaque_backdrop: true },
+      ], characters: [{ id: 'reach', build: 'reach', offset: [50, 10] }, { id: 'plain', build: 'plain', offset: [0, 20] }],
+      order: ['z-layer', 'plain', 'a-layer', 'reach'] }));
+      const receipt = (): ComposeRun => composeFromFiles(source).runRecord;
+      const digest = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
+      const before = receipt();
+      const hashRows = (r: ComposeRun): Array<[string, string]> => [
+        ['scene', r.scene.sha256],
+        ...r.characters.flatMap(c => c.files.map(f => [`character:${c.id}:${f.path}`, f.sha256] as [string, string])),
+        ...(r.plate === null ? [] : [['plate', r.plate.sha256] as [string, string]]),
+        ...r.plates.map(p => [`plate:${p.name}`, p.sha256] as [string, string]),
+      ];
+      const buildFiles = before.characters.flatMap(c => c.files.map(f => ({ key: `character:${c.id}:${f.path}`, path: join(dir, c.build, f.path) })));
+      const inventory = before.characters.every(c => {
+        const rig = JSON.parse(readFileSync(join(dir, c.build, 'rig/rig.json'), 'utf8')) as RigSpec;
+        const skinImages = [...new Set(Object.values(rig.skins.default).flatMap(atts => Object.values(atts).flatMap(a => {
+          const att = a as unknown as { image?: string; generator?: { depth?: { image?: string } } };
+          return [att.image, att.generator?.depth?.image].filter((v): v is string => typeof v === 'string');
+        })))];
+        const expected = ['check/check.json', 'parts.json', 'rig/rig.json', 'rig/motion.json', ...skinImages.map(f => `rig/images/${f}`)].sort();
+        return JSON.stringify(c.files.map(f => f.path)) === JSON.stringify(expected) &&
+          c.files.every(f => f.sha256 === digest(readFileSync(join(dir, c.build, f.path))));
+      });
+      say('SC104_COMPOSE_RUN_BINDS_EXACT_BUILD_SCENE_LEGACY_AND_NAMED_PLATE_BYTES',
+        before.spec === COMPOSE_RUN_SPEC && inventory && before.scene.path === source && before.scene.sha256 === digest(readFileSync(source)) &&
+          before.plate?.sha256 === digest(readFileSync(join(dir, 'plate.png'))) && before.plates.length === 2 &&
+          before.plates.every(p => p.sha256 === digest(readFileSync(join(dir, p.path)))) &&
+          before.characters.map(c => c.id).join(',') === 'plain,reach' && before.plates.map(p => p.name).join(',') === 'a-layer,z-layer' &&
+          Object.keys(before).join(',') === 'spec,scene,characters,plate,plates' &&
+          Object.keys(before.scene).join(',') === 'path,sha256' && before.characters.every(c => Object.keys(c).join(',') === 'id,build,files' && c.files.every(f => Object.keys(f).join(',') === 'path,sha256')) &&
+          before.plates.every(p => Object.keys(p).join(',') === 'name,path,sha256'),
+        `characters ${before.characters.length}; build files ${buildFiles.length}; plates ${before.plates.length + Number(before.plate !== null)}; inventory ${inventory}`, why);
+      // For each kind, change one byte without changing its decoded meaning.
+      // PNG bytes after IEND are ignored by the codec, but remain part of the consumed file.
+      const oneChange = (path: string, keys: string[]): boolean => {
+        const saved = readFileSync(path);
+        const isJson = path.endsWith('.json');
+        const base = isJson ? saved : Buffer.concat([saved, Buffer.from([0])]);
+        try {
+          writeFileSync(path, base);
+          const a = receipt();
+          const changed = Buffer.from(base); changed[changed.length - 1] = isJson ? 32 : 1;
+          writeFileSync(path, changed);
+          const b = receipt();
+          const rowsA = new Map(hashRows(a)), rowsB = new Map(hashRows(b));
+          const moved = [...rowsA].filter(([key, hash]) => rowsB.get(key) !== hash).map(([key]) => key).sort();
+          // Comparing the whole record with its hash strings erased also protects identity/order/shape.
+          const shape = (r: ComposeRun) => JSON.stringify(r).replace(/[a-f0-9]{64}/g, '<hash>');
+          return saved.length > 0 && base.filter((v, i) => v !== changed[i]).length === 1 &&
+            shape(a) === shape(b) && JSON.stringify(moved) === JSON.stringify([...keys].sort()) &&
+            keys.every(key => rowsB.get(key) === digest(changed));
+        } finally { writeFileSync(path, saved); }
+      };
+      const changedBuilds = buildFiles.map(f => ({ ...f, isolated: oneChange(f.path, [f.key]) }));
+      say('SC105_ONE_BYTE_IN_EACH_CONSUMED_BUILD_FILE_CHANGES_ONLY_ITS_HASH',
+        inventory && changedBuilds.length > 0 && changedBuilds.every(f => f.isolated),
+        `${changedBuilds.length} file mutations; isolated ${changedBuilds.filter(f => f.isolated).length}`, why);
+      say('SC106_ONE_SCENE_BYTE_CHANGES_ONLY_THE_SCENE_HASH', oneChange(source, ['scene']), 'one trailing newline becomes a space', why);
+      // A shared physical plate legitimately changes all three references; use distinct files to test isolation.
+      const body = JSON.parse(readFileSync(source, 'utf8')) as { plate: { image: string }; plates: Array<{ name: string; image: string }> };
+      const distinct = [body.plate, ...body.plates];
+      distinct.forEach((p, i) => { p.image = `record-plate-${i}.png`; writeFileSync(join(dir, p.image), readFileSync(join(dir, 'plate.png'))); });
+      writeFileSync(source, sceneText(body));
+      const plateChanges = distinct.map((p, i) => oneChange(join(dir, p.image), [i === 0 ? 'plate' : `plate:${body.plates[i - 1].name}`]));
+      say('SC107_ONE_BYTE_IN_LEGACY_AND_EACH_NAMED_PLATE_CHANGES_ONLY_ITS_HASH', plateChanges.every(Boolean), `${plateChanges.length} isolated plate mutations`, why);
+      const stable = rigJsonText(receipt());
+      const extra = join(dir, 'plain', 'rig', 'images', 'unreferenced.png');
+      writeFileSync(extra, 'not a PNG and not a skin input');
+      say('SC108_RECORD_BYTES_REPEAT_WITH_NO_DIRECTORY_EXTRAS_OR_CLOCK', stable === rigJsonText(receipt()) && !stable.includes('started_at') && !stable.includes('finished_at'), 'extra unreferenced image ignored; repeated consumed inputs equal', why);
+      rmSync(extra);
+      const bin = suiteRigc();
+      const runner = rigcRunnerAt(bin, spawnRigc);
+      const out = join(dir, 'record-out');
+      const run = (rig: RigcRunner = runner, check: RigcRunner = runner) => composeStage(
+        { scene: source, out }, { rig, check, checkBin: bin, scratch: join(dir, 'record-gate') }, () => {});
+      const first = run();
+      const firstBytes = existsSync(join(out, COMPOSE_RUN_FILE)) ? readFileSync(join(out, COMPOSE_RUN_FILE), 'utf8') : null;
+      const again = run();
+      const secondBytes = existsSync(join(out, COMPOSE_RUN_FILE)) ? readFileSync(join(out, COMPOSE_RUN_FILE), 'utf8') : null;
+      say('SC109_GREEN_COMPOSE_WRITES_ONLY_ROOT_RECORD_WITH_DETERMINISTIC_BYTES',
+        first.stoppedAt === null && again.stoppedAt === null && firstBytes === stable && firstBytes === secondBytes &&
+          !existsSync(join(out, RUN_STAMP_FILE)) && sceneOutputFiles(out).filter(p => p.endsWith(COMPOSE_RUN_FILE)).join(',') === COMPOSE_RUN_FILE,
+        `stops ${first.stoppedAt}/${again.stoppedAt}; receipt ${firstBytes !== null}; repeated bytes ${firstBytes === secondBytes}`, why);
+      const absent = [...buildFiles, { key: 'scene', path: source }, ...distinct.map((p, i) => ({ key: `plate:${i}`, path: join(dir, p.image) }))];
+      const missing = absent.map(f => {
+        const saved = readFileSync(f.path);
+        try {
+          rmSync(f.path); writeFileSync(join(out, COMPOSE_RUN_FILE), 'stale');
+          const logs: string[] = [];
+          const result = composeStage({ scene: source, out }, { rig: runner, check: runner, checkBin: bin, scratch: join(dir, 'record-missing-gate') }, l => logs.push(l));
+          const code = f.key === 'scene' ? 'SCENE_FILE' : f.key.startsWith('plate:') ? 'SCENE_PLATE_PRESENT' : 'SCENE_BUILD_PRESENT';
+          return result.stoppedAt === 'compose' && !existsSync(join(out, COMPOSE_RUN_FILE)) && logs.some(l => l.includes(code) && l.includes(basename(f.path)));
+        } finally { writeFileSync(f.path, saved); }
+      });
+      say('SC110_EACH_MISSING_BUILD_SCENE_OR_PLATE_IS_NAMED_AND_REMOVES_STALE_RECORD',
+        first.stoppedAt === null && missing.every(Boolean), `${missing.length} missing inputs; named and cleared ${missing.filter(Boolean).length}`, why);
+      const reject: RigcRunner = () => ({ status: 1, out: 'planted gate refusal' });
+      writeFileSync(join(out, COMPOSE_RUN_FILE), 'stale');
+      const redGate = run(reject);
+      const gateCleared = !existsSync(join(out, COMPOSE_RUN_FILE));
+      writeFileSync(join(out, COMPOSE_RUN_FILE), 'stale');
+      const redCheck = run(runner, reject);
+      say('SC111_GATE_AND_CHECK_REFUSALS_NEVER_EMIT_A_RECORD',
+        first.stoppedAt === null && redGate.stoppedAt === 'compose' && gateCleared && redCheck.stoppedAt === 'check' && !existsSync(join(out, COMPOSE_RUN_FILE)),
+        `gate ${redGate.stoppedAt}, cleared ${gateCleared}; check ${redCheck.stoppedAt}`, why);
+      // Mutate every input only after compose has captured it, at the gate boundary.
+      const snapshot = receipt(), saved = new Map(absent.map(f => [f.path, readFileSync(f.path)]));
+      let mutated = false;
+      const mutableGate: RigcRunner = argv => {
+        if (!mutated) { mutated = true; for (const [path, bytes] of saved) writeFileSync(path, Buffer.concat([bytes, Buffer.from([32])])); }
+        return runner(argv);
+      };
+      let frozen: ReturnType<typeof composeStage> | null = null;
+      try { frozen = run(mutableGate); }
+      finally { for (const [path, bytes] of saved) writeFileSync(path, bytes); }
+      say('SC112_RECORD_BINDS_CAPTURED_BYTES_WHEN_INPUTS_CHANGE_DURING_GATE',
+        mutated && frozen?.stoppedAt === null && readFileSync(join(out, COMPOSE_RUN_FILE), 'utf8') === rigJsonText(snapshot) &&
+          [...saved].every(([path, bytes]) => readFileSync(path).equals(bytes)),
+        `mutated ${mutated}; stage ${frozen?.stoppedAt}; restored ${saved.size} input files`, why);
+      const noPlate = composeFromFiles(scene(two({ plate: undefined, plates: undefined })));
+      say('SC114_ABSENT_PLATES_HAVE_NULL_AND_EMPTY_ARRAY_IN_THE_FIXED_RECORD_SHAPE',
+        noPlate.runRecord.plate === null && noPlate.runRecord.plates.length === 0,
+        'legacy plate null; named plates empty', why);
+      writeFileSync(join(out, COMPOSE_RUN_FILE), 'stale');
+      const badPage = refusals(() => composeStage({ scene: source, out, pageSize: 0 }, { rig: runner, check: runner, checkBin: bin, scratch: join(dir, 'record-option-gate') }, () => {}));
+      say('SC113_STAGE_OPTION_REFUSAL_CLEARS_RECORD_BEFORE_VALIDATION', has(badPage, 'PACK_PAGE_SIZE') && !existsSync(join(out, COMPOSE_RUN_FILE)), `option refusal ${codes(badPage)}`, why);
+    }
+
     // Scene animation controls (#1346): names allocated after the live SC01..SC75 scan.
     {
       const why = 'issue #1346: declared final names, additive idle, Core refusals and posed endpoint closure before emission';
@@ -46575,11 +46708,11 @@ function runSceneSuite(): number {
       const legacyPath = scene(body()); const legacyOut = join(dir, 'clips-legacy-parity');
       const first = runCli(['compose', '--scene', legacyPath, '--out', legacyOut]);
 
-      const files = sceneOutputFiles(legacyOut);
+      const files = sceneOutputFiles(legacyOut).filter(p => p !== COMPOSE_RUN_FILE);
       const firstBytes = new Map(files.map(p => [p, readFileSync(join(legacyOut, p))]));
       writeFileSync(legacyPath, sceneText(body({})));
       const again = runCli(['compose', '--scene', legacyPath, '--out', legacyOut]);
-      const parity = compareSceneBytes(firstBytes, new Map(sceneOutputFiles(legacyOut).map(p => [p, readFileSync(join(legacyOut, p))])));
+      const parity = compareSceneBytes(firstBytes, new Map(sceneOutputFiles(legacyOut).filter(p => p !== COMPOSE_RUN_FILE).map(p => [p, readFileSync(join(legacyOut, p))])));
       say('SC87_ABSENT_DECLARATION_RETAINS_SAME_PATH_OUTPUT_BYTES_AND_PREFIX_AUDIT',
         first.status === 0 && again.status === 0 && files.length > 0 && parity.stableEqual && extended !== null &&
           unprefixedNames(extended.rig, extended.motion, ['a'], true, [], ['idle']).length === 0 &&
@@ -47981,6 +48114,32 @@ function runSceneSuite(): number {
           readFileSync(join(out, 'rig', 'images', 'a.face_depth.png')).equals(readFileSync(join(build, 'rig', 'images', 'face_depth.png'))),
         `rig ${rig.status}; unchecked ${codes(unchecked.err)}; check ${checked.status}; compose ${run.status}; budget ${JSON.stringify(C?.rig.invariants)}; depth ${JSON.stringify(depth)}; ${sceneBarLines(run.out, join(out, 'check'))}`,
         'issue #1344: real CLI producer and Core gate, then real check; no hand-written PASS receipt admits this input');
+      // Reuse SC60's producer; a generator's named depth image is an input too.
+      const recordScene = scene({ ...body, characters: [{ id: 'a', build, offset: [0, 0] }], order: ['a'] });
+      const depthPath = join(build, 'rig', 'images', 'face_depth.png');
+      let depthBound = false, depthMoved = false, depthMissing = false;
+      if (checked.status === 0 && existsSync(depthPath)) {
+        const saved = readFileSync(depthPath);
+        try {
+          const original = composeFromFiles(recordScene).runRecord;
+          const entry = original.characters[0].files.find(f => f.path === 'rig/images/face_depth.png');
+          depthBound = entry?.sha256 === createHash('sha256').update(saved).digest('hex');
+          const changed = Buffer.concat([saved, Buffer.from([1])]);
+          writeFileSync(depthPath, changed);
+          const next = composeFromFiles(recordScene).runRecord;
+          const expected = structuredClone(original);
+          const expectedDepth = expected.characters[0].files.find(f => f.path === 'rig/images/face_depth.png');
+          if (expectedDepth !== undefined) expectedDepth.sha256 = createHash('sha256').update(changed).digest('hex');
+          depthMoved = rigJsonText(expected) === rigJsonText(next) && rigJsonText(original) !== rigJsonText(next);
+          rmSync(depthPath);
+          const error = refusals(() => composeFromFiles(recordScene));
+          depthMissing = has(error, 'SCENE_BUILD_PRESENT', 'face_depth.png');
+        } finally { writeFileSync(depthPath, saved); }
+      }
+      say('SC115_GENERATOR_DEPTH_IMAGE_IS_BOUND_AND_ITS_MUTATION_AND_MISSING_INPUT_ARE_ISOLATED',
+        run.status === 0 && depthBound && depthMoved && depthMissing,
+        `depth bound ${depthBound}; isolated added byte ${depthMoved}; missing named ${depthMissing}`,
+        'issue #1348: reuse the real SC60 producer; the depth filename comes from its skin generator, not a directory inventory');
       const scaled = checked.status === 0 ? compose({ ...body, characters: [{ id: 'a', build, offset: [0, 0], scale: 0.5 }], order: ['a'] }) : { err: null };
       say('SC61_DEPTH_GRID_SCALE_WITHOUT_A_GEOMETRY_SCALE_CONTRACT_IS_REFUSED',
         has(scaled.err, 'SCENE_SCALE_EXACT', 'image-sized depth grid'), codes(scaled.err),

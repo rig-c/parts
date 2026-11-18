@@ -82,6 +82,8 @@
  * one platform's answer, the runner's.
  */
 import { compareSceneBytes } from './scene_parity.ts';
+import { COMPOSE_RUN_FILE, COMPOSE_RUN_SPEC, type ComposeRun } from '../src/runstamp.ts';
+import { createHash } from 'node:crypto';
 import { runWithoutBun } from './smoke_without_bun.ts';
 import { checkSmokeWithoutBun } from './check_smoke_without_bun.ts';
 import { findSmokeExecutable, isSmokePathInside, runSmokeCommand } from './smoke_process.ts';
@@ -1230,17 +1232,24 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, fetchedTgz?: strin
     // #1346: stable bytes at identical paths; retain explicit Core clock-field differences.
     const emitted = (root: string, prefix = ''): string[] => readdirSync(join(root, prefix), { withFileTypes: true })
       .flatMap(e => e.isDirectory() ? emitted(root, join(prefix, e.name)) : [join(prefix, e.name)]).sort();
-    const files = emitted(sceneOut), bytes = new Map(files.map(file => [file, readFileSync(join(sceneOut, file))]));
+    const files = emitted(sceneOut).filter(file => file !== COMPOSE_RUN_FILE), bytes = new Map(files.map(file => [file, readFileSync(join(sceneOut, file))]));
+    const recordPath = join(sceneOut, COMPOSE_RUN_FILE);
+    const recordBefore: ComposeRun | null = existsSync(recordPath) ? JSON.parse(readFileSync(recordPath, 'utf8')) as ComposeRun : null;
     const refusal = (result: { out: string }) => result.out.split('\n').filter(line => /FAIL|refused|stopped/.test(line)).join(' | ') || 'no refusal line';
     const scenePath = join(home, 'scene.json');
     const declaration = JSON.parse(readFileSync(scenePath, 'utf8')) as Record<string, unknown>;
     writeFileSync(scenePath, JSON.stringify({ ...declaration, animations: {} }, null, 1) + '\n');
     const parity = run(bin, ['compose', '--scene', scenePath, '--out', sceneOut], home);
     output += parity.out;
-    const compared = compareSceneBytes(bytes, new Map((existsSync(sceneOut) ? emitted(sceneOut) : []).map(file => [file, readFileSync(join(sceneOut, file))])));
-    const equal = parity.status === 0 && files.length > 0 && compared.stableEqual;
+    const compared = compareSceneBytes(bytes, new Map((existsSync(sceneOut) ? emitted(sceneOut).filter(file => file !== COMPOSE_RUN_FILE) : []).map(file => [file, readFileSync(join(sceneOut, file))])));
+    const recordAfter: ComposeRun | null = existsSync(recordPath) ? JSON.parse(readFileSync(recordPath, 'utf8')) as ComposeRun : null;
+    const expectedSceneHash = createHash('sha256').update(readFileSync(scenePath)).digest('hex');
+    const recordBinds = recordBefore?.spec === COMPOSE_RUN_SPEC && recordAfter?.spec === COMPOSE_RUN_SPEC &&
+      recordAfter.scene.sha256 === expectedSceneHash && recordBefore.scene.sha256 !== recordAfter.scene.sha256 &&
+      JSON.stringify({ ...recordBefore, scene: recordAfter.scene }) === JSON.stringify(recordAfter);
+    const equal = parity.status === 0 && files.length > 0 && compared.stableEqual && recordBinds;
     if (!equal) fault('compose', `SCENE_CLIP_LEGACY_BYTES: empty declaration exit ${parity.status}; stable parity ${equal}; raw parity ${compared.rawEqual}; differences ${JSON.stringify(compared.differences)}; ${refusal(parity)}`);
-    else notes.push(`scene clips: absent versus empty declaration kept ${files.length} stable same-path files; raw equal ${compared.rawEqual}; Core clock differences ${JSON.stringify(compared.differences)}`);
+    else notes.push(`scene clips: absent versus empty declaration kept ${files.length} stable same-path files; raw equal ${compared.rawEqual}; Core clock differences ${JSON.stringify(compared.differences)}; compose record binds changed scene bytes ${recordBinds}`);
     const clip = { duration: 2, loop: true, tracks: [{ bone: 'plate', property: 'translatex', keys: [{ t: 0, v: [-2] }, { t: 1, v: [2] }, { t: 2, v: [-2] }] }] };
     writeFileSync(scenePath, JSON.stringify({ ...declaration, animations: { pan: clip } }, null, 1) + '\n');
     const clipped = run(bin, ['compose', '--scene', scenePath, '--out', sceneOut], home);
@@ -1251,7 +1260,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, fetchedTgz?: strin
     writeFileSync(scenePath, JSON.stringify({ ...declaration, animations: { pan: clip } }, null, 1) + '\n');
     const red = run(bin, ['compose', '--scene', scenePath, '--out', sceneOut], home);
     output += red.out;
-    if (red.status !== 1 || !red.out.includes('SCENE_ANIMATION_LOOP_CLOSES') || existsSync(join(sceneOut, 'rig')) || existsSync(join(sceneOut, 'scene.json'))) fault('compose', `SCENE_CLIP_INSTALLED_NONCLOSING: exit ${red.status}; refusal ${red.out.includes('SCENE_ANIMATION_LOOP_CLOSES')}; rig emitted ${existsSync(join(sceneOut, 'rig'))}; ${refusal(red)}`);
+    if (red.status !== 1 || !red.out.includes('SCENE_ANIMATION_LOOP_CLOSES') || existsSync(join(sceneOut, 'rig')) || existsSync(join(sceneOut, 'scene.json')) || existsSync(recordPath)) fault('compose', `SCENE_CLIP_INSTALLED_NONCLOSING: exit ${red.status}; refusal ${red.out.includes('SCENE_ANIMATION_LOOP_CLOSES')}; rig emitted ${existsSync(join(sceneOut, 'rig'))}; ${refusal(red)}`);
     else notes.push('installed scene clip retained its own duration and refused nonclosing posed endpoints before emission');
   }
 
