@@ -47034,7 +47034,7 @@ function runSceneSuite(): number {
       {
         const why = 'issue #1358: exact endpoint equality, first differing object/channel, hand-computed values and geometry fallback';
         // Reuse the already gated synthetic scene. Only its throwaway take timeline changes;
-        // plate has identity setup/world transform, so its keyed x/y values are world x/y.
+        // With keyed y fixed at zero, plate world x equals its keyed x; no trigonometric cross-term enters.
         const probe = (patch: Record<string, unknown>) => {
           if (modelText === null) return { problems: [] as Problem[], poses: [] as ReturnType<typeof poseRawAnimation>, text: '' };
           const raw = JSON.parse(modelText) as { animations: Array<Record<string, unknown>> };
@@ -47062,10 +47062,10 @@ function runSceneSuite(): number {
         say('SC130_LOOP_NAMES_BONE_WORLD_X_START_END_AND_EXACT_TOLERANCE',
           names(x, expected('bone "plate"', 'worldX', '2', '5')) && closed.poses.length === 2 && closed.problems.length === 0,
           `${summary(x)}; equal endpoint companion ${summary(closed)}`, why);
-        const y = probe({ bones: [boneTrack('plate', 0, 0, -2, 7)] });
-        say('SC131_LOOP_NAMES_WORLD_Y_WITH_HAND_COMPUTED_NEGATIVE_START',
-          names(y, expected('bone "plate"', 'worldY', '-2', '7')) && closed.problems.length === 0,
-          summary(y), why);
+        const negativeX = probe({ bones: [boneTrack('plate', -2, 7)] });
+        say('SC131_LOOP_NAMES_WORLD_X_WITH_HAND_COMPUTED_NEGATIVE_START',
+          names(negativeX, expected('bone "plate"', 'worldX', '-2', '7')) && closed.problems.length === 0,
+          summary(negativeX), why);
         const alpha = probe({ slots: [{ name: 'plate', timelines: [{ name: 'alpha',
           keys: [{ time: 0, value: 1 }, { time: 2, value: 0.25 }] }] }] });
         say('SC132_LOOP_NAMES_SLOT_ALPHA_WITH_HAND_COMPUTED_FRACTION',
@@ -47084,8 +47084,8 @@ function runSceneSuite(): number {
             closed.poses.length === 2 && closed.problems.length === 0,
           `${summary(order)}; bones and slots equal ${sameBonesAndSlots(order)}`, why);
         const both = [
-          probe({ bones: [boneTrack('plate', 2, 5, -2, 7)], slots: [{ name: 'plate', timelines: [{ name: 'alpha', keys: [{ time: 0, value: 1 }, { time: 2, value: 0.25 }] }] }] }),
-          probe({ slots: [{ name: 'plate', timelines: [{ name: 'alpha', keys: [{ time: 0, value: 1 }, { time: 2, value: 0.25 }] }] }], bones: [boneTrack('plate', 2, 5, -2, 7)] }),
+          probe({ bones: [boneTrack('plate', 2, 5)], slots: [{ name: 'plate', timelines: [{ name: 'alpha', keys: [{ time: 0, value: 1 }, { time: 2, value: 0.25 }] }] }] }),
+          probe({ slots: [{ name: 'plate', timelines: [{ name: 'alpha', keys: [{ time: 0, value: 1 }, { time: 2, value: 0.25 }] }] }], bones: [boneTrack('plate', 2, 5)] }),
         ];
         say('SC135_LOOP_FIRST_DIFFERENCE_IS_DETERMINISTIC_ACROSS_TIMELINE_FIELD_ORDER',
           both.every(r => names(r, expected('bone "plate"', 'worldX', '2', '5'))) &&
@@ -47097,7 +47097,7 @@ function runSceneSuite(): number {
         const note = 'numeric tolerance 0 (exact equality)';
         const stableLoopMessage = (text: string) => text.includes('Issue #1358') && text.includes('first differing bone or slot') && text.includes(note);
         say('SC136_LOOP_REJECTS_EXACT_BINARY_TINY_DELTA_AND_DOCUMENTS_UNCHANGED_GATE',
-          names(tiny, expected('bone "plate"', 'worldX', '0', '0.00000095367431640625')) &&
+          names(tiny, expected('bone "plate"', 'worldX', '0', JSON.stringify(2 ** -20))) &&
             closed.poses.length === 2 && closed.problems.length === 0 &&
             stableLoopMessage(stabilityClips) && !stableLoopMessage(stabilityClips.replace(note, 'numeric tolerance 1')) &&
             green.status === 0 && modelText !== null && readFileSync(modelFile, 'utf8') === modelText,
