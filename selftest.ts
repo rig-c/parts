@@ -753,7 +753,7 @@ import { block, constraintConfig, dustImages, dustParts, FACE_EXPECT, faceConfig
 import { FORK_SMOOTH_MAX_INFLUENCES, smoothForkShares } from './src/rig.ts';
 import { type AttachmentSetsFile, blinkHoldProblems, buildRig as originalBuildRig, influenceReachHolds, DEFAULT_IDLE_KEYS, expandSetAttachmentKeys, FACE_TIPS_AXIS_NAME, HEAD_UP_BONE, flattenRig, IDLE_DRIVES_MESHES_WHY, type MeshAttachment, PAD, type RegionAttachment, rigJsonText, type RigOutput, type RigSpec, roundShares, tipRoundingBound, writtenShares } from './src/rig.ts';
 import { readEditorReceipts } from './src/editreceipt.ts';
-import { type ComposedScene, composeFromFiles, IMAGE_SEP, PLATE, PLATE_IMAGE, PREFIX_SEP, SCENE_REPORT_FILE, SCENE_SPEC, scaledConstraint, scaledStop, unprefixedNames } from './src/scene.ts';
+import { type ComposedScene, composeFromFiles, IMAGE_SEP, PLATE, PLATE_IMAGE, PREFIX_SEP, SCENE_REPORT_FILE, SCENE_SPEC, scaledConstraint, scaledStop, unprefixedNames, plateImageName } from './src/scene.ts';
 import { sceneCharacterRig, sceneText, writeFlatPlate, writeSceneBuild, writeTurnSceneBuild, sceneTurnFixture, sceneFoldProducerFixture, writeSceneProducerInput } from './fixtures/scene.ts';
 import { localInfluences, regionWeight } from './src/localweights.ts';
 import { boneHeat as solveBoneHeat, HEAT_MAX_ITERATIONS, HEAT_SOURCE_BAND, HEAT_TOLERANCE, latticeSilhouette } from './src/heat.ts';
@@ -46442,6 +46442,148 @@ function runSceneSuite(): number {
       return { ok, err };
     };
     const has = (err: PartsError | null, code: string, text = ''): boolean => err !== null && err.problems.some((p) => p.code === code && problemLine(p).includes(text));
+
+    // BEGIN named plate controls (#1345); also extracted unchanged for the narrow pool sample.
+    {
+      const why = 'issue #1345: explicit top-left canvas placement, per-layer alpha, exactly-once slots and emit only after the unchanged rigc gate';
+      const alpha = (file: string, w: number, h: number): void => {
+        const r = newRaster(w, h);
+        r.data.fill(255); r.data[3] = 0;
+        writeFileSync(join(dir, file), encodePngBytes(r));
+      };
+      writeFlatPlate(join(dir, 'oversize.png'), 120, 80, [48, 64, 80]);
+      alpha('middle.png', 20, 14); alpha('front.png', 140, 90);
+      const plates = [
+        { name: 'backdrop', image: 'oversize.png', provenance: 'generated', at: [-10, -10], opaque_backdrop: true },
+        { name: 'middle', image: 'middle.png', provenance: 'observed', at: [40, 18] },
+        { name: 'foreground', image: 'front.png', provenance: 'unknown', at: [-30, 4] },
+      ];
+      const named = (over: Record<string, unknown> = {}): Record<string, unknown> => {
+        const body = two(); delete body.plate;
+        return { ...body, plates, order: ['backdrop', 'plain', 'middle', 'reach', 'foreground'], ...over };
+      };
+      const result = compose(named());
+      const C = result.ok;
+      const expectedOrder = ['backdrop', 'plain:cloth', 'plain:eye', 'middle', 'reach:cloth', 'reach:eye', 'foreground'];
+      const geometry = [[0, 30], [0, 35], [-10, 11]];
+      const rightGeometry = (rig: RigSpec): boolean => plates.every((p, i) => {
+        const bone = rig.bones.find(b => b.name === p.name);
+        const att = rig.skins.default[p.name]?.[p.name] as RegionAttachment | undefined;
+        return bone?.parent === 'root' && bone.x === 0 && bone.y === 0 && att?.x === geometry[i][0] && att.y === geometry[i][1];
+      });
+      const hashes = plates.map(p => createHash('sha256').update(readFileSync(join(dir, p.image))).digest('hex'));
+      const out = join(dir, 'named-plates-out');
+      const run = runCli(['compose', '--scene', scene(named()), '--out', out]);
+      const sk = readJsonFile(join(out, 'check/build/skeleton.json'));
+      const compiled = (sk?.slots as Array<{name: string}> | undefined)?.map(s => s.name) ?? [];
+      const skin = (sk?.skins as Array<{attachments: Record<string, Record<string, {x?: number; y?: number; width: number; height: number}>>}> | undefined)?.[0]?.attachments;
+      const sizes = [[120, 80], [20, 14], [140, 90]];
+      const compiledGeometry = plates.every((p, i) => {
+        const a = skin?.[p.name]?.[p.name];
+        return a !== undefined && (a.x === undefined ? 0 : a.x) === geometry[i][0] && (a.y === undefined ? 0 : a.y) === geometry[i][1] && a.width === sizes[i][0] && a.height === sizes[i][1];
+      });
+      say('SC64_NAMED_PLATES_BEHIND_BETWEEN_FRONT_KEEP_HASHES_GEOMETRY_AND_GATE',
+        C !== null && rightGeometry(C.rig) && C.rig.slots.map(s => s.name).join(',') === expectedOrder.join(',') &&
+          run.status === 0 && compiled.join(',') === expectedOrder.join(',') && compiledGeometry &&
+          C.report.plates?.every((p, i) => p.sha256 === hashes[i]) === true &&
+          plates.every((_, i) => existsSync(join(out, 'rig/images', plateImageName(i))) && createHash('sha256').update(readFileSync(join(out, 'rig/images', plateImageName(i)))).digest('hex') === hashes[i]),
+        `compose ${run.status}; compiled slots ${compiled.join(',')}; geometry ${compiledGeometry}; hashes ${hashes.join(',')}; ${sceneBarLines(run.out, join(out, 'check'))}`, why);
+      const badAt = [undefined, null, [0], [0, 1, 2], [0.5, 0], [0, Infinity], ['0', 0]].map(at => compose(named({ plates: [{ ...plates[0], at }], order: ['backdrop', 'plain', 'reach'] })));
+      const outside = compose(named({ plates: [{ ...plates[1], at: [-200, 300] }], order: ['plain', 'middle', 'reach'] }));
+      const infinite = scene(named());
+      writeFileSync(infinite, readFileSync(infinite, 'utf8').replace(/"at": \[\s*-10,\s*-10\s*\]/, '"at":[1e999,-10]'));
+      const nonfinite = refusals(() => composeFromFiles(infinite));
+      say('SC65_PLATE_AT_REQUIRES_FINITE_INTEGERS_WITH_NEGATIVE_OUTSIDE_ALLOWED',
+        badAt.every(r => has(r.err, 'SCENE_PLATE_AT', 'scene.plates[0].at')) && has(nonfinite, 'SCENE_PLATE_AT') && outside.err === null,
+        `${badAt.filter(r => has(r.err, 'SCENE_PLATE_AT')).length}/${badAt.length} invalid placements; overflow ${codes(nonfinite)}; outside ${codes(outside.err)}`, why);
+      const duplicate = compose(named({ plates: [plates[0], plates[0]] }));
+      const collisions = ['root', 'plate', 'idle', 'plain', 'plain:body', 'plain:cloth', 'plain:idle'].map(name => compose(named({ plates: [{ ...plates[0], name }], order: [name, 'plain', 'reach'] })));
+      say('SC66_PLATE_NAMES_REFUSE_DUPLICATES_AND_CHARACTER_BONE_SLOT_ANIMATION_COLLISIONS',
+        has(duplicate.err, 'SCENE_PLATE_NAME_UNIQUE') && collisions.every(r => has(r.err, 'SCENE_PLATE_NAME_FREE')),
+        `duplicate ${codes(duplicate.err)}; ${collisions.filter(r => has(r.err, 'SCENE_PLATE_NAME_FREE')).length}/${collisions.length} reserved names refused`, why);
+      const orders = [
+        { order: ['backdrop', 'plain', 'middle', 'reach', 'foreground', 'middle'], code: 'SCENE_ORDER_ONCE' },
+        { order: ['backdrop', 'plain', 'reach', 'foreground'], code: 'SCENE_ORDER_COMPLETE' },
+        { order: ['backdrop', 'plain', 'middle', 'reach', 'foreground', 'ghost'], code: 'SCENE_ORDER_RESOLVES' },
+        { order: ['backdrop', 'plain:cloth', 'plain:cloth', 'plain', 'middle', 'reach', 'foreground'], code: 'SCENE_ORDER_ONCE' },
+        { order: ['backdrop', 'plain:cloth', 'middle', 'reach', 'foreground'], code: 'SCENE_ORDER_COMPLETE' },
+        { order: ['backdrop', 'plain:ghost', 'plain', 'middle', 'reach', 'foreground'], code: 'SCENE_ORDER_RESOLVES' },
+      ].map(p => ({ ...p, result: compose(named({ order: p.order })) }));
+      const inter = compose(named({ order: ['backdrop', 'plain:cloth', 'middle', 'reach', 'plain', 'foreground'] }));
+      say('SC67_PLATE_AND_CHARACTER_SLOTS_SHARE_EXACTLY_ONCE_ORDER_EXPANSION',
+        orders.every(p => has(p.result.err, p.code)) && inter.ok?.rig.slots.map(s => s.name).join(',') === 'backdrop,plain:cloth,middle,reach:cloth,reach:eye,plain:eye,foreground',
+        `${orders.filter(p => has(p.result.err, p.code)).length}/${orders.length} invalid orders; interleaved ${codes(inter.err)}`, why);
+      const alphaMissing = compose(named({ plates: [{ ...plates[0], opaque_backdrop: undefined }], order: ['backdrop', 'plain', 'reach'] }));
+      const alphaFalse = compose(named({ plates: [{ ...plates[0], opaque_backdrop: false }], order: ['backdrop', 'plain', 'reach'] }));
+      const undeclared = { ...plates[0] }; delete (undeclared as Partial<typeof undeclared>).opaque_backdrop;
+      const opaqueOut = join(dir, 'named-opaque-red');
+      const opaque = runCli(['compose', '--scene', scene(named({ plates: [undeclared], order: ['backdrop', 'plain', 'reach'] })), '--out', opaqueOut]);
+      say('SC68_ONLY_PER_LAYER_TRUE_DECLARATION_EXEMPTS_OPAQUE_PIXELS',
+        C !== null && alphaMissing.err !== null && has(alphaFalse.err, 'SCENE_PLATE_ALPHA') && opaque.status === 1 && opaque.out.includes('SCENE_PLATE_ALPHA') && !existsSync(join(opaqueOut, 'rig')) && !existsSync(join(opaqueOut, 'scene.json')),
+        `declared backdrop ${codes(result.err)}; false ${codes(alphaFalse.err)}; undeclared oversized exit ${opaque.status}, before emit ${!existsSync(join(opaqueOut, 'rig'))}`, why);
+      const receipt = { file: 'oversize.png', sha256: hashes[0], from_sha256: '0'.repeat(64), editor: 'image editor' };
+      const ledger = (editor_receipts: unknown): Record<string, unknown> => named({ plates: [{ ...plates[0], editor_receipts }], order: ['backdrop', 'plain', 'reach'] });
+      const good = compose(ledger({ required: true, receipts: [receipt] }));
+      const receiptFaults = [
+        [ledger({ required: true, receipts: [] }), 'SCENE_EDITOR_RECEIPT_MISSING'],
+        [ledger({ receipts: [{ ...receipt, sha256: '1'.repeat(64) }] }), 'SCENE_EDITOR_RECEIPT_SHA256'],
+        [ledger({ receipts: [{ ...receipt, file: 'missing.png' }] }), 'SCENE_EDITOR_RECEIPT_FILE'],
+        [ledger({ receipts: [{ ...receipt, editor: '' }] }), 'SCENE_EDITOR_RECEIPT'],
+      ] as const;
+      say('SC69_EVERY_NAMED_PLATE_VERIFIES_ITS_OWN_RECEIPT_LEDGER',
+        good.err === null && receiptFaults.every(([body, code]) => has(compose(body).err, code, 'scene.plates[0]')),
+        `matching ${codes(good.err)}; ${receiptFaults.length} ledger refusal variants`, why);
+      const legacy = compose(two()).ok;
+      const origin = compose(named({ plates: [{ ...plates[0], name: 'origin', image: 'plate.png', at: [0, 0] }], order: ['origin', 'plain', 'reach'] })).ok;
+      const oldBone = legacy?.rig.bones.find(b => b.name === 'plate');
+      const newBone = origin?.rig.bones.find(b => b.name === 'origin');
+      const oldAtt = legacy?.rig.skins.default.plate.plate as RegionAttachment | undefined;
+      const newAtt = origin?.rig.skins.default.origin.origin as RegionAttachment | undefined;
+      say('SC70_NAMED_AT_ZERO_CANVAS_SIZE_EQUALS_LEGACY_BONE_AND_ATTACHMENT_NUMBERS',
+        oldBone !== undefined && newBone !== undefined && oldBone.x === newBone.x && oldBone.y === newBone.y && oldBone.parent === newBone.parent && oldAtt !== undefined && newAtt !== undefined && oldAtt.x === newAtt.x && oldAtt.y === newAtt.y,
+        `legacy bone ${JSON.stringify(oldBone)}, named ${JSON.stringify(newBone)}; attachment xy ${oldAtt?.x},${oldAtt?.y} vs ${newAtt?.x},${newAtt?.y}`, why);
+      writeSceneBuild(join(dir, 'named-ungated'), 'reach', { rig: r => ((r.slots as Array<Record<string, unknown>>)[0].attachment = 'ghost') });
+      const redOut = join(dir, 'named-gate-red');
+      const red = runCli(['compose', '--scene', scene(named({ characters: [{ id: 'plain', build: 'plain', offset: [0, 20] }, { id: 'reach', build: 'named-ungated', offset: [50, 10] }] })), '--out', redOut]);
+      say('SC71_NAMED_PLATES_NEVER_EMIT_AFTER_CORE_GATE_REFUSAL',
+        red.status === 1 && red.out.includes('COMPOSE_RIGC_GREEN') && !existsSync(join(redOut, 'rig')) && !existsSync(join(redOut, 'scene.json')) && !existsSync(join(redOut, 'check')),
+        `core refusal ${red.status}, emitted rig ${existsSync(join(redOut, 'rig'))}`, why);
+      const shapes = [
+        named({ plates: null }),
+        named({ plates: [null] }),
+        named({ plates: [{ ...plates[0], name: '' }] }),
+        named({ plates: [{ ...plates[0], image: '' }] }),
+        named({ plates: [{ ...plates[0], provenance: 'invented' }] }),
+        named({ plates: [{ ...plates[0], opaque_backdrop: 'true' }] }),
+        named({ plates: [{ ...plates[0], unknown: 1 }] }),
+      ].map(body => compose(body));
+      say('SC73_NAMED_PLATE_SHAPE_FIELDS_AND_UNKNOWN_KEYS_ARE_REFUSED', shapes.every(r => r.err !== null),
+        `${shapes.filter(r => r.err !== null).length}/${shapes.length} malformed declarations refused`, why);
+      writeSceneBuild(join(dir, 'image-collision'), 'plain');
+      fs.copyFileSync(join(dir, 'image-collision/rig/images/cloth.png'), join(dir, 'image-collision/rig/images/0.png'));
+      const collisionRig = readJsonAt(join(dir, 'image-collision/rig/rig.json')) as RigSpec;
+      (collisionRig.skins.default.cloth.cloth as RegionAttachment).image = '0.png';
+      writeFileSync(join(dir, 'image-collision/rig/rig.json'), rigJsonText(collisionRig));
+      const imageCollision = compose(named({ characters: [{ id: 'scene-plate', build: 'image-collision', offset: [0, 20] }], order: ['backdrop', 'scene-plate', 'middle', 'foreground'] }));
+      say('SC74_NAMED_PLATE_IMAGE_NAMESPACE_REFUSES_CHARACTER_FILE_COLLISION', has(imageCollision.err, 'SCENE_IMAGE_NAME_FREE', 'scene-plate.0.png'),
+        `character image versus plate image ${codes(imageCollision.err)}`, why);
+      const undersized = [[99, 60], [100, 59], [99, 59]].map(([w, h], i) => {
+        const image = `small-backdrop-${i}.png`; writeFlatPlate(join(dir, image), w, h, [48, 64, 80]);
+        return { w, h, result: compose(named({ plates: [{ ...plates[0], image }], order: ['backdrop', 'plain', 'reach'] })) };
+      });
+      const smallOut = join(dir, 'named-small-backdrop-red');
+      const small = runCli(['compose', '--scene', scene(named({ plates: [{ ...plates[0], image: 'small-backdrop-0.png' }], order: ['backdrop', 'plain', 'reach'] })), '--out', smallOut]);
+      const smallClear = compose(named({ plates: [{ ...plates[1], opaque_backdrop: true }], order: ['plain', 'middle', 'reach'] }));
+      say('SC75_OPAQUE_BACKDROP_REQUIRES_BOTH_CORE_STAGE_DIMENSIONS_BEFORE_EMIT',
+        undersized.every(p => has(p.result.err, 'SCENE_PLATE_BACKDROP_SIZE', `${p.w}x${p.h}`) && has(p.result.err, 'SCENE_PLATE_BACKDROP_SIZE', 'width >= 100 and height >= 60')) &&
+          small.status === 1 && small.out.includes('SCENE_PLATE_BACKDROP_SIZE') && small.out.includes('backdrop') && !existsSync(join(smallOut, 'rig')) && !existsSync(join(smallOut, 'scene.json')) && smallClear.err === null,
+        `${undersized.length} width/height floor plants; small opaque exit ${small.status}, before emit ${!existsSync(join(smallOut, 'rig'))}; transparent small backdrop ${codes(smallClear.err)}`, why);
+      const totality = C === null ? ['no scene'] : unprefixedNames(C.rig, C.motion, ['plain', 'reach'], false, plates.map(p => p.name));
+      const dropped = C === null ? [] : unprefixedNames(C.rig, C.motion, ['plain', 'reach'], false);
+      say('SC72_PREFIX_TOTALITY_ADMITS_ONLY_DECLARED_PLATE_NAMES_AND_IMAGES', totality.length === 0 && dropped.some(s => s.includes('backdrop')),
+        `declared ${totality.join(';') || 'none'}; omitted declaration ${dropped.length} misses`, why);
+    }
+    // END named plate controls (#1345).
 
     // Receipt checks use the public generated scene fixture, never artwork.
     const plateSha = createHash('sha256').update(readFileSync(join(dir, 'plate.png'))).digest('hex');
