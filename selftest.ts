@@ -756,6 +756,7 @@ import { readEditorReceipts } from './src/editreceipt.ts';
 import { type ComposedScene, composeFromFiles, composeStage, IMAGE_SEP, PLATE, PLATE_IMAGE, PREFIX_SEP, SCENE_REPORT_FILE, SCENE_SPEC, scaledConstraint, scaledStop, unprefixedNames, plateImageName } from './src/scene.ts';
 import { mergeSceneAnimations, readSceneAnimations, sceneClipLoopProblems, scenePoseState, sceneKeyedModel } from './src/sceneclips.ts';
 import { poseRawAnimation } from '@rig-c/core/core';
+import { compareSceneBytes } from './scripts/scene_parity.ts';
 import { sceneOutputFiles, sceneClip, writeSceneClipBuild, sceneCharacterRig, sceneText, writeFlatPlate, writeSceneBuild, writeTurnSceneBuild, sceneTurnFixture, sceneFoldProducerFixture, writeSceneProducerInput } from './fixtures/scene.ts';
 import { localInfluences, regionWeight } from './src/localweights.ts';
 import { boneHeat as solveBoneHeat, HEAT_MAX_ITERATIONS, HEAT_SOURCE_BAND, HEAT_TOLERANCE, latticeSilhouette } from './src/heat.ts';
@@ -46456,9 +46457,12 @@ function runSceneSuite(): number {
         ...(animations === undefined ? {} : { animations }),
       });
       const authored = sceneClip(2);
-      const baseline = compose(body()).ok;
-      const extended = compose(body({ idle: authored })).ok;
-      const separate = compose(body({ take: sceneClip(4) })).ok;
+      const baselineResult = compose(body());
+      const extendedResult = compose(body({ idle: authored }));
+      const separateResult = compose(body({ take: sceneClip(4) }));
+      const baseline = baselineResult.ok, extended = extendedResult.ok, separate = separateResult.ok;
+      const diagnosis = (result: ReturnType<typeof compose>): string => result.err === null ? `composed=${result.ok !== null}` : result.err.problems.map(problemLine).join(' | ');
+      const cliDiagnosis = (result: { status: number; out: string }): string => `exit ${result.status}; ${result.out.split('\n').filter(line => /FAIL|refused|stopped/.test(line)).join(' | ') || 'no refusal line'}`;
       const out = join(dir, 'scene-clips-out');
       // Real Core gate and packed model; keep both the idle extension and separate-duration clip.
       const green = runCli(['compose', '--scene', scene(body({ idle: authored, take: sceneClip(4) })), '--out', out]);
@@ -46475,7 +46479,7 @@ function runSceneSuite(): number {
           close(bone(i, 'plate')?.worldX ?? NaN, [-3, 3, -3][i]) &&
           close(angle(i, 'a:yaw_dial'), [-4, 4, -4][i]) && close(angle(i, 'a:body_yaw_dial'), [-2, 2, -2][i])) &&
           posed.map(p => p.animationTime).join(',') === '0,2,4',
-        `compose ${green.status}; samples ${posed.map(p => p.animationTime)}; plate ${posed.map((_, i) => bone(i, 'plate')?.worldX)}; yaw ${posed.map((_, i) => angle(i, 'a:yaw_dial'))}; body ${posed.map((_, i) => angle(i, 'a:body_yaw_dial'))}`, why);
+        `compose ${cliDiagnosis(green)}; baseline ${diagnosis(baselineResult)}; extended ${diagnosis(extendedResult)}; separate ${diagnosis(separateResult)}; samples ${posed.map(p => p.animationTime)}; plate ${posed.map((_, i) => bone(i, 'plate')?.worldX)}; yaw ${posed.map((_, i) => angle(i, 'a:yaw_dial'))}; body ${posed.map((_, i) => angle(i, 'a:body_yaw_dial'))}`, why);
       const baseIdle = baseline?.motion.animations.idle as unknown as { tracks: unknown[]; deform?: unknown } | undefined;
       const addedIdle = extended?.motion.animations.idle as unknown as { tracks: unknown[]; deform?: unknown } | undefined;
       say('SC77_IDLE_APPENDS_WITHOUT_CHANGING_CHARACTER_TRACKS_DEFORMS_OR_PHYSICS',
@@ -46484,7 +46488,7 @@ function runSceneSuite(): number {
           addedIdle.tracks.length === baseIdle.tracks.length + authored.tracks.length &&
           JSON.stringify(addedIdle.deform) === JSON.stringify(baseIdle.deform) && baseIdle.deform !== undefined &&
           rigJsonText(baseline.rig) === rigJsonText(extended.rig) && (extended.rig.constraints ?? []).some(c => c.type === 'physics'),
-        `original tracks ${baseIdle?.tracks.length}; extended ${addedIdle?.tracks.length}; deforms ${baseIdle?.deform !== undefined}; physics ${(extended?.rig.constraints ?? []).filter(c => c.type === 'physics').length}`, why);
+        `original tracks ${baseIdle?.tracks.length}; extended ${addedIdle?.tracks.length}; deforms ${baseIdle?.deform !== undefined}; physics ${(extended?.rig.constraints ?? []).filter(c => c.type === 'physics').length}; baseline ${diagnosis(baselineResult)}; extended ${diagnosis(extendedResult)}`, why);
       say('SC78_NEW_SCENE_CLIP_KEEPS_ITS_OWN_DURATION_AND_CHARACTER_IDLE',
         baseline !== null && separate !== null && rigJsonText(separate.motion.animations.idle) === rigJsonText(baseline.motion.animations.idle) &&
           (separate.motion.animations.take as { duration: number }).duration === 4 && separate.motion.animations.idle.duration === 2 &&
@@ -46561,26 +46565,28 @@ function runSceneSuite(): number {
         { take: { duration: 2, tracks: [{ bone: 'plate', property: 'translate' }] } },
         { take: { duration: 2, tracks: [{ bone: 'plate', property: 'translate', keys: [{ v: [0, 0] }] }] } },
       ].map(animations => compose(body(animations)));
+      const invalidFields = ['animations."take".duration', 'animations."take".tracks', 'animations."take".tracks[0].keys', 'animations."take".tracks[0].keys[0].t'];
       const missingValue = runRed('missing-value', { take: { duration: 2, tracks: [{ bone: 'plate', property: 'translate', keys: [{ t: 0 }, { t: 2, v: [0, 0] }] }] } });
       say('SC86_MISSING_DURATION_KEYS_VALUES_AND_TIMES_ARE_CORE_NAMED_REFUSALS',
-        invalid.every(r => r.err !== null && r.err.problems.some(p => p.code === 'CE_MOTION_FIELD_SHAPE')) && missingValue.status === 1 && missingValue.empty && missingValue.out.includes('CE_COMPILE_TIMELINE_VALUE_CHANNEL_COUNT') && separate !== null,
+        invalid.every((r, i) => r.err !== null && r.err.problems.some(p => p.code === 'CE_MOTION_FIELD_SHAPE' && p.detail.includes(invalidFields[i]))) && missingValue.status === 1 && missingValue.empty && missingValue.out.includes('CE_COMPILE_TIMELINE_VALUE_CHANNEL_COUNT') && separate !== null,
         invalid.map(r => codes(r.err)).join('; ') + `; missing value ${missingValue.status}`, why);
       const legacyPath = scene(body()); const legacyOut = join(dir, 'clips-legacy-parity');
       const first = runCli(['compose', '--scene', legacyPath, '--out', legacyOut]);
 
       const files = sceneOutputFiles(legacyOut);
-      const firstBytes = files.map(p => readFileSync(join(legacyOut, p)));
+      const firstBytes = new Map(files.map(p => [p, readFileSync(join(legacyOut, p))]));
       writeFileSync(legacyPath, sceneText(body({})));
       const again = runCli(['compose', '--scene', legacyPath, '--out', legacyOut]);
-      const same = files.length > 0 && JSON.stringify(files) === JSON.stringify(sceneOutputFiles(legacyOut)) && files.every((p, i) => firstBytes[i].equals(readFileSync(join(legacyOut, p))));
+      const parity = compareSceneBytes(firstBytes, new Map(sceneOutputFiles(legacyOut).map(p => [p, readFileSync(join(legacyOut, p))])));
       say('SC87_ABSENT_DECLARATION_RETAINS_SAME_PATH_OUTPUT_BYTES_AND_PREFIX_AUDIT',
-        first.status === 0 && again.status === 0 && same && extended !== null &&
+        first.status === 0 && again.status === 0 && files.length > 0 && parity.stableEqual && extended !== null &&
           unprefixedNames(extended.rig, extended.motion, ['a'], true, [], ['idle']).length === 0 &&
           separate !== null && unprefixedNames(separate.rig, separate.motion, ['a'], true, [], ['take']).length === 0,
-        `legacy ${first.status}/${again.status}; files ${files.length}; byte equal ${same}`, why);
+        `legacy ${cliDiagnosis(first)} / ${cliDiagnosis(again)}; baseline ${diagnosis(baselineResult)}; files ${files.length}; raw equal ${parity.rawEqual}; stable equal ${parity.stableEqual}; differences ${JSON.stringify(parity.differences)}`, why);
+      const importedCollision = compose(body({ 'a:turn': sceneClip(2) }));
       say('SC88_SCENE_CLIP_CANNOT_REPLACE_IMPORTED_ANIMATION',
-        has(compose(body({ 'a:turn': sceneClip(2) })).err, 'SCENE_ANIMATION_NAME_FREE', 'a:turn') && separate !== null,
-        'imported clip name refused; separate scene name accepted', why);
+        has(importedCollision.err, 'SCENE_ANIMATION_NAME_FREE', 'a:turn') && separate !== null,
+        `imported collision ${diagnosis(importedCollision)}; separate companion ${diagnosis(separateResult)}`, why);
       const delayed = { duration: 2, loop: false, tracks: [{ bone: 'plate', property: 'translatex', keys: [{ t: 0.5, v: [3] }, { t: 2, v: [3] }] }] };
       const delayedRun = runRed('delayed-start', { take: delayed });
       say('SC89_CLOSURE_READS_POSES_BEFORE_FIRST_KEY_AND_LOOP_FALSE_DOES_NOT_BYPASS',
@@ -46665,6 +46671,47 @@ function runSceneSuite(): number {
       });
       say('SC96_ALL_SLIDER_INPUT_CHANNELS_CHECK_OWN_BOUNDS_AND_REFUSE_DERIVE',
         channelReadings.every(r => r.ok), channelReadings.map(r => `${r.source}/${r.property}[${r.channel}]:${r.ok}`).join('; '), why);
+      let emptyClips: ReturnType<typeof readSceneAnimations> | undefined;
+      let numericClips: ReturnType<typeof readSceneAnimations> | undefined;
+      const emptyWrapper = refusals(() => { emptyClips = readSceneAnimations({}, 'empty scene'); });
+      const numericWrapper = refusals(() => { numericClips = readSceneAnimations({ take: sceneClip(2) }, 'numeric scene'); });
+      const missingDurationWrapper = refusals(() => readSceneAnimations({ take: { tracks: [] } }, 'missing-duration scene'));
+      say('SC101_SCENE_WRAPPER_SUPPLIES_CORE_TABLES_AND_MISSING_DURATION_NAMES_ITS_OWN_FIELD',
+        emptyWrapper === null && emptyClips !== undefined && Object.keys(emptyClips).length === 0 && numericWrapper === null && numericClips?.take.duration === 2 &&
+          missingDurationWrapper !== null && missingDurationWrapper.problems.some(p => p.code === 'CE_MOTION_FIELD_SHAPE' && p.detail.includes('animations."take".duration') && !p.detail.includes('`easings`')),
+        `empty ${codes(emptyWrapper)}; numeric ${codes(numericWrapper)}; missing duration ${missingDurationWrapper?.problems.map(problemLine).join(' | ')}`, why);
+      const badNarrowDir = writeSceneClipBuild(join(dir, 'bad-narrowing'));
+      const badNarrowMotionPath = join(badNarrowDir, 'rig', 'motion.json');
+      const badNarrowMotion = JSON.parse(readFileSync(badNarrowMotionPath, 'utf8')) as { animations: { idle: { deform: Array<{ keys: Array<{ transform: { narrowing: unknown } }> }> } } };
+      badNarrowMotion.animations.idle.deform[0].keys[0].transform.narrowing = 0;
+      writeFileSync(badNarrowMotionPath, rigJsonText(badNarrowMotion));
+      const badNarrow = compose(body(undefined, badNarrowDir));
+      say('SC102_CLIP_FIXTURE_USES_BOOLEAN_NARROWING_AND_PLANTED_NUMBER_IS_FULLY_NAMED',
+        baselineResult.err === null && baseline !== null && has(badNarrow.err, 'SCENE_BUILD_FIELD_KNOWN', 'motion.json animations.idle.deform[0].keys[0].transform.narrowing') &&
+          has(badNarrow.err, 'SCENE_BUILD_FIELD_KNOWN', 'is 0; a boolean is required'),
+        `positive baseline ${diagnosis(baselineResult)}; numeric plant ${diagnosis(badNarrow)}`, why);
+      const parityBytes = (start: string, finish: string, digest = 'synthetic') => new Map([
+        ['rig/rig.json', new TextEncoder().encode('{"stable":true}')],
+        ['check/build/run.json', new TextEncoder().encode(JSON.stringify({ started_at: start, finished_at: finish, inputs: [{ sha256: digest }] }))],
+      ]);
+      const firstClock = parityBytes('2000-01-01T00:00:00.000Z', '2000-01-01T00:00:01.000Z');
+      const nextClock = parityBytes('2000-01-01T00:00:02.000Z', '2000-01-01T00:00:03.000Z');
+      const clockComparison = compareSceneBytes(firstClock, nextClock);
+      const changedDigest = compareSceneBytes(firstClock, parityBytes('2000-01-01T00:00:02.000Z', '2000-01-01T00:00:03.000Z', 'changed'));
+      const changedRig = new Map(nextClock); changedRig.set('rig/rig.json', new TextEncoder().encode('{"stable":false}'));
+      const missingRig = new Map(nextClock); missingRig.delete('rig/rig.json');
+      // The same field names in another run.json remain ordinary output bytes.
+      const otherClockBefore = new Map(firstClock), otherClockAfter = new Map(firstClock);
+      otherClockBefore.set('check/run.json', new TextEncoder().encode(JSON.stringify({ started_at: '2000-01-01T00:00:00.000Z', finished_at: '2000-01-01T00:00:01.000Z' })));
+      otherClockAfter.set('check/run.json', new TextEncoder().encode(JSON.stringify({ started_at: '2000-01-01T00:00:02.000Z', finished_at: '2000-01-01T00:00:03.000Z' })));
+      const otherFileClock = compareSceneBytes(otherClockBefore, otherClockAfter);
+      say('SC103_STABLE_PARITY_REPORTS_RAW_CLOCK_DIFFERENCES_AND_REFUSES_OTHER_CHANGES',
+        !clockComparison.rawEqual && clockComparison.stableEqual && clockComparison.differences.length === 1 && clockComparison.differences[0].fields.join(',') === 'finished_at,started_at' &&
+          !changedDigest.stableEqual && !compareSceneBytes(firstClock, changedRig).stableEqual && !compareSceneBytes(firstClock, missingRig).stableEqual &&
+          !otherFileClock.rawEqual && !otherFileClock.stableEqual && otherFileClock.differences.length === 1 &&
+          otherFileClock.differences[0].path === 'check/run.json' && !otherFileClock.differences[0].clockOnly,
+        `clock-only ${JSON.stringify(clockComparison)}; changed inputs accepted ${changedDigest.stableEqual}; other-file timestamps ${JSON.stringify(otherFileClock)}`, why);
+
 
 
     }

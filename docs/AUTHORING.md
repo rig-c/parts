@@ -7268,6 +7268,12 @@ For example, this declaration adds a plate take independently of character idle:
 }
 ```
 
+Legacy same-path comparisons report raw file differences as well as stable-byte
+parity. Core's `check/build/run.json` carries fresh `started_at` and `finished_at`
+execution timestamps. Only those two valid clock fields may differ in the
+stable comparison: every other receipt field and every other output byte must
+match. Raw all-file equality is never reported when those clocks differ.
+
 Every declared scene clip, including an `idle` extension, is sampled from the
 gated compiled model at `t=0` and its declared duration before any scene output
 is emitted. Bone transforms, drawn/deformed geometry, slots, alpha, clipping and

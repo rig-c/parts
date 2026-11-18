@@ -147,8 +147,8 @@ export function writeSceneClipBuild(dir: string, bodySlider?: string): string {
     const deform = animations.turn.deform?.[0];
     if (deform === undefined) throw new Error('scene clip fixture requires the real turn deform producer');
     animations.idle.deform = [{ ...deform, keys: [
-      { t: 0, transform: { kind: 'yaw', degrees: 0, depth: true, narrowing: 0 } },
-      { t: animations.idle.duration, transform: { kind: 'yaw', degrees: 0, depth: true, narrowing: 0 } },
+      { t: 0, transform: { kind: 'yaw', degrees: 0, depth: true, narrowing: false } },
+      { t: animations.idle.duration, transform: { kind: 'yaw', degrees: 0, depth: true, narrowing: false } },
     ] }];
   } });
 }

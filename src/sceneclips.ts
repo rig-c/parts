@@ -11,7 +11,7 @@ export type SceneAnimations = CoreMotion['animations'];
 /** Core owns shape, required numbers, key times and all target families. */
 export function readSceneAnimations(raw: unknown, where: string): SceneAnimations {
   try {
-    return parseMotionSpec({ spec: 'rigc-motion/1', archetype: 'scene', cut: 'scene', animations: raw }, where).animations;
+    return parseMotionSpec({ spec: 'rigc-motion/1', archetype: 'scene', cut: 'scene', easings: {}, groups: {}, animations: raw }, where).animations;
   } catch (err) {
     if (!(err instanceof CompileError) || err.code === undefined) throw err;
     throw new PartsError([{ code: err.code, object: 'scene.animations', detail: err.message }]);
