@@ -130,6 +130,11 @@ export function clearRunStamp(outDir: string): void {
   rmSync(join(outDir, RUN_STAMP_FILE), { force: true });
 }
 
+/** Remove a previous compose record before CLI prevalidation or the compose stage begins. */
+export function clearComposeRun(outDir: string): void {
+  rmSync(join(outDir, COMPOSE_RUN_FILE), { force: true });
+}
+
 /**
  * Read package `name` and `version` from `package.json`, refusing with `RUN_STAMP_PACKAGE`
  * when the file is missing, invalid JSON, or lacks a non-empty string `name` or `version`.

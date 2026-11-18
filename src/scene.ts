@@ -104,7 +104,7 @@ import { readParts } from './parts.ts';
 import { missingReceipts, readEditorReceipts, type EditorReceipts } from './editreceipt.ts';
 import type { MotionSpec } from './motion.ts';
 import { decodePngBytes } from './raster/png.ts';
-import { COMPOSE_RUN_FILE, COMPOSE_RUN_SPEC, type ComposeRun, type RunStampFileEntry } from './runstamp.ts';
+import { clearComposeRun, COMPOSE_RUN_FILE, COMPOSE_RUN_SPEC, type ComposeRun, type RunStampFileEntry } from './runstamp.ts';
 import { readRequirements, type RequirementsFile } from './requirements.ts';
 import { OFFSET_PLACES, rigJsonText, type RigSpec } from './rig.ts';
 import { pyRound } from './round.ts';
@@ -1797,7 +1797,7 @@ export interface ComposeResult {
  */
 export function composeStage(input: ComposeInput, run: ComposeRunners, log: Log): ComposeResult {
   // Clear before even option validation: a refused rerun cannot retain an earlier receipt.
-  rmSync(join(input.out, COMPOSE_RUN_FILE), { force: true });
+  clearComposeRun(input.out);
   const prefix = (stage: ComposeStage): Log => (line) => log(`[${stage}] ${line}`);
   const say = prefix('compose');
   const refused = (stage: ComposeStage, err: unknown, composed: ComposedScene | null = null): ComposeResult => {

@@ -46577,6 +46577,29 @@ function runSceneSuite(): number {
       writeFileSync(join(out, COMPOSE_RUN_FILE), 'stale');
       const badPage = refusals(() => composeStage({ scene: source, out, pageSize: 0 }, { rig: runner, check: runner, checkBin: bin, scratch: join(dir, 'record-option-gate') }, () => {}));
       say('SC113_STAGE_OPTION_REFUSAL_CLEARS_RECORD_BEFORE_VALIDATION', has(badPage, 'PACK_PAGE_SIZE') && !existsSync(join(out, COMPOSE_RUN_FILE)), `option refusal ${codes(badPage)}`, why);
+      // Same single-character fixture as the pre-fix standalone CLI RED.
+      const cliFixture = join(dir, 'record-cli-preflight');
+      writeSceneBuild(join(cliFixture, 'character'), 'plain');
+      const cliSource = join(cliFixture, 'scene.json'), cliOut = join(cliFixture, 'out');
+      writeFileSync(cliSource, sceneText({ canvas: { width: 40, height: 40 }, characters: [{ id: 'a', build: 'character', offset: [0, 0] }], order: ['a'] }));
+      const cliArgs = ['compose', '--scene', cliSource, '--out', cliOut];
+      const cliGreen = runCli(cliArgs);
+      const cliRecord = join(cliOut, COMPOSE_RUN_FILE);
+      const greenRecord = existsSync(cliRecord) ? readFileSync(cliRecord) : null;
+      const legacyRig = join(cliOut, 'rig', 'rig.json');
+      const greenRig = existsSync(legacyRig) ? readFileSync(legacyRig) : null;
+      const preflight = ['0', '-1', '1.5', 'abc', ''].map((value, index) => {
+        // Reuse only the record bytes this real green CLI run wrote, avoiding another build per refusal.
+        if (index > 0 && greenRecord !== null) writeFileSync(cliRecord, greenRecord);
+        const result = runCli([...cliArgs, '--page-size', value]);
+        return { value, exit: result.status, named: result.out.includes(PACK_PAGE_SIZE),
+          cleared: !existsSync(cliRecord), legacyKept: greenRig !== null && existsSync(legacyRig) && readFileSync(legacyRig).equals(greenRig) };
+      });
+      say('SC116_CLI_PRE_STAGE_PAGE_SIZE_REFUSALS_CLEAR_THE_PREVIOUS_GREEN_RECORD',
+        cliGreen.status === 0 && greenRecord !== null &&
+          preflight.every(r => r.exit === 1 && r.named && r.cleared && r.legacyKept),
+        `green CLI exit ${cliGreen.status}, wrote record ${greenRecord !== null}; ${JSON.stringify(preflight)}`,
+        'issue #1348: a real green compose followed at the same --out by --page-size 0 must clear its record before cmdCompose refuses; other invalid values take the same pre-stage path and keep legacy outputs');
     }
 
     // Scene animation controls (#1346): names allocated after the live SC01..SC75 scan.
