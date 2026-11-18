@@ -6495,6 +6495,7 @@ and stay absent).
 | <a id="RIG_TURN_SURFACE_DEPTH_REQUIRED"></a>`RIG_TURN_SURFACE_DEPTH_REQUIRED` | a part with role `"surface"` in `config.turn.roles` or `config.turn.body.roles` carries no depth sheet in `parts.json` | run `assemble` with `config.depth` or provide `<part>_depth.png` in `parts.json` |
 | <a id="RIG_TURN_GRID_BUDGET"></a>`RIG_TURN_GRID_BUDGET` | a `"surface"` grid exceeds 2,400 triangles on one slot or 4,000 triangles across all `"surface"` slots | lower `config.turn.grid` / `config.turn.body.grid` `[cols, rows]` within the per-slot and total budgets |
 | <a id="RIG_TURN_HEAD_BONE"></a>`RIG_TURN_HEAD_BONE` | `buildRig` found no `"head"` (or body turn root) bone when emitting 2.5D turn carriers | declare `"head"` (or the body turn root bone) in `config.bones` |
+| <a id="RIG_TURN_BOUNDARY_DEPTH"></a>`RIG_TURN_BOUNDARY_DEPTH` | boundary names or sheets do not resolve; surfaces are not different, abutting without overlap in one group with common units; band is empty/outside/not boundary-reaching; declarations cycle; or grid support is missing | use exact existing parts, different abutting surfaces in one group with common near/zScale, a contained nonempty band reaching their boundary, acyclic declarations and the generated grid support |
 | <a id="RIG_TURN_SHARED_DEPTH_SCALE"></a>`RIG_TURN_SHARED_DEPTH_SCALE` | `"surface"` parts bound to one head or body turn declare different `near` polarities or `zScale` values | use one shared `near` and `zScale` across all `"surface"` parts in the turn group |
 | <a id="RIG_TURN_UNIT_DEPTH_REQUIRED"></a>`RIG_TURN_UNIT_DEPTH_REQUIRED` | a `"unit"` bone has neither a `unitDepths` entry nor a readable `"surface"` depth sheet | provide a `"surface"` depth sheet or an explicit `unitDepths.<part>` value |
 | <a id="RIG_TURN_UNIT_DEPTH_SUPPORT"></a>`RIG_TURN_UNIT_DEPTH_SUPPORT` | WARN only: an implicit unit depth sample is outside the source surface pixel-index bounds or its sampled art alpha is below 255 | author an explicit calibrated `unitDepths.<part>` value when this cross-part extrapolation is unintended; existing scalar sampling and refusal behavior are retained |
@@ -8426,6 +8427,71 @@ cohort to the actual PNG frame set through `readFrameSet` and `boneTrackOf`,
 including unselected frames, before reading the worst pose. Identical static
 ranges on a bone deduplicate; conflicting ranges are explicitly ambiguous,
 never described as no declared range.
+
+## Declared boundary depths (#1342)
+
+Optional `turn.boundaryDepths` and `turn.body.boundaryDepths` are maps keyed by
+an exact target part name. Every entry requires `neighbour` and `band`, both
+exact existing names in `parts.json`. Target and neighbour must be different
+`surface` parts in that same turn group, with common `near` and `zScale`.
+The band can be the target itself or another part whose nonzero alpha support
+is contained in the target and reaches its shared boundary with the neighbour.
+Missing fields use `CONFIG_FIELD_PRESENT`; malformed fields use
+`CONFIG_FIELD_TYPE`; unresolved config names use `CONFIG_NAME_RESOLVES`.
+Rig-time support failures and reciprocal or longer cycles use
+[`RIG_TURN_BOUNDARY_DEPTH`](#RIG_TURN_BOUNDARY_DEPTH).
+
+A contained rectangular band already has a producer: `assemble.patches`.
+For example, on a target occupying `[18,20,34,44]` and a neighbour ending at
+`y=20`, add this patch and its ordinary region binding to the existing config:
+
+```json
+{
+  "assemble": {
+    "patches": [{"name":"band_mask","box":[18,20,26,28],"alpha":"box","draw":"back"}]
+  },
+  "regions": {"band_mask":"chest"},
+  "turn": {
+    "body": {
+      "boundaryDepths": {"garment":{"neighbour":"upper","band":"band_mask"}}
+    }
+  }
+}
+```
+
+Merge these fields into a complete config with the existing plan, regions or
+meshes, body roles and pivot. The patch reads the painting in rig pixels and
+makes a separate opaque part without subtracting any target pixels. Verify
+its support lies inside the actual target alpha, not merely its bounding box.
+It is an ordinary drawn region: use a back drawing order that the target
+covers. `trace_parts: true` rejects painting patches; this route does not
+claim traced source-part provenance. A separately authored layer added to
+`assemble.plan` can also supply an existing named support part. No band
+producer, inferred width or hidden drawing is introduced by this feature.
+
+Support is the union of closed native pixel cells with alpha greater than
+zero. Target and neighbour must share cell edges and have no overlapping
+support; corner-only contact is not an abutting edge. Inside the band each
+sample projects onto the nearest shared edge and bilinearly samples the
+**original**, silhouette-extended neighbour sheet there. Distinct equidistant
+projection points contribute their arithmetic mean, once per point. The
+result stays floating point until the existing motion encoding; no corrected
+sheet is written. Outside the band the original target sample is used exactly:
+a hard switch with no blend. Transparent silhouette and image-padding samples
+inherit their nearest opaque target cell, as with the existing scalar extension.
+Sample locations are the existing generated grid
+or authored mesh vertices; mesh interpolation between them still applies.
+A partial boundary band only constrains the boundary it reaches.
+
+The original group anchor stays unchanged. A neighbour that has its own
+boundary declaration still lends its original sheet, so declaration order
+cannot feed corrections back into another target. Head yaw/pitch and body yaw
+use the same scalar rule. Without declarations, existing rig, motion, art,
+sheet and compiled output bytes remain unchanged. This opt-in changes motion,
+not prepared maps, bindings, calibration or setup geometry. Inspect both turn
+extremes and the inner band edge: the hard switch can stretch or fold cells.
+Existing fold, stretch and seam checks keep their existing bars and scope;
+a depth-continuity reading alone does not establish composite visibility.
 
 ## Per-layer depth sheets (#773)
 

@@ -5310,10 +5310,10 @@ function checkTurn(
   const hasBody = isPlainObject(v) && 'body' in v;
   const hasDepths = isPlainObject(v) && 'depths' in v;
   const o = hasRoles
-    ? c.object(at, v, ['roles'], ['pivot', 'depths', 'counter', 'grid', 'unitDepths', 'head', 'deform', 'band', 'radius', 'surface', 'body'])
+    ? c.object(at, v, ['roles'], ['pivot', 'depths', 'counter', 'grid', 'unitDepths', 'boundaryDepths', 'head', 'deform', 'band', 'radius', 'surface', 'body'])
     : hasBody && !hasDepths
-      ? c.object(at, v, ['body'], ['pivot', 'depths', 'roles', 'counter', 'grid', 'unitDepths', 'head', 'deform', 'band', 'radius', 'surface'])
-      : c.object(at, v, ['pivot', 'depths'], ['roles', 'counter', 'grid', 'unitDepths', 'head', 'deform', 'band', 'radius', 'surface', 'body']);
+      ? c.object(at, v, ['body'], ['pivot', 'depths', 'roles', 'counter', 'grid', 'unitDepths', 'boundaryDepths', 'head', 'deform', 'band', 'radius', 'surface'])
+      : c.object(at, v, ['pivot', 'depths'], ['roles', 'counter', 'grid', 'unitDepths', 'boundaryDepths', 'head', 'deform', 'band', 'radius', 'surface', 'body']);
   if (o === null) return;
   const pivot = 'pivot' in o && c.number(`${at}.pivot`, o.pivot) ? (o.pivot as number) : null;
   const checkGridField = (gAt: string, gv: Json): void => {
@@ -5349,6 +5349,26 @@ function checkTurn(
       }
     }
   };
+  const checkBoundaryDepths = (bAt: string, value: Json, roles: Json | undefined): void => {
+    if (!isPlainObject(value)) { c.fail('CONFIG_FIELD_TYPE', bAt, 'requires an object of target part -> {neighbour, band}'); return; }
+    for (const [target, raw] of Object.entries(value)) {
+      const field = `${bAt}.${target}`;
+      const declaration = c.object(field, raw, ['neighbour', 'band'], []);
+      if (!attached.has(target)) c.fail('CONFIG_NAME_RESOLVES', field, `names "${target}"; an exact attached part name is required`);
+      if (!isPlainObject(roles) || roles[target] !== 'surface') c.fail('CONFIG_FIELD_TYPE', field, `target "${target}" requires role "surface" in this turn group`);
+      if (declaration === null) continue;
+      for (const key of ['neighbour', 'band']) {
+        if (!(key in declaration)) continue;
+        const name = declaration[key];
+        if (typeof name !== 'string' || name.length === 0) c.fail('CONFIG_FIELD_TYPE', `${field}.${key}`, 'requires an exact nonempty part name');
+        else if (!attached.has(name)) c.fail('CONFIG_NAME_RESOLVES', `${field}.${key}`, `names "${name}"; an exact attached part name is required`);
+      }
+      if (typeof declaration.neighbour === 'string' && (!isPlainObject(roles) || roles[declaration.neighbour] !== 'surface' || declaration.neighbour === target)) {
+        c.fail('CONFIG_FIELD_TYPE', `${field}.neighbour`, `requires a different surface in the same turn group as "${target}"`);
+      }
+    }
+  };
+  if ('boundaryDepths' in o) checkBoundaryDepths(`${at}.boundaryDepths`, o.boundaryDepths, o.roles);
   if ('counter' in o && c.number(`${at}.counter`, o.counter)) {
     const cnt = o.counter as number;
     if (cnt < 0 || cnt > 1) {
@@ -5448,7 +5468,8 @@ function checkTurn(
   }
   if ('body' in o) {
     const bAt = `${at}.body`;
-    const bo = c.object(bAt, o.body, ['roles'], ['pivot', 'bone', 'slider', 'counter', 'grid', 'unitDepths']);
+    const bo = c.object(bAt, o.body, ['roles'], ['pivot', 'bone', 'slider', 'counter', 'grid', 'unitDepths', 'boundaryDepths']);
+    if (bo !== null && 'boundaryDepths' in bo) checkBoundaryDepths(`${bAt}.boundaryDepths`, bo.boundaryDepths, bo.roles);
     if (bo !== null) {
       if ('pivot' in bo) {
         c.number(`${bAt}.pivot`, bo.pivot);

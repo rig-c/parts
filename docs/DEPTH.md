@@ -62,9 +62,16 @@ Matching medians does not match boundary depths when the relief differs.
 Conversely, replacing each surface's own median with the shared anchor adds
 `-(ownMedian - zRef) * sin(a)` uniformly to that surface; it can enlarge one
 seam while reducing another. This is placement, not a sleeve-specific scale.
-Where continuity is intended, adjust the declared `median` and `relief` so
-sampled depths meet at the shared boundary, then check both seams at both turn
-extremes. Choosing a different shared reference leaves the seam jump unchanged.
+Where continuity is intended, declare `turn.body.boundaryDepths` so a named
+band takes the original neighbour sheet's sampled boundary depth. Samples use
+the nearest shared boundary; depths at distinct equidistant projection candidates
+are combined by their arithmetic mean. The head equivalent is
+`turn.boundaryDepths`. The band may be the target itself or a
+contained existing part made with `assemble.patches`; the declaration and a
+concrete patch example are in
+[Declared boundary depths](AUTHORING.md#declared-boundary-depths-1342).
+The band uses a hard switch, so inspect stretch at its inner edge as well as
+the shared seam at both turn extremes. No calibration is retuned. Choosing a different shared reference leaves the seam jump unchanged.
 Neither a per-sleeve pivot nor a guessed correction is inferred. A seam reading
 measures depth discontinuity, not composite visibility.
 
@@ -145,7 +152,27 @@ which one you ran. Model licences are the model's own and are not this
 package's to restate — the site's [licensing page](https://rig-c.org/docs/licensing/)
 says where each kind of term sits.
 
-### 3. Apply the maps as depth sheets
+### 3. Bind every map to its prepared input
+
+After the model writes each numeric map, bind those exact bytes to the input
+image you supplied:
+
+```sh
+rig-parts depth-bind --map face.json --input inference/face.png --part face
+rig-parts depth-bind --map hair_front.json --input inference/hair_front.png --part hair_front
+rig-parts depth-bind --map hair_back.json --input inference/hair_back.png --part hair_back
+```
+
+This writes a sibling `<map>.binding.json` receipt containing the part name
+and the map and input SHA256 hashes. It records the files you name at invocation;
+it does not prove the model inferred one from the other. Use each recipe map
+path and its matching prepared image, retain the receipts with the maps, then
+apply them. Existing receipts are never overwritten. If a map changes, retain
+the old map and receipt and bind the new map at a new path; update the recipe
+and prepare again so its manifest binds that recipe. `depth-apply` refuses
+missing, stale or mismatched bindings before emission.
+
+### 4. Apply the maps as depth sheets
 
 ```sh
 rig-parts depth-apply --parts work/rig --manifest inference/manifest.json --config depth.json --rig-config config.json --out mapped
@@ -172,7 +199,7 @@ in `work/rig` or your original config is touched. Any mismatch — a recipe edit
 after prepare, a part that moved, a map of the wrong size, a part your
 `turn.roles` does not name — is refused by name before a byte is written.
 
-### 4. Rig, and look
+### 5. Rig, and look
 
 ```sh
 rig-parts rig --parts mapped --config mapped/config.json --out compiled
@@ -192,7 +219,7 @@ from here as they do for any rig.
 **Try it today.** The `look` example in
 [rig-c/examples](https://github.com/rig-c/examples/tree/main/look) is a complete
 depth-driven head and body turn you can rebuild, with no model and no GPU. It
-takes the See-through sheets route, so steps 1 to 3 are already done for you:
+takes the See-through sheets route, so steps 1 to 4 are already done for you:
 
 ```sh
 rig-parts assemble --source painting.png --full layers/full --head layers/head --config config.json --out assembled

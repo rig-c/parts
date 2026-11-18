@@ -1,4 +1,15 @@
 #!/usr/bin/env bun
+import { buildDepth25DTurn, type Depth25DTurnOptions } from './src/turn.ts';
+import { turnNeighbourMeshes } from './src/rig.ts';
+import { boundaryDepthSamplers, type BoundaryDepths } from './src/boundarydepth.ts';
+import { rigOutputTexts } from './src/build.ts';
+import { writePng } from './src/raster/png.ts';
+import { cutPatch } from './src/assemble.ts';
+import { abuttingSurfaceFixture, sleeveSurfaceFixture } from './fixtures/turn_surface.ts';
+import { compile as compileBoundaryRig } from '@rig-c/core/compile';
+import { modelDocument as boundaryModelDocument } from '@rig-c/core/model';
+import { readModel as readBoundaryModel, poseRawSetup as boundarySetup, poseRawAnimation as boundaryAnimation } from '@rig-c/core/core';
+import { stretchLine as boundaryStretchLine } from './src/check.ts';
 import { blankRigcRunClock } from './fixtures/rigc_run_clock.ts';
 import { CONTOUR_TURN_STAGE_A_HASHES, writeContourTurnFixture } from './fixtures/contour-turn.ts';
 import { runRigcRunClockChecks } from './fixtures/rigc_run_clock_checks.ts';
@@ -8041,9 +8052,268 @@ function runContourBodyTurnRigCases(say: FixtureCaseReporter): void {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
+/** #1342: native cell support, original-sheet projection and compiled seam controls. */
+export function runBoundaryDepthChecks(dir: string, say: (name: string, ok: boolean, detail: string) => void, compiled = true, gates = true): void {
+  const checkedBoundaryDepthSamplers = (...args: Parameters<typeof boundaryDepthSamplers>) => {
+    const result = boundaryDepthSamplers(...args);
+    if (result.problems.length > 0) throw new PartsError(result.problems);
+    return result.samplers;
+  };
+  const fixture = (authored: boolean, patch: boolean, group: 'head' | 'body' = 'body') => {
+    const f = abuttingSurfaceFixture(group, authored), target = f.parts.parts[1], neighbour = f.parts.parts[0];
+    // Align the generated grid with the existing authored four-pixel lattice,
+    // including the four-pixel image padding. No geometry threshold changes.
+    const turn = f.config.turn as TurnSpec;
+    (group === 'body' ? turn.body! : turn).grid = [(target.w + 8) / 4 + 1, (target.h + 8) / 4 + 1];
+    let band = target.name;
+    if (patch) {
+      band = 'band_mask';
+      const declaration: Patch = { name: band, box: [target.x, target.y, target.x + target.w, target.y + 4], alpha: 'box', draw: 'back' };
+      const made = cutPatch(declaration, block(64, 64), null);
+      if (made === null) throw new Error('synthetic box patch unexpectedly empty');
+      (f.config.assemble as Record<string, unknown>).patches = [declaration];
+      (f.config.regions as Record<string, string>)[band] = group === 'body' ? 'chest' : 'head';
+      f.parts.parts.unshift(made.record);
+      f.images.set(band, made.image);
+    }
+    return { ...f, target, neighbour, band, turn, group: group === 'body' ? turn.body! : turn };
+  };
+  const declareBoundaryDepth = (f: ReturnType<typeof fixture>) => { f.group.boundaryDepths = { [f.target.name]: { neighbour: f.neighbour.name, band: f.band } }; };
+  const sampler = (f: ReturnType<typeof fixture>) => checkedBoundaryDepthSamplers(f.group.boundaryDepths, f.parts.parts, f.images, f.group.roles!, 'config.turn.body');
+  const fresh = () => { const f = fixture(false, true); declareBoundaryDepth(f); return f; };
+  const f = fresh(), at = sampler(f).get(f.target.name)!;
+  const x = f.target.x + f.target.w / 2, y = f.target.y;
+  say('BD01_PATCH_SUPPORT_IS_CONTAINED_AND_REACHES_BOUNDARY', f.parts.parts[0].name === 'band_mask' && f.parts.parts[0].opaque_px === 128 && at(x, y) === 100 && at(x, y + 5) === 122,
+    `actual cutPatch: band 32x4=128 opaque cells; boundary level ${at(x, y)}; outside band original level ${at(x, y + 5)}`);
+  const whole = fixture(false, false); declareBoundaryDepth(whole);
+  say('BD02_TARGET_ITSELF_IS_A_VALID_BAND', sampler(whole).get(whole.target.name)!(x, y + 10) === 100, 'nearest shared horizontal edge samples original neighbour level 100 across the whole target');
+  // Two parallel edges are equally near [1.5,1.5]. The extended original
+  // neighbour is [20,20,100]; bilinear levels at x=1,2 are 20,60: mean=40.
+  const art = block(3, 3); for (let i = 0; i < 9; i++) art.data[i * 4 + 3] = 0;
+  art.data[(1 * 3) * 4 + 3] = 255; art.data[(1 * 3 + 2) * 4 + 3] = 255;
+  const sheet = block(3, 3); for (let v = 0; v < 3; v++) for (let u = 0; u < 3; u++) sheet.data.set([20 + 40 * u, 20 + 40 * u, 20 + 40 * u, 255], (v * 3 + u) * 4);
+  const ref = f.neighbour.depth!, tieParts = [{ name: 'middle', x: 1, y: 1, w: 1, h: 1, depth: { ...ref, image: 'middle.png' } }, { name: 'sides', x: 0, y: 0, w: 3, h: 3, depth: { ...ref, image: 'sides.png' } }];
+  const tieImages = new Map([['middle', block(1, 1)], ['sides', art], ['middle.png', block(1, 1)], ['sides.png', sheet]]);
+  const tie = checkedBoundaryDepthSamplers({ middle: { neighbour: 'sides', band: 'middle' } }, tieParts, tieImages, { middle: 'surface', sides: 'surface' }, 'config.turn').get('middle')!(1.5, 1.5);
+  say('BD03_EQUIDISTANT_DEPTHS_USE_ARITHMETIC_MEAN', tie === 40, `hand-computed (20+60)/2=40; actual ${tie}`);
+  const mutation = (name: string, change: (f: ReturnType<typeof fresh>) => void, fragment: string) => {
+    const p = fresh(); change(p);
+    const error = refusals(() => sampler(p));
+    say(name, error?.problems.some(p => p.code === 'RIG_TURN_BOUNDARY_DEPTH' && p.object.includes('boundaryDepths') && p.detail.includes(fragment)) === true, codes(error));
+  };
+  mutation('BD04_UNRESOLVED_TARGET_REFUSED', f => { f.group.boundaryDepths = { absent: { neighbour: f.neighbour.name, band: f.band } }; }, 'names no parts.json');
+  mutation('BD05_MISMATCHED_NEIGHBOUR_REFUSED_BY_NAME', f => { f.group.boundaryDepths![f.target.name].neighbour = 'absent_neighbour'; }, 'absent_neighbour');
+  mutation('BD06_UNRESOLVED_BAND_REFUSED', f => { f.group.boundaryDepths![f.target.name].band = 'absent_band'; }, 'absent_band');
+  mutation('BD07_DIFFERENT_GROUP_OR_SELF_REFUSED', f => { delete f.group.roles![f.neighbour.name]; }, 'same turn group');
+  mutation('BD08_NON_ABUTTING_REFUSED', f => { f.neighbour.y--; }, 'does not abut');
+  mutation('BD09_OUTSIDE_BAND_REFUSED', f => { f.parts.parts[0].x--; }, 'outside target');
+  mutation('BD10_EMPTY_BAND_REFUSED', f => { f.images.get(f.band)!.data.fill(0); }, 'empty or');
+  mutation('BD11_NON_REACHING_BAND_REFUSED', f => { f.parts.parts[0].y++; }, 'does not reach');
+  mutation('BD12_RECIPROCAL_DECLARATIONS_REFUSED', f => { f.group.boundaryDepths![f.neighbour.name] = { neighbour: f.target.name, band: f.neighbour.name }; }, 'cycle');
+  mutation('BD13_COMMON_SCALE_REQUIRED', f => { f.neighbour.depth = { ...f.neighbour.depth!, zScale: 41 }; }, 'near and zScale');
+  mutation('BD14_SELF_NEIGHBOUR_REFUSED', f => { f.group.boundaryDepths![f.target.name].neighbour = f.target.name; }, 'cycle');
+  const malformed = (value: unknown) => {
+    const f = fresh(); (f.group as unknown as Record<string, unknown>).boundaryDepths = value;
+    return refusals(() => parseConfig(f.config));
+  };
+  say('BD15_MISSING_AND_MALFORMED_FIELDS_REFUSED', malformed({ bottomwear: { neighbour: 'topwear' } })?.problems.some(p => p.code === 'CONFIG_FIELD_PRESENT' && p.object.endsWith('.band')) === true &&
+    malformed({ bottomwear: { neighbour: 3, band: 'band_mask' } })?.problems.some(p => p.code === 'CONFIG_FIELD_TYPE' && p.object.endsWith('.neighbour')) === true &&
+    malformed({ bottomwear: { neighbour: 'absent', band: 'band_mask' } })?.problems.some(p => p.code === 'CONFIG_NAME_RESOLVES') === true,
+    'required band, non-string neighbour and unresolved neighbour each refused by field and name');
+  const third = { ...tieParts[0], name: 'third' }, triangle = [...tieParts, third];
+  const cyclic: BoundaryDepths = { middle: { neighbour: 'sides', band: 'middle' }, sides: { neighbour: 'third', band: 'sides' }, third: { neighbour: 'middle', band: 'third' } };
+  const cycle = refusals(() => checkedBoundaryDepthSamplers(cyclic, triangle, tieImages, { middle: 'surface', sides: 'surface', third: 'surface' }, 'config.turn'));
+  say('BD16_LONG_CYCLES_REFUSED', cycle?.problems.some(p => p.code === 'RIG_TURN_BOUNDARY_DEPTH' && p.detail.includes('cycle')) === true, codes(cycle));
+  const pixelsBefore = [...f.images].map(([n, p]) => [n, Buffer.from(p.data).toString('hex')]);
+  sampler(f); sampler(f);
+  say('BD17_INPUT_ART_AND_SHEETS_UNCHANGED', JSON.stringify(pixelsBefore) === JSON.stringify([...f.images].map(([n, p]) => [n, Buffer.from(p.data).toString('hex')])), 'original raster bytes unchanged; no sheet correction or anchor rewrite');
+  const chainParts = [0, 1, 2].map(i => ({ ...tieParts[0], name: `chain${i}`, x: 0, y: i * 2, w: 2, h: 2, depth: { ...ref, image: `chain${i}.png` } }));
+  const chainImages = new Map<string, Raster>();
+  for (const [i, p] of chainParts.entries()) {
+    chainImages.set(p.name, block(2, 2));
+    const sheet = block(2, 2); for (let j = 0; j < 4; j++) sheet.data.set([40 + 40 * i, 40 + 40 * i, 40 + 40 * i, 255], j * 4);
+    chainImages.set(p.depth.image, sheet);
+  }
+  const chainDeclarations: BoundaryDepths = { chain0: { neighbour: 'chain1', band: 'chain0' }, chain1: { neighbour: 'chain2', band: 'chain1' } };
+  const chainRoles = { chain0: 'surface', chain1: 'surface', chain2: 'surface' };
+  const forward = checkedBoundaryDepthSamplers(chainDeclarations, chainParts, chainImages, chainRoles, 'config.turn');
+  const reverse = checkedBoundaryDepthSamplers(Object.fromEntries(Object.entries(chainDeclarations).reverse()), chainParts, chainImages, chainRoles, 'config.turn');
+  say('BD22_DECLARATION_ORDER_USES_ORIGINAL_NEIGHBOUR', forward.get('chain0')!(1, 1) === 80 && forward.get('chain1')!(1, 3) === 120 && reverse.get('chain0')!(1, 1) === 80,
+    'chain0 takes original chain1=80, not corrected chain1=120; reversed declarations give identical samples');
+  mutation('BD23_OVERLAPPING_SURFACES_REFUSED', f => { f.neighbour.y++; }, 'does not abut');
+  mutation('BD24_COMMON_POLARITY_REQUIRED', f => { f.neighbour.depth = { ...f.neighbour.depth!, near: 'black' }; }, 'near and zScale');
+  // Each art/sheet operand in the boundary resolver must fail closed.
+  for (const [suffix, remove] of [
+    ['TARGET_ART', (f: ReturnType<typeof fresh>) => { f.images.delete(f.target.name); }],
+    ['NEIGHBOUR_ART', (f: ReturnType<typeof fresh>) => { f.images.delete(f.neighbour.name); }],
+    ['BAND_ART', (f: ReturnType<typeof fresh>) => { f.images.delete(f.band); }],
+    ['TARGET_SHEET', (f: ReturnType<typeof fresh>) => { f.images.delete(f.target.depth!.image); }],
+    ['NEIGHBOUR_SHEET', (f: ReturnType<typeof fresh>) => { f.images.delete(f.neighbour.depth!.image); }],
+    ['TARGET_REFERENCE', (f: ReturnType<typeof fresh>) => { delete f.target.depth; }],
+    ['NEIGHBOUR_REFERENCE', (f: ReturnType<typeof fresh>) => { delete f.neighbour.depth; }],
+  ] as const) mutation(`BD25_MISSING_${suffix}_REFUSED`, remove, 'require resolved art and both original surface sheets');
+  mutation('BD26_TARGET_REQUIRES_SURFACE_ROLE', f => { f.group.roles![f.target.name] = 'unit'; }, 'same turn group');
+  const validDeclaration = { bottomwear: { neighbour: 'topwear', band: 'band_mask' } };
+  const validConfig = malformed(validDeclaration);
+  for (const [suffix, value, code, field] of [
+    ['MAP_TYPE', null, 'CONFIG_FIELD_TYPE', '.boundaryDepths'],
+    ['ENTRY_TYPE', { bottomwear: 7 }, 'CONFIG_FIELD_TYPE', '.bottomwear'],
+    ['TARGET_NAME', { absent_target: validDeclaration.bottomwear }, 'CONFIG_NAME_RESOLVES', '.absent_target'],
+    ['TARGET_ROLE', { band_mask: validDeclaration.bottomwear }, 'CONFIG_FIELD_TYPE', '.band_mask'],
+    ['MISSING_NEIGHBOUR', { bottomwear: { band: 'band_mask' } }, 'CONFIG_FIELD_PRESENT', '.neighbour'],
+    ['MISSING_BAND', { bottomwear: { neighbour: 'topwear' } }, 'CONFIG_FIELD_PRESENT', '.band'],
+    ['EMPTY_NAME', { bottomwear: { neighbour: '', band: 'band_mask' } }, 'CONFIG_FIELD_TYPE', '.neighbour'],
+    ['BAND_TYPE', { bottomwear: { neighbour: 'topwear', band: 7 } }, 'CONFIG_FIELD_TYPE', '.band'],
+    ['BAND_NAME', { bottomwear: { neighbour: 'topwear', band: 'absent_band' } }, 'CONFIG_NAME_RESOLVES', '.band'],
+    ['NEIGHBOUR_ROLE', { bottomwear: { neighbour: 'band_mask', band: 'band_mask' } }, 'CONFIG_FIELD_TYPE', '.neighbour'],
+    ['SELF_NEIGHBOUR', { bottomwear: { neighbour: 'bottomwear', band: 'band_mask' } }, 'CONFIG_FIELD_TYPE', '.neighbour'],
+    ['UNKNOWN_FIELD', { bottomwear: { ...validDeclaration.bottomwear, extra: true } }, 'CONFIG_KEY_KNOWN', '.extra'],
+  ] as const) {
+    const error = malformed(value);
+    say(`BD27_CONFIG_${suffix}_REFUSED`, validConfig === null && error?.problems.some(p => p.code === code && p.object.endsWith(field)) === true,
+      `valid declaration: ${codes(validConfig)}; planted ${suffix}: ${codes(error)}`);
+  }
+  // The generated-grid refusal lives after scalar resolution, so exercise the
+  // real turn producer with and without its existing emitted support metadata.
+  const gridFixture = fresh(), gridConfig = parseConfig(gridFixture.config);
+  const gridBuilt = buildRig(gridConfig, gridFixture.parts, gridFixture.images);
+  const gridOptions: Depth25DTurnOptions = {
+    turn: gridFixture.turn, parts: gridFixture.parts.parts, images: gridFixture.images,
+    regions: gridConfig.regions, stills: {}, boneLandmarks: new Map(), hasAlternateFaceSet: false,
+    surfaceMeshes: [], neighbourMeshes: turnNeighbourMeshes(gridConfig, gridBuilt.rig, gridFixture.parts, new Map(gridBuilt.images)),
+  };
+  const gridControl = (options: Depth25DTurnOptions) => refusals(() => buildDepth25DTurn(structuredClone(gridBuilt.rig), { animations: {} }, options));
+  const gridPresent = gridControl(gridOptions), gridMissing = gridControl({ ...gridOptions, neighbourMeshes: [] });
+  say('BD28_GENERATED_GRID_SUPPORT_PRESENT_GREEN_MISSING_REFUSED', gridPresent === null && gridMissing?.problems.some(p =>
+    p.code === 'RIG_TURN_BOUNDARY_DEPTH' && p.object === 'config.turn.body.boundaryDepths.bottomwear' &&
+    p.detail === 'has no resolved grid sampling topology; supply the generated grid support') === true,
+    `resolved support: ${codes(gridPresent)}; missing support: ${codes(gridMissing)}`);
+  const headFixture = fixture(false, false, 'head'), bodyFixture = fixture(false, false);
+  declareBoundaryDepth(headFixture); declareBoundaryDepth(bodyFixture);
+  const combinedParts = { ...bodyFixture.parts, parts: [...headFixture.parts.parts, ...bodyFixture.parts.parts] };
+  const combinedImages = new Map([...headFixture.images, ...bodyFixture.images]);
+  const combinedConfig = { ...bodyFixture.config,
+    assemble: { ...(bodyFixture.config.assemble as Record<string, unknown>), plan: combinedParts.parts.map(p => [p.name, ...p.from.split(':')]) },
+    regions: { ...(headFixture.config.regions as Record<string, string>), ...(bodyFixture.config.regions as Record<string, string>) },
+    turn: { ...headFixture.turn, body: bodyFixture.turn.body },
+  };
+  const combinedPositive = refusals(() => buildRig(parseConfig(combinedConfig), combinedParts, combinedImages));
+  const combinedBroken = structuredClone(combinedConfig);
+  combinedBroken.turn.boundaryDepths![headFixture.target.name].band = headFixture.neighbour.name;
+  combinedBroken.turn.body!.boundaryDepths![bodyFixture.target.name].band = bodyFixture.neighbour.name;
+  const bothGroups = refusals(() => buildRig(parseConfig(combinedBroken), combinedParts, combinedImages));
+  const bothObjects = ['config.turn.boundaryDepths.hair_front', 'config.turn.body.boundaryDepths.bottomwear'];
+  say('BD29_HEAD_AND_BODY_ERRORS_SHARE_ONE_REFUSAL', combinedPositive === null && bothGroups?.problems.length === 2 &&
+    bothObjects.every(object => bothGroups.problems.some(p => p.code === 'RIG_TURN_BOUNDARY_DEPTH' && p.object === object && p.detail.includes('has support outside target'))),
+    JSON.stringify({ positive: codes(combinedPositive), problems: bothGroups?.problems }));
+  const sameGroupFixture = sleeveSurfaceFixture(false), sameTurn = sameGroupFixture.config.turn as TurnSpec;
+  sameTurn.body!.boundaryDepths = { topwear: { neighbour: 'sleeve', band: 'topwear' }, bottomwear: { neighbour: 'sleeve', band: 'bottomwear' } };
+  const samePositive = refusals(() => buildRig(parseConfig(sameGroupFixture.config), sameGroupFixture.parts, sameGroupFixture.images));
+  const sameBroken = structuredClone(sameGroupFixture.config), sameBrokenTurn = sameBroken.turn as TurnSpec;
+  sameBrokenTurn.body!.boundaryDepths!.topwear.band = 'sleeve';
+  sameBrokenTurn.body!.boundaryDepths!.bottomwear.band = 'sleeve';
+  const sameGroup = refusals(() => buildRig(parseConfig(sameBroken), sameGroupFixture.parts, sameGroupFixture.images));
+  say('BD30_SAME_GROUP_DECLARATIONS_COLLECT_INDEPENDENT_ERRORS', samePositive === null && sameGroup?.problems.length === 2 &&
+    ['topwear', 'bottomwear'].every(part => sameGroup.problems.some(p => p.code === 'RIG_TURN_BOUNDARY_DEPTH' && p.object === `config.turn.body.boundaryDepths.${part}` && p.detail.includes('has support outside target'))),
+    JSON.stringify({ positive: codes(samePositive), problems: sameGroup?.problems }));
+  const independent = fresh(); independent.neighbour.y--; independent.parts.parts[0].x--;
+  const independentProblems = boundaryDepthSamplers(independent.group.boundaryDepths, independent.parts.parts, independent.images, independent.group.roles!, 'config.turn.body');
+  say('BD31_ABUTMENT_AND_BAND_CHECKS_ARE_INDEPENDENT', independentProblems.problems.length === 2 && independentProblems.samplers.size === 0 &&
+    independentProblems.problems.some(p => p.detail.includes('does not abut')) && independentProblems.problems.some(p => p.detail.includes('has support outside target')),
+    JSON.stringify(independentProblems.problems));
+  const unresolved = fresh(); unresolved.group.boundaryDepths = {
+    [unresolved.target.name]: { neighbour: 'missing_neighbour', band: 'missing_band' },
+    [unresolved.neighbour.name]: { neighbour: unresolved.target.name, band: 'other_missing_band' },
+  };
+  const names = boundaryDepthSamplers(unresolved.group.boundaryDepths, unresolved.parts.parts, unresolved.images, unresolved.group.roles!, 'config.turn.body');
+  say('BD32_UNRESOLVED_NAMES_DO_NOT_HIDE_OTHER_DECLARATIONS', names.problems.length === 3 && names.samplers.size === 0 &&
+    ['missing_neighbour', 'missing_band', 'other_missing_band'].every(name => names.problems.some(p => p.detail.includes(`"${name}" names no parts.json part`))),
+    JSON.stringify(names.problems));
+  for (const defect of ['outside', 'non-abutting'] as const) {
+    const cyclicFixture = fresh();
+    cyclicFixture.group.boundaryDepths![cyclicFixture.neighbour.name] = { neighbour: cyclicFixture.target.name, band: cyclicFixture.neighbour.name };
+    if (defect === 'outside') cyclicFixture.parts.parts[0].x--;
+    else cyclicFixture.neighbour.y--;
+    const combined = boundaryDepthSamplers(cyclicFixture.group.boundaryDepths, cyclicFixture.parts.parts, cyclicFixture.images, cyclicFixture.group.roles!, 'config.turn.body');
+    const targetObject = `config.turn.body.boundaryDepths.${cyclicFixture.target.name}`;
+    say(`BD33_CYCLE_DOES_NOT_HIDE_${defect === 'outside' ? 'OUTSIDE_BAND' : 'NON_ABUTMENT'}`, combined.samplers.size === 0 &&
+      combined.problems.filter(p => p.detail.includes('cycle reaches')).length === 2 && combined.problems.some(p => p.object === targetObject &&
+        p.detail.includes(defect === 'outside' ? 'has support outside target' : 'does not abut')),
+      JSON.stringify(combined.problems));
+  }
+  const reachPositive = fresh(), reachNegative = fresh();
+  reachNegative.parts.parts[0].x--; reachNegative.parts.parts[0].y++;
+  const reachControl = (f: ReturnType<typeof fresh>) => boundaryDepthSamplers(f.group.boundaryDepths, f.parts.parts, f.images, f.group.roles!, 'config.turn.body');
+  const reaches = reachControl(reachPositive), misses = reachControl(reachNegative);
+  say('BD34_OUTSIDE_BAND_DOES_NOT_HIDE_NON_REACHING_WITH_KNOWN_EDGE', reaches.problems.length === 0 && reaches.samplers.size === 1 &&
+    misses.samplers.size === 0 && misses.problems.length === 2 && misses.problems.some(p => p.detail.includes('has support outside target')) &&
+    misses.problems.some(p => p.detail.includes('empty or does not reach')) && !misses.problems.some(p => p.detail.includes('does not abut')),
+    JSON.stringify({ positive: reaches.problems, negative: misses.problems }));
+  if (!compiled) return;
+  const compileBuilt = (built: ReturnType<typeof buildRig>, label: string) => {
+    const home = join(dir, label); mkdirSync(join(home, 'images'), { recursive: true });
+    for (const [name, image] of built.images) writePng(join(home, 'images', name), image);
+    for (const [name, text] of rigOutputTexts(built, null)) writeFileSync(join(home, name), text);
+    return compileBoundaryRig({ rigPath: join(home, 'rig.json'), motionPath: join(home, 'motion.json'), outDir: join(home, 'sdk') });
+  };
+  for (const group of ['body', 'head'] as const) for (const authored of [false, true]) for (const patch of [false, true]) {
+    const f = fixture(authored, patch, group), label = `${group}-${authored ? 'authored' : 'grid'}-${patch ? 'patch' : 'whole'}`;
+    const before = buildRig(parseConfig(f.config), f.parts, f.images), base = compileBuilt(before, `${label}-base`);
+    f.group.boundaryDepths = {};
+    const empty = compileBuilt(buildRig(parseConfig(f.config), f.parts, f.images), `${label}-empty`);
+    say(`BD18_${label.toUpperCase().replaceAll('-', '_')}_NO_DECLARATION_BYTES`, base.skeletonText === empty.skeletonText && base.atlasText === empty.atlasText, 'paired compiled absent/empty declarations: identical skeleton and atlas bytes');
+    declareBoundaryDepth(f);
+    const built = buildRig(parseConfig(f.config), f.parts, f.images), corrected = compileBuilt(built, label);
+    const doc = readBoundaryModel(boundaryModelDocument(corrected.model, corrected.skeletonText, corrected.atlasText));
+    const baseDoc = readBoundaryModel(boundaryModelDocument(base.model, base.skeletonText, base.atlasText));
+    const animName = group === 'body' ? 'body_turn' : 'turn';
+    const duration = (built.motion.animations[animName] as { duration: number }).duration;
+    const rest = boundarySetup(doc), poses = boundaryAnimation(doc, animName, [duration]);
+    const restMeshes: MeshRest[] = rest.drawn.filter(p => p.kind === 'mesh').map(p => ({ slot: p.slot, attachment: p.attachment, vertices: p.vertices, triangles: p.triangles }));
+    const frames = poses.map((p, index) => ({ index, attachments: p.drawn }));
+    const stretchProblems: Problem[] = [];
+    const stretch = boundaryStretchLine({ meshes: restMeshes, frames, viewport: null, setupBones: null, frameBones: [], times: [] }, 'synthetic turn extremes', stretchProblems);
+    const baselineRest = boundarySetup(baseDoc), baselinePoses = boundaryAnimation(baseDoc, animName, [duration]);
+    const baselineStretch = boundaryStretchLine({ meshes: baselineRest.drawn.filter(p => p.kind === 'mesh'), frames: baselinePoses.map((p, index) => ({ index, attachments: p.drawn })), viewport: null, setupBones: null, frameBones: [], times: [] }, 'synthetic baseline', []);
+    let folded = 0, flat = 0;
+    for (const mesh of restMeshes) for (const pose of poses) {
+      const moved = pose.drawn.find(p => p.slot === mesh.slot)!;
+      const area = (v: readonly number[], i: number) => { const [a, b, c] = mesh.triangles.slice(i, i + 3).map(vx => vx * 2); return (v[b] - v[a]) * (v[c + 1] - v[a + 1]) - (v[b + 1] - v[a + 1]) * (v[c] - v[a]); };
+      for (let i = 0; i < mesh.triangles.length; i += 3) { const a = area(moved.vertices, i); if (a * area(mesh.vertices, i) < 0) folded++; if (a === 0) flat++; }
+    }
+    const quantum = f.target.depth!.zScale / 255 * Math.abs(Math.sin(15 * Math.PI / 180));
+    const seamJumps = (rest: ReturnType<typeof boundarySetup>, poses: ReturnType<typeof boundaryAnimation>) => poses.map(pose => {
+      const edge = (part: string) => {
+        const r = rest.drawn.find(p => p.slot === part)!, posed = pose.drawn.find(p => p.slot === part)!;
+        return r.vertices.flatMap((_, i) => i % 2 === 0 && Math.abs(r.vertices[i + 1] - (64 - f.target.y)) < quantum ? [{ x: r.vertices[i], dx: posed.vertices[i] - r.vertices[i] }] : []);
+      };
+      const a = edge(f.target.name), b = edge(f.neighbour.name);
+      const pairs = a.flatMap(v => b.filter(w => Math.abs(v.x - w.x) < quantum).map(w => Math.abs(v.dx - w.dx)));
+      return { samples: pairs.length, max: Math.max(...pairs) };
+    });
+    const jumps = seamJumps(rest, poses), mismatched = seamJumps(baselineRest, baselinePoses);
+    const innerMeshes = patch ? restMeshes.filter(m => m.slot === f.target.name).map(m => ({ ...m, triangles: m.triangles.filter((_, i) => {
+      const start = i - i % 3, ys = m.triangles.slice(start, start + 3).map(v => m.vertices[2 * v + 1]);
+      const innerY = 64 - f.target.y - 4;
+      return Math.min(...ys) < innerY && Math.max(...ys) >= innerY;
+    }) })) : [];
+    const innerCellStretch = innerMeshes.length === 0 ? [] : stretchFigures(innerMeshes, frames).map(m => ({ slot: m.slot, triangles: m.triangles, max: m.max?.ratio ?? null, min: m.min?.ratio ?? null }));
+    say(`BD21_${label.toUpperCase().replaceAll('-', '_')}_MISMATCHED_DEPTH_NEGATIVE`, mismatched.every(j => j.samples > 0 && j.max > quantum), JSON.stringify({ mismatched, oneLevelTravel: quantum }));
+    say(`BD19_${label.toUpperCase().replaceAll('-', '_')}_COMPILED_SEAM_AND_STRETCH`, jumps.every(j => j.samples > 0 && j.max <= quantum) && stretch.status === 'PASS' && folded === 0 && flat === 0,
+      JSON.stringify({ jumps, oneLevelTravel: quantum, baselineStretch, stretch, innerCellStretch, folded, flat }));
+    if (!gates || group !== 'body' || !patch) continue;
+    // The real gate retains its existing A39/A40 checks and all other rows.
+    const home = join(dir, label);
+    const gate = spawnSync(process.execPath, [fileURLToPath(import.meta.resolve('@rig-c/core/cli')), 'build', '--rig', join(home, 'rig.json'), '--motion', join(home, 'motion.json'), '--out', join(home, 'built'), '--profile', 'rig-play'], { encoding: 'utf8', maxBuffer: 1 << 24 });
+    writeFileSync(join(home, 'gate.log'), gate.stdout + gate.stderr);
+    say(`BD20_${label.toUpperCase().replaceAll('-', '_')}_EXISTING_GATE`, gate.status === 0, `exit ${gate.status}; ${(gate.stdout + gate.stderr).replace(/\s+/g, ' ').trim()}`);
+  }
+}
+
 function runRigSuite(): number {
   section('rig: bones, lattice meshes, weights, regions and the idle');
   const { say, bad } = counter();
+  { const dir = temp('boundary-depth'); try { runBoundaryDepthChecks(dir, (name, ok, detail) => say(name, ok, detail, 'synthetic declared band projection; unchanged existing gates')); } finally { rmSync(dir, { recursive: true, force: true }); } }
   runContourBodyTurnRigCases(say);
   runTurnRollChecks((name, ok, detail) => say(name, ok, detail, 'report-only head roll; fixed public separation limit and analytic planted angles'));
   { const dir = temp('neck-draft-render'); try { runNeckDraftRenderChecks(dir, (name, ok, detail) => say(name, ok, detail, 'public source-first neck, mandatory Core gate and rendered extreme ROI')); } finally { rmSync(dir, { recursive: true, force: true }); } }

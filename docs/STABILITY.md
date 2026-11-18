@@ -455,11 +455,13 @@ part name, `[i]` an entry of a list):
 - **motion.blink** — required: `t`, `eyes`, `squash`; optional: `brows`, `brow_drop`, `still`, `more`
 - **motion.blink.still.&lt;part&gt;** — required: `row`, `bone`
 - **motion.animations_from**, the file it names — required: `spec`, `animations`
-- **turn** — required: `pivot`, `depths` (or `roles` / `body`, issues #763, #787); optional: `deform`, `band`, `radius`, `surface`, `head`, `roles`, `counter`, `grid`, `unitDepths`, `body`
+- **turn** — required: `pivot`, `depths` (or `roles` / `body`, issues #763, #787); optional: `deform`, `band`, `radius`, `surface`, `head`, `roles`, `counter`, `grid`, `unitDepths`, `boundaryDepths`, `body`
+- **turn.boundaryDepths.&lt;part&gt;**, when an object — required: `neighbour`, `band` (issue #1342)
+- **turn.body.boundaryDepths.&lt;part&gt;**, when an object — required: `neighbour`, `band` (issue #1342)
 - **turn.depths.&lt;part&gt;** — a See-through depth
 - **turn.roles.&lt;part&gt;** — `"surface"`, `"unit"` or `"rear"` (issue #763)
 - **turn.unitDepths.&lt;part&gt;** — a calibrated world depth in rig pixels (issue #763)
-- **turn.body**, when an object — required: `roles`, `pivot` (when `turn.pivot` is absent); optional: `bone`, `slider`, `counter`, `grid`, `unitDepths` (issue #787)
+- **turn.body**, when an object — required: `roles`, `pivot` (when `turn.pivot` is absent); optional: `bone`, `slider`, `counter`, `grid`, `unitDepths`, `boundaryDepths` (issue #787)
 - **turn.body.roles.&lt;part&gt;** — `"surface"`, `"unit"` or `"rear"` (issue #787)
 - **turn.body.unitDepths.&lt;part&gt;** — a calibrated world depth in rig pixels (issue #787)
 - **turn.deform.&lt;key&gt;** — a per-degree fraction or coupling share (FACE_DEFORM_FRACTIONS, issue #436)
@@ -508,6 +510,14 @@ suite's controls hold those, refusal by refusal.
 The values a field takes (`retriangulate` is "delaunay", `removalOrder`
 "deformation-load", `selection.policy` "multi-interval"; the units and ranges of
 every number) are AUTHORING §3's tables, and the loader refuses any other by name.
+
+Optional turn boundary-depth declarations (issue #1342) resolve existing part
+names and project band samples onto the original neighbour sheet. Bands may be
+the target itself or contained boundary-reaching parts, including existing
+painting patches. Shared anchors, calibration, prepared maps and setup geometry
+are unchanged; omission preserves existing output bytes. Projection ties use
+the arithmetic mean and the inner band edge is a hard switch, without blending.
+See [boundary authoring](AUTHORING.md#declared-boundary-depths-1342).
 
 ## Files this package writes
 
