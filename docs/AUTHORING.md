@@ -8285,6 +8285,9 @@ surface samples its own sheet for `z`; it does not subtract its own median or
 eye samples. The depth recipe's `median` is encoded upstream in that sheet,
 so relative placements between surfaces survive the turn. Each group keeps
 its own reference; a single surface keeps its existing motion bytes.
+Where boundary continuity is intended, adjust the declared `median` and `relief`
+so sampled depths meet there; choosing a different shared reference leaves the
+seam jump unchanged. See [DEPTH](DEPTH.md) for the boundary-depth equation.
 
 Mixed depth and normals sources use this same coordinate space. Depth apply
 normalizes each raw field by its own median and percentile span, then encodes
