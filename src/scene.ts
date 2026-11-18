@@ -103,7 +103,7 @@ import { failLine, PartsError, type Problem, refuseIfAny } from './errors.ts';
 import { readParts } from './parts.ts';
 import { missingReceipts, readEditorReceipts, type EditorReceipts } from './editreceipt.ts';
 import type { MotionSpec } from './motion.ts';
-import { readPng } from './raster/png.ts';
+import { decodePngBytes, readPng } from './raster/png.ts';
 import { readRequirements, type RequirementsFile } from './requirements.ts';
 import { OFFSET_PLACES, rigJsonText, type RigSpec } from './rig.ts';
 import { pyRound } from './round.ts';
@@ -168,10 +168,23 @@ export interface ScenePlate {
   note: string | null;
 }
 
+/** An opt-in layer. at is the image top-left in canvas pixels, y down; no scale. */
+export interface NamedScenePlate extends ScenePlate {
+  name: string;
+  at: [number, number];
+  opaque_backdrop?: boolean;
+}
+
+/** Separate from character image names; collisions are still refused before emission. */
+export function plateImageName(index: number): string {
+  return `scene-plate.${index}.png`;
+}
+
 export interface SceneFile {
   path: string;
   canvas: { width: number; height: number };
   plate: ScenePlate | null;
+  plates?: NamedScenePlate[];
   characters: SceneCharacter[];
   order: string[];
 }
@@ -252,7 +265,7 @@ export function loadScene(path: string): SceneFile {
       if (!keys.includes(k) && !freeKey(k, v)) fail('SCENE_KEY_KNOWN', `${where}.${k}`, `is a key ${SCENE_SPEC} does not read; it reads ${keys.join(', ')} (and "note", "…_note" strings and "x-…" records, which nothing reads)`);
     }
   };
-  known(o, 'scene', ['spec', 'canvas', 'plate', 'characters', 'order']);
+  known(o, 'scene', ['spec', 'canvas', 'plate', 'plates', 'characters', 'order']);
   if (o.spec !== SCENE_SPEC) fail('SCENE_SPEC', 'scene.spec', `is ${show(o.spec)}; "${SCENE_SPEC}" is required`);
 
   // canvas
@@ -288,6 +301,40 @@ export function loadScene(path: string): SceneFile {
       if (typeof image === 'string' && image !== '' && typeof prov === 'string' && (PROVENANCES as readonly string[]).includes(prov)) {
         plate = { image, imagePath: resolve(base, image), provenance: prov as Provenance, ...('editor_receipts' in p ? { editor_receipts: p.editor_receipts as EditorReceipts } : {}), note: typeof p.note === 'string' ? p.note : null };
       }
+    }
+  }
+
+  // Named layers are opt-in; keep the legacy plate reader and its bytes intact.
+  const plates: NamedScenePlate[] = [];
+  if ('plates' in o) {
+    if (!Array.isArray(o.plates)) fail('SCENE_FIELD_TYPE', 'scene.plates', `is ${show(o.plates)}; a list of named plates is required`);
+    else {
+      const seen = new Map<string, number>();
+      o.plates.forEach((p, i) => {
+        const where = `scene.plates[${i}]`;
+        if (!isRecord(p)) { fail('SCENE_FIELD_TYPE', where, `is ${show(p)}; {name, image, provenance, at} is required`); return; }
+        known(p, where, ['name', 'image', 'provenance', 'at', 'opaque_backdrop', 'editor_receipts', 'note']);
+        for (const key of ['name', 'image', 'provenance']) {
+          if (!(key in p)) fail('SCENE_FIELD_PRESENT', `${where}.${key}`, 'is absent and required');
+          else if (typeof p[key] !== 'string' || p[key] === '') fail('SCENE_FIELD_TYPE', `${where}.${key}`, `is ${show(p[key])}; a nonempty string is required`);
+        }
+        if (typeof p.name === 'string' && p.name !== '') {
+          const first = seen.get(p.name);
+          if (first !== undefined) fail('SCENE_PLATE_NAME_UNIQUE', `${where}.name`, `is ${show(p.name)}, also declared at scene.plates[${first}]; every plate has one name`);
+          else seen.set(p.name, i);
+        }
+        if (typeof p.provenance === 'string' && !(PROVENANCES as readonly string[]).includes(p.provenance)) fail('SCENE_PLATE_PROVENANCE', `${where}.provenance`, `is ${show(p.provenance)}; one of ${PROVENANCES.join(', ')} is required`);
+        const at = p.at;
+        const placed = Array.isArray(at) && at.length === 2 && at.every(v => typeof v === 'number' && Number.isFinite(v) && Number.isInteger(v));
+        if (!placed) fail('SCENE_PLATE_AT', `${where}.at`, `is ${show(at)}; [x, y], two finite integers locating the image top-left in canvas pixels (y down), is required; negative and outside coordinates are allowed`);
+        if ('opaque_backdrop' in p && typeof p.opaque_backdrop !== 'boolean') fail('SCENE_FIELD_TYPE', `${where}.opaque_backdrop`, `is ${show(p.opaque_backdrop)}; a boolean is required`);
+        if ('editor_receipts' in p) problems.push(...editorReceiptProblems(p.editor_receipts, `${where}.editor_receipts`).map(problem => ({ ...problem, code: 'SCENE_EDITOR_RECEIPT' })));
+        if (typeof p.name === 'string' && p.name !== '' && typeof p.image === 'string' && p.image !== '' && (PROVENANCES as readonly unknown[]).includes(p.provenance) && placed) {
+          plates.push({ name: p.name, image: p.image, imagePath: resolve(base, p.image), provenance: p.provenance as Provenance, at: at as [number, number], note: typeof p.note === 'string' ? p.note : null,
+            ...('opaque_backdrop' in p ? { opaque_backdrop: p.opaque_backdrop as boolean } : {}),
+            ...('editor_receipts' in p ? { editor_receipts: p.editor_receipts as EditorReceipts } : {}) });
+        }
+      });
     }
   }
 
@@ -367,7 +414,7 @@ export function loadScene(path: string): SceneFile {
     });
   }
   refuseIfAny(problems);
-  return { path: at, canvas, plate, characters, order };
+  return { path: at, canvas, plate, ...('plates' in o ? { plates } : {}), characters, order };
 }
 
 // ---------------------------------------------------------------------------
@@ -943,6 +990,7 @@ export interface SceneReport {
   pack_mode: { page_edges: string; pack_shape: string };
   /** `sha256` (issue #1183) is of the plate PNG's bytes as compose read them, so a verdict can bind to them. */
   plate: { image: string; provenance: Provenance; note: string | null; bone: string; slot: string; size: [number, number]; sha256: string; judged_by: 'nothing' } | null;
+  plates?: Array<{ name: string; image: string; provenance: Provenance; note: string | null; at: [number, number]; opaque_backdrop: boolean; bone: string; slot: string; size: [number, number]; sha256: string; judged_by: 'nothing' }>;
   characters: SceneCharacterReport[];
   order: { declared: string[]; slots: string[]; judged_by: 'nothing' };
   idle_duration: number;
@@ -980,6 +1028,7 @@ export function composeScene(
   problems: Problem[],
   mode: PackMode = { pageEdges: DEFAULT_PAGE_EDGES, packShape: DEFAULT_PACK_SHAPE },
   requirements: RequirementsFile | null = null,
+  plateLayers: ReadonlyArray<PlateImage | null> = [],
 ): ComposedScene {
   const fail = (code: string, object: string, detail: string): void => {
     problems.push({ code, object, detail });
@@ -994,6 +1043,34 @@ export function composeScene(
   if (scene.plate !== null && plate !== null && (plate.width !== canvas.width || plate.height !== canvas.height)) {
     fail('SCENE_PLATE_SIZE', `scene.plate.image (${scene.plate.image})`, `is ${plate.width}x${plate.height}; the canvas's size, ${canvas.width}x${canvas.height}, is required — the plate is drawn at canvas (0, 0) and is never scaled`);
   }
+
+  const layers = scene.plates ?? [];
+  const layerNames = new Set(layers.map(p => p.name));
+  const reserved = new Set([ROOT_BONE, PLATE, 'idle', ...ids, ...ready.flatMap(b => [
+    ...b.rig.bones.map(x => prefixed(b.id, x.name)),
+    ...b.rig.slots.map(x => prefixed(b.id, x.name)),
+    ...Object.keys(b.motion.animations).map(n => prefixed(b.id, n)),
+  ])]);
+  layers.forEach((p, i) => {
+    const where = `scene.plates[${i}] (${show(p.name)})`;
+    if (reserved.has(p.name)) fail('SCENE_PLATE_NAME_FREE', `${where}.name`, `is ${show(p.name)}, reserved by the shared root, legacy plate, character id, bone, slot or animation; a distinct name is required`);
+    if (layers.findIndex(q => q.name === p.name) !== i) fail('SCENE_PLATE_NAME_UNIQUE', `${where}.name`, `is ${show(p.name)}, already declared; every plate has one name`);
+    if (!(Array.isArray(p.at) && p.at.length === 2 && p.at.every(v => Number.isFinite(v) && Number.isInteger(v)))) fail('SCENE_PLATE_AT', `${where}.at`, `is ${show(p.at)}; two finite integers of canvas pixels locating the image top-left are required`);
+    const img = plateLayers[i];
+    if (img === undefined || img === null) {
+      fail('SCENE_PLATE_PRESENT', `${where}.image`, 'has no decoded PNG; an image with its own dimensions is required');
+      return;
+    }
+    const raster = decodePngBytes(img.bytes, `${where}.image`);
+    if (raster.width !== img.width || raster.height !== img.height) fail('SCENE_PLATE_SIZE', `${where}.image`, `decoded ${raster.width}x${raster.height}, declared ${img.width}x${img.height}; the image dimensions must agree`);
+    const transparent = raster.data.some((v, k) => k % 4 === 3 && v < 255);
+    if (!transparent) {
+      if (p.opaque_backdrop !== true) fail('SCENE_PLATE_ALPHA', `${where}.image`, `is opaque in every texel; a layer must use alpha below 255 unless this layer explicitly declares opaque_backdrop: true; A19_OVERLAY_PNGS_HAVE_ALPHA remains enabled`);
+      // Core 3.8.0 a19.ts:38-39,64-69: no named rig-spec base plate;
+      // both attachment dimensions must meet the stage, which sceneStage makes the canvas.
+      else if (img.width < stage.width || img.height < stage.height) fail('SCENE_PLATE_BACKDROP_SIZE', `${where}.image`, `is an opaque backdrop of ${img.width}x${img.height}; width >= ${stage.width} and height >= ${stage.height} (the ${canvas.width}x${canvas.height} canvas stage) are required by rigc A19's size inference; use transparency or a sufficiently sized backdrop`);
+    }
+  });
 
   // ---- one rig_scale, one idle length -------------------------------------
   const scales = ready.map((b) => `"${b.id}" ${b.rigScale}`);
@@ -1049,8 +1126,15 @@ export function composeScene(
   const slotsOf = new Map(ready.map((b) => [b.id, b.rig.slots.map((s) => s.name)]));
   const explicit = new Map<string, number>();
   const idAt = new Map<string, number>();
+  const layerAt = new Map<string, number>();
   scene.order.forEach((e, i) => {
     const at = `scene.order[${i}]`;
+    if (layerNames.has(e)) {
+      const first = layerAt.get(e);
+      if (first !== undefined) fail('SCENE_ORDER_ONCE', at, `names the plate ${show(e)} again (first at scene.order[${first}]); every plate slot is drawn exactly once`);
+      else layerAt.set(e, i);
+      return;
+    }
     const cut = e.indexOf(PREFIX_SEP);
     if (cut < 0) {
       if (!ids.includes(e)) {
@@ -1086,8 +1170,10 @@ export function composeScene(
       fail('SCENE_ORDER_COMPLETE', `scene.order (character "${id}")`, `names ${missing.length} of the ${own.length} slot(s) of "${id}" nowhere: ${missing.map((s) => `"${prefixed(id, s)}"`).join(', ')}; every slot is drawn exactly once — name "${id}" (its remaining slots, in its own order) or each slot`);
     }
   }
+  for (const p of layers) if (!layerAt.has(p.name)) fail('SCENE_ORDER_COMPLETE', 'scene.order', `names plate ${show(p.name)} nowhere; every plate slot is drawn exactly once`);
   const drawn: string[] = [];
   for (const e of scene.order) {
+    if (layerNames.has(e)) { drawn.push(e); continue; }
     if (e.includes(PREFIX_SEP)) {
       if (explicit.has(e)) drawn.push(e);
       continue;
@@ -1200,6 +1286,7 @@ export function composeScene(
   // ---- image names ------------------------------------------------------------
   const taken = new Map<string, string>();
   if (scene.plate !== null) taken.set(PLATE_IMAGE, 'the plate');
+  layers.forEach((p, i) => taken.set(plateImageName(i), `plate ${show(p.name)}`));
   for (const b of ready) {
     for (const [file] of b.images) {
       const n = imageName(b.id, file);
@@ -1208,7 +1295,7 @@ export function composeScene(
       else taken.set(n, `character "${b.id}" image "${file}"`);
     }
   }
-  if (requirements !== null) problems.push(...requirementPrefixProblems(requirements, ready, scene.plate !== null));
+  if (requirements !== null) problems.push(...requirementPrefixProblems(requirements, ready, scene.plate !== null, [...layerNames]));
   refuseIfAny(problems);
 
   // ---- the rig ----------------------------------------------------------------
@@ -1236,6 +1323,13 @@ export function composeScene(
     skin[PLATE] = { [PLATE]: { image: PLATE_IMAGE, x: stage.x + canvas.width / 2, y: cropToSpineY(canvas.height / 2, canvas.height) } };
     images.push([PLATE_IMAGE, plate.bytes]);
   }
+  layers.forEach((p, i) => {
+    const img = plateLayers[i] as PlateImage;
+    bones.push({ name: p.name, parent: ROOT_BONE, x: 0, y: 0 });
+    skin[p.name] = { [p.name]: { image: plateImageName(i), x: stage.x + p.at[0] + img.width / 2, y: cropToSpineY(p.at[1] + img.height / 2, canvas.height) } };
+    slotDefs.set(p.name, { name: p.name, bone: p.name, attachment: p.name });
+    images.push([plateImageName(i), img.bytes]);
+  });
   const constraints: Array<Record<string, unknown>> = [];
   const stops: RigStop[] = [];
   const detached: NonNullable<NonNullable<RigSpec['invariants']>['detached']> = [];
@@ -1400,6 +1494,10 @@ export function composeScene(
     rig_name: name,
     pack_mode: { page_edges: mode.pageEdges, pack_shape: mode.packShape },
     plate: scene.plate === null || plate === null ? null : { image: scene.plate.image, provenance: scene.plate.provenance, note: scene.plate.note, bone: PLATE, slot: PLATE, size: [plate.width, plate.height], sha256: createHash('sha256').update(plate.bytes).digest('hex'), judged_by: 'nothing' },
+    ...(scene.plates === undefined ? {} : { plates: layers.map((p, i) => {
+      const img = plateLayers[i] as PlateImage;
+      return { name: p.name, image: p.image, provenance: p.provenance, note: p.note, at: [...p.at] as [number, number], opaque_backdrop: p.opaque_backdrop === true, bone: p.name, slot: p.name, size: [img.width, img.height] as [number, number], sha256: createHash('sha256').update(img.bytes).digest('hex'), judged_by: 'nothing' as const };
+    }) }),
     characters: rows,
     order: { declared: [...scene.order], slots: slots.map((s) => s.name), judged_by: 'nothing' },
     idle_duration: durations[0],
@@ -1418,7 +1516,7 @@ export function composeScene(
  * refused naming the prefixed names it could have meant. Any other miss is
  * left to `check`'s own `REQUIREMENTS_RESOLVES`, which names it in its words.
  */
-export function requirementPrefixProblems(file: RequirementsFile, builds: readonly CharacterBuild[], plate: boolean): Problem[] {
+export function requirementPrefixProblems(file: RequirementsFile, builds: readonly CharacterBuild[], plate: boolean, plates: readonly string[] = []): Problem[] {
   const out: Problem[] = [];
   const bare = {
     bone: (b: CharacterBuild) => b.rig.bones.map((x) => x.name).filter((n) => n !== ROOT_BONE),
@@ -1427,7 +1525,7 @@ export function requirementPrefixProblems(file: RequirementsFile, builds: readon
     attachment: (b: CharacterBuild) => Object.values(b.rig.skins.default).flatMap((a) => Object.keys(a)),
   } as const;
   // What the composed rig will hold, by kind: each character's names under its prefix, and the shared root and plate.
-  const own = (kind: keyof typeof bare): Set<string> => new Set([...builds.flatMap((b) => bare[kind](b).map((n) => prefixed(b.id, n))), ...(kind === 'bone' ? [ROOT_BONE] : []), ...(plate && kind !== 'constraint' ? [PLATE] : [])]);
+  const own = (kind: keyof typeof bare): Set<string> => new Set([...builds.flatMap((b) => bare[kind](b).map((n) => prefixed(b.id, n))), ...(kind === 'bone' ? [ROOT_BONE] : []), ...(plate && kind !== 'constraint' ? [PLATE] : []), ...(kind !== 'constraint' ? plates : [])]);
   const kinds = {
     bone: { have: own('bone'), bare: bare.bone },
     constraint: { have: own('constraint'), bare: bare.constraint },
@@ -1472,9 +1570,9 @@ export function requirementPrefixProblems(file: RequirementsFile, builds: readon
  * control runs over what `compose` wrote. Each entry is `<where> "<name>"`.
  * Images are held to `<id>.` the same way.
  */
-export function unprefixedNames(rig: RigSpec, motion: MotionSpec, ids: readonly string[], plate: boolean): string[] {
+export function unprefixedNames(rig: RigSpec, motion: MotionSpec, ids: readonly string[], plate: boolean, plates: readonly string[] = []): string[] {
   const bad: string[] = [];
-  const ok = (n: string, allowPlate: boolean): boolean => n === ROOT_BONE || (allowPlate && plate && n === PLATE) || ids.some((id) => n.startsWith(`${id}${PREFIX_SEP}`) && n.length > id.length + 1);
+  const ok = (n: string, allowPlate: boolean): boolean => n === ROOT_BONE || (allowPlate && ((plate && n === PLATE) || plates.includes(n))) || ids.some((id) => n.startsWith(`${id}${PREFIX_SEP}`) && n.length > id.length + 1);
   const name = (where: string, n: unknown, allowPlate = true): void => {
     if (typeof n !== 'string' || !ok(n, allowPlate)) bad.push(`${where} ${show(n)}`);
   };
@@ -1493,7 +1591,7 @@ export function unprefixedNames(rig: RigSpec, motion: MotionSpec, ids: readonly 
     for (const [a, att] of Object.entries(atts)) {
       name(`skin ${slot} attachment`, a);
       const img = (att as unknown as Attachment).image;
-      if (typeof img !== 'string' || !((plate && img === PLATE_IMAGE) || ids.some((id) => img.startsWith(`${id}${IMAGE_SEP}`)))) bad.push(`skin ${slot} ${a} image ${show(img)}`);
+      if (typeof img !== 'string' || !((plate && img === PLATE_IMAGE) || plates.some((_, i) => img === plateImageName(i)) || ids.some((id) => img.startsWith(`${id}${IMAGE_SEP}`)))) bad.push(`skin ${slot} ${a} image ${show(img)}`);
       const generator = (att as unknown as Attachment).generator;
       if (isRecord(generator) && isRecord(generator.depth)) {
         const image = generator.depth.image;
@@ -1588,6 +1686,20 @@ export function composeFromFiles(scenePath: string, requirementsPath?: string, m
       }
     }
   }
+  const plateLayers = (scene.plates ?? []).map((p, i): PlateImage | null => {
+    const where = `scene.plates[${i}]`;
+    const ledger = readEditorReceipts(p.editor_receipts, scene.path, `${where}.editor_receipts`, 'scene file');
+    const codes: Readonly<Record<string, string>> = { ASSEMBLE_EDITOR_RECEIPT_FILE: 'SCENE_EDITOR_RECEIPT_FILE', ASSEMBLE_EDITOR_RECEIPT_SHA256: 'SCENE_EDITOR_RECEIPT_SHA256', ASSEMBLE_EDITOR_RECEIPT_MISSING: 'SCENE_EDITOR_RECEIPT_MISSING' };
+    problems.push(...[...ledger.problems, ...missingReceipts(ledger, [{ object: `${where}.image`, path: p.imagePath }])].map(problem => ({ ...problem, code: codes[problem.code] ?? problem.code })));
+    try {
+      const bytes = new Uint8Array(readFileSync(p.imagePath));
+      const r = decodePngBytes(bytes, `${where}.image`);
+      return { bytes, width: r.width, height: r.height };
+    } catch (err) {
+      problems.push({ code: 'SCENE_PLATE_PRESENT', object: `${where}.image (${p.image})`, detail: `${(err as Error).message}; a PNG is required` });
+      return null;
+    }
+  });
   let req: RequirementsFile | null = null;
   if (requirementsPath !== undefined) {
     try {
@@ -1597,7 +1709,7 @@ export function composeFromFiles(scenePath: string, requirementsPath?: string, m
       problems.push(...err.problems);
     }
   }
-  return composeScene(scene, builds, plate, problems, mode, req);
+  return composeScene(scene, builds, plate, problems, mode, req, plateLayers);
 }
 
 export interface ComposeInput {
