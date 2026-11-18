@@ -1076,7 +1076,7 @@ export function retainCheckRender(source: string, target: string): void {
     // One render samples every set at the same rate. Preserve the rate suffix
     // on ordinary safe names, but never infer a public name from that suffix.
     const suffix = typeof set.fps === 'number' && set.fps !== IDLE_FPS ? `@${set.fps}fps` : '';
-    const dir = typeof set.animation === 'string' ? diagnosticSegment(set.animation) + suffix : diagnosticSegment(set.dir);
+    const dir = typeof set.animation === 'string' ? diagnosticSegment(set.animation, suffix) : diagnosticSegment(set.dir);
     if (seen.has(dir)) return sidecarProblem(index, `retained set directory ${JSON.stringify(dir)} is repeated`);
     seen.add(dir);
     sourceDirs.push(set.dir);
@@ -1085,7 +1085,7 @@ export function retainCheckRender(source: string, target: string): void {
   mkdirSync(target, { recursive: true });
   // Root sidecars and set-local filenames are fixed renderer protocol names.
   for (const entry of readdirSync(source, { withFileTypes: true })) {
-    if (entry.isFile() && entry.name !== 'frames.json') copyFileSync(join(source, entry.name), join(target, diagnosticSegment(entry.name)));
+    if (entry.isFile() && entry.name !== 'frames.json') copyFileSync(join(source, entry.name), join(target, entry.name));
   }
   sourceDirs.forEach((dir, i) => cpSync(join(source, dir), join(target, sets[i].dir), { recursive: true }));
   const changed = sets.some((set, i) => set.dir !== sourceDirs[i]);
@@ -2532,7 +2532,7 @@ function seamPairRowsFrom(seam: SeamFigures, parts: readonly PlacedAlpha[], rigS
   return sorted.map((acc, i) => {
     // A part over no other art is named first, then SEAM_NO_ART.
     const pair: [string, string] = acc.a < 0 ? [name(acc.b), SEAM_NO_ART] : [name(acc.a), name(acc.b)];
-    const file = diagnosticSegment(`${String(i + 1).padStart(Math.max(2, width), '0')}_${pair.map((n) => (n === SEAM_NO_ART ? 'no-art' : n)).join('_')}`) + '.png';
+    const file = diagnosticSegment(`${String(i + 1).padStart(Math.max(2, width), '0')}_${pair.map((n) => (n === SEAM_NO_ART ? 'no-art' : n)).join('_')}`, '.png');
     const subjects = pair.filter(p => p !== SEAM_NO_ART);
     const cut = acc.a >= 0 && parts[acc.a].from === parts[acc.b].from ? { cut: { from: parts[acc.a].from, differing_copies_px: acc.differing } } : {};
     return { row: { ...checkRow('seam_pairs', subjects.length === 0 ? 'rig' : subjects.length === 1 ? 'part' : 'pair', false, subjects), parts: pair, px_over_40: acc.over40,
@@ -6615,6 +6615,7 @@ function renderExtremes(build: string, out: string, animations: readonly string[
     writeFileSync(grid, JSON.stringify({ spec: 'rigc-frames/1', viewport: { ...vp, scale: 1, pixelWidth: Math.max(1, Math.round(vp.width as number)), pixelHeight: Math.max(1, Math.round(vp.height as number)) } }));
     const lines: string[] = [];
     for (const animation of animations) {
+      const target = join(dest, diagnosticSegment(animation));
       const rendered = join(scratch, 'render');
       const call = render(['render', '--candidate', build, '--animation', animation, '--fps', String(IDLE_FPS), '--viewport-from', grid, '--extremes-only', '--out', rendered]);
       if (call.status !== 0) throw new Error(`render --extremes-only ${JSON.stringify(animation)} exited ${call.status}: ${call.out.trim()}${rigcRanClause(call)}`);
@@ -6625,7 +6626,7 @@ function renderExtremes(build: string, out: string, animations: readonly string[
       const sets = isRecord(frameSets) && Array.isArray(frameSets.sets) ? frameSets.sets.filter(isRecord).filter(row => row.animation === animation) : [];
       const dir = sets.length === 1 ? sets[0].dir : undefined;
       if (typeof dir !== 'string' || dir.length === 0 || isAbsolute(dir) || dir.split(/[\\/]/).includes('..')) throw new Error(`the existing render has no local set for ${JSON.stringify(animation)}`);
-      const source = join(rendered, dir), target = join(dest, diagnosticSegment(animation));
+      const source = join(rendered, dir);
       const observation: unknown = JSON.parse(readFileSync(join(source, 'extremes.json'), 'utf8'));
       if (!isRecord(observation) || observation.animation !== animation) throw new Error(`render --extremes-only has no set for ${JSON.stringify(animation)}`);
       mkdirSync(target, { recursive: true });
@@ -6636,9 +6637,10 @@ function renderExtremes(build: string, out: string, animations: readonly string[
     }
     return lines;
   } catch (err) {
-    // Diagnostics never add a measured bar or change the gate's verdict. An
-    // incomplete observation is explicitly unavailable, not a partial sheet set.
+    // Invalid destination names are input refusals. Other diagnostic failures
+    // leave the measured bars unchanged and mark the observation unavailable.
     rmSync(dest, { recursive: true, force: true });
+    if (err instanceof PartsError && err.problems.some(problem => problem.code === 'DIAGNOSTIC_PATH_SEGMENT')) throw err;
     return [`EXTREMES SKIP: CHECK_EXTREMES_RENDER_FAILED — ${err instanceof Error ? err.message : String(err)}`];
   } finally {
     rmSync(scratch, { recursive: true, force: true });
@@ -6746,6 +6748,8 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   if (reqFile?.cut_material !== undefined && (set !== undefined || allSets)) refuseIfAny([{code: 'CHECK_CUT_MATERIAL_MEASURED', object: 'cut_material', detail: 'source evidence binds base assembly only; run check on its base parts without --set/--all-sets; alternate-set coverage requires its own original source instrument'}]);
   const cutMaterialProblems: Problem[] = [];
   const cutMaterial = reqFile?.cut_material === undefined ? null : checkJointMaterial(reqFile.cut_material, inp.parts, name => readPng(join(dirname(inp.partsDir), partImageReference((inp.parts as PartsFile).parts.find(p => p.name === name) as PartRecord).path)), cutMaterialProblems, inp.parts === null ? undefined : readMaterialSources(dirname(inp.partsDir), inp.parts));
+  const animationNames = isRecord(inp.motion.animations) ? Object.keys(inp.motion.animations) : [];
+  if (!noExtremes) for (const animation of animationNames) diagnosticSegment(animation);
   // A measured material failure is a check bar; unavailable data is a refusal.
   const rigcEntry = readRigcEntry(requireRigcVersion(rigc));
   /**
@@ -6826,7 +6830,6 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     keyed = join(loopDir, 'build');
     return keyed;
   };
-  const animationNames = isRecord(inp.motion.animations) ? Object.keys(inp.motion.animations) : [];
   const named = animationNames.filter((n) => n !== 'idle');
   // Issue #590: steady-wind seam band sweep, only under --wind-band; run before idle/still renders so a refusal
   // on an unbanded pair writes nothing.

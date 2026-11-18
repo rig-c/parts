@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { writeCheckRig, writeMergedCheckRig } from '../fixtures/checkrig.ts';
 import { blankRigcRunClock } from '../fixtures/rigc_run_clock.ts';
 import { checkStage } from '../src/build.ts';
-import { readFrameSet, retainCheckRender, seamPairRows, type RigcRunner } from '../src/check.ts';
+import { readFrameSet, retainCheckRender, runCheck, seamPairRows, type RigcRunner } from '../src/check.ts';
 import { diagnosticSegment } from '../src/outputpaths.ts';
 import { writePng } from '../src/raster/png.ts';
 import { PartsError } from '../src/errors.ts';
@@ -22,23 +22,76 @@ function tree(dir: string, prefix = ''): string[] {
   });
 }
 
+/** Independent left-to-right inverse of literal units and five-character escapes. */
+function decodeDiagnosticSegment(segment: string): string {
+  let name = '';
+  for (let i = 0; i < segment.length;) {
+    if (segment[i] !== '~') { name += segment[i++]; continue; }
+    const hex = segment.slice(i + 1, i + 5);
+    if (!/^[0-9a-f]{4}$/.test(hex)) throw new Error('fixture decoder requires a four-digit escape');
+    name += String.fromCharCode(parseInt(hex, 16));
+    i += 5;
+  }
+  return name;
+}
+
 /** Hand-spelled code units and generated sidecars; no renderer or art needed. */
 export function runDiagnosticPathChecks(root: string, say: Say): void {
   const vectors: Array<[string, string]> = [
     ['idle', 'idle'], ['wave-2_left', 'wave-2_left'], ['idle@24fps', 'idle@24fps'],
-    ['a:turn', '~0061003a007400750072006e'], ['a-turn', 'a-turn'],
-    ['A', '~0041'], ['a', 'a'], ['\u00e9', '~00e9'], ['e\u0301', '~00650301'],
-    ['~0041', '~007e0030003000340031'], ['CON', '~0043004f004e'], ['con', '~0063006f006e'],
-    ['con.txt', '~0063006f006e002e007400780074'], ['lpt1', '~006c007000740031'],
-    ['tail.', '~007400610069006c002e'], ['tail ', '~007400610069006c0020'],
-    ['.', '~002e'], ['..', '~002e002e'], ['', '~'],
-    ['a/b', '~0061002f0062'], ['a\\b', '~0061005c0062'], ['a\u0000', '~00610000'],
-    ['<>:"|?*', '~003c003e003a0022007c003f002a'],
-    ['\ud800', '~d800'], ['\ufffd', '~fffd'],
+    ['a:turn', 'a~003aturn'], ['a~003aturn', 'a~007e003aturn'], ['a-turn', 'a-turn'],
+    ['A', '~0041'], ['a', 'a'], ['\u00e9', '~00e9'], ['e\u0301', 'e~0301'],
+    ['~0041', '~007e0041'], ['CON', '~0043~004f~004e'], ['con', '~0063on'],
+    ['con.txt', '~0063on.txt'], ['lpt1', '~006cpt1'],
+    ['tail.', 'tail~002e'], ['tail ', 'tail~0020'],
+    ['.', '~002e'], ['..', '.~002e'], ['con.', 'con~002e'],
+    ['tail~002e', 'tail~007e002e'], ['~0063on.txt', '~007e0063on.txt'], ['.~002e', '.~007e002e'],
+    ['a/b', 'a~002fb'], ['a\\b', 'a~005cb'], ['a\u0000', 'a~0000'],
+    ['<>:"|?*', '~003c~003e~003a~0022~007c~003f~002a'],
+    ['\ud800', '~d800'], ['\udc00', '~dc00'], ['\ufffd', '~fffd'], ['\ud83d\ude00', '~d83d~de00'],
   ];
   const actual = vectors.map(([name]) => diagnosticSegment(name));
   say('CK1362_SEGMENTS_MATCH_HAND_COMPUTED_CODE_UNITS', vectors.every(([, want], i) => actual[i] === want),
     JSON.stringify(vectors.map(([name, want], i) => ({ name, want, got: actual[i] }))));
+  say('CK1362_LEFT_TO_RIGHT_DECODER_ROUNDTRIPS_EVERY_COLLISION_FIXTURE',
+    vectors.every(([name], i) => decodeDiagnosticSegment(actual[i]) === name) &&
+    decodeDiagnosticSegment(diagnosticSegment('\ud83d\ude00')) === '\ud83d\ude00' &&
+    decodeDiagnosticSegment(diagnosticSegment('\udc00')) === '\udc00',
+    `${vectors.length} hand-computed names, a surrogate pair and a lone low surrogate recover exact UTF-16 units`);
+  const refusedName = (name: string, suffix = ''): boolean => {
+    try { diagnosticSegment(name, suffix); }
+    catch (error) {
+      return error instanceof PartsError && error.problems.length === 1 && error.problems[0].code === 'DIAGNOSTIC_PATH_SEGMENT' &&
+        error.problems[0].object === `diagnostic name ${JSON.stringify(name)}` &&
+        error.problems[0].detail.includes(name.length === 0 ? 'is empty' : 'encodes to 256 characters');
+    }
+    return false;
+  };
+  say('CK1362_EMPTY_AND_OVERLONG_NAMES_ARE_NAMED_REFUSALS_WITHOUT_TRUNCATION',
+    refusedName('') && refusedName('', '.png') && refusedName('a'.repeat(256)) && refusedName('a'.repeat(251) + 'A') &&
+    refusedName('a'.repeat(252), '.png') && refusedName('a'.repeat(250), '@24fps') &&
+    diagnosticSegment('a'.repeat(255)) === 'a'.repeat(255) &&
+    diagnosticSegment('a'.repeat(250) + 'A') === 'a'.repeat(250) + '~0041' &&
+    diagnosticSegment('a'.repeat(251), '.png') === 'a'.repeat(251) + '.png' &&
+    diagnosticSegment('a'.repeat(249), '@24fps') === 'a'.repeat(249) + '@24fps',
+    'empty originals refuse even with a suffix; literal, escaped-unit, PNG and fps boundaries accept 255 and refuse 256, naming the original');
+  const refusedBeforeRender = ['', 'a'.repeat(251) + 'A'].map((name, i) => {
+    const home = join(root, 'refused-name-' + i), out = join(root, 'refused-name-out-' + i);
+    writeCheckRig(home);
+    const motion = json(join(home, 'motion.json'));
+    const animations = motion.animations as Record<string, unknown>;
+    motion.animations = { [name]: animations.idle };
+    writeFileSync(join(home, 'motion.json'), JSON.stringify(motion));
+    let calls = 0;
+    try { runCheck(home, out, () => { calls++; throw new Error('no renderer may run for a refused diagnostic name'); }); }
+    catch (error) {
+      return error instanceof PartsError && error.problems[0]?.code === 'DIAGNOSTIC_PATH_SEGMENT' &&
+        error.problems[0].object === `diagnostic name ${JSON.stringify(name)}` && calls === 0 && !existsSync(out);
+    }
+    return false;
+  });
+  say('CK1362_INVALID_EXTREMES_NAMES_REFUSE_BEFORE_CORE_OR_OUTPUT', refusedBeforeRender.every(Boolean),
+    'empty and 256-character encoded names: named refusals, zero core calls, no output directory');
   const fold = (name: string): string => name.normalize('NFD').toLowerCase();
   const unique = (names: string[]): boolean => new Set(names.map(fold)).size === names.length;
   const portable = (name: string): boolean => name.length > 0 && !/[<>:"/\\|?*\u0000-\u001f]/.test(name) &&
@@ -50,12 +103,12 @@ export function runDiagnosticPathChecks(root: string, say: Say): void {
   const reserved = ['prn', 'aux', 'nul', 'com1', 'com9', 'lpt9', 'con.log', 'com1.log', 'lpt9.log', 'COM\u00b9', 'LPT\u00b2'];
   say('CK1362_DEVICE_EXTENSIONS_AND_CONTROL_CHARACTERS_ARE_ENCODED',
     [...reserved, ...Array.from({ length: 32 }, (_, i) => String.fromCharCode(i))].every(name => diagnosticSegment(name) !== name && portable(diagnosticSegment(name))),
-    'device basenames, extensions, superscript devices and every C0 control are outside the literal alphabet');
+    'device basenames and extensions force an escape; superscript devices and every C0 control contain an unsafe unit');
 
   const source = join(root, 'source'), target = join(root, 'kept');
   mkdirSync(source, { recursive: true });
   const names = ['idle', 'a:turn', 'A', 'a', '\u00e9', 'e\u0301', '~0041'];
-  const wanted = ['idle', '~0061003a007400750072006e', '~0041', 'a', '~00e9', '~00650301', '~007e0030003000340031'];
+  const wanted = ['idle', 'a~003aturn', '~0041', 'a', '~00e9', 'e~0301', '~007e0041'];
   const sets = names.map((animation, i) => {
     const dir = 'source-' + i;
     mkdirSync(join(source, dir));
@@ -65,7 +118,12 @@ export function runDiagnosticPathChecks(root: string, say: Say): void {
   });
   const manifest = { spec: 'rigc-frames/1', viewport: { x: 0, y: 0, width: 1, height: 1, scale: 1, pixelWidth: 1, pixelHeight: 1 }, background: [0, 0, 0, 0], sets };
   writeFileSync(join(source, 'frames.json'), JSON.stringify(manifest));
+  writeFileSync(join(source, 'Fixed-Root.json'), '{ "protocol": "verbatim" }\n');
   retainCheckRender(source, target);
+  say('CK1362_FIXED_ROOT_SIDECARS_KEEP_PROTOCOL_NAMES_AND_BYTES',
+    readFileSync(join(target, 'Fixed-Root.json'), 'utf8') === readFileSync(join(source, 'Fixed-Root.json'), 'utf8') &&
+    !existsSync(join(target, '~0046ixed-~0052oot.json')),
+    'a planted case-bearing protocol sidecar is copied verbatim, rather than passed through the diagnostic name mapping');
   const kept = json(join(target, 'frames.json')).sets as typeof sets;
   say('CK1362_RETAINED_INDEX_AND_READERS_KEEP_DISTINCT_PUBLIC_NAMES', unique(kept.map(set => set.dir)) && kept.every((set, i) => {
     const reading = readFrameSet(join(target, set.dir));
@@ -103,7 +161,7 @@ export function runDiagnosticPathChecks(root: string, say: Say): void {
   const picture = (name: string) => seamPairRows(seam, [{ name, from: 'generated', x: 0, y: 0, image: pixel }], [1, 1], viewport)[0].row;
   const prefixed = picture('a:turn'), plain = picture('a-turn');
   say('CK1362_SEAM_PICTURE_PATH_IS_MAPPED_WITH_SUBJECTS_AND_COUNTS_UNCHANGED',
-    prefixed.picture === 'seam/~00300031005f0061003a007400750072006e005f006e006f002d006100720074.png' &&
+    prefixed.picture === 'seam/01_a~003aturn_no-art.png' &&
     plain.picture === 'seam/01_a-turn_no-art.png' && prefixed.parts[0] === 'a:turn' && prefixed.px_over_40 === 1 && plain.px_over_40 === 1,
     JSON.stringify({ prefixed, plain }));
 }
@@ -205,7 +263,7 @@ export function runExtremesChecks(root: string, say: Say, rigc: RigcRunner): voi
   writeFileSync(join(prefixedHome, 'motion.json'), JSON.stringify(prefixedMotion));
   const prefixedOut = join(root, 'prefixed-out');
   const prefixed = run(prefixedOut, false, rigc, prefixedHome);
-  const prefixedDir = join(prefixedOut, 'extremes', '~0061003a007400750072006e');
+  const prefixedDir = join(prefixedOut, 'extremes', 'a~003aturn');
   say('CK1362_PREFIXED_ANIMATION_RETAINS_ORIGINAL_NAME_IN_EXTREMES', existsSync(join(prefixedDir, 'extremes.png')) &&
     json(join(prefixedDir, 'extremes.json')).animation === 'a:turn' && !existsSync(join(prefixedOut, 'extremes', 'a:turn')) &&
     prefixed.lines.some(line => line.includes('EXTREMES "a:turn"')),
