@@ -107,6 +107,7 @@ import { decodePngBytes, readPng } from './raster/png.ts';
 import { readRequirements, type RequirementsFile } from './requirements.ts';
 import { OFFSET_PLACES, rigJsonText, type RigSpec } from './rig.ts';
 import { pyRound } from './round.ts';
+import { mergeSceneAnimations, readSceneAnimations, sceneBoneContext, sceneClipLoopProblems, type SceneAnimations } from './sceneclips.ts';
 
 /** The scene file's `spec`. */
 export const SCENE_SPEC = 'spine-parts-scene/1';
@@ -185,6 +186,7 @@ export interface SceneFile {
   canvas: { width: number; height: number };
   plate: ScenePlate | null;
   plates?: NamedScenePlate[];
+  animations?: SceneAnimations;
   characters: SceneCharacter[];
   order: string[];
 }
@@ -265,7 +267,7 @@ export function loadScene(path: string): SceneFile {
       if (!keys.includes(k) && !freeKey(k, v)) fail('SCENE_KEY_KNOWN', `${where}.${k}`, `is a key ${SCENE_SPEC} does not read; it reads ${keys.join(', ')} (and "note", "…_note" strings and "x-…" records, which nothing reads)`);
     }
   };
-  known(o, 'scene', ['spec', 'canvas', 'plate', 'plates', 'characters', 'order']);
+  known(o, 'scene', ['spec', 'canvas', 'plate', 'plates', 'characters', 'order', 'animations']);
   if (o.spec !== SCENE_SPEC) fail('SCENE_SPEC', 'scene.spec', `is ${show(o.spec)}; "${SCENE_SPEC}" is required`);
 
   // canvas
@@ -413,8 +415,16 @@ export function loadScene(path: string): SceneFile {
       else order.push(e);
     });
   }
+  let animations: SceneAnimations | undefined;
+  if ('animations' in o) {
+    try { animations = readSceneAnimations(o.animations, at); }
+    catch (err) {
+      if (!(err instanceof PartsError)) throw err;
+      problems.push(...err.problems);
+    }
+  }
   refuseIfAny(problems);
-  return { path: at, canvas, plate, ...('plates' in o ? { plates } : {}), characters, order };
+  return { path: at, canvas, plate, ...('plates' in o ? { plates } : {}), ...(animations === undefined ? {} : { animations }), characters, order };
 }
 
 // ---------------------------------------------------------------------------
@@ -1002,6 +1012,8 @@ export interface ComposedScene {
   /** Every image file of the composed rig, by its composed name: the plate's first, then each character's. */
   images: Array<[string, Uint8Array]>;
   report: SceneReport;
+  /** Opt-in declaration retained for pre-emission pose measurement; never serialized. */
+  sceneAnimations?: SceneAnimations;
 }
 
 /** The plate image's bytes and size, read by the caller. */
@@ -1488,6 +1500,8 @@ export function composeScene(
   const note = notes.size === 1 ? [...notes][0] : ready.map((b) => `${b.id}: ${b.motion.animations.idle.note}`).join(' | ');
   const motion: MotionSpec = { spec: 'rigc-motion/1', archetype: name, cut: name, easings, groups, animations: { idle: { duration: durations[0], loop: true, note, tracks, ...(idleDeform.length === 0 ? {} : { deform: idleDeform }) }, ...beside } };
 
+  if (scene.animations !== undefined) mergeSceneAnimations(rig, motion, scene.animations);
+
   const report: SceneReport = {
     spec: SCENE_REPORT_SPEC,
     scene: scene.path,
@@ -1503,7 +1517,7 @@ export function composeScene(
     order: { declared: [...scene.order], slots: slots.map((s) => s.name), judged_by: 'nothing' },
     idle_duration: durations[0],
   };
-  return { rig, motion, images, report };
+  return { rig, motion, images, report, ...(scene.animations === undefined ? {} : { sceneAnimations: scene.animations }) };
 }
 
 // ---------------------------------------------------------------------------
@@ -1571,7 +1585,7 @@ export function requirementPrefixProblems(file: RequirementsFile, builds: readon
  * control runs over what `compose` wrote. Each entry is `<where> "<name>"`.
  * Images are held to `<id>.` the same way.
  */
-export function unprefixedNames(rig: RigSpec, motion: MotionSpec, ids: readonly string[], plate: boolean, plates: readonly string[] = []): string[] {
+export function unprefixedNames(rig: RigSpec, motion: MotionSpec, ids: readonly string[], plate: boolean, plates: readonly string[] = [], sceneAnimations: readonly string[] = []): string[] {
   const bad: string[] = [];
   const ok = (n: string, allowPlate: boolean): boolean => n === ROOT_BONE || (allowPlate && ((plate && n === PLATE) || plates.includes(n))) || ids.some((id) => n.startsWith(`${id}${PREFIX_SEP}`) && n.length > id.length + 1);
   const name = (where: string, n: unknown, allowPlate = true): void => {
@@ -1631,9 +1645,9 @@ export function unprefixedNames(rig: RigSpec, motion: MotionSpec, ids: readonly 
     name('group', g, false);
     for (const m of members) name(`group ${g} member`, m, false);
   }
-  for (const t of Object.values(animationsOf(motion)).flatMap((a) => a.tracks)) {
+  for (const [animation, a] of Object.entries(animationsOf(motion))) for (const t of a.tracks) {
     const tr = t as unknown as Record<string, unknown>;
-    if ('bone' in tr) name('track bone', tr.bone, false);
+    if ('bone' in tr) name('track bone', tr.bone, sceneAnimations.includes(animation));
     if ('group' in tr) name('track group', tr.group, false);
     for (const k of (tr.keys as Array<Record<string, unknown>>) ?? []) {
       if (typeof k.ease === 'string') name('key ease', k.ease, false);
@@ -1641,7 +1655,7 @@ export function unprefixedNames(rig: RigSpec, motion: MotionSpec, ids: readonly 
     }
   }
   for (const [animation, a] of Object.entries(animationsOf(motion))) {
-    if (animation !== 'idle') name('animation', animation, false);
+    if (animation !== 'idle' && !sceneAnimations.includes(animation)) name('animation', animation, false);
     for (const d of a.deform ?? []) {
       name('deform slot', d.slot, false);
       name('deform attachment', d.attachment, false);
@@ -1782,7 +1796,16 @@ export function composeStage(input: ComposeInput, run: ComposeRunners, log: Log)
     ['rig.json', rigJsonText(composed.rig)],
     ['motion.json', rigJsonText(composed.motion)],
   ];
-  const gate = gateThroughRigc(composed.images, texts, run.rig, run.scratch, mode);
+  let gate: ReturnType<typeof gateThroughRigc>;
+  try {
+    const clips = composed.sceneAnimations;
+    gate = gateThroughRigc(composed.images, texts, run.rig, run.scratch, mode, clips === undefined ? undefined : build => {
+      refuseIfAny(sceneClipLoopProblems(readFileSync(join(build, 'skeleton.model.json'), 'utf8'), clips));
+    });
+  } catch (err) { return refused('compose', err); }
+  if (composed.sceneAnimations !== undefined) for (const g of gate) {
+    g.lines = g.lines.map(line => sceneBoneContext(line, composed.report.characters.map(c => c.id)));
+  }
   for (const g of gate) {
     say(`  rigc ${g.label}: exit ${g.status}`);
     for (const l of g.lines) say(`    ${l.trim()}`);
