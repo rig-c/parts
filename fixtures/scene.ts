@@ -145,10 +145,15 @@ export function writeSceneClipBuild(dir: string, bodySlider?: string): string {
   return writeSceneOutput(dir, out, f.parts, { motion: motion => {
     const animations = motion.animations as Record<string, { duration: number; deform?: Array<{ slot: string; attachment: string; keys: Array<Record<string, unknown>> }> }>;
     const deform = animations.turn.deform?.[0];
-    if (deform === undefined) throw new Error('scene clip fixture requires the real turn deform producer');
+    const offsets = deform?.keys.find(key => Array.isArray(key.vertices) && key.vertices.some(v => v !== 0));
+    const reset = deform?.keys.find(key => key.vertices === undefined && key.transform === undefined);
+    if (deform === undefined || offsets === undefined || reset === undefined) throw new Error('scene clip fixture requires authored weighted turn offsets and a neutral reset');
+    // Weighted turn meshes carry bind-space offsets, not attachment depth maps.
+    // Retain the producer's payloads in a closed idle: reset, authored offsets, reset.
     animations.idle.deform = [{ ...deform, keys: [
-      { t: 0, transform: { kind: 'yaw', degrees: 0, depth: true, narrowing: false } },
-      { t: animations.idle.duration, transform: { kind: 'yaw', degrees: 0, depth: true, narrowing: false } },
+      { ...structuredClone(reset), t: 0 },
+      { ...structuredClone(offsets), t: animations.idle.duration / 2 },
+      { ...structuredClone(reset), t: animations.idle.duration },
     ] }];
   } });
 }

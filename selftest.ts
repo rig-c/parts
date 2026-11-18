@@ -46504,7 +46504,7 @@ function runSceneSuite(): number {
       const badIdle = runRed('idle-loop', { idle: nonclosing }), badTake = runRed('take-loop', { take: nonclosing });
       say('SC79_BOTH_SCENE_CLIP_FORMS_REFUSE_NONCLOSING_POSED_ENDPOINTS_BEFORE_EMIT',
         [badIdle, badTake].every(r => r.status === 1 && r.empty && r.out.includes('SCENE_ANIMATION_LOOP_CLOSES')) && green.status === 0,
-        `idle ${badIdle.status}/${badIdle.empty}; take ${badTake.status}/${badTake.empty}; positive ${green.status}`, why);
+        `idle ${cliDiagnosis(badIdle)}/${badIdle.empty}; take ${cliDiagnosis(badTake)}/${badTake.empty}; positive ${green.status}`, why);
       const absentDials = ['a:yaw_dial', 'a:pitch_dial', 'a:body_yaw_dial'].map((bone, i) => ({ bone,
         run: runRed(`absent-dial-${i}`, { take: { duration: 2, tracks: [{ bone, property: 'rotate', keys: [{ t: 0, v: [0] }, { t: 2, v: [0] }] }] } }, 'plain'),
       }));
@@ -46513,7 +46513,7 @@ function runSceneSuite(): number {
       const customRun = runCli(['compose', '--scene', scene(body({ take: sceneClip(2, 'a:torso_control') }, 'custom-clip-character')), '--out', customOut]);
       say('SC80_ABSENT_DIAL_USES_CORE_UNKNOWN_BONE_AND_NAMES_CHARACTER_CUSTOM_DIAL_RESOLVES',
         absentDials.every(({ bone, run }) => run.status === 1 && run.empty && run.out.includes('CE_COMPILE_ANIMATION_BONE_UNKNOWN') && run.out.includes(bone) && run.out.includes('character "a"')) && custom.err === null && customRun.status === 0,
-        `absent ${absentDials.map(({ bone, run }) => `${bone}:${run.status}/${run.empty}`).join(', ')}; custom ${customRun.status}/${codes(custom.err)}`, why);
+        `absent ${absentDials.map(({ bone, run }) => `${bone}:${cliDiagnosis(run)}/${run.empty}`).join(', ')}; custom ${cliDiagnosis(customRun)}/${diagnosis(custom)}`, why);
       const limits = baseline?.rig.constraints?.filter(c => c.type === 'slider' && ['a:yaw_dial', 'a:pitch_dial', 'a:body_yaw_dial'].includes(String(c.bone))) ?? [];
       const rangePlants = limits.map(c => {
         const track = (v: number) => ({ duration: 2, tracks: [{ bone: c.bone, property: c.property, keys: [{ t: 0, v: [v] }, { t: 2, v: [v] }] }] });
@@ -46535,13 +46535,13 @@ function runSceneSuite(): number {
       const idleCollision = runRed('idle-collision', { idle: collision });
       say('SC83_DUPLICATE_AND_IMPORTED_IDLE_PROPERTY_COLLISIONS_KEEP_CORE_CODE',
         [duplicateRun, idleCollision].every(r => r.status === 1 && r.empty && r.out.includes('CE_COMPILE_ANIMATION_TRACK_DUPLICATE')) && green.status === 0,
-        `duplicate ${duplicateRun.status}; idle collision ${idleCollision.status}; green ${green.status}`, why);
+        `duplicate ${cliDiagnosis(duplicateRun)}; idle collision ${cliDiagnosis(idleCollision)}; green ${green.status}`, why);
       const badTime = sceneClip(2); badTime.tracks[0].keys[1].t = 3;
       const timeRun = runRed('bad-time', { take: badTime });
       const duration = compose(body({ idle: sceneClip(4) }));
       say('SC84_BAD_TIMES_USE_CORE_REFUSAL_IDLE_DURATION_MISMATCH_NEVER_RETIMES',
         timeRun.status === 1 && timeRun.empty && timeRun.out.includes('CE_COMPILE_KEY_AFTER_DURATION') && has(duration.err, 'SCENE_DURATION_AGREES', 'is 4; composed idle declares 2') && extended !== null,
-        `bad time ${timeRun.status}; mismatch ${codes(duration.err)}; positive idle ${extended !== null}`, why);
+        `bad time ${cliDiagnosis(timeRun)}; mismatch ${diagnosis(duration)}; positive idle ${extended !== null}`, why);
       writeSceneBuild(join(dir, 'unknown-animation'), 'plain', { rig: r => {
         r.constraints = [{ type: 'slider', name: 'test_slider', animation: 'ghost_animation', bone: 'body', property: 'rotate', from: -1, max: 1 }];
       } });
@@ -46569,7 +46569,7 @@ function runSceneSuite(): number {
       const missingValue = runRed('missing-value', { take: { duration: 2, tracks: [{ bone: 'plate', property: 'translate', keys: [{ t: 0 }, { t: 2, v: [0, 0] }] }] } });
       say('SC86_MISSING_DURATION_KEYS_VALUES_AND_TIMES_ARE_CORE_NAMED_REFUSALS',
         invalid.every((r, i) => r.err !== null && r.err.problems.some(p => p.code === 'CE_MOTION_FIELD_SHAPE' && p.detail.includes(invalidFields[i]))) && missingValue.status === 1 && missingValue.empty && missingValue.out.includes('CE_COMPILE_TIMELINE_VALUE_CHANNEL_COUNT') && separate !== null,
-        invalid.map(r => codes(r.err)).join('; ') + `; missing value ${missingValue.status}`, why);
+        invalid.map(diagnosis).join('; ') + `; missing value ${cliDiagnosis(missingValue)}; positive separate ${separate !== null}`, why);
       const legacyPath = scene(body()); const legacyOut = join(dir, 'clips-legacy-parity');
       const first = runCli(['compose', '--scene', legacyPath, '--out', legacyOut]);
 
@@ -46591,7 +46591,7 @@ function runSceneSuite(): number {
       const delayedRun = runRed('delayed-start', { take: delayed });
       say('SC89_CLOSURE_READS_POSES_BEFORE_FIRST_KEY_AND_LOOP_FALSE_DOES_NOT_BYPASS',
         delayedRun.status === 1 && delayedRun.empty && delayedRun.out.includes('SCENE_ANIMATION_LOOP_CLOSES') && green.status === 0,
-        `equal raw key values; delayed-start exit ${delayedRun.status}; no emission ${delayedRun.empty}; positive ${green.status}`, why);
+        `equal raw key values; delayed-start ${cliDiagnosis(delayedRun)}; no emission ${delayedRun.empty}; positive ${green.status}`, why);
       const authoringClips = readFileSync(join(ROOT, 'docs/AUTHORING.md'), 'utf8');
       const stabilityClips = readFileSync(join(ROOT, 'docs/STABILITY.md'), 'utf8');
       say('SC90_AUTHORING_AND_STABILITY_PROMISE_GENERATED_NAMES_WITH_MAJOR_RENAME',
@@ -46682,14 +46682,20 @@ function runSceneSuite(): number {
         `empty ${codes(emptyWrapper)}; numeric ${codes(numericWrapper)}; missing duration ${missingDurationWrapper?.problems.map(problemLine).join(' | ')}`, why);
       const badNarrowDir = writeSceneClipBuild(join(dir, 'bad-narrowing'));
       const badNarrowMotionPath = join(badNarrowDir, 'rig', 'motion.json');
-      const badNarrowMotion = JSON.parse(readFileSync(badNarrowMotionPath, 'utf8')) as { animations: { idle: { deform: Array<{ keys: Array<{ transform: { narrowing: unknown } }> }> } } };
-      badNarrowMotion.animations.idle.deform[0].keys[0].transform.narrowing = 0;
+      const badNarrowMotion = JSON.parse(readFileSync(badNarrowMotionPath, 'utf8')) as { animations: Record<string, { deform: Array<{ keys: Array<{ t: number; vertices?: number[]; transform?: { kind: string; degrees: number; depth: boolean; narrowing: unknown } }> }> }> };
+      const idleDeform = badNarrowMotion.animations.idle.deform[0];
+      const originalDeform = badNarrowMotion.animations.turn.deform[0];
+      const retainedOffsets = idleDeform.keys[1].vertices;
+      const authoredDeform = retainedOffsets !== undefined && retainedOffsets.some(value => value !== 0) &&
+        originalDeform.keys.some(key => JSON.stringify(key.vertices) === JSON.stringify(retainedOffsets)) &&
+        [idleDeform.keys[0], idleDeform.keys[2]].every(key => Object.keys(key).length === 1 && key.transform === undefined);
+      idleDeform.keys[0].transform = { kind: 'yaw', degrees: 0, depth: true, narrowing: 0 };
       writeFileSync(badNarrowMotionPath, rigJsonText(badNarrowMotion));
       const badNarrow = compose(body(undefined, badNarrowDir));
-      say('SC102_CLIP_FIXTURE_USES_BOOLEAN_NARROWING_AND_PLANTED_NUMBER_IS_FULLY_NAMED',
-        baselineResult.err === null && baseline !== null && has(badNarrow.err, 'SCENE_BUILD_FIELD_KNOWN', 'motion.json animations.idle.deform[0].keys[0].transform.narrowing') &&
+      say('SC102_CLIP_FIXTURE_RETAINS_AUTHORED_OFFSETS_AND_PLANTED_NARROWING_NUMBER_IS_FULLY_NAMED',
+        authoredDeform && baselineResult.err === null && baseline !== null && green.status === 0 && has(badNarrow.err, 'SCENE_BUILD_FIELD_KNOWN', 'motion.json animations.idle.deform[0].keys[0].transform.narrowing') &&
           has(badNarrow.err, 'SCENE_BUILD_FIELD_KNOWN', 'is 0; a boolean is required'),
-        `positive baseline ${diagnosis(baselineResult)}; numeric plant ${diagnosis(badNarrow)}`, why);
+        `authored offsets ${authoredDeform}; positive baseline ${diagnosis(baselineResult)}; positive gate ${cliDiagnosis(green)}; numeric plant ${diagnosis(badNarrow)}`, why);
       const parityBytes = (start: string, finish: string, digest = 'synthetic') => new Map([
         ['rig/rig.json', new TextEncoder().encode('{"stable":true}')],
         ['check/build/run.json', new TextEncoder().encode(JSON.stringify({ started_at: start, finished_at: finish, inputs: [{ sha256: digest }] }))],
@@ -46705,12 +46711,27 @@ function runSceneSuite(): number {
       otherClockBefore.set('check/run.json', new TextEncoder().encode(JSON.stringify({ started_at: '2000-01-01T00:00:00.000Z', finished_at: '2000-01-01T00:00:01.000Z' })));
       otherClockAfter.set('check/run.json', new TextEncoder().encode(JSON.stringify({ started_at: '2000-01-01T00:00:02.000Z', finished_at: '2000-01-01T00:00:03.000Z' })));
       const otherFileClock = compareSceneBytes(otherClockBefore, otherClockAfter);
+      const windowsPaths = (files: ReadonlyMap<string, Uint8Array>) => new Map([...files].map(([path, bytes]) => [path.replaceAll('/', '\\'), bytes]));
+      const windowsClock = compareSceneBytes(windowsPaths(firstClock), windowsPaths(nextClock));
+      const windowsDigest = compareSceneBytes(windowsPaths(firstClock), windowsPaths(parityBytes('2000-01-01T00:00:02.000Z', '2000-01-01T00:00:03.000Z', 'changed')));
+      const windowsRig = compareSceneBytes(windowsPaths(firstClock), windowsPaths(changedRig));
+      const windowsMissing = compareSceneBytes(windowsPaths(firstClock), windowsPaths(missingRig));
+      const outsideReceipt = ['check\\run.json', 'other\\check\\build\\run.json', '/check/build/run.json', 'check/build/../build/run.json'].map(path => {
+        const before = new Map([[path, firstClock.get('check/build/run.json')!]]);
+        const after = new Map([[path, nextClock.get('check/build/run.json')!]]);
+        const comparison = compareSceneBytes(before, after);
+        return !comparison.rawEqual && !comparison.stableEqual && comparison.differences.length === 1 && comparison.differences[0].path === path && !comparison.differences[0].clockOnly;
+      });
       say('SC103_STABLE_PARITY_REPORTS_RAW_CLOCK_DIFFERENCES_AND_REFUSES_OTHER_CHANGES',
         !clockComparison.rawEqual && clockComparison.stableEqual && clockComparison.differences.length === 1 && clockComparison.differences[0].fields.join(',') === 'finished_at,started_at' &&
           !changedDigest.stableEqual && !compareSceneBytes(firstClock, changedRig).stableEqual && !compareSceneBytes(firstClock, missingRig).stableEqual &&
           !otherFileClock.rawEqual && !otherFileClock.stableEqual && otherFileClock.differences.length === 1 &&
-          otherFileClock.differences[0].path === 'check/run.json' && !otherFileClock.differences[0].clockOnly,
-        `clock-only ${JSON.stringify(clockComparison)}; changed inputs accepted ${changedDigest.stableEqual}; other-file timestamps ${JSON.stringify(otherFileClock)}`, why);
+          otherFileClock.differences[0].path === 'check/run.json' && !otherFileClock.differences[0].clockOnly &&
+          !windowsClock.rawEqual && windowsClock.stableEqual && windowsClock.differences.length === 1 && windowsClock.differences[0].clockOnly &&
+          windowsClock.differences[0].path === 'check\\build\\run.json' && windowsClock.differences[0].fields.join(',') === 'finished_at,started_at' &&
+          !windowsDigest.rawEqual && !windowsDigest.stableEqual && !windowsRig.rawEqual && !windowsRig.stableEqual &&
+          !windowsMissing.rawEqual && !windowsMissing.stableEqual && outsideReceipt.every(Boolean),
+        `clock-only ${JSON.stringify(clockComparison)}; changed inputs accepted ${changedDigest.stableEqual}; other-file timestamps ${JSON.stringify(otherFileClock)}; Windows clocks ${JSON.stringify(windowsClock)}; Windows digest/rig/missing accepted ${[windowsDigest, windowsRig, windowsMissing].map(result => result.stableEqual)}; outside receipt refused ${outsideReceipt}`, why);
 
 
 

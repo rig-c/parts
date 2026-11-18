@@ -18,7 +18,9 @@ export function compareSceneBytes(before: ReadonlyMap<string, Uint8Array>, after
     if (left !== undefined && right !== undefined && Buffer.from(left).equals(Buffer.from(right))) continue;
     let clockOnly = false;
     let fields: string[] = [];
-    if (path === 'check/build/run.json' && left !== undefined && right !== undefined) {
+    // sceneOutputFiles uses the host separator; only this exact relative receipt is approved.
+    const relativePath = path.replaceAll('\\', '/');
+    if (relativePath === 'check/build/run.json' && left !== undefined && right !== undefined) {
       try {
         const a: unknown = JSON.parse(new TextDecoder().decode(left));
         const b: unknown = JSON.parse(new TextDecoder().decode(right));
