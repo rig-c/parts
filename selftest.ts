@@ -46531,11 +46531,13 @@ function runSceneSuite(): number {
       say('SC82_UNREADABLE_SLIDER_RANGE_REFUSES_WITHOUT_INVENTING_LIMITS', has(missingRange.err, 'SCENE_DIAL_RANGE_DECLARED', 'max undefined') && rangePlants.every(Boolean), codes(missingRange.err), why);
       const duplicate = sceneClip(2); duplicate.tracks.push(structuredClone(duplicate.tracks[0]));
       const duplicateRun = runRed('duplicate', { take: duplicate });
-      const collision = { duration: 2, tracks: [{ bone: 'a:head', property: 'rotate', keys: [{ t: 0, v: [0] }, { t: 2, v: [0] }] }] };
+      // The producer may key a control parent rather than the mesh bone itself.
+      // Duplicate its actual imported property claim, including the final target name.
+      const collision = { duration: authored.duration, tracks: baseIdle === undefined ? [] : structuredClone(baseIdle.tracks.slice(0, 1)) };
       const idleCollision = runRed('idle-collision', { idle: collision });
       say('SC83_DUPLICATE_AND_IMPORTED_IDLE_PROPERTY_COLLISIONS_KEEP_CORE_CODE',
-        [duplicateRun, idleCollision].every(r => r.status === 1 && r.empty && r.out.includes('CE_COMPILE_ANIMATION_TRACK_DUPLICATE')) && green.status === 0,
-        `duplicate ${cliDiagnosis(duplicateRun)}; idle collision ${cliDiagnosis(idleCollision)}; green ${green.status}`, why);
+        collision.tracks.length === 1 && [duplicateRun, idleCollision].every(r => r.status === 1 && r.empty && r.out.includes('CE_COMPILE_ANIMATION_TRACK_DUPLICATE')) && green.status === 0,
+        `duplicate ${cliDiagnosis(duplicateRun)}; imported track ${JSON.stringify(collision.tracks[0])}; idle collision ${cliDiagnosis(idleCollision)}; green ${green.status}`, why);
       const badTime = sceneClip(2); badTime.tracks[0].keys[1].t = 3;
       const timeRun = runRed('bad-time', { take: badTime });
       const duration = compose(body({ idle: sceneClip(4) }));
