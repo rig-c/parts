@@ -521,6 +521,44 @@ See [boundary authoring](AUTHORING.md#declared-boundary-depths-1342).
 
 ## Files this package writes
 
+### Diagnostic path segments
+
+Issue #1362 changes name-derived diagnostic paths written by `check`, including
+the check inside `build` and `compose`. The one mapping is
+`diagnosticSegment` in `src/outputpaths.ts`: keep a nonempty name matching
+`^[a-z0-9_@+.-]+$` verbatim unless it is `.` or `..`, ends in a dot, or its
+basename before the first dot is `con`, `prn`, `aux`, `nul`, `com1` through
+`com9`, or `lpt1` through `lpt9`. Otherwise write `~` followed by each original
+UTF-16 code unit as exactly four lowercase hexadecimal digits, in order.
+An empty name maps to `~`. For example, `idle` stays `idle` and `a:turn`
+becomes `~0061003a007400750072006e`. The literal branch cannot begin with `~`,
+so a name resembling an encoded name is encoded again. No normalization,
+case conversion, truncation or hash is applied to the input. Distinct inputs
+remain distinct under filesystem case folding and Unicode normalization;
+Windows punctuation, C0 controls, device names and trailing dots/spaces cannot
+appear in the mapped segment.
+
+`extremes/<segment>/` uses the original animation name. Retained render sets
+use its mapped animation name plus `@<fps>fps` only outside the protocol
+12 fps, with `frames.json`'s `sets[].dir` updated to the actual directory.
+A setup-only set maps its renderer directory instead. The original animation
+fields, including `extremes.json`, and the public `<id>:<name>` animation
+names stay unchanged. Readers follow `sets[].dir` rather than reconstructing
+a folder from `animation`. Safe unchanged indexes retain their original bytes.
+
+The same mapping applies to alternate-set folders in `setup_still/`,
+`setup_still_auto/` and `seam/`, the complete ranked seam-picture filename stem,
+and animation/requirement folders in `requirements/{as-declared,released,full}`.
+The retained seam reference worlds under `seam_motion/{default,still}` use
+the mapped render indexes. Loop output filenames are fixed; fold, loop,
+stress, sweep and wind-band render scratch is removed rather than published.
+Source part/image references retain their separate asset contracts.
+
+The mapping lives in this package's retention step. Core's `frameSetDir`
+still writes original names in staging before that step; this layout fix
+does not certify native Windows rendering or repair staging collisions on a
+filesystem that already aliases two original names.
+
 `depth-bind` writes `<map>.binding.json` beside the numeric map, spec
 `rig-parts-depth-map-binding/1`, with `spec`, `part`, `mapSha256`, `inputSha256`
 in that order. Hashes are computed from current map and input PNG bytes.

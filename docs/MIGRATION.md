@@ -9,6 +9,8 @@ from the pull request that measured it.
 
 ## In one paragraph
 
+Issue #1362: consumers of check/build/compose diagnostic folders must use the [diagnostic path mapping](STABILITY.md#diagnostic-path-segments) and retained `frames.json` directories; prefixed animation names and `extremes.json` animation fields are unchanged.
+
 Install `@rig-c/parts` (the package's name after 1.5.3; *After 1.5.3* below). A
 config that built on 0.16.0 loads and builds unchanged: every config change since is
 a new, opt-in field inside a new mesh mode. The bytes a config without that mode

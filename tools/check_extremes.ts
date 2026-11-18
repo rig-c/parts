@@ -5,7 +5,9 @@ import { join } from 'node:path';
 import { writeCheckRig, writeMergedCheckRig } from '../fixtures/checkrig.ts';
 import { blankRigcRunClock } from '../fixtures/rigc_run_clock.ts';
 import { checkStage } from '../src/build.ts';
-import type { RigcRunner } from '../src/check.ts';
+import { readFrameSet, retainCheckRender, seamPairRows, type RigcRunner } from '../src/check.ts';
+import { diagnosticSegment } from '../src/outputpaths.ts';
+import { writePng } from '../src/raster/png.ts';
 import { PartsError } from '../src/errors.ts';
 
 type Say = (name: string, pass: boolean, detail: string) => void;
@@ -20,7 +22,94 @@ function tree(dir: string, prefix = ''): string[] {
   });
 }
 
+/** Hand-spelled code units and generated sidecars; no renderer or art needed. */
+export function runDiagnosticPathChecks(root: string, say: Say): void {
+  const vectors: Array<[string, string]> = [
+    ['idle', 'idle'], ['wave-2_left', 'wave-2_left'], ['idle@24fps', 'idle@24fps'],
+    ['a:turn', '~0061003a007400750072006e'], ['a-turn', 'a-turn'],
+    ['A', '~0041'], ['a', 'a'], ['\u00e9', '~00e9'], ['e\u0301', '~00650301'],
+    ['~0041', '~007e0030003000340031'], ['CON', '~0043004f004e'], ['con', '~0063006f006e'],
+    ['con.txt', '~0063006f006e002e007400780074'], ['lpt1', '~006c007000740031'],
+    ['tail.', '~007400610069006c002e'], ['tail ', '~007400610069006c0020'],
+    ['.', '~002e'], ['..', '~002e002e'], ['', '~'],
+    ['a/b', '~0061002f0062'], ['a\\b', '~0061005c0062'], ['a\u0000', '~00610000'],
+    ['<>:"|?*', '~003c003e003a0022007c003f002a'],
+    ['\ud800', '~d800'], ['\ufffd', '~fffd'],
+  ];
+  const actual = vectors.map(([name]) => diagnosticSegment(name));
+  say('CK1362_SEGMENTS_MATCH_HAND_COMPUTED_CODE_UNITS', vectors.every(([, want], i) => actual[i] === want),
+    JSON.stringify(vectors.map(([name, want], i) => ({ name, want, got: actual[i] }))));
+  const fold = (name: string): string => name.normalize('NFD').toLowerCase();
+  const unique = (names: string[]): boolean => new Set(names.map(fold)).size === names.length;
+  const portable = (name: string): boolean => name.length > 0 && !/[<>:"/\\|?*\u0000-\u001f]/.test(name) &&
+    !/[. ]$/.test(name) && !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name);
+  say('CK1362_CASE_NORMALIZATION_AND_ESCAPE_PREFIX_COLLISIONS_ARE_PLANTED', unique(actual) && actual.every(portable) &&
+    !unique(['A', 'a']) && !unique(['\u00e9', 'e\u0301']) && !unique(['a:turn', 'a-turn'].map(n => n.replace(':', '-'))) &&
+    !portable('CON') && !portable('tail.') && !portable('tail '),
+    `${actual.length} distinct portable segments; identity, normalization and colon replacement lose the planted pairs`);
+  const reserved = ['prn', 'aux', 'nul', 'com1', 'com9', 'lpt9', 'con.log', 'com1.log', 'lpt9.log', 'COM\u00b9', 'LPT\u00b2'];
+  say('CK1362_DEVICE_EXTENSIONS_AND_CONTROL_CHARACTERS_ARE_ENCODED',
+    [...reserved, ...Array.from({ length: 32 }, (_, i) => String.fromCharCode(i))].every(name => diagnosticSegment(name) !== name && portable(diagnosticSegment(name))),
+    'device basenames, extensions, superscript devices and every C0 control are outside the literal alphabet');
+
+  const source = join(root, 'source'), target = join(root, 'kept');
+  mkdirSync(source, { recursive: true });
+  const names = ['idle', 'a:turn', 'A', 'a', '\u00e9', 'e\u0301', '~0041'];
+  const wanted = ['idle', '~0061003a007400750072006e', '~0041', 'a', '~00e9', '~00650301', '~007e0030003000340031'];
+  const sets = names.map((animation, i) => {
+    const dir = 'source-' + i;
+    mkdirSync(join(source, dir));
+    writePng(join(source, dir, 'f0000.png'), { width: 1, height: 1, data: new Uint8ClampedArray([i, 0, 0, 255]) });
+    for (const file of ['extremes.json', 'seam.json', 'folds.json', 'geometry.json']) writeFileSync(join(source, dir, file), JSON.stringify({ animation, marker: i }));
+    return { animation, dir, fps: 12, sampled: 1, written: 1, stride: 1, duration: 0 };
+  });
+  const manifest = { spec: 'rigc-frames/1', viewport: { x: 0, y: 0, width: 1, height: 1, scale: 1, pixelWidth: 1, pixelHeight: 1 }, background: [0, 0, 0, 0], sets };
+  writeFileSync(join(source, 'frames.json'), JSON.stringify(manifest));
+  retainCheckRender(source, target);
+  const kept = json(join(target, 'frames.json')).sets as typeof sets;
+  say('CK1362_RETAINED_INDEX_AND_READERS_KEEP_DISTINCT_PUBLIC_NAMES', unique(kept.map(set => set.dir)) && kept.every((set, i) => {
+    const reading = readFrameSet(join(target, set.dir));
+    return set.dir === wanted[i] && set.animation === names[i] && reading.animation === names[i] && reading.frames[0].image.data[0] === i &&
+      ['extremes.json', 'seam.json', 'folds.json', 'geometry.json'].every(file => readFileSync(join(source, sets[i].dir, file), 'utf8') === readFileSync(join(target, set.dir, file), 'utf8'));
+  }), JSON.stringify(kept.map(({ animation, dir }) => ({ animation, dir }))));
+
+  const safe = join(root, 'safe'), safeKept = join(root, 'safe-kept');
+  mkdirSync(join(safe, 'idle@24fps'), { recursive: true });
+  const safeText = JSON.stringify({ ...manifest, sets: [{ ...sets[0], dir: 'idle@24fps', fps: 24 }] });
+  writeFileSync(join(safe, 'frames.json'), safeText);
+  writeFileSync(join(safe, 'idle@24fps', 'sentinel'), 'unchanged');
+  retainCheckRender(safe, safeKept);
+  say('CK1362_SAFE_LOWERCASE_RENDER_PRESERVES_PATHS_AND_INDEX_BYTES', readFileSync(join(safeKept, 'frames.json'), 'utf8') === safeText &&
+    readFileSync(join(safeKept, 'idle@24fps', 'sentinel'), 'utf8') === 'unchanged', 'safe idle@24fps and its original frames.json bytes retained');
+
+  const invalid = [
+    { ...manifest, sets: null },
+    { ...manifest, sets: [{ ...sets[0], dir: '../outside' }] },
+    { ...manifest, sets: [sets[0], { ...sets[1], animation: 'idle' }] },
+  ];
+  const refused = invalid.map((value, i) => {
+    const home = join(root, 'bad-' + i), kept = join(root, 'bad-kept-' + i);
+    mkdirSync(home);
+    writeFileSync(join(home, 'frames.json'), JSON.stringify(value));
+    try { retainCheckRender(home, kept); }
+    catch (error) { return error instanceof PartsError && error.problems[0]?.code === 'FRAMES_SIDECAR' && !existsSync(kept); }
+    return false;
+  });
+  say('CK1362_UNREADABLE_OR_ALIASED_RETAINED_INDEX_IS_REFUSED_BEFORE_COPY', refused.every(Boolean),
+    'missing sets, escaping source dir and duplicate retained dir: ' + refused.join(', '));
+  const pixel = { width: 1, height: 1, data: new Uint8ClampedArray([0, 0, 0, 255]) };
+  const viewport = { x: 0, y: 0, width: 1, height: 1, scale: 1, pixelWidth: 1, pixelHeight: 1 };
+  const seam = { mean: 50, over40: 1, over80: 0, border: null, counted: [0], countedDiff: [50], map: { sx: 1, sy: 1, tx: 0, ty: 0 } };
+  const picture = (name: string) => seamPairRows(seam, [{ name, from: 'generated', x: 0, y: 0, image: pixel }], [1, 1], viewport)[0].row;
+  const prefixed = picture('a:turn'), plain = picture('a-turn');
+  say('CK1362_SEAM_PICTURE_PATH_IS_MAPPED_WITH_SUBJECTS_AND_COUNTS_UNCHANGED',
+    prefixed.picture === 'seam/~00300031005f0061003a007400750072006e005f006e006f002d006100720074.png' &&
+    plain.picture === 'seam/01_a-turn_no-art.png' && prefixed.parts[0] === 'a:turn' && prefixed.px_over_40 === 1 && plain.px_over_40 === 1,
+    JSON.stringify({ prefixed, plain }));
+}
+
 export function runExtremesChecks(root: string, say: Say, rigc: RigcRunner): void {
+  runDiagnosticPathChecks(join(root, 'portable-paths'), say);
   const input = join(root, 'input');
   writeCheckRig(input);
   const motionPath = join(input, 'motion.json');
@@ -106,7 +195,21 @@ export function runExtremesChecks(root: string, say: Say, rigc: RigcRunner): voi
     }
     return result;
   }, namedHome);
-  say('CK840_EXISTING_METADATA_OWNS_DIRECTORY_WITHOUT_A_NEW_FRAME_SIDECAR', existsSync(join(renamedOut, 'extremes', 'core-owned', 'nested set', 'extremes.png')) && !existsSync(join(renamedOut, 'extremes', 'wave')) && !renamed.lines.some(line => line.includes('CHECK_EXTREMES_RENDER_FAILED')), renamed.lines.filter(line => line.includes('EXTREMES')).join(' | '));
+  say('CK840_EXISTING_METADATA_OWNS_DIRECTORY_WITHOUT_A_NEW_FRAME_SIDECAR', existsSync(join(renamedOut, 'extremes', 'wave', 'extremes.png')) && !existsSync(join(renamedOut, 'extremes', 'core-owned')) && !renamed.lines.some(line => line.includes('CHECK_EXTREMES_RENDER_FAILED')), renamed.lines.filter(line => line.includes('EXTREMES')).join(' | '));
+  const prefixedHome = join(root, 'prefixed');
+  writeCheckRig(prefixedHome);
+  const prefixedMotion = json(join(prefixedHome, 'motion.json'));
+  const prefixedAnims = prefixedMotion.animations as Record<string, unknown>;
+  prefixedAnims['a:turn'] = prefixedAnims.idle;
+  delete prefixedAnims.idle;
+  writeFileSync(join(prefixedHome, 'motion.json'), JSON.stringify(prefixedMotion));
+  const prefixedOut = join(root, 'prefixed-out');
+  const prefixed = run(prefixedOut, false, rigc, prefixedHome);
+  const prefixedDir = join(prefixedOut, 'extremes', '~0061003a007400750072006e');
+  say('CK1362_PREFIXED_ANIMATION_RETAINS_ORIGINAL_NAME_IN_EXTREMES', existsSync(join(prefixedDir, 'extremes.png')) &&
+    json(join(prefixedDir, 'extremes.json')).animation === 'a:turn' && !existsSync(join(prefixedOut, 'extremes', 'a:turn')) &&
+    prefixed.lines.some(line => line.includes('EXTREMES "a:turn"')),
+    prefixed.lines.filter(line => line.includes('EXTREMES')).join(' | '));
   for (const defect of ['missing', 'wrong-animation'] as const) {
     const badOut = join(root, 'observation-' + defect);
     const bad = run(badOut, false, args => {
