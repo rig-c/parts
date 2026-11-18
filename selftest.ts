@@ -21457,6 +21457,86 @@ function runCheckJudgementCases(dir: string, say: ReturnType<typeof counter>['sa
     'issue #351: when the breath carries the root and the held-still mesh is also below the bar, breathCarrier previously returned null and blamed only the chain\'s amplitudes; it now names the carrier and the held-still ratio together',
   );
 
+  // CK1309..CK1312 allocated after the live CK00..CK1308 tree scan (#1358).
+  // A breathing child of s0 is a sibling of s1_ctl. Its lower-segment root stays on-chain at stress setup,
+  // but its local translate carries the upper art more than the tip on idle. No corpus or sampled magnitude is expected.
+  const breathingChain1358 = (label: string, lowerRoot: 'chest' | 'root' | 's1') => {
+    const home = join(dir, `tip-breath-chain-${label}`);
+    writeCheckRig(home, { from: ['full:handwear-r', 'head:face'], peak: 0, hung: { carry: 0, swing: 1, pivot: 'top' } });
+    const rig = JSON.parse(readFileSync(join(home, 'rig.json'), 'utf8')) as {
+      bones: unknown[];
+      slots: Array<{ name: string; bone: string }>;
+      skins: { default: { back: { back: { uvs: number[]; triangles: number[]; hull: number;
+        weights: Array<Array<{ bone: string; x: number; y: number; weight: number }>> } } } };
+    };
+    rig.bones = [
+      { name: 'root', x: 0, y: 0 },
+      { name: 's0_ctl', parent: 'root', x: -5, y: 80, rotation: -90 },
+      { name: 's0', parent: 's0_ctl', x: 0, y: 0, length: 40 },
+      { name: 'chest_ctl', parent: 's0', x: 20, y: 0 },
+      { name: 'chest', parent: 'chest_ctl', x: 0, y: 0 },
+      { name: 's1_ctl', parent: 's0', x: 40, y: 0 },
+      { name: 's1', parent: 's1_ctl', x: 0, y: 0, length: 40 },
+    ];
+    // The weighted mesh's slot rides an unkeyed bone; no A15 exemption or irrelevant zero root key.
+    for (const slot of rig.slots) slot.bone = slot.name === 'back' ? 's0' : 'root';
+    const corners = [[-20, 80], [10, 80], [10, 60], [10, 0], [-20, 0], [-20, 60]];
+    const mesh = rig.skins.default.back.back;
+    mesh.uvs = [0, 0, 1, 0, 1, 0.25, 1, 1, 0, 1, 0, 0.25];
+    mesh.triangles = [0, 1, 2, 2, 5, 0, 5, 2, 3, 3, 4, 5];
+    mesh.hull = 6;
+    mesh.weights = corners.map(([x, y], i) => {
+      const bone = i < 2 ? 's0' : i === 2 || i === 5 ? lowerRoot : 's1';
+      // Setup links point down: their local (x,y) is (originY-worldY, worldX+5), by hand.
+      const local = bone === 'root' ? { x, y } : { x: (bone === 's0' ? 80 : bone === 's1' ? 40 : 60) - y, y: x + 5 };
+      return [{ bone, ...local, weight: 1 }];
+    });
+    const motion = JSON.parse(readFileSync(join(home, 'motion.json'), 'utf8')) as { animations: { idle: { tracks: unknown[] } } };
+    const sine = (amp: number, phase: number) => Array.from({ length: 9 }, (_, k) => ({ t: k / 8, v: [Math.round(amp * Math.sin(2 * Math.PI * (k / 8 - phase)) * 1e6) / 1e6] }));
+    motion.animations.idle.tracks = [
+      { bone: 's0_ctl', property: 'rotate', keys: sine(1, 0) },
+      { bone: 's1_ctl', property: 'rotate', keys: sine(1.2, 0.125) },
+      { bone: 'chest_ctl', property: 'translatey', keys: [{ t: 0, v: [0] }, { t: 0.5, v: [4] }, { t: 1, v: [0] }] },
+    ];
+    writeFileSync(join(home, 'rig.json'), JSON.stringify(rig));
+    writeFileSync(join(home, 'motion.json'), JSON.stringify(motion));
+    const out = join(home, 'checked');
+    const result = runCli(['check', '--rig', home, '--out', out]);
+    const figures = readJsonFile(join(out, 'check.json'));
+    const tip = figures?.TIP_OVER_ROOT as { status?: string; ratio_floor?: number; parts?: Array<{ ratio?: number; carried_by?: string }> } | undefined;
+    const stress = figures?.STRESS_OFF_CHAIN as { status?: string; bar?: number; per_part?: Array<{ off_chain?: Array<{ bone: string }>; poses?: Array<{ reading?: number }> }> } | undefined;
+    return { ...result, tip, stress, ratio: tip?.parts?.[0]?.ratio, fail: failLine(result.out, 'CHECK_TIP_OVER_ROOT'),
+      poses: stress?.per_part?.[0]?.poses?.map(p => p.reading) ?? [], off: stress?.per_part?.[0]?.off_chain?.map(p => p.bone) ?? [],
+      detail: `${label}: exit ${result.status}, TIP ${JSON.stringify(tip)}, STRESS ${JSON.stringify(stress)}` };
+  };
+  const baseline1358 = breathingChain1358('baseline', 'chest');
+  const rebound1358 = breathingChain1358('root-to-hang', 'root');
+  const next1358 = breathingChain1358('next-link', 's1');
+  const rigidStress1358 = (r: typeof baseline1358): boolean => r.stress?.status === 'PASS' && r.stress.bar === STRESS_RIGID &&
+    r.poses.length === STRESS_TURNS.length && r.poses.every(value => value === STRESS_RIGID);
+  const passingTip1358 = (r: typeof baseline1358): boolean => r.tip?.status === 'PASS' && r.tip.ratio_floor === TIP_RATIO_FLOOR &&
+    typeof r.ratio === 'number' && r.ratio >= TIP_RATIO_FLOOR;
+  const why1358 = 'issue #1358: the same synthetic lower-segment root stays within the keyed chain or is pinned to its hang bone; expectations use the defined bars, never sampled ratios';
+  say('CK1309_A_BREATHING_CHILD_INSIDE_A_KEYED_CHAIN_FAILS_TIP_AND_PASSES_STRESS',
+    baseline1358.status === 1 && baseline1358.tip?.status === 'FAIL' && baseline1358.tip.ratio_floor === TIP_RATIO_FLOOR &&
+      typeof baseline1358.ratio === 'number' && baseline1358.ratio < TIP_RATIO_FLOOR &&
+      baseline1358.tip.parts?.[0]?.carried_by === 'chest' && rigidStress1358(baseline1358), baseline1358.detail, why1358);
+  say('CK1310_REBINDING_THE_LOWER_ROOT_TO_THE_HANG_BONE_TRADES_TIP_FOR_STRESS',
+    rebound1358.status === 1 && passingTip1358(rebound1358) && rebound1358.stress?.status === 'FAIL' &&
+      rebound1358.poses.length === STRESS_TURNS.length && rebound1358.poses.every(value => typeof value === 'number' && value > STRESS_RIGID) &&
+      rebound1358.off.join(',') === 'root', rebound1358.detail, why1358);
+  say('CK1311_THE_NEXT_CHAIN_LINK_MEETS_BOTH_BARS',
+    next1358.status === 0 && passingTip1358(next1358) && rigidStress1358(next1358), next1358.detail, why1358);
+  say('CK1312_TIP_REMEDIES_RETAIN_EXISTING_BRANCHES_NAME_MEASURED_OPTIONS_AND_REQUIRE_STRESS_RECHECK',
+    baseline1358.fail !== null && baseline1358.fail.includes('bind the root to `root`, the bone the part hangs from') &&
+      baseline1358.fail.includes('can fail STRESS_OFF_CHAIN while passing TIP_OVER_ROOT') &&
+      baseline1358.fail.includes('lower segment on `chest` to its existing carrier `s1` under the next keyed link `s1_ctl`') &&
+      baseline1358.fail.includes("moving `chest_ctl`'s translate to `root`, the bone the part hangs from or an ancestor") &&
+      baseline1358.fail.includes('re-check STRESS_OFF_CHAIN after every remedy') &&
+      [tipFail, carriedFail, bothFail, stillHemFail].every(line => line?.includes('re-check STRESS_OFF_CHAIN after every remedy')) &&
+      Buffer.byteLength(baseline1358.fail, 'utf8') < PRINTED_LINE_LIMIT,
+    baseline1358.fail ?? 'no TIP refusal', why1358);
+
   // Issue #987: the halves are read in the frame of the bone the part hangs from. The planted sleeves hang on a
   // two-link chain under `chest`, which the idle carries 4 rig px across (fixtures/checkrig.ts `hung`): one rides
   // it rigid, one turns about its middle (a pendulum), one trails the carry on keyed links with physics children
@@ -46602,6 +46682,64 @@ function runSceneSuite(): number {
         'issue #1348: a real green compose followed at the same --out by --page-size 0 must clear its record before cmdCompose refuses; other invalid values take the same pre-stage path and keep legacy outputs');
     }
 
+    // SC137..SC139: measured dial-sign controls (#1358).
+    {
+      const why = 'issue #1358: measure actual synthetic posed-world coordinates, including reversed authored keys, not dial angles';
+      writeTurnSceneBuild(join(dir, 'dial-sign-character'));
+      const dialNames = ['yaw_dial', 'body_yaw_dial', 'pitch_dial'] as const;
+      const clips = Object.fromEntries(dialNames.flatMap(dial => [1, -1].map(sign => [
+        `${dial}_${sign > 0 ? 'positive' : 'negative'}`,
+        { duration: 2, loop: true, tracks: [{ bone: `a:${dial}`, property: 'rotate',
+          keys: [{ t: 0, v: [0] }, { t: 1, v: [sign * 4] }, { t: 2, v: [0] }] }] },
+      ])));
+      const source = scene({ canvas: { width: 64, height: 64 },
+        characters: [{ id: 'a', build: 'dial-sign-character', offset: [0, 0] }], order: ['a'], animations: clips });
+      const out = join(dir, 'dial-sign-out');
+      const gate = runCli(['compose', '--scene', source, '--out', out]);
+      const model = join(out, 'check', 'build', 'skeleton.model.json');
+      const doc = existsSync(model) ? sceneKeyedModel(readFileSync(model, 'utf8')).doc : null;
+      const readings = dialNames.flatMap(dial => [1, -1].map(sign => {
+        const name = `${dial}_${sign > 0 ? 'positive' : 'negative'}`;
+        const poses = doc === null ? [] : poseRawAnimation(doc, name, [1, 1]);
+        const carrier = dial === 'body_yaw_dial' ? 'a:bodyshift' : 'a:faceshift';
+        const other = dial === 'body_yaw_dial' ? 'a:faceshift' : 'a:bodyshift';
+        const bones = poses.map(p => p.bones.find(b => b.name === carrier));
+        const otherBones = poses.map(p => p.bones.find(b => b.name === other));
+        const coordinate = (i: number): number => dial === 'pitch_dial'
+          ? bones[i]?.worldY ?? NaN : bones[i]?.worldX ?? NaN;
+        const slot = dial === 'body_yaw_dial' ? 'a:topwear' : 'a:face';
+        const channel = dial === 'pitch_dial' ? 1 : 0;
+        const vertices = poses.map(p => p.drawn.find(piece => piece.slot === slot)?.vertices);
+        const meshDelta = vertices[0] === undefined || vertices[1] === undefined ? NaN : vertices[1][channel] - vertices[0][channel];
+        return { dial, sign, poses, delta: coordinate(1) - coordinate(0), meshDelta,
+          unchangedOther: otherBones.length === 3 && otherBones.every(b => b !== undefined && JSON.stringify(b) === JSON.stringify(otherBones[0])),
+          closed: poses.length === 3 && scenePoseState(poses[0]) === scenePoseState(poses[2]) };
+      }));
+      // Hand-computable oracle: sign of a forward carrier's screen displacement is opposite
+      // the dial sign; y-up makes negative y screen-down. No measured magnitude is an expectation.
+      const positiveConvention = (delta: number): boolean => Number.isFinite(delta) && delta < 0;
+      say('SC137_POSITIVE_HEAD_BODY_YAW_AND_PITCH_MOVE_FORWARD_CARRIERS_LEFT_OR_DOWN',
+        gate.status === 0 && readings.length === 6 && readings.every(r =>
+          positiveConvention(r.delta * r.sign) && positiveConvention(r.meshDelta * r.sign)),
+        `gate ${gate.status}; ${readings.map(r => `${r.dial}/${r.sign}: carrier ${r.delta}, mesh ${r.meshDelta}`).join('; ')}`, why);
+      say('SC138_SIGN_READING_REFUSES_REVERSED_AND_ZERO_DISPLACEMENT_WITH_INDEPENDENT_CLOSED_DIALS',
+        readings.length === 6 && readings.every(r => positiveConvention(r.delta * r.sign) &&
+          !positiveConvention(-r.delta * r.sign) && !positiveConvention(0) && r.unchangedOther && r.closed),
+        readings.map(r => `${r.dial}/${r.sign}: other fixed ${r.unchangedOther}, closed ${r.closed}`).join('; '), why);
+      const documentation = readFileSync(join(ROOT, 'docs/AUTHORING.md'), 'utf8');
+      const documentsSigns = (text: string): boolean =>
+        /positive `rotate` keys on `<id>:yaw_dial` turn toward \*\*screen left\*\*/.test(text) &&
+        /negative keys turn toward screen right/.test(text) &&
+        /body_yaw_dial`\) has the\nsame sign/.test(text) &&
+        /Positive `<id>:pitch_dial` turns downward/.test(text) &&
+        text.includes('writeTurnSceneBuild') && text.includes('world x at +4°');
+      const reversedDocumentation = documentation.replace('**screen left**', '**screen right**');
+      say('SC139_AUTHORING_STATES_MEASURED_TURN_DIAL_SIGNS_WITH_REVERSED_TEXT_NEGATIVE_CONTROL',
+        documentsSigns(documentation) && !documentsSigns(reversedDocumentation),
+        'measured head/body/pitch convention documented; reversed sign sentence refused', why);
+    }
+
+
     // Scene animation controls (#1346): names allocated after the live SC01..SC75 scan.
     {
       const why = 'issue #1346: declared final names, additive idle, Core refusals and posed endpoint closure before emission';
@@ -46892,6 +47030,79 @@ function runSceneSuite(): number {
         `clock-only ${JSON.stringify(clockComparison)}; changed inputs accepted ${changedDigest.stableEqual}; other-file timestamps ${JSON.stringify(otherFileClock)}; Windows clocks ${JSON.stringify(windowsClock)}; Windows digest/rig/missing accepted ${[windowsDigest, windowsRig, windowsMissing].map(result => result.stableEqual)}; outside receipt refused ${outsideReceipt}`, why);
 
 
+      // SC130..SC136: #1358 loop diagnostics; SC137..SC139 belong to the dial controls.
+      {
+        const why = 'issue #1358: exact endpoint equality, first differing object/channel, hand-computed values and geometry fallback';
+        // Reuse the already gated synthetic scene. Only its throwaway take timeline changes;
+        // With keyed y fixed at zero, plate world x equals its keyed x; no trigonometric cross-term enters.
+        const probe = (patch: Record<string, unknown>) => {
+          if (modelText === null) return { problems: [] as Problem[], poses: [] as ReturnType<typeof poseRawAnimation>, text: '' };
+          const raw = JSON.parse(modelText) as { animations: Array<Record<string, unknown>> };
+          const take = raw.animations.find(a => a.name === 'take');
+          if (take === undefined) throw new Error('loop control requires the gated take animation');
+          Object.assign(take, { duration: 2, bones: [], slots: [], attachments: [], drawOrder: [], events: [],
+            constraints: { ik: [], transform: [], path: [], physics: [], slider: [] }, ...patch });
+          const text = JSON.stringify(raw);
+          return { problems: sceneClipLoopProblems(text, { take: sceneClip(2) }),
+            poses: poseRawAnimation(sceneKeyedModel(text).doc, 'take', [2]), text };
+        };
+        const boneTrack = (name: string, x0: number, x1: number, y0 = 0, y1 = 0) => ({ name, timelines: [{ name: 'translate',
+          keys: [{ time: 0, x: x0, y: y0 }, { time: 2, x: x1, y: y1 }] }] });
+        const expected = (object: string, channel: string, start: string, end: string) =>
+          `${object} channel ${channel}: start ${start} at t=0; end ${end} at t=2; tolerance 0 (exact equality)`;
+        const names = (result: ReturnType<typeof probe>, detail: string): boolean => result.problems.length === 1 &&
+          result.problems[0].code === 'SCENE_ANIMATION_LOOP_CLOSES' && result.problems[0].object === 'scene.animations.take' &&
+          result.problems[0].detail.startsWith(`${detail}; identical endpoint poses are required (physics left out: `);
+        const summary = (result: ReturnType<typeof probe>) => result.problems.map(problemLine).join(' | ') || 'no refusal';
+        const sameBonesAndSlots = (result: ReturnType<typeof probe>): boolean => result.poses.length === 2 &&
+          JSON.stringify(result.poses[0].bones) === JSON.stringify(result.poses[1].bones) &&
+          JSON.stringify(result.poses[0].slots) === JSON.stringify(result.poses[1].slots);
+        const closed = probe({ bones: [boneTrack('plate', 2, 2)] });
+        const x = probe({ bones: [boneTrack('plate', 2, 5)] });
+        say('SC130_LOOP_NAMES_BONE_WORLD_X_START_END_AND_EXACT_TOLERANCE',
+          names(x, expected('bone "plate"', 'worldX', '2', '5')) && closed.poses.length === 2 && closed.problems.length === 0,
+          `${summary(x)}; equal endpoint companion ${summary(closed)}`, why);
+        const negativeX = probe({ bones: [boneTrack('plate', -2, 7)] });
+        say('SC131_LOOP_NAMES_WORLD_X_WITH_HAND_COMPUTED_NEGATIVE_START',
+          names(negativeX, expected('bone "plate"', 'worldX', '-2', '7')) && closed.problems.length === 0,
+          summary(negativeX), why);
+        const alpha = probe({ slots: [{ name: 'plate', timelines: [{ name: 'alpha',
+          keys: [{ time: 0, value: 1 }, { time: 2, value: 0.25 }] }] }] });
+        say('SC132_LOOP_NAMES_SLOT_ALPHA_WITH_HAND_COMPUTED_FRACTION',
+          names(alpha, expected('slot "plate"', 'a', '1', '0.25')) && closed.poses.length === 2 && closed.problems.length === 0,
+          summary(alpha), why);
+        const attachment = probe({ slots: [{ name: 'plate', timelines: [{ name: 'attachment',
+          keys: [{ time: 0, name: 'plate' }, { time: 2, name: null }] }] }] });
+        say('SC133_LOOP_NAMES_SLOT_ATTACHMENT_AND_NULL_WITH_EXACT_EQUALITY',
+          names(attachment, expected('slot "plate"', 'attachment', '"plate"', 'null')) && closed.poses.length === 2 && closed.problems.length === 0,
+          summary(attachment), why);
+        // Move the first slot one place: [plate, a:hair_back, ...] -> [a:hair_back, plate, ...].
+        // No bone or slot channel changes; drawOrder must still refuse with its actual first cell.
+        const order = probe({ drawOrder: [{ time: 0 }, { time: 2, offsets: [{ slot: 'plate', offset: 1 }] }] });
+        say('SC134_LOOP_FALLBACK_NAMES_DRAW_ORDER_WHEN_BONES_AND_SLOTS_MATCH',
+          sameBonesAndSlots(order) && names(order, expected('slot "plate"', 'drawOrder[0]', '"plate"', '"a:hair_back"')) &&
+            closed.poses.length === 2 && closed.problems.length === 0,
+          `${summary(order)}; bones and slots equal ${sameBonesAndSlots(order)}`, why);
+        const both = [
+          probe({ bones: [boneTrack('plate', 2, 5)], slots: [{ name: 'plate', timelines: [{ name: 'alpha', keys: [{ time: 0, value: 1 }, { time: 2, value: 0.25 }] }] }] }),
+          probe({ slots: [{ name: 'plate', timelines: [{ name: 'alpha', keys: [{ time: 0, value: 1 }, { time: 2, value: 0.25 }] }] }], bones: [boneTrack('plate', 2, 5)] }),
+        ];
+        say('SC135_LOOP_FIRST_DIFFERENCE_IS_DETERMINISTIC_ACROSS_TIMELINE_FIELD_ORDER',
+          both.every(r => names(r, expected('bone "plate"', 'worldX', '2', '5'))) &&
+            JSON.stringify(both[0].problems) === JSON.stringify(both[1].problems) &&
+            JSON.stringify(sceneClipLoopProblems(x.text, { take: sceneClip(2) })) === JSON.stringify(x.problems),
+          both.map(summary).join(' | '), why);
+        // 2^-20 is exactly representable in float32 and float64; it must never become an epsilon pass.
+        const tiny = probe({ bones: [boneTrack('plate', 0, 2 ** -20)] });
+        const note = 'numeric tolerance 0 (exact equality)';
+        const stableLoopMessage = (text: string) => text.includes('Issue #1358') && text.includes('first differing bone or slot') && text.includes(note);
+        say('SC136_LOOP_REJECTS_EXACT_BINARY_TINY_DELTA_AND_DOCUMENTS_UNCHANGED_GATE',
+          names(tiny, expected('bone "plate"', 'worldX', '0', JSON.stringify(2 ** -20))) &&
+            closed.poses.length === 2 && closed.problems.length === 0 &&
+            stableLoopMessage(stabilityClips) && !stableLoopMessage(stabilityClips.replace(note, 'numeric tolerance 1')) &&
+            green.status === 0 && modelText !== null && readFileSync(modelFile, 'utf8') === modelText,
+          `${summary(tiny)}; equal endpoint companion ${summary(closed)}; gated model file unchanged; tolerance note and planted relaxation checked`, why);
+      }
 
     }
 

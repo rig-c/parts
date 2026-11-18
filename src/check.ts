@@ -8528,7 +8528,7 @@ function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems
       problems.push({
         code: 'CHECK_TIP_OVER_ROOT',
         object: `part "${p.name}", box ${p.x},${p.y} ${p.w}x${p.h} rig px, posed by the idle's geometry, declared rests${rises ? ' and rises' : ''}`,
-        detail: `${travels} (ratio ${ratio ?? 'undefined: the root does not move'}${inWorld}); the scene file's rests declares its tip at rest, so a ratio <= ${TIP_REST_RATIO_CEILING} is required — the tip swings: the chain's amplitudes grow toward the tip, or the tip of the mesh is weighted to a bone the idle swings`,
+        detail: `${travels} (ratio ${ratio ?? 'undefined: the root does not move'}${inWorld}); the scene file's rests declares its tip at rest, so a ratio <= ${TIP_REST_RATIO_CEILING} is required — the tip swings: the chain's amplitudes grow toward the tip, or the tip of the mesh is weighted to a bone the idle swings; re-check STRESS_OFF_CHAIN after every remedy`,
       });
     } else if (!ok) {
       failed = true;
@@ -8543,6 +8543,7 @@ function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems
       const hangName = hang === null ? 'the bone the part hangs from' : `\`${hang}\`, the bone the part hangs from`;
       const held = carry === null ? '' : `the root travels with the breath (${round3(t.root)} px of ${round3(carry.breath)} px): it is carried by \`${carry.bone}\`, which moves it more than the tip; with \`${carry.keyed}\`'s translate held still the root travels ${round3(carry.root)} rig px and the tip ${round3(carry.tip)}`;
       const heldRatio = carry === null ? '' : `ratio ${carry.root > 0 ? round3(carry.tip / carry.root) : 'undefined: the root moves only with it'}`;
+      const chainRemedy = carry === null || carry.link ? '' : breathingSegmentRemedy(inp.rig, inp.motion, p.name, carry.bone, carry.keyed, hangName);
       const why =
         carry === null
           ? `${t.root === 0 && t.tip === 0 && hang !== null ? `nothing in it moves against \`${hang}\`: it rides that bone whole; ` : ''}the chain's amplitudes do not grow toward the tip, or the mesh is not weighted to the chain${offChain === null ? '' : `; ${offChain}`}`
@@ -8554,7 +8555,7 @@ function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems
       problems.push({
         code: 'CHECK_TIP_OVER_ROOT',
         object: `part "${p.name}", box ${p.x},${p.y} ${p.w}x${p.h} rig px, posed by the idle's geometry${rises ? ', declared rises' : ''}`,
-        detail: `${travels} (ratio ${ratio ?? (hang === null ? 'undefined: nothing moves' : `undefined: nothing moves against \`${hang}\``)}${inWorld}); a ratio >= ${TIP_RATIO_FLOOR} is required — ${misplaced ?? why}${rigid && rests ? '; declare it in `not_swinging` if it is meant to ride rigidly' : ''}`,
+        detail: `${travels} (ratio ${ratio ?? (hang === null ? 'undefined: nothing moves' : `undefined: nothing moves against \`${hang}\``)}${inWorld}); a ratio >= ${TIP_RATIO_FLOOR} is required — ${misplaced ?? why}${chainRemedy}${rigid && rests ? '; declare it in `not_swinging` if it is meant to ride rigidly' : ''}; re-check STRESS_OFF_CHAIN after every remedy`,
       });
     }
   }
@@ -8762,6 +8763,33 @@ function breathCarrier(
     return { bone: carrier, keyed: k, breath, root: t.root, tip: t.tip, passes: t.tip >= TIP_RATIO_FLOOR * t.root, link: links.has(carrier) };
   }
   return null;
+}
+
+/** Issue #1358: options for a breathing mesh carrier below one keyed chain link, without guessing a binding. */
+function breathingSegmentRemedy(rig: Record<string, unknown>, motion: Record<string, unknown>, part: string, carrier: string, keyed: string, hangName: string): string {
+  const { found, bound } = chainsCarrying(rig, motion, part);
+  if (found.length !== 1) return '';
+  const bones = (Array.isArray(rig.bones) ? rig.bones : []).filter(isRecord);
+  const parent = new Map(bones.filter(b => typeof b.name === 'string').map(b => [String(b.name), typeof b.parent === 'string' ? b.parent : null]));
+  const under = (bone: string, ancestor: string): boolean => {
+    const seen = new Set<string>();
+    for (let at: string | null = bone; at !== null && !seen.has(at); at = parent.get(at) ?? null) {
+      if (at === ancestor) return true;
+      seen.add(at);
+    }
+    return false;
+  };
+  const chain = found[0];
+  const at = chain.findLastIndex(link => under(carrier, link));
+  if (at < 0) return '';
+  const next = chain[at + 1];
+  const after = chain[at + 2];
+  // Name only an existing bound carrier under the immediate next link, never an inferred control-twin mapping.
+  const targets = next === undefined ? [] : [...bound].filter(bone => bone !== carrier && under(bone, next) && (after === undefined || !under(bone, after)));
+  const rebind = targets.length === 1
+    ? `try rebinding the lower segment on \`${carrier}\` to its existing carrier \`${targets[0]}\` under the next keyed link \`${next}\`, or `
+    : '';
+  return `; this breathing carrier is inside the keyed chain: binding it to ${hangName} can fail STRESS_OFF_CHAIN while passing TIP_OVER_ROOT; ${rebind}try moving \`${keyed}\`'s translate to ${hangName} or an ancestor; these options must be measured on this rig`;
 }
 
 /** A bone at the setup pose off the idle's geometry: its world origin, and its world x axis (a, c) when the file gives it. */

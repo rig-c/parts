@@ -7253,6 +7253,32 @@ or the second `shear` channel. Only the channel that drives that slider is
 compared to its bounds. Group names must be own declared keys; inherited object
 properties are refused with `CE_COMPILE_ANIMATION_GROUP_UNKNOWN`.
 
+**Turn-dial sign convention (issue #1358).** On an upright, unmirrored 2.5D
+turn rig, positive `rotate` keys on `<id>:yaw_dial` turn toward **screen left**
+(the viewer's left, decreasing world x); negative keys turn toward screen right.
+The body dial `<id>:<turn.body.slider>` (default `<id>:body_yaw_dial`) has the
+same sign. To turn toward leftward travel, key a positive yaw/body angle within
+that dial's declared range. These dials turn the depth layers about their pivot;
+they do not translate the character's scene root, and counter-moving parts can
+move in the opposite direction. Positive `<id>:pitch_dial` turns downward
+(decreasing world y, because rig coordinates are y up).
+
+Measured example: the synthetic `writeTurnSceneBuild` fixture from
+`fixtures/scene.ts`, composed as character `a` on a 64×64 canvas at offset
+`[0, 0]`, was gated through Core 3.8.0 with the `rig-play` profile. Separate clips
+keyed each dial from `0°` at t=0 to `+4°` at t=1 and back to `0°` at t=2.
+Posing the packed model gave these carrier world-x readings (rig pixels,
+rounded to six decimals); the face and torso mesh vertices also moved left:
+
+| keyed dial | observed carrier | world x at 0° | world x at +4° | displacement |
+| --- | --- | ---: | ---: | ---: |
+| `a:yaw_dial` | `a:faceshift` | −0.000001 | −1.392281 | −1.392279 |
+| `a:body_yaw_dial` | `a:bodyshift` | −0.000001 | −1.392280 | −1.392279 |
+
+Each carrier returned to its exact starting coordinates at t=2, and the other
+dial's carrier stayed fixed. In the pitch clip, `a:faceshift` world y moved from
+28.000000 to 26.606287 at `+4°`, establishing the downward sign independently.
+
 For example, this declaration adds a plate take independently of character idle:
 
 ```json
@@ -9211,13 +9237,13 @@ Internal `SeamSupport.drawings` never enters check JSON. Named requirement
 | `SEAM_OVER_RANGE.joints[].poses` | `SEAM_OVER_RANGE.joints[].poses` | 'part' | finding when fail; otherwise evidence | [j.part] | [check.ts:4411](../src/check.ts#L4411) |
 | `SETUP_MATCHES_PAINTING.regions` | `SETUP_MATCHES_PAINTING.regions` | 'rig' | finding when status === 'FAIL'; otherwise evidence | [] | [setuppainting.ts:175](../src/setuppainting.ts#L175) |
 | `SETUP_MATCHES_PAINTING.regions[].slots` | `SETUP_MATCHES_PAINTING.regions[].slots` | part when the supplied mapping resolves a piece; otherwise rig | evidence | resolved piece for slot; otherwise [] | [setuppainting.ts:176](../src/setuppainting.ts#L176) |
-| `STILL_REGIONS_DARK.*.crossing` | `STILL_REGIONS_DARK.*.crossing` | part when the supplied mapping resolves a piece; otherwise rig | finding | resolved piece for sl.name; otherwise [] | [check.ts:9062](../src/check.ts#L9062) |
-| `STILL_REGIONS_DARK.*.still_slots` | `STILL_REGIONS_DARK.*.still_slots` | part when the supplied mapping resolves a piece; otherwise rig | evidence; finding when r.max > tolerance; otherwise evidence | resolved piece for slot; otherwise [] | [check.ts:9048](../src/check.ts#L9048), [check.ts:9053](../src/check.ts#L9053) |
+| `STILL_REGIONS_DARK.*.crossing` | `STILL_REGIONS_DARK.*.crossing` | part when the supplied mapping resolves a piece; otherwise rig | finding | resolved piece for sl.name; otherwise [] | [check.ts:9090](../src/check.ts#L9090) |
+| `STILL_REGIONS_DARK.*.still_slots` | `STILL_REGIONS_DARK.*.still_slots` | part when the supplied mapping resolves a piece; otherwise rig | evidence; finding when r.max > tolerance; otherwise evidence | resolved piece for slot; otherwise [] | [check.ts:9076](../src/check.ts#L9076), [check.ts:9081](../src/check.ts#L9081) |
 | `STRESS_OFF_CHAIN.not_read` | `STRESS_OFF_CHAIN.not_read` | 'part' | evidence | [r.part] | [check.ts:3971](../src/check.ts#L3971) |
 | `STRESS_OFF_CHAIN.per_part` | `STRESS_OFF_CHAIN.per_part` | 'part' | finding when poses.some(p => typeof p.reading === 'number' && p.reading > STRESS_RIGID); otherwise evidence | [r.part] | [check.ts:3959](../src/check.ts#L3959) |
 | `STRESS_OFF_CHAIN.per_part[].off_chain` | `STRESS_OFF_CHAIN.per_part[].off_chain` | 'part' | evidence | [r.part] | [check.ts:3959](../src/check.ts#L3959) |
 | `STRESS_OFF_CHAIN.per_part[].poses` | `STRESS_OFF_CHAIN.per_part[].poses` | 'part' | evidence; finding when shown > STRESS_RIGID; otherwise evidence | [r.part] | [check.ts:3927](../src/check.ts#L3927), [check.ts:3945](../src/check.ts#L3945) |
-| `TEXTURE_STRETCH.per_mesh` | `TEXTURE_STRETCH.per_mesh` | part when the supplied mapping resolves a piece; otherwise rig | evidence; finding when severity > TEXTURE_STRETCH_CEILING; otherwise evidence | resolved piece for m.slot; otherwise [] | [check.ts:9712](../src/check.ts#L9712), [check.ts:9722](../src/check.ts#L9722) |
+| `TEXTURE_STRETCH.per_mesh` | `TEXTURE_STRETCH.per_mesh` | part when the supplied mapping resolves a piece; otherwise rig | evidence; finding when severity > TEXTURE_STRETCH_CEILING; otherwise evidence | resolved piece for m.slot; otherwise [] | [check.ts:9740](../src/check.ts#L9740), [check.ts:9750](../src/check.ts#L9750) |
 | `TIP_OVER_ROOT.parts` | `TIP_OVER_ROOT.parts` | 'part' | evidence; finding when !ok && !(!rigid && hanging.onLink && Math.max(c.root, c.tip) < TIP_TRAVEL_FLOOR); otherwise evidence | [p.name] | [check.ts:8466](../src/check.ts#L8466), [check.ts:8471](../src/check.ts#L8471), [check.ts:8492](../src/check.ts#L8492), [check.ts:8503](../src/check.ts#L8503) |
 | `WIND_BAND.pairs` | `WIND_BAND.pairs` | 'pair' | finding when !holdsAll; otherwise evidence | [p.a, p.b] | [check.ts:6500](../src/check.ts#L6500) |
 | `WIND_BAND.pairs[].steps` | `WIND_BAND.pairs[].steps` | 'pair' | finding when !s.holds; otherwise evidence | [p.a, p.b] | [check.ts:6511](../src/check.ts#L6511) |
