@@ -104,6 +104,60 @@ export function scenePoseState(pose: RawPose): string {
   return JSON.stringify({ bones: pose.bones, slots: pose.slots, drawOrder: pose.drawOrder, drawn: pose.drawn, clips: pose.clips, clipped: pose.clipped });
 }
 
+interface PoseDifference {
+  path: Array<string | number>;
+  start: unknown;
+  end: unknown;
+}
+
+/** Walk the same JSON values the closure gate compares, in producer field/array order.
+ * No rounding or epsilon: the existing numeric tolerance is exactly zero.
+ */
+function firstPoseDifference(start: unknown, end: unknown, path: Array<string | number> = []): PoseDifference | null {
+  if (JSON.stringify(start) === JSON.stringify(end)) return null;
+  if (Array.isArray(start) && Array.isArray(end)) {
+    for (let i = 0; i < Math.max(start.length, end.length); i++) {
+      const difference = firstPoseDifference(start[i], end[i], [...path, i]);
+      if (difference !== null) return difference;
+    }
+  } else if (start !== null && end !== null && typeof start === 'object' && typeof end === 'object') {
+    const a = start as Record<string, unknown>, b = end as Record<string, unknown>;
+    for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
+      const difference = firstPoseDifference(a[key], b[key], [...path, key]);
+      if (difference !== null) return difference;
+    }
+  }
+  return { path, start, end };
+}
+
+/** Name geometry-only differences too, including invisible slots and clipping. */
+function poseDifferenceDetail(start: RawPose, end: RawPose): string {
+  const difference = firstPoseDifference(JSON.parse(scenePoseState(start)), JSON.parse(scenePoseState(end)));
+  if (difference === null) return 'endpoint sample clocks differ';
+  const [family, index, ...fields] = difference.path;
+  const i = typeof index === 'number' ? index : -1;
+  let object = 'pose', channel = difference.path.map(String).join('.');
+  if (family === 'bones') {
+    object = `bone ${JSON.stringify(start.bones[i]?.name ?? end.bones[i]?.name)}`;
+    channel = fields.map(String).join('.') || 'presence';
+  } else if (family === 'slots') {
+    object = `slot ${JSON.stringify(start.slots[i]?.[0] ?? end.slots[i]?.[0])}`;
+    const [field, ...rest] = fields;
+    const channels = ['name', 'attachment', 'r', 'g', 'b', 'a', 'dark', 'path', 'blend'];
+    channel = [typeof field === 'number' ? channels[field] : 'presence', ...rest].join('.');
+  } else if (family === 'drawOrder') {
+    object = `slot ${JSON.stringify(start.drawOrder[i] ?? end.drawOrder[i])}`;
+    channel = `drawOrder[${i}]`;
+  } else if (family === 'drawn' || family === 'clips' || family === 'clipped') {
+    const a = start[family][i], b = end[family][i];
+    const slot = (row: typeof a) => row === undefined ? undefined : Array.isArray(row) ? row[0] : row.slot;
+    object = `slot ${JSON.stringify(slot(a) ?? slot(b))}`;
+    channel = `${family}.${fields.map(String).join('.') || 'presence'}`;
+  }
+  const value = (v: unknown) => v === undefined ? 'absent' : JSON.stringify(v);
+  return `${object} channel ${channel}: start ${value(difference.start)} at t=0; end ${value(difference.end)} at t=${end.trackTime}; tolerance 0 (exact equality)`;
+}
+
 /** A throwaway keyed-pose view; simulation is retained in the emitted document. */
 export function sceneKeyedModel(modelText: string) {
   const raw = JSON.parse(modelText) as Record<string, unknown>;
@@ -128,7 +182,12 @@ export function sceneClipLoopProblems(modelText: string, clips: SceneAnimations)
     for (const [name, clip] of Object.entries(clips)) {
       const poses = poseRawAnimation(doc, name, [clip.duration]);
       if (poses.length !== 2 || poses[0].animationTime !== 0 || poses[1].trackTime !== clip.duration || scenePoseState(poses[0]) !== scenePoseState(poses[1])) {
-        problems.push({ code: 'SCENE_ANIMATION_LOOP_CLOSES', object: `scene.animations.${name}`, detail: `posed samples at t=0 and t=${clip.duration} differ; identical endpoint poses are required (physics left out: ${physics.join(', ') || 'none'})` });
+        const difference = poses.length !== 2
+          ? `pose sample count ${poses.length}; required 2 at t=0 and t=${clip.duration}`
+          : poses[0].animationTime !== 0 || poses[1].trackTime !== clip.duration
+            ? `pose sample clocks start ${poses[0].animationTime}, end ${poses[1].trackTime}; required 0 and ${clip.duration}; tolerance 0 (exact equality)`
+            : poseDifferenceDetail(poses[0], poses[1]);
+        problems.push({ code: 'SCENE_ANIMATION_LOOP_CLOSES', object: `scene.animations.${name}`, detail: `${difference}; identical endpoint poses are required (physics left out: ${physics.join(', ') || 'none'})` });
       }
     }
     return problems;
