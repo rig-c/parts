@@ -260,17 +260,19 @@ What a lane runs before it reports, where, and how often. The verdict on the tre
 | tier | what runs | where | cap | when |
 | --- | --- | --- | --- | --- |
 | V0 pre-flight | `typecheck`, `lint`, `git diff --check`; grep `selftest.ts` for every rule code and message the diff touches and list the exact-message controls that will move; check every `--only` suite name exists (an unknown name exits 64 (usage), #1006); check message length against the line ceiling | the lane's machine, no selftest | 2 min | every commit |
-| V1 quick | `bun run verify:nova -- --only <suites>` (`--label`, `--owner`, `--session`; sets `RIG_PARTS_VALIDATION_HEAD` from `HEAD` and `RIG_PARTS_SELFTEST_JOBS=1`, and reports exit 2 as `green-partial`) | the remote pool | 10 min per job | each iteration |
+| V1 quick | `bun run verify:nova -- --only <suites>` (`--label`, `--owner`, `--session`; sets `RIG_PARTS_VALIDATION_HEAD` from `HEAD` and `RIG_PARTS_SELFTEST_JOBS=1`, and reports exit 2 as `green-partial`) | the remote pool | 10 min per job | each iteration, and before every handover |
 | V2 precise | the full selftest (its shards), build controls, packed installs, `ships`, the merged run tally | PR CI, on a draft PR the tower opens from the worker's branch | CI's own (`.github/workflows/ci.yml`) | once when V1 is green; again only after a fix |
 | V3 measurement | only what the issue's bar names: public-example output hashes, a stage timer, a pixel comparison, a reproduction | the remote pool, narrowest sample | named in the issue, ≤ 15 min | only when the issue names it |
 
 - A lane does not run the full serial selftest on the remote pool. V2 is that verdict. The exceptions are named in the issue: the issue is about the full run's own time or memory (#1018), or CI is down.
-- Until #1018's derived selector lands, a diff that touches `cli.ts`, `selftest.ts`'s shared machinery, or more than three suites skips V1 and goes to V2.
+- **A runner verifies before it hands over.** Before every handover it runs V1 over the suites its diff touches, however many there are. It picks them by searching `selftest.ts` and `tools/` for the paths, modules and rule codes it changed. A handover with only V0 is an unverified handover, and it is sent back. If that V1 sample would take more than 15 min for one run, the worker raises it under the cost check below; it does not skip to V2.
+- V1 is a sample. It is reported as `green-partial`, never as a pass. V2 stays the only verdict on the tree.
+- After a red V2, the worker reruns the failed suites with `--only` before the next push.
 - `--exclusive` is only for whole-run timing comparisons. A stage timer against a millisecond bar runs on the ordinary pool, median of 3.
 - Limits:
   - A re-run on the same head with the same command needs a named change: code, input, or a flake with its evidence.
   - The same failure twice is a STOP.
-  - The third red V2 cycle on one issue is a STOP.
+  - The third red V2 cycle on one issue from the same cause is a STOP.
   - More than 40 min of remote-pool time (V1 + V3) on one issue is a STOP. The report says what consumed it.
 - **Cost check before an expensive run.** Before a run estimated over 15 min, or one that would take the issue's total past 40 min, the worker sends the tower four things and waits:
   - the order it was given;
