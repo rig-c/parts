@@ -390,20 +390,26 @@ export interface CharacterBuild {
   accepted: string[];
 }
 
-const BONE_KEYS = ['name', 'parent', 'length', 'rotation', 'x', 'y'];
+const BONE_KEYS = ['name', 'parent', 'length', 'rotation', 'x', 'y', 'inherit'];
 const SLOT_KEYS = ['name', 'bone', 'attachment'];
-const ATTACHMENT_KEYS = ['type', 'path', 'image', 'width', 'height', 'uvs', 'triangles', 'hull', 'weights', 'x', 'y', 'rotation'];
+const ATTACHMENT_KEYS = ['type', 'path', 'image', 'width', 'height', 'uvs', 'triangles', 'hull', 'weights', 'x', 'y', 'rotation', 'generator'];
 const RIG_KEYS = ['spec', 'name', 'images', 'skeleton', 'bones', 'slots', 'skins', 'constraints', 'stops', 'invariants'];
 const STOP_KEYS = ['chain', 'links', 'against', 'at', 'inward', 'outward', 'lower'];
 const STOP_LOWER_KEYS = ['inward', 'outward'];
-const INVARIANT_KEYS = ['idleDrivesMeshes', 'detached', 'axes'];
+const INVARIANT_KEYS = ['idleDrivesMeshes', 'detached', 'axes', 'meshSlots', 'meshTriangles', 'deformMayFold'];
 const MOTION_KEYS = ['spec', 'archetype', 'cut', 'easings', 'groups', 'animations'];
-const IDLE_KEYS = ['duration', 'loop', 'note', 'tracks'];
+const IDLE_KEYS = ['duration', 'loop', 'note', 'tracks', 'deform'];
 const TRACK_KEYS = ['bone', 'group', 'property', 'keys'];
-const KEY_KEYS = ['t', 'v', 'curve', 'ease'];
+const KEY_KEYS = ['t', 'v', 'curve', 'ease', 'derive'];
+// Only the turn producer's models, not Core's general transform vocabulary.
+const DERIVE_KEYS = ['kind', 'degrees', 'depth', 'carried', 'about', 'narrowing'];
+const DEFORM_KEYS = ['skin', 'slot', 'attachment', 'keys'];
+const DEFORM_KEY_KEYS = ['t', 'vertices', 'transform'];
+const TURN_TRANSFORM_KEYS = ['kind', 'degrees', 'depth', 'narrowing'];
+type SceneDeform = { skin?: string; slot: string; attachment: string; keys: Array<Record<string, unknown>> };
 
 /** One animation of a motion.json: the idle, or one beside it as the file `motion.animations_from` named it (issue #183). */
-type SceneAnimation = { duration: number; loop?: boolean; note?: string; tracks: MotionSpec['animations']['idle']['tracks'] };
+type SceneAnimation = { duration: number; loop?: boolean; note?: string; tracks: MotionSpec['animations']['idle']['tracks']; deform?: SceneDeform[] };
 
 /** Every animation a motion.json holds, the idle first, in its own order. */
 function animationsOf(motion: MotionSpec): Record<string, SceneAnimation> {
@@ -565,19 +571,47 @@ export function readCharacterBuild(c: SceneCharacter, problems: Problem[], accep
           });
         }
       }
-      if (isRecord(r.invariants)) unknown('rig.json invariants', r.invariants, INVARIANT_KEYS);
+      if (isRecord(r.invariants)) {
+        unknown('rig.json invariants', r.invariants, INVARIANT_KEYS);
+        for (const key of ['meshSlots', 'meshTriangles']) if (key in r.invariants && !(typeof r.invariants[key] === 'number' && Number.isSafeInteger(r.invariants[key]) && r.invariants[key] >= 0)) {
+          problems.push({ code: 'SCENE_BUILD_FIELD_KNOWN', object: `${who} rig.json invariants.${key}`, detail: `is ${show(r.invariants[key])}; a non-negative integer mesh budget is required` });
+        }
+        if ('deformMayFold' in r.invariants) {
+          if (!Array.isArray(r.invariants.deformMayFold)) unknown('rig.json invariants.deformMayFold', r.invariants.deformMayFold, []);
+          else r.invariants.deformMayFold.forEach((entry, i) => unknown(`rig.json invariants.deformMayFold[${i}]`, entry, ['slot', 'why']));
+        }
+      }
       const skins = isRecord(r.skins) ? r.skins : {};
       unknown('rig.json skins', skins, ['default']);
       const seen = new Set<string>();
       for (const [slot, atts] of Object.entries(isRecord(skins.default) ? skins.default : {})) {
         for (const [name, att] of Object.entries(isRecord(atts) ? atts : {})) {
           unknown(`rig.json skins.default.${slot}.${name}`, att, ATTACHMENT_KEYS);
-          const file = isRecord(att) ? att.image : undefined;
-          if (typeof file !== 'string' || seen.has(file)) continue;
-          seen.add(file);
-          const png = join(dir, 'rig', 'images', file);
-          if (!existsSync(png)) problems.push({ code: 'SCENE_BUILD_PRESENT', object: `${who} skins.default.${slot}.${name}`, detail: `names the image "${file}", and ${png} does not exist` });
-          else images.push([file, new Uint8Array(readFileSync(png))]);
+          const at = `rig.json skins.default.${slot}.${name}`;
+          let depthImage: unknown;
+          if (isRecord(att) && 'generator' in att) {
+            const g = att.generator;
+            unknown(`${at}.generator`, g, ['kind', 'cols', 'rows', 'depth']);
+            const shape = (field: string, detail: string): void => { problems.push({ code: 'SCENE_BUILD_FIELD_KNOWN', object: `${who} ${at}.generator.${field}`, detail }); };
+            if (isRecord(g)) {
+              if (g.kind !== 'grid') shape('kind', `is ${show(g.kind)}; only the rig producer's depth grid is supported`);
+              for (const key of ['cols', 'rows']) if (!(typeof g[key] === 'number' && Number.isSafeInteger(g[key]) && g[key] >= 2)) shape(key, `is ${show(g[key])}; an integer grid count of at least two is required`);
+              unknown(`${at}.generator.depth`, g.depth, ['image', 'near', 'zScale']);
+              if (isRecord(g.depth)) {
+                depthImage = g.depth.image;
+                if (typeof depthImage !== 'string' || depthImage === '') shape('depth.image', `is ${show(depthImage)}; a depth PNG name is required`);
+                if (g.depth.near !== 'white' && g.depth.near !== 'black') shape('depth.near', `is ${show(g.depth.near)}; white or black is required`);
+                if (!(typeof g.depth.zScale === 'number' && Number.isFinite(g.depth.zScale) && g.depth.zScale > 0)) shape('depth.zScale', `is ${show(g.depth.zScale)}; a positive finite depth scale is required`);
+              }
+            }
+          }
+          for (const file of [isRecord(att) ? att.image : undefined, depthImage]) {
+            if (typeof file !== 'string' || seen.has(file)) continue;
+            seen.add(file);
+            const png = join(dir, 'rig', 'images', file);
+            if (!existsSync(png)) problems.push({ code: 'SCENE_BUILD_PRESENT', object: `${who} skins.default.${slot}.${name}`, detail: `names the image "${file}", and ${png} does not exist` });
+            else images.push([file, new Uint8Array(readFileSync(png))]);
+          }
         }
       }
     }
@@ -609,6 +643,51 @@ export function readCharacterBuild(c: SceneCharacter, problems: Problem[], accep
           keys.forEach((k, j) => unknown(`motion.json animations.idle.tracks[${i}].keys[${j}]`, k, KEY_KEYS));
         });
       } else problems.push({ code: 'SCENE_BUILD_PRESENT', object: `${who} motion.json animations.idle`, detail: 'is absent; the rig stage writes one idle, which the scene holds every character\'s tracks in' });
+    }
+  }
+  if (isRecord(motionRaw) && isRecord(motionRaw.animations)) {
+    const shape = (where: string, detail: string): void => { problems.push({ code: 'SCENE_BUILD_FIELD_KNOWN', object: `${who} ${where}`, detail }); };
+    const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+    const turn = (v: unknown, at: string, model: 'derive' | 'transform'): void => {
+      unknown(at, v, model === 'derive' ? DERIVE_KEYS : TURN_TRANSFORM_KEYS);
+      if (!isRecord(v)) return;
+      if (v.kind !== 'yaw' && v.kind !== 'pitch') shape(`${at}.kind`, `is ${show(v.kind)}; the turn producer's yaw or pitch is required`);
+      if (!finite(v.degrees)) shape(`${at}.degrees`, `is ${show(v.degrees)}; finite degrees are required`);
+      if (model === 'derive') {
+        if (!finite(v.depth) && !(isRecord(v.depth) && Object.values(v.depth).every(finite))) shape(`${at}.depth`, `is ${show(v.depth)}; a finite depth or a map of bone to finite depth is required`);
+        for (const k of ['carried', 'about']) if (k in v && !finite(v[k])) shape(`${at}.${k}`, `is ${show(v[k])}; a finite length is required`);
+      } else if (v.depth !== true) shape(`${at}.depth`, `is ${show(v.depth)}; the turn producer's depth: true is required`);
+      if ('narrowing' in v && typeof v.narrowing !== 'boolean') shape(`${at}.narrowing`, `is ${show(v.narrowing)}; a boolean is required`);
+    };
+    for (const [name, anim] of Object.entries(motionRaw.animations)) {
+      if (!isRecord(anim)) continue;
+      const at = `motion.json animations.${name}`;
+      for (const [i, tr] of (Array.isArray(anim.tracks) ? anim.tracks : []).entries()) {
+        if (!isRecord(tr) || !Array.isArray(tr.keys)) continue;
+        for (const [j, key] of tr.keys.entries()) if (isRecord(key) && 'derive' in key) {
+          const where = `${at}.tracks[${i}].keys[${j}]`;
+          turn(key.derive, `${where}.derive`, 'derive');
+          if ('v' in key) shape(where, 'carries both v and derive; one source of values is required');
+        }
+      }
+      if (!('deform' in anim)) continue;
+      if (!Array.isArray(anim.deform)) { shape(`${at}.deform`, `is ${show(anim.deform)}; a list of turn deform timelines is required`); continue; }
+      for (const [i, deform] of anim.deform.entries()) {
+        const where = `${at}.deform[${i}]`;
+        unknown(where, deform, DEFORM_KEYS);
+        if (!isRecord(deform)) continue;
+        for (const k of ['slot', 'attachment']) if (typeof deform[k] !== 'string' || deform[k] === '') shape(`${where}.${k}`, `is ${show(deform[k])}; a non-empty name is required`);
+        if (!Array.isArray(deform.keys)) { shape(`${where}.keys`, `is ${show(deform.keys)}; a list of turn deform keys is required`); continue; }
+        for (const [j, key] of deform.keys.entries()) {
+          const keyAt = `${where}.keys[${j}]`;
+          unknown(keyAt, key, DEFORM_KEY_KEYS);
+          if (!isRecord(key)) continue;
+          if (!finite(key.t)) shape(`${keyAt}.t`, `is ${show(key.t)}; a finite time is required`);
+          if ('vertices' in key && !(Array.isArray(key.vertices) && key.vertices.every(finite))) shape(`${keyAt}.vertices`, `is ${show(key.vertices)}; finite offset pairs are required`);
+          if ('transform' in key) turn(key.transform, `${keyAt}.transform`, 'transform');
+          if ('vertices' in key && 'transform' in key) shape(keyAt, 'carries both vertices and transform; one source of offsets is required');
+        }
+      }
     }
   }
   if (problems.length > before) return null;
@@ -701,11 +780,14 @@ export function scaleProblems(c: SceneCharacter, b: CharacterBuild): Problem[] {
       (t.keys as unknown as Array<Record<string, unknown>>).forEach((key, j) => {
         const v = key.v;
         const numbers = (x: unknown): boolean => Array.isArray(x) && x.every((n) => typeof n === 'number');
-        if (!numbers(v) && !(isRecord(v) && Object.values(v).every(numbers))) {
+        if (!isRecord(key.derive) && !numbers(v) && !(isRecord(v) && Object.values(v).every(numbers))) {
           out.push({ code: 'SCENE_SCALE_EXACT', object: `${where}.keys[${j}].v`, detail: `is ${show(v)}; a ${prop} key's value is a length, which compose scales in a list of numbers or a map of member to list, and this is neither` });
         }
       });
     });
+  }
+  for (const [slot, atts] of Object.entries(b.rig.skins.default)) for (const [name, att] of Object.entries(atts)) {
+    if ('generator' in att) out.push({ code: 'SCENE_SCALE_EXACT', object: `${who} rig.json skins.default.${slot}.${name}.generator`, detail: 'is an image-sized depth grid; scaling its bone offsets and zScale does not scale its generated bind geometry — compose it at scale 1, or rebuild it at another assemble.rig_scale' });
   }
   (b.rig.constraints ?? []).forEach((con, k) => {
     const forces = con.type === 'physics' ? physicsForce(con as Record<string, unknown>) : [];
@@ -808,6 +890,15 @@ function scaledTrack<T extends { property: string; keys: unknown[] }>(t: T, s: n
   const list = (v: unknown): unknown => (Array.isArray(v) ? v.map((n) => scaledBy(n as number, s)) : v);
   const keys = (t.keys as Array<Record<string, unknown>>).map((k) => {
     const out: Record<string, unknown> = { ...k, v: isRecord(k.v) ? Object.fromEntries(Object.entries(k.v).map(([m, x]) => [m, list(x)])) : list(k.v) };
+    if (isRecord(k.derive)) {
+      const d = { ...k.derive };
+      for (const field of ['depth', 'carried', 'about']) {
+        const v = d[field];
+        if (typeof v === 'number') d[field] = scaledBy(v, s);
+        else if (isRecord(v)) d[field] = Object.fromEntries(Object.entries(v).map(([name, n]) => [name, scaledBy(n as number, s)]));
+      }
+      out.derive = d;
+    }
     // A raw curve is four numbers per channel, (time, value, time, value): the values are at the odd places.
     if (Array.isArray(k.curve)) out.curve = (k.curve as number[]).map((n, i) => (i % 2 === 1 ? scaledBy(n, s) : n));
     return out;
@@ -1047,6 +1138,37 @@ export function composeScene(
       ax.bones.forEach((n, j) => ownBone(b.id, n, `character "${b.id}" rig.json invariants.axes[${k}].bones[${j}]`));
     }
   }
+  // Turn names are resolved before any output or call to Core, including map keys.
+  for (const b of ready) {
+    const anims = animationsOf(b.motion);
+    const missing = (where: string, detail: string): void => { fail('SCENE_NAME_RESOLVES', `character "${b.id}" ${where}`, detail); };
+    for (const [name, anim] of Object.entries(anims)) {
+      for (const [i, tr] of anim.tracks.entries()) {
+        const t = tr as unknown as Record<string, unknown>;
+        const members = typeof t.bone === 'string' ? [t.bone] : typeof t.group === 'string' ? b.motion.groups[t.group] : undefined;
+        for (const [j, key] of (t.keys as Array<Record<string, unknown>>).entries()) {
+          const at = `motion.json animations.${name}.tracks[${i}].keys[${j}]`;
+          const maps: Array<[string, unknown]> = [['v', key.v], ['derive.depth', isRecord(key.derive) ? key.derive.depth : undefined]];
+          for (const [field, map] of maps) if (isRecord(map)) for (const member of Object.keys(map)) {
+            ownBone(b.id, member, `character "${b.id}" ${at}.${field}.${member}`);
+            if (members === undefined || !members.includes(member)) missing(`${at}.${field}.${member}`, `names "${member}", which is not a member of this track's target; a named member of that target is required`);
+          }
+        }
+      }
+      for (const [i, d] of (anim.deform ?? []).entries()) {
+        const at = `motion.json animations.${name}.deform[${i}]`;
+        if (d.skin !== undefined && d.skin !== 'default') missing(`${at}.skin`, `names ${show(d.skin)}; the composed rig shares only the default skin`);
+        if (!(slotsOf.get(b.id) ?? []).includes(d.slot)) missing(`${at}.slot`, `names "${d.slot}", which this character does not declare`);
+        if (b.rig.skins.default[d.slot]?.[d.attachment] === undefined) missing(`${at}.attachment`, `names "${d.attachment}" on slot "${d.slot}", which this character's default skin does not hold`);
+      }
+    }
+    for (const [i, entry] of (b.rig.invariants?.deformMayFold ?? []).entries()) {
+      if (!(slotsOf.get(b.id) ?? []).includes(entry.slot)) missing(`rig.json invariants.deformMayFold[${i}].slot`, `names ${show(entry.slot)}, which this character does not declare`);
+    }
+    for (const [i, con] of (b.rig.constraints ?? []).entries()) if (con.type === 'slider') {
+      if (typeof con.animation !== 'string' || !(con.animation in anims)) missing(`rig.json constraints[${i}].animation`, `names ${show(con.animation)}, which this character's motion does not declare; an animation of its own is required`);
+    }
+  }
   // The root is shared: a character that drives it would move every character.
   for (const b of ready) {
     const where = `character "${b.id}"`;
@@ -1146,6 +1268,9 @@ export function composeScene(
           ...(typeof att.path === 'string' ? { path: imageName(id, att.path) } : {}),
           image: imageName(id, att.image as string),
         };
+        if (isRecord(att.generator) && isRecord(att.generator.depth)) {
+          a.generator = { ...att.generator, depth: { ...att.generator.depth, image: imageName(id, att.generator.depth.image as string) } };
+        }
         if (Array.isArray(att.weights)) {
           a.weights = (att.weights as Array<Array<Record<string, unknown>>>).map((v) =>
             v.map((w) =>
@@ -1180,6 +1305,7 @@ export function composeScene(
         out[field] = arity === 'one' ? P(id, con[field] as string) : (con[field] as string[]).map((n) => P(id, n));
       }
       if (type === 'path' && typeof con.slot === 'string') out.slot = prefixed(id, con.slot);
+      if (type === 'slider' && typeof con.animation === 'string') out.animation = con.animation === 'idle' ? 'idle' : prefixed(id, con.animation);
       constraints.push(out);
     }
     for (const st of b.rig.stops ?? []) {
@@ -1207,12 +1333,32 @@ export function composeScene(
   if (whys.length === 1) invariants.idleDrivesMeshes = { why: whys[0] };
   if (detached.length > 0) invariants.detached = detached;
   if (axes.length > 0) invariants.axes = axes;
+  const mayFold = ready.flatMap(b => (b.rig.invariants?.deformMayFold ?? []).map(e => ({ ...e, slot: prefixed(b.id, e.slot) })));
+  if (mayFold.length > 0) invariants.deformMayFold = mayFold;
+  const meshCounts = (b: CharacterBuild): { meshSlots: number; meshTriangles: number } => {
+    let meshSlots = 0, meshTriangles = 0;
+    for (const atts of Object.values(b.rig.skins.default)) {
+      let mesh = false;
+      for (const att of Object.values(atts)) if ('type' in att && att.type === 'mesh') {
+        mesh = true;
+        const triangles = att.generator?.kind === 'grid' ? 2 * (att.generator.cols - 1) * (att.generator.rows - 1) : att.triangles.length / 3;
+        meshTriangles = Math.max(meshTriangles, triangles);
+      }
+      if (mesh) meshSlots++;
+    }
+    return { meshSlots, meshTriangles };
+  };
+  for (const field of ['meshSlots', 'meshTriangles'] as const) if (ready.some(b => b.rig.invariants?.[field] !== undefined)) {
+    const values = ready.map(b => b.rig.invariants?.[field] ?? meshCounts(b)[field]);
+    invariants[field] = field === 'meshSlots' ? values.reduce((a, b) => a + b, 0) : Math.max(...values);
+  }
   if (Object.keys(invariants).length > 0) rig.invariants = invariants;
 
   // ---- the motion ---------------------------------------------------------------
   const easings: MotionSpec['easings'] = {};
   const groups: MotionSpec['groups'] = {};
   const tracks: MotionSpec['animations']['idle']['tracks'] = [];
+  const idleDeform: SceneDeform[] = [];
   // Every animation beside a character's idle rides along under its character's prefix (issue #183), its tracks
   // prefixed as the idle's are and nothing else changed: the scene plays the idle, and schedules none of these.
   const beside: Record<string, SceneAnimation> = {};
@@ -1226,14 +1372,26 @@ export function composeScene(
       const tr = { ...t } as Record<string, unknown>;
       if (typeof tr.bone === 'string') tr.bone = P(id, tr.bone);
       if (typeof tr.group === 'string') tr.group = prefixed(id, tr.group);
-      tr.keys = (t.keys as unknown as Array<Record<string, unknown>>).map((k) => (typeof k.ease === 'string' ? { ...k, ease: prefixed(id, k.ease) } : k));
+      const memberMap = (v: Record<string, unknown>): Record<string, unknown> => Object.fromEntries(Object.entries(v).map(([n, value]) => [P(id, n), value]));
+      tr.keys = (t.keys as unknown as Array<Record<string, unknown>>).map((k) => ({
+        ...k,
+        ...(typeof k.ease === 'string' ? { ease: prefixed(id, k.ease) } : {}),
+        ...(isRecord(k.v) ? { v: memberMap(k.v) } : {}),
+        ...(isRecord(k.derive) ? { derive: { ...k.derive, ...(isRecord(k.derive.depth) ? { depth: memberMap(k.derive.depth) } : {}) } } : {}),
+      }));
       return tr as unknown as MotionSpec['animations']['idle']['tracks'][number];
     };
     for (const t of b.motion.animations.idle.tracks) tracks.push(scaledTrack(prefixTrack(t), c.scale));
-    for (const [n, a] of Object.entries(animationsOf(b.motion))) if (n !== 'idle') beside[prefixed(id, n)] = { ...a, tracks: a.tracks.map((t) => scaledTrack(prefixTrack(t), c.scale)) };
+    const deforms = (a: SceneAnimation): { deform?: SceneDeform[] } => a.deform === undefined ? {} : { deform: a.deform.map((d) => ({
+      ...d, slot: prefixed(id, d.slot), attachment: prefixed(id, d.attachment),
+      // default is the one shared skin, not a per-character name.
+      keys: d.keys.map((k) => ({ ...k, ...(Array.isArray(k.vertices) && c.scale !== 1 ? { vertices: k.vertices.map((v) => scaledBy(v as number, c.scale)) } : {}) })),
+    })) };
+    idleDeform.push(...(deforms(animationsOf(b.motion).idle).deform ?? []));
+    for (const [n, a] of Object.entries(animationsOf(b.motion))) if (n !== 'idle') beside[prefixed(id, n)] = { ...a, tracks: a.tracks.map((t) => scaledTrack(prefixTrack(t), c.scale)), ...deforms(a) };
   }
   const note = notes.size === 1 ? [...notes][0] : ready.map((b) => `${b.id}: ${b.motion.animations.idle.note}`).join(' | ');
-  const motion: MotionSpec = { spec: 'rigc-motion/1', archetype: name, cut: name, easings, groups, animations: { idle: { duration: durations[0], loop: true, note, tracks }, ...beside } };
+  const motion: MotionSpec = { spec: 'rigc-motion/1', archetype: name, cut: name, easings, groups, animations: { idle: { duration: durations[0], loop: true, note, tracks, ...(idleDeform.length === 0 ? {} : { deform: idleDeform }) }, ...beside } };
 
   const report: SceneReport = {
     spec: SCENE_REPORT_SPEC,
@@ -1336,6 +1494,11 @@ export function unprefixedNames(rig: RigSpec, motion: MotionSpec, ids: readonly 
       name(`skin ${slot} attachment`, a);
       const img = (att as unknown as Attachment).image;
       if (typeof img !== 'string' || !((plate && img === PLATE_IMAGE) || ids.some((id) => img.startsWith(`${id}${IMAGE_SEP}`)))) bad.push(`skin ${slot} ${a} image ${show(img)}`);
+      const generator = (att as unknown as Attachment).generator;
+      if (isRecord(generator) && isRecord(generator.depth)) {
+        const image = generator.depth.image;
+        if (typeof image !== 'string' || !ids.some(id => image.startsWith(`${id}${IMAGE_SEP}`))) bad.push(`skin ${slot} ${a} depth image ${show(image)}`);
+      }
       const w = (att as unknown as Attachment).weights;
       if (Array.isArray(w)) for (const v of w as Array<Array<{ bone: string }>>) for (const e of v) name(`skin ${slot} ${a} weight bone`, e.bone, false);
     }
@@ -1348,12 +1511,14 @@ export function unprefixedNames(rig: RigSpec, motion: MotionSpec, ids: readonly 
       else if (Array.isArray(v)) for (const n of v) name(`constraint ${String(c.name)} ${field}`, n, false);
     }
     if (c.type === 'path') name(`constraint ${String(c.name)} slot`, c.slot, false);
+    if (c.type === 'slider' && c.animation !== 'idle') name(`constraint ${String(c.name)} animation`, c.animation, false);
   }
   for (const s of rig.stops ?? []) {
     name('stop chain', s.chain, false);
     for (const l of s.links) name(`stop ${s.chain} link`, l, false);
     name(`stop ${s.chain} against`, s.against, false);
   }
+  for (const entry of rig.invariants?.deformMayFold ?? []) name('invariants.deformMayFold slot', entry.slot, false);
   for (const d of rig.invariants?.detached ?? []) {
     name('invariants.detached bone', d.bone, false);
     name('invariants.detached notUnder', d.notUnder, false);
@@ -1371,7 +1536,18 @@ export function unprefixedNames(rig: RigSpec, motion: MotionSpec, ids: readonly 
     const tr = t as unknown as Record<string, unknown>;
     if ('bone' in tr) name('track bone', tr.bone, false);
     if ('group' in tr) name('track group', tr.group, false);
-    for (const k of (tr.keys as Array<Record<string, unknown>>) ?? []) if (typeof k.ease === 'string') name('key ease', k.ease, false);
+    for (const k of (tr.keys as Array<Record<string, unknown>>) ?? []) {
+      if (typeof k.ease === 'string') name('key ease', k.ease, false);
+      for (const map of [k.v, isRecord(k.derive) ? k.derive.depth : undefined]) if (isRecord(map)) for (const member of Object.keys(map)) name('key member', member, false);
+    }
+  }
+  for (const [animation, a] of Object.entries(animationsOf(motion))) {
+    if (animation !== 'idle') name('animation', animation, false);
+    for (const d of a.deform ?? []) {
+      name('deform slot', d.slot, false);
+      name('deform attachment', d.attachment, false);
+      if (d.skin !== undefined && d.skin !== 'default') bad.push(`deform skin ${show(d.skin)}`);
+    }
   }
   return bad;
 }

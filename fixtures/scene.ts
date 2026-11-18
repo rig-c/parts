@@ -24,11 +24,14 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseConfig } from '../src/config.ts';
-import { serializeParts } from '../src/parts.ts';
+import { type PartsFile, serializeParts } from '../src/parts.ts';
 import { encodePngBytes } from '../src/raster/png.ts';
 import { newRaster } from '../src/raster/types.ts';
 import { buildRig, type IdleKeys, rigJsonText, type RigOutput } from '../src/rig.ts';
 import { constraintConfig, rigConfig, rigImages, rigParts } from './rig.ts';
+import { weightedSurfaceEarFixture } from './turn_surface.ts';
+import { syntheticPolicy } from './automesh.ts';
+import { withPolicyMotion } from './automotion.ts';
 
 /** The ik the `reach` character carries: rigc's own shape, as `config.constraints` writes it. */
 export const REACH_IK = { type: 'ik', name: 'reach', bones: ['hem0', 'hem1'], target: 'tgt' } as const;
@@ -59,7 +62,51 @@ export interface SceneBuildOptions {
 
 /** Write one fixture character as `build --out` leaves it, under `dir`. Returns `dir`. */
 export function writeSceneBuild(dir: string, kind: SceneCharacterKind, opts: SceneBuildOptions = {}): string {
-  const out = sceneCharacterRig(kind);
+  return writeSceneOutput(dir, sceneCharacterRig(kind), rigParts(), opts);
+}
+
+/** The rig command's real producer inputs; sampled grids or authored weighted surfaces. */
+export function sceneTurnFixture(grid = false) {
+  const f = weightedSurfaceEarFixture();
+  f.config.constraints = [];
+  // Keep the existing head track to state the idle duration, without an unrelated equal-phase parent track.
+  const motion = f.config.motion as { tracks: Array<{ bone?: string }> };
+  motion.tracks = motion.tracks.filter(track => track.bone === 'head');
+  if (!grid) {
+    (f.config.meshes as Record<string, unknown>).face = { grid: 8, r: 20, segments: [['head', [32, 36], [32, 12]]] };
+    delete (f.config.regions as Record<string, unknown>).face;
+  }
+  return f;
+}
+
+/** Exact producer layout, including already-suffixed depth PNG names. */
+export function writeSceneProducerInput(dir: string, fixture: { config: Record<string, unknown>; parts: PartsFile; images: ReturnType<typeof rigImages> }): { config: string; parts: string } {
+  const parts = join(dir, 'parts-in');
+  mkdirSync(join(parts, 'parts'), { recursive: true });
+  writeFileSync(join(dir, 'config.json'), rigJsonText(fixture.config));
+  writeFileSync(join(parts, 'parts.json'), serializeParts(fixture.parts));
+  for (const [name, image] of fixture.images) writeFileSync(join(parts, 'parts', name.endsWith('.png') ? name : `${name}.png`), encodePngBytes(image));
+  return { config: join(dir, 'config.json'), parts };
+}
+
+/** The existing automatic cloth policy with its explicit fold declaration, through buildRig. */
+export function sceneFoldProducerFixture() {
+  const config = rigConfig();
+  const cloth = (config.meshes as Record<string, { grid: number; r: number; segments: string[] }>).cloth;
+  const auto = withPolicyMotion(syntheticPolicy(cloth.grid / 2));
+  auto.motion = { ...auto.motion!, deformMayFold: true };
+  config.meshes = { cloth: { auto, r: cloth.r, segments: cloth.segments } };
+  (config.bones as Array<{ name?: string; inherit?: string }>).find(b => b.name === 'body')!.inherit = 'normal';
+  return { config, parts: rigParts(), images: rigImages() };
+}
+
+/** Weighted head/body surfaces and unit ears, with no physics or sampled-grid generator. */
+export function writeTurnSceneBuild(dir: string, opts: SceneBuildOptions = {}): string {
+  const f = sceneTurnFixture();
+  return writeSceneOutput(dir, buildRig(parseConfig(f.config), f.parts, f.images), f.parts, opts);
+}
+
+function writeSceneOutput(dir: string, out: RigOutput, parts: PartsFile, opts: SceneBuildOptions): string {
   const rig = JSON.parse(rigJsonText(out.rig)) as Record<string, unknown>;
   const motion = JSON.parse(rigJsonText(out.motion)) as Record<string, unknown>;
   opts.rig?.(rig);
@@ -68,7 +115,7 @@ export function writeSceneBuild(dir: string, kind: SceneCharacterKind, opts: Sce
   for (const [file, img] of out.images) writeFileSync(join(dir, 'rig', 'images', file), encodePngBytes(img));
   writeFileSync(join(dir, 'rig', 'rig.json'), rigJsonText(rig));
   writeFileSync(join(dir, 'rig', 'motion.json'), rigJsonText(motion));
-  writeFileSync(join(dir, 'parts.json'), serializeParts({ ...rigParts(), scale_rig_per_source: opts.rigScale ?? 0.5 }));
+  writeFileSync(join(dir, 'parts.json'), serializeParts({ ...parts, scale_rig_per_source: opts.rigScale ?? parts.scale_rig_per_source }));
   if (opts.noCheck !== true) {
     mkdirSync(join(dir, 'check'), { recursive: true });
     const green = opts.pass ?? true;

@@ -7189,7 +7189,7 @@ single-character path (§4, steps 0–9) on its own, already isolated input to a
 | `canvas` | the shared stage, canvas px, y down. The composed rig's stage is the canvas, `root` at its bottom centre, as a single character's is its own |
 | `plate` | optional. `image` (relative to the scene file) is a PNG of exactly the canvas's size; `provenance` is `observed` (the painting's own pixels), `generated` or `unknown` (a residual after the people were removed is `unknown` where they stood, and the author says so); `note` is free text. `provenance` and `note` are copied into `scene.json` and **judged by nothing**. Optional `editor_receipts` uses the [editor receipt ledger](#scene-plate-editor-receipts-issue-966), with paths relative to the scene file and verified file hashes; `required: true` demands a matching plate receipt |
 | `characters[].id` | the prefix: every bone, slot, attachment (skin entry), constraint (its name, and every bone and path slot it names), `stops` entry (its `chain`, `links` and `against`, issue #431), `invariants.detached` bone, track, group and easing of that character is renamed `<id>:<name>`. `root` is the one shared root. A name resolves to exactly one character, and nothing resolves across characters without its prefix |
-| `characters[].build` | a `build --out` directory (relative to the scene file) whose own `check/check.json` is green |
+| `characters[].build` | a `build --out` directory (relative to the scene file) whose own `check/check.json` is green. After `rig` plus `rigc build`, run `rig-parts check --rig <build>/rig --parts <assembled-inputs> --out <build>/check`; retain its named SKIPs |
 | `characters[].offset` | `[x, y]`, a translation from the build's rig px to canvas px. Every character is built at one `assemble.rig_scale`, so its rig px are canvas px at scale 1 |
 | `characters[].scale` | optional, a positive number; absent is 1, and 1 composes to the bytes a scene without the key writes. The character's size on the canvas, about its stage's top-left corner: a rig px `p` lands at canvas px `scale * p + offset` (issue #197). A character scaled up past its art is drawn soft — the art is not resampled; rebuild it at a higher `assemble.rig_scale` if that matters |
 | `characters[].accept` | optional, a list of bar names: the bars this character's own check may have failed and still be composed (issue #203). `compose --accept <bar>[,<bar>…]` is the same list for every character; the two are joined, so the command line applies to every character and a character's list adds to it. Each name is one of the bars `check`'s summary names, less the gate — `loop`, `seam`, `BREATH_VISIBLE`, `BLINK_NO_HOLE`, `CHAIN_LAG`, `TIP_OVER_ROOT`, `STILL_REGIONS_DARK`, `TEXTURE_STRETCH`, `ANIMATIONS_DO_NOT_FOLD` (issue #320), `STRESS_OFF_CHAIN` (issue #347), `SEAM_OVER_MOTION` (the body-root bar, issue #686); anything else is `SCENE_ACCEPT_KNOWN`. A build is taken when every bar its `check.json` failed is named; its gate red, a declared requirement not PASS, or a bar not named is `SCENE_BUILD_GREEN` as before. **It is for looking, not for shipping:** the `[compose]` line says which failing bars were accepted, `scene.json` records them as the character's `accepted`, the composed rig's own check measures them again and reports them as it finds them, and the run exits 1 even when that check is PASS (a composed rig has no `parts.json`, so the seam and four judgement lines say SKIP there). A list that accepts nothing — every build green — composes to the bytes a scene without one writes |
@@ -7245,6 +7245,36 @@ What is composed:
   play. Each is read with the idle's own key lists, so a key compose does not know
   how to prefix is `SCENE_BUILD_FIELD_KNOWN`, as it is on the idle, and a track of
   one that keys `root` is `SCENE_ROOT_SHARED` (issue #183).
+- **Turn producer output** (issue #1344) is admitted explicitly: yaw/pitch
+  `derive` keys (including per-bone depth maps and per-member values), weighted
+  deform offsets and the producer's `depth: true` yaw/pitch deform transforms.
+  Slots, attachments, map members and slider animation references are prefixed;
+  the one `default` skin stays shared. Degrees, key times and grid counts stay;
+  translate values, derive `depth`/`carried`/`about`, and weighted deform offsets
+  scale with the character. Unknown nested models or fields are refused by name.
+- **Depth grids** carry only the rig producer's `generator: {kind: "grid",
+  cols, rows, depth: {image, near, zScale}}`. The depth image is copied unchanged
+  under the character's image prefix, and the generator names that copy; it is
+  compile-time input, not another atlas region. A generated image-sized grid at
+  character scale other than 1 is `SCENE_SCALE_EXACT`: moving its bone offsets
+  and depth scale alone cannot resize its bind geometry. Rebuild it at another
+  `assemble.rig_scale`; no image or geometry resampling is guessed.
+- **Producer invariants** carry `inherit` modes unchanged and prefix
+  `deformMayFold` slots without changing their reasons. Declared `meshSlots`
+  ceilings are summed for the composed skeleton; a member with no ceiling
+  contributes its actual mesh-slot count. `meshTriangles` is the maximum of the
+  declared per-mesh ceilings and actual maxima of members with none. These
+  counts come from emitted weighted triangles or declared grid dimensions;
+  scenes with no declared budget gain no budget field.
+- **A rig gate is not the character's check.** `rig-parts rig --out <build>/rig`
+  followed by `rigc build` does not create `<build>/check/check.json` and remains
+  `SCENE_BUILD_PRESENT`, even if the rigc gate is green. Keep `parts.json` beside
+  `rig/`, then run `rig-parts check --rig <build>/rig --parts <build> --out <build>/check`
+  before composing. Only a standalone rig with no manifest in its own or parent
+  directory may omit `--parts`; its parts-dependent lines retain named SKIPs. The check must
+  report both `PASS: true` and `gate_spine_html_green: true`; named accepted
+  failing bars keep the existing preview-only semantics. No alternate gated-only
+  admission is implied by the turn contract.
 - **Gated as `rig` gates its own:** `rigc build --profile rig-play --pack`, the
   compile and the packed pages on disk, in a scratch directory; `--out` receives
   `rig/` (`rig.json`, `motion.json`, `images/`) and `scene.json` only when it is

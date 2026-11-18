@@ -754,7 +754,7 @@ import { FORK_SMOOTH_MAX_INFLUENCES, smoothForkShares } from './src/rig.ts';
 import { type AttachmentSetsFile, blinkHoldProblems, buildRig as originalBuildRig, influenceReachHolds, DEFAULT_IDLE_KEYS, expandSetAttachmentKeys, FACE_TIPS_AXIS_NAME, HEAD_UP_BONE, flattenRig, IDLE_DRIVES_MESHES_WHY, type MeshAttachment, PAD, type RegionAttachment, rigJsonText, type RigOutput, type RigSpec, roundShares, tipRoundingBound, writtenShares } from './src/rig.ts';
 import { readEditorReceipts } from './src/editreceipt.ts';
 import { type ComposedScene, composeFromFiles, IMAGE_SEP, PLATE, PLATE_IMAGE, PREFIX_SEP, SCENE_REPORT_FILE, SCENE_SPEC, scaledConstraint, scaledStop, unprefixedNames } from './src/scene.ts';
-import { sceneCharacterRig, sceneText, writeFlatPlate, writeSceneBuild } from './fixtures/scene.ts';
+import { sceneCharacterRig, sceneText, writeFlatPlate, writeSceneBuild, writeTurnSceneBuild, sceneTurnFixture, sceneFoldProducerFixture, writeSceneProducerInput } from './fixtures/scene.ts';
 import { localInfluences, regionWeight } from './src/localweights.ts';
 import { boneHeat as solveBoneHeat, HEAT_MAX_ITERATIONS, HEAT_SOURCE_BAND, HEAT_TOLERANCE, latticeSilhouette } from './src/heat.ts';
 import { influences } from './src/weights.ts';
@@ -47413,6 +47413,152 @@ function runSceneSuite(): number {
         `bad shape -> ${codes(badStopShape.err)} (${badStopShape.err?.problems.length ?? 0}); bad refs -> ${codes(badStopRef.err)} (${badStopRef.err?.problems.length ?? 0})`,
         'issue #431: every stop shape fault, bone belonging to another character, unresolvable bone reference, and shared-root reference in stops is collected and refused with its rule and field name',
       );
+    }
+    // #1344: only turn-emitted models are admitted; all plants alter generated JSON, never source.
+    {
+      const turn = writeTurnSceneBuild(join(dir, 'turn'), { motion: (m) => {
+        const a = (m.animations as Record<string, { tracks: Array<{ group?: string; keys: Array<Record<string, unknown>> }>; deform?: Array<{ skin?: string }> }>).turn;
+        const group = a.tracks.find(t => t.group === 'turn_units');
+        if (group !== undefined) group.keys.find(k => k.t !== undefined && Array.isArray(k.v))!.v = { ear_r: [0], ear_l: [0] };
+        if (a.deform !== undefined) a.deform[0].skin = 'default';
+      } });
+      const body = { canvas: { width: 160, height: 80 }, characters: [{ id: 'a', build: 'turn', offset: [0, 0] }, { id: 'b', build: 'turn', offset: [80, 0], scale: 0.5 }], order: ['a', 'b'] };
+      const files = ['rig/rig.json', 'rig/motion.json', 'parts.json'];
+      const before = files.map(p => createHash('sha256').update(readFileSync(join(turn, p))).digest('hex'));
+      const composed = compose(body), C = composed.ok;
+      const out = join(dir, 'turn-composed');
+      const run = runCli(['compose', '--scene', scene(body), '--out', out]);
+      const motion = C?.motion as unknown as { animations: Record<string, { tracks: Array<{ group?: string; keys: Array<{ v?: unknown; derive?: { depth: number | Record<string, number>; carried?: number; degrees: number } }> }>; deform?: Array<{ skin?: string; slot: string; attachment: string; keys: Array<{ vertices?: number[] }> }> }> } | undefined;
+      const a = motion?.animations['a:turn'], b = motion?.animations['b:turn'];
+      const leftovers = C === null ? ['not composed'] : unprefixedNames(C.rig, C.motion, ['a', 'b'], false);
+      const gate = readJsonFile(join(out, 'check', 'check.json'));
+      say('SC53_TWO_TURN_CHARACTERS_GATE_WITH_PREFIXED_NESTED_REFERENCES',
+        run.status === 0 && gate?.PASS === true && C !== null && leftovers.length === 0 &&
+          (C.rig.constraints ?? []).filter(c => c.type === 'slider').every(c => String(c.animation).startsWith(String(c.name).startsWith('a:') ? 'a:' : 'b:')) && a?.deform?.[0].skin === 'default',
+        `exit ${run.status}; gate ${String(gate?.gate_spine_html_green)}; entry ${JSON.stringify(gate?.rigc_entry)}; unprefixed ${leftovers.join('; ') || 'none'}; shared skin ${a?.deform?.[0].skin}`,
+        'issue #1344: turn references stay inside each character; default is the shared skin');
+      const da = a?.tracks.find(t => t.group === 'a:turn_units')?.keys.find(k => k.derive)?.derive;
+      const db = b?.tracks.find(t => t.group === 'b:turn_units')?.keys.find(k => k.derive)?.derive;
+      const va = a?.deform?.find(d => d.slot === 'a:hair_back')?.keys.find(k => k.vertices)?.vertices;
+      const vb = b?.deform?.find(d => d.slot === 'b:hair_back')?.keys.find(k => k.vertices)?.vertices;
+      const values = a?.tracks.find(t => t.group === 'a:turn_units')?.keys.find(k => k.v !== undefined && !Array.isArray(k.v))?.v;
+      say('SC54_TURN_DEPTHS_CARRIED_LENGTHS_AND_DEFORM_OFFSETS_SCALE_BUT_DEGREES_DO_NOT',
+        da !== undefined && db !== undefined && typeof da.depth === 'object' && typeof db.depth === 'object' &&
+          db.depth['b:ear_r'] === da.depth['a:ear_r'] / 2 && db.carried === (da.carried ?? 0) / 2 && db.degrees === da.degrees &&
+          va !== undefined && vb !== undefined && va.length === vb.length && va.some(v => v !== 0) && va.every((v, i) => Math.abs(v / 2 - vb[i]) <= 0.000001) &&
+          JSON.stringify(values) === JSON.stringify({ 'a:ear_r': [0], 'a:ear_l': [0] }),
+        `depth ${JSON.stringify(da?.depth)} -> ${JSON.stringify(db?.depth)}; carried ${da?.carried} -> ${db?.carried}; offsets ${va?.length ?? 0}; member values ${JSON.stringify(values)}`,
+        'issue #1344: scalar depths and carried are lengths; map keys are names; angles and times stay');
+      const planted = (name: string, opts: Parameters<typeof writeTurnSceneBuild>[1]) => {
+        writeTurnSceneBuild(join(dir, name), opts);
+        return { ...body, characters: [{ id: 'a', build: name, offset: [0, 0] }] , order: ['a'] };
+      };
+      const unknownBody = planted('turn-unknown', { motion: (m) => {
+        const a = (m.animations as Record<string, { tracks: Array<{ keys: Array<{ derive?: { depth: unknown } }> }> }>).turn;
+        const d = a.tracks.flatMap(t => t.keys).find(k => k.derive !== undefined && typeof k.derive.depth === 'object')!.derive!;
+        (d.depth as Record<string, number>).ghost = 1;
+      } });
+      const unknownOut = join(dir, 'turn-unknown-out');
+      const unknown = runCli(['compose', '--scene', scene(unknownBody), '--out', unknownOut]);
+      say('SC55_UNKNOWN_TURN_MEMBER_IS_REFUSED_BEFORE_EMIT', unknown.status === 1 && unknown.out.includes('SCENE_NAME_RESOLVES') && unknown.out.includes('ghost') && !existsSync(join(unknownOut, 'rig')) && !existsSync(join(unknownOut, SCENE_REPORT_FILE)),
+        `exit ${unknown.status}; named ghost ${unknown.out.includes('ghost')}; rig written ${existsSync(join(unknownOut, 'rig'))}`,
+        'issue #1344: an unknown nested reference cannot reach emitted output');
+      const unsupported = compose(planted('turn-unsupported', { motion: (m) => {
+        const a = (m.animations as Record<string, { tracks: Array<{ keys: Array<Record<string, unknown>> }>; deform: Array<{ keys: Array<Record<string, unknown>> }> }>).turn;
+        const d = a.tracks.flatMap(t => t.keys).find(k => k.derive !== undefined)!.derive as Record<string, unknown>; d.extra = 1;
+        a.deform[0].keys[0] = { t: 0, transform: { kind: 'affine', degrees: 0, depth: true, scale: [1, 1] } };
+      } }));
+      say('SC56_UNSUPPORTED_DERIVE_AND_DEFORM_TRANSFORM_FIELDS_STILL_REFUSE',
+        has(unsupported.err, 'SCENE_BUILD_FIELD_KNOWN', '.derive.extra') && has(unsupported.err, 'SCENE_BUILD_FIELD_KNOWN', '.transform.scale') && has(unsupported.err, 'SCENE_BUILD_FIELD_KNOWN', '.transform.kind'),
+        codes(unsupported.err), 'issue #1344: accepting turn does not admit Core models or unknown nested fields');
+      const missing = compose(planted('turn-missing', { rig: r => {
+        const c = (r.constraints as Array<Record<string, unknown>>).find(c => c.type === 'slider')!; c.animation = 'ghost_animation';
+      }, motion: m => {
+        const d = (m.animations as Record<string, { deform: Array<Record<string, unknown>> }>).turn.deform[0]; d.slot = 'ghost_slot'; d.attachment = 'ghost_attachment'; d.skin = 'ghost_skin';
+      } }));
+      say('SC57_SLIDER_ANIMATION_AND_DEFORM_TARGET_MISSES_ARE_NAMED', ['ghost_animation', 'ghost_slot', 'ghost_attachment', 'ghost_skin'].every(n => has(missing.err, 'SCENE_NAME_RESOLVES', n)),
+        codes(missing.err), 'issue #1344: animations, slots, attachments and the shared default skin resolve before emit');
+      const mutant = C === null ? null : structuredClone(C);
+      if (mutant !== null) {
+        (mutant.rig.constraints ?? []).find(c => c.type === 'slider')!.animation = 'turn';
+        const ma = (mutant.motion.animations as unknown as Record<string, { deform: Array<{ slot: string; attachment: string }>; tracks: Array<{ keys: Array<{ derive?: { depth: unknown } }> }> }> )['a:turn'];
+        ma.deform[0].attachment = 'hair_back';
+        const d = ma.tracks.flatMap(t => t.keys).find(k => k.derive !== undefined && typeof k.derive.depth === 'object')!.derive!; (d.depth as Record<string, number>).ear_r = 1;
+      }
+      const caught = mutant === null ? [] : unprefixedNames(mutant.rig, mutant.motion, ['a', 'b'], false);
+      say('SC58_PREFIX_TOTALITY_DETECTS_BARE_SLIDER_DEFORM_AND_MEMBER_REFERENCES', caught.some(x => x.includes('animation')) && caught.some(x => x.includes('deform attachment')) && caught.some(x => x.includes('key member')),
+        caught.join('; '), 'issue #1344: a totality check must see names nested below a track');
+      const mismatch = compose(planted('turn-wrong-member', { motion: m => {
+        const a = (m.animations as Record<string, { tracks: Array<{ keys: Array<{ derive?: { depth: unknown } }> }> }>).turn;
+        const d = a.tracks.flatMap(t => t.keys).find(k => k.derive !== undefined && typeof k.derive.depth === 'object')!.derive!; (d.depth as Record<string, number>).head = 1;
+      } }));
+      const after = files.map(p => createHash('sha256').update(readFileSync(join(turn, p))).digest('hex'));
+      say('SC59_A_KNOWN_BONE_OUTSIDE_THE_TRACK_MEMBERS_REFUSES_AND_INPUT_BYTES_STAY', has(mismatch.err, 'SCENE_NAME_RESOLVES', 'not a member') && JSON.stringify(before) === JSON.stringify(after),
+        `wrong member ${codes(mismatch.err)}; input hashes unchanged ${JSON.stringify(before) === JSON.stringify(after)}`,
+        'issue #1344: a bone existing elsewhere is not a member of this track, and composition never mutates its checked input');
+    }
+    // #1344 review regression: idle is shared, including when a slider targets it.
+    {
+      writeSceneBuild(join(dir, 'idle-slider'), 'plain', { rig: r => {
+        r.constraints = [{ type: 'slider', name: 'idle_dial', animation: 'idle', bone: 'body', property: 'rotate', from: 0, to: 1, local: true }];
+      } });
+      const body = two({ characters: [{ id: 'plain', build: 'idle-slider', offset: [0, 20] }], order: ['plain'] });
+      const out = join(dir, 'idle-slider-out');
+      const run = runCli(['compose', '--scene', scene(body), '--out', out]);
+      const C = compose(body).ok;
+      const mutant = C === null ? null : structuredClone(C);
+      if (mutant !== null) (mutant.rig.constraints ?? []).find(c => c.type === 'slider')!.animation = 'bare_animation';
+      const caught = mutant === null ? [] : unprefixedNames(mutant.rig, mutant.motion, ['plain'], true);
+      say('SC63_SLIDER_IDLE_STAYS_SHARED_AND_COMPOSES_THROUGH_THE_GATE',
+        run.status === 0 && C !== null && (C.rig.constraints ?? []).find(c => c.type === 'slider')?.animation === 'idle' &&
+          Object.keys(C.motion.animations).join(',') === 'idle' && unprefixedNames(C.rig, C.motion, ['plain'], true).length === 0 && caught.some(x => x.includes('animation')),
+        `compose ${run.status}; slider ${String(C?.rig.constraints?.find(c => c.type === 'slider')?.animation)}; planted bare reference ${caught.join('; ')}; ${sceneBarLines(run.out, join(out, 'check'))}`,
+        'issue #1344: idle is the shared scene animation; only other animation names are prefixed, and a bare non-idle reference still fails totality');
+    }
+    // #1344 widened: invoke the real rig command on the synthetic depth producer inputs.
+    {
+      const f = sceneTurnFixture(true);
+      const input = writeSceneProducerInput(join(dir, 'producer-input'), f);
+      const build = join(dir, 'producer-build');
+      mkdirSync(build, { recursive: true });
+      const rig = runCli(['rig', '--config', input.config, '--parts', input.parts, '--out', join(build, 'rig')]);
+      const body = { canvas: { width: 160, height: 80 }, characters: [{ id: 'a', build, offset: [0, 0] }, { id: 'b', build, offset: [80, 0] }], order: ['a', 'b'] };
+      const uncheckedBuild = join(dir, 'producer-unchecked');
+      if (rig.status === 0) fs.cpSync(join(build, 'rig'), join(uncheckedBuild, 'rig'), { recursive: true });
+      mkdirSync(uncheckedBuild, { recursive: true });
+      writeFileSync(join(uncheckedBuild, 'parts.json'), serializeParts(f.parts));
+      const unchecked = compose({ ...body, characters: [{ id: 'a', build: uncheckedBuild, offset: [0, 0] }], order: ['a'] });
+      const checked = rig.status === 0 ? runCli(['check', '--rig', join(build, 'rig'), '--out', join(build, 'check')]) : { status: null, out: 'rig failed' };
+      writeFileSync(join(build, 'parts.json'), serializeParts(f.parts));
+      const out = join(dir, 'producer-composed');
+      const run = checked.status === 0 ? runCli(['compose', '--scene', scene(body), '--out', out]) : { status: null, out: 'check failed' };
+      const C = checked.status === 0 ? compose(body).ok : null;
+      const source = readJsonFile(join(build, 'rig', 'rig.json')) as unknown as RigSpec | null;
+      const generator = C?.rig.skins.default['a:face']?.['a:face'];
+      const depth = generator !== undefined && 'generator' in generator ? generator.generator?.depth : undefined;
+      say('SC60_REAL_RIG_DEPTH_TURN_PRODUCER_REQUIRES_CHECK_THEN_COMPOSES',
+        rig.status === 0 && checked.status === 0 && run.status === 0 && C !== null && source !== null &&
+          has(unchecked.err, 'SCENE_BUILD_PRESENT', 'check.json') && unprefixedNames(C.rig, C.motion, ['a', 'b'], false).length === 0 &&
+          C.rig.invariants?.meshSlots === (source.invariants?.meshSlots ?? 0) * 2 && C.rig.invariants?.meshTriangles === source.invariants?.meshTriangles && depth?.image === 'a.face_depth.png' &&
+          readFileSync(join(out, 'rig', 'images', 'a.face_depth.png')).equals(readFileSync(join(build, 'rig', 'images', 'face_depth.png'))),
+        `rig ${rig.status}; unchecked ${codes(unchecked.err)}; check ${checked.status}; compose ${run.status}; budget ${JSON.stringify(C?.rig.invariants)}; depth ${JSON.stringify(depth)}; ${sceneBarLines(run.out, join(out, 'check'))}`,
+        'issue #1344: real CLI producer and Core gate, then real check; no hand-written PASS receipt admits this input');
+      const scaled = checked.status === 0 ? compose({ ...body, characters: [{ id: 'a', build, offset: [0, 0], scale: 0.5 }], order: ['a'] }) : { err: null };
+      say('SC61_DEPTH_GRID_SCALE_WITHOUT_A_GEOMETRY_SCALE_CONTRACT_IS_REFUSED',
+        has(scaled.err, 'SCENE_SCALE_EXACT', 'image-sized depth grid'), codes(scaled.err),
+        'issue #1344: a grid is generated in image-sized bind units; scaling its offsets alone is not exact; rebuild at assemble.rig_scale');
+      const fold = sceneFoldProducerFixture();
+      const foldInput = writeSceneProducerInput(join(dir, 'fold-input'), fold);
+      const foldBuild = join(dir, 'fold-build'); mkdirSync(foldBuild, { recursive: true });
+      const folded = runCli(['rig', '--config', foldInput.config, '--parts', foldInput.parts, '--out', join(foldBuild, 'rig')]);
+      const foldCheck = folded.status === 0 ? runCli(['check', '--rig', join(foldBuild, 'rig'), '--out', join(foldBuild, 'check')]) : { status: null, out: 'rig failed' };
+      writeFileSync(join(foldBuild, 'parts.json'), serializeParts(fold.parts));
+      const permitted = foldCheck.status === 0 ? compose({ ...body, characters: [{ id: 'a', build: foldBuild, offset: [0, 0] }], order: ['a'] }) : { ok: null, err: null };
+      say('SC62_REAL_PRODUCER_INHERIT_AND_FOLD_EXEMPTION_NAMES_ARE_PRESERVED',
+        folded.status === 0 && foldCheck.status === 0 && permitted.err === null && permitted.ok?.rig.bones.some(b => b.name === 'a:body' && b.inherit === 'normal') === true && permitted.ok?.rig.invariants?.deformMayFold?.[0]?.slot === 'a:cloth',
+        `rig ${folded.status}; check ${foldCheck.status}; refusal ${codes(permitted.err)}; exemption ${JSON.stringify(permitted.ok?.rig.invariants?.deformMayFold)}`,
+        'issue #1344: the actual automatic mesh producer emits inherit and the declared fold exemption; no input rig is hand patched');
+
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
