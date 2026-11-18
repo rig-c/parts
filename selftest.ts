@@ -6700,7 +6700,7 @@ function runCliSuite(): number {
     layersShortH.status === 0 &&
       layersShortH.out === expectedSection1360('layers') &&
       layersDotSlash.status === 0 &&
-      layersDotSlash.out.includes('rig-parts layers: ComfyUI wrapper form, ./-h/layers.json') &&
+      layersDotSlash.out.includes(`rig-parts layers: ComfyUI wrapper form, ${join('./-h', 'layers.json')}`) &&
       paintShortH.status === 0 &&
       paintShortH.out === expectedSection1360('painting') &&
       paintWithKpShortH.status === 0 &&
