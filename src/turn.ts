@@ -28,6 +28,7 @@
  * that the depth maps do not carry relief inside a layer, so a part moves as
  * one piece. Pure: no file, no clock.
  */
+import { boundaryDepthSamplers, type BoundaryDepths } from './boundarydepth.ts';
 import { computeWorldTransforms, setupToPaintingPoint, toBoneLocalVector, toWorld, type BoneTransform } from './coords.ts';
 import { extendDepthSilhouette, sampleDepthFloat, type PartDepthReference } from './depthsheets.ts';
 import { type Problem, refuseIfAny } from './errors.ts';
@@ -265,6 +266,7 @@ export interface TurnBodySpec {
   counter?: number;
   grid?: [number, number] | Record<string, [number, number]>;
   unitDepths?: Record<string, number>;
+  boundaryDepths?: BoundaryDepths;
 }
 
 /** `config.turn`: either the legacy `{ pivot, depths }` turn spec or the 2.5D depth-sampled `{ roles, body?, pivot?, counter?, grid?, unitDepths?, band? }` spec (#763, #787). */
@@ -276,6 +278,7 @@ export interface TurnSpec {
   counter?: number;
   grid?: [number, number] | Record<string, [number, number]>;
   unitDepths?: Record<string, number>;
+  boundaryDepths?: BoundaryDepths;
   head?: { pivot?: number; radius?: number };
   surface?: { radius?: number };
   radius?: number;
@@ -1516,6 +1519,7 @@ interface Depth25DGroupSpec {
   pivot: number;
   counter: number;
   unitDepths?: Record<string, number>;
+  boundaryDepths?: BoundaryDepths;
   carrierBone: string;
   rearCarrierBone: string;
   unitGroupName: string;
@@ -1629,6 +1633,8 @@ function buildDepth25DTurnGroup(
   if (primarySurface !== undefined) {
     for (const sheet of surfaceSheets.values()) sheet.zRef = primarySurface.zRef;
   }
+  // Resolve on original sheets AFTER choosing the original shared anchor.
+  const boundarySamples = boundaryDepthSamplers(group.boundaryDepths, opts.parts, opts.images, group.roles, group.fieldPrefix);
   const pivot = pyRound(group.pivot, 4);
   const counter = group.counter;
   const rearDepth = pyRound(-counter * pivot, 4);
@@ -1865,7 +1871,14 @@ function buildDepth25DTurnGroup(
       }>;
     }> = [];
     for (const [part, { rec, ext, zRef }] of surfaceSheets) {
+      const boundarySample = boundarySamples.get(part);
       const authored = opts.surfaceMeshes?.filter((m) => m.part === part) ?? [];
+      // Core grids already expose their exact topology as neighbour support.
+      // Only an opted-in grid needs explicit offsets; legacy transforms stay intact.
+      if (boundarySample !== undefined && authored.length === 0) {
+        authored.push(...(opts.neighbourMeshes?.filter(m => m.part === part && m.gridSamples !== undefined) ?? []));
+        if (authored.length === 0) problems.push({ code: 'RIG_TURN_BOUNDARY_DEPTH', object: `${group.fieldPrefix}.boundaryDepths.${part}`, detail: 'has no resolved grid sampling topology; supply the generated grid support' });
+      }
       if (authored.length > 0) {
         const setup = surfaceSetupGraph(rig);
         const world = computeWorldTransforms(setup.bones);
@@ -1884,7 +1897,7 @@ function buildDepth25DTurnGroup(
               }
               // A unit/rear mesh sharing this root would move our bindings too.
               let ancestor = setup.bones.find((b) => b.name === setup.resolve(w.bone));
-              while (ancestor !== undefined) {
+              while (ancestor !== undefined && mesh.gridSamples === undefined) {
                 if ([FACESHIFT_BONE, REAR_SHIFT_BONE, BODYSHIFT_BONE, BODY_REAR_SHIFT_BONE].includes(ancestor.name)) {
                   problems.push({ code: 'RIG_TURN_SURFACE_MESH_BINDINGS', object: `${group.fieldPrefix}.roles.${part}`, detail: `binds "${w.bone}" through turn carrier "${ancestor.name}" shared with another role; surface mesh bindings must retain their authored frame` });
                   break;
@@ -1898,8 +1911,11 @@ function buildDepth25DTurnGroup(
               problems.push({ code: 'RIG_TURN_SURFACE_MESH_BINDINGS', object: `surface mesh "${mesh.slot}/${mesh.attachment}" vertex ${index}`, detail: `has influence sum ${total}; weights closing at 1 are required to sample a setup position` });
             }
             const [cx, cy] = setupToPaintingPoint([wx, wy], mesh.canvas, mesh.canvas);
-            const z = levelToDepthZ(sampleDepthFloat(ext, cx - rec.x, cy - rec.y), rec.depth);
-            return { row, depth: pivot + z - zRef };
+            const point = mesh.gridSamples?.[index] ?? [cx, cy];
+            const level = boundarySample?.(point[0], point[1]) ?? sampleDepthFloat(ext, point[0] - rec.x, point[1] - rec.y);
+            const z = levelToDepthZ(level, rec.depth);
+            // Grid carrier tracks already contribute pivot-zRef once.
+            return { row, depth: mesh.gridSamples === undefined ? pivot + z - zRef : z };
           });
           if (problems.length > startProblems || !active) continue;
           deform.push({
@@ -2183,6 +2199,7 @@ export function buildDepth25DTurn(
         pivot: opts.turn.pivot ?? DEFAULT_TURN_PIVOT_25D,
         counter: opts.turn.counter ?? DEFAULT_TURN_COUNTER_25D,
         unitDepths: opts.turn.unitDepths,
+        boundaryDepths: opts.turn.boundaryDepths,
         carrierBone: FACESHIFT_BONE,
         rearCarrierBone: REAR_SHIFT_BONE,
         unitGroupName: 'turn_units',
@@ -2210,6 +2227,7 @@ export function buildDepth25DTurn(
         pivot: body.pivot ?? opts.turn.pivot ?? DEFAULT_TURN_PIVOT_25D,
         counter: body.counter ?? opts.turn.counter ?? DEFAULT_TURN_COUNTER_25D,
         unitDepths: body.unitDepths ?? opts.turn.unitDepths,
+        boundaryDepths: body.boundaryDepths,
         carrierBone: BODYSHIFT_BONE,
         rearCarrierBone: BODY_REAR_SHIFT_BONE,
         unitGroupName: 'body_turn_units',
