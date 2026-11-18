@@ -103,7 +103,8 @@ import { failLine, PartsError, type Problem, refuseIfAny } from './errors.ts';
 import { readParts } from './parts.ts';
 import { missingReceipts, readEditorReceipts, type EditorReceipts } from './editreceipt.ts';
 import type { MotionSpec } from './motion.ts';
-import { decodePngBytes, readPng } from './raster/png.ts';
+import { decodePngBytes } from './raster/png.ts';
+import { clearComposeRun, COMPOSE_RUN_FILE, COMPOSE_RUN_SPEC, type ComposeRun, type RunStampFileEntry } from './runstamp.ts';
 import { readRequirements, type RequirementsFile } from './requirements.ts';
 import { OFFSET_PLACES, rigJsonText, type RigSpec } from './rig.ts';
 import { pyRound } from './round.ts';
@@ -133,7 +134,7 @@ export const PROVENANCES = ['observed', 'generated', 'unknown'] as const;
 export type Provenance = (typeof PROVENANCES)[number];
 
 /** Every path `compose` writes under `--out`, relative — and so every path it clears first. */
-export const COMPOSE_OWNS: readonly string[] = ['rig', 'check', SCENE_REPORT_FILE];
+export const COMPOSE_OWNS: readonly string[] = ['rig', 'check', SCENE_REPORT_FILE, COMPOSE_RUN_FILE];
 
 /** `<id>:<name>`. */
 export function prefixed(id: string, name: string): string {
@@ -183,6 +184,8 @@ export function plateImageName(index: number): string {
 
 export interface SceneFile {
   path: string;
+  /** Hash of the exact bytes parsed by loadScene, before any gate runs. */
+  sha256: string;
   canvas: { width: number; height: number };
   plate: ScenePlate | null;
   plates?: NamedScenePlate[];
@@ -250,8 +253,11 @@ export function loadScene(path: string): SceneFile {
   const at = resolve(path);
   if (!existsSync(at) || !statSync(at).isFile()) refuseIfAny([{ code: 'SCENE_FILE', object: at, detail: `no such file; a ${SCENE_SPEC} file is required` }]);
   let raw: unknown;
+  let sha256 = '';
   try {
-    raw = JSON.parse(readFileSync(at, 'utf8'));
+    const bytes = readFileSync(at);
+    raw = JSON.parse(bytes.toString('utf8'));
+    sha256 = createHash('sha256').update(bytes).digest('hex');
   } catch (err) {
     refuseIfAny([{ code: 'SCENE_FILE', object: at, detail: `${(err as Error).message}; a JSON object is required` }]);
   }
@@ -424,7 +430,7 @@ export function loadScene(path: string): SceneFile {
     }
   }
   refuseIfAny(problems);
-  return { path: at, canvas, plate, ...('plates' in o ? { plates } : {}), ...(animations === undefined ? {} : { animations }), characters, order };
+  return { path: at, sha256, canvas, plate, ...('plates' in o ? { plates } : {}), ...(animations === undefined ? {} : { animations }), characters, order };
 }
 
 // ---------------------------------------------------------------------------
@@ -443,6 +449,8 @@ export interface CharacterBuild {
   artBox: [number, number, number, number];
   /** Every image the build's skin names, as `rig/images/<file>` holds it, in the order the skin names them. */
   images: Array<[string, Uint8Array]>;
+  /** Build-relative paths and hashes of the JSON and image bytes consumed here. */
+  files: RunStampFileEntry[];
   /** The bars its own check failed that were accepted (issue #203), in check's order; empty for a green build. */
   accepted: string[];
 }
@@ -473,13 +481,16 @@ function animationsOf(motion: MotionSpec): Record<string, SceneAnimation> {
   return motion.animations as unknown as Record<string, SceneAnimation>;
 }
 
-function readJson(path: string, what: string, problems: Problem[]): unknown {
+function readJson(path: string, what: string, problems: Problem[], consumed: (bytes: Uint8Array) => void): unknown {
   if (!existsSync(path)) {
     problems.push({ code: 'SCENE_BUILD_PRESENT', object: path, detail: `no such file; ${what}` });
     return undefined;
   }
   try {
-    return JSON.parse(readFileSync(path, 'utf8'));
+    const bytes = readFileSync(path);
+    const parsed: unknown = JSON.parse(bytes.toString('utf8'));
+    consumed(bytes);
+    return parsed;
   } catch (err) {
     problems.push({ code: 'SCENE_BUILD_PRESENT', object: path, detail: `${(err as Error).message}; ${what}` });
     return undefined;
@@ -503,11 +514,16 @@ export function readCharacterBuild(c: SceneCharacter, problems: Problem[], accep
   const before = problems.length;
   const dir = c.buildDir;
   const who = `character "${c.id}" (${c.build})`;
+  const files: RunStampFileEntry[] = [];
+  const consumed = (path: string, bytes: Uint8Array): void => {
+    files.push({ path, sha256: createHash('sha256').update(bytes).digest('hex') });
+  };
+  const json = (path: string, what: string): unknown => readJson(join(dir, path), what, problems, bytes => consumed(path, bytes));
   if (!existsSync(dir) || !statSync(dir).isDirectory()) {
     problems.push({ code: 'SCENE_BUILD_PRESENT', object: who, detail: `${dir} is not a directory; the --out of a green \`rig-parts build\` is required` });
     return null;
   }
-  const check = readJson(join(dir, 'check', 'check.json'), "the build's own check; a build that ran its check writes it", problems);
+  const check = json('check/check.json', "the build's own check; a build that ran its check writes it");
   const joined = new Set([...accept, ...c.accept]);
   let accepted: string[] = [];
   if (check !== undefined) {
@@ -537,7 +553,7 @@ export function readCharacterBuild(c: SceneCharacter, problems: Problem[], accep
       });
     }
   }
-  const parts = readJson(join(dir, 'parts.json'), "assemble's parts.json, which holds the rig_scale and the art's place", problems);
+  const parts = json('parts.json', "assemble's parts.json, which holds the rig_scale and the art's place");
   // Legacy scene records keep their existing checks; a declared package raster
   // goes through the same file binding reader as rig, check, sheet and propose.
   if (isRecord(parts) && 'painting_in_rig' in parts) {
@@ -547,8 +563,8 @@ export function readCharacterBuild(c: SceneCharacter, problems: Problem[], accep
       problems.push(...err.problems);
     }
   }
-  const rigRaw = readJson(join(dir, 'rig', 'rig.json'), "the rig stage's rig.json", problems);
-  const motionRaw = readJson(join(dir, 'rig', 'motion.json'), "the rig stage's motion.json", problems);
+  const rigRaw = json('rig/rig.json', "the rig stage's rig.json");
+  const motionRaw = json('rig/motion.json', "the rig stage's motion.json");
   const unknown = (where: string, obj: unknown, keys: readonly string[]): void => {
     if (!isRecord(obj)) {
       problems.push({ code: 'SCENE_BUILD_FIELD_KNOWN', object: `${who} ${where}`, detail: `is ${show(obj)}; an object is required` });
@@ -667,7 +683,11 @@ export function readCharacterBuild(c: SceneCharacter, problems: Problem[], accep
             seen.add(file);
             const png = join(dir, 'rig', 'images', file);
             if (!existsSync(png)) problems.push({ code: 'SCENE_BUILD_PRESENT', object: `${who} skins.default.${slot}.${name}`, detail: `names the image "${file}", and ${png} does not exist` });
-            else images.push([file, new Uint8Array(readFileSync(png))]);
+            else {
+              const bytes = new Uint8Array(readFileSync(png));
+              images.push([file, bytes]);
+              consumed(`rig/images/${file}`, bytes);
+            }
           }
         }
       }
@@ -748,7 +768,8 @@ export function readCharacterBuild(c: SceneCharacter, problems: Problem[], accep
     }
   }
   if (problems.length > before) return null;
-  return { id: c.id, dir, rig: rigRaw as RigSpec, motion: motionRaw as MotionSpec, rigSize, rigScale, artBox, images, accepted };
+  files.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  return { id: c.id, dir, rig: rigRaw as RigSpec, motion: motionRaw as MotionSpec, rigSize, rigScale, artBox, images, files, accepted };
 }
 
 // ---------------------------------------------------------------------------
@@ -1676,7 +1697,7 @@ export function unprefixedNames(rig: RigSpec, motion: MotionSpec, ids: readonly 
  * {@link composeScene} — one refusal naming every problem the
  * files hold. Pure but for the reads.
  */
-export function composeFromFiles(scenePath: string, requirementsPath?: string, mode: PackMode = { pageEdges: DEFAULT_PAGE_EDGES, packShape: DEFAULT_PACK_SHAPE }, accept: readonly string[] = []): ComposedScene {
+export function composeFromFiles(scenePath: string, requirementsPath?: string, mode: PackMode = { pageEdges: DEFAULT_PAGE_EDGES, packShape: DEFAULT_PACK_SHAPE }, accept: readonly string[] = []): ComposedScene & { runRecord: ComposeRun } {
   const scene = loadScene(scenePath);
   const problems: Problem[] = acceptProblems(accept, '--accept');
   const builds = scene.characters.map((c) => readCharacterBuild(c, problems, accept));
@@ -1694,8 +1715,9 @@ export function composeFromFiles(scenePath: string, requirementsPath?: string, m
     if (!existsSync(scene.plate.imagePath)) problems.push({ code: 'SCENE_PLATE_PRESENT', object: where, detail: `${scene.plate.imagePath} does not exist; a PNG of the canvas's size is required` });
     else {
       try {
-        const r = readPng(scene.plate.imagePath);
-        plate = { bytes: new Uint8Array(readFileSync(scene.plate.imagePath)), width: r.width, height: r.height };
+        const bytes = new Uint8Array(readFileSync(scene.plate.imagePath));
+        const r = decodePngBytes(bytes, scene.plate.imagePath);
+        plate = { bytes, width: r.width, height: r.height };
       } catch (err) {
         problems.push({ code: 'SCENE_PLATE_PRESENT', object: where, detail: `${(err as Error).message}; a PNG is required` });
       }
@@ -1724,7 +1746,17 @@ export function composeFromFiles(scenePath: string, requirementsPath?: string, m
       problems.push(...err.problems);
     }
   }
-  return composeScene(scene, builds, plate, problems, mode, req, plateLayers);
+  const composed = composeScene(scene, builds, plate, problems, mode, req, plateLayers);
+  const runRecord: ComposeRun = {
+    spec: COMPOSE_RUN_SPEC,
+    scene: { path: scenePath, sha256: scene.sha256 },
+    characters: scene.characters.map(c => ({ id: c.id, build: c.build, files: builds.find(b => b?.id === c.id)!.files }))
+      .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+    plate: scene.plate === null || plate === null ? null : { path: scene.plate.image, sha256: createHash('sha256').update(plate.bytes).digest('hex') },
+    plates: (scene.plates ?? []).map((p, i) => ({ name: p.name, path: p.image, sha256: createHash('sha256').update(plateLayers[i]!.bytes).digest('hex') }))
+      .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
+  };
+  return { ...composed, runRecord };
 }
 
 export interface ComposeInput {
@@ -1764,6 +1796,8 @@ export interface ComposeResult {
  * first. A crash that is not a refusal is rethrown.
  */
 export function composeStage(input: ComposeInput, run: ComposeRunners, log: Log): ComposeResult {
+  // Clear before even option validation: a refused rerun cannot retain an earlier receipt.
+  clearComposeRun(input.out);
   const prefix = (stage: ComposeStage): Log => (line) => log(`[${stage}] ${line}`);
   const say = prefix('compose');
   const refused = (stage: ComposeStage, err: unknown, composed: ComposedScene | null = null): ComposeResult => {
@@ -1779,7 +1813,7 @@ export function composeStage(input: ComposeInput, run: ComposeRunners, log: Log)
   for (const p of COMPOSE_OWNS) rmSync(join(input.out, p), { recursive: true, force: true });
   const mode: PackMode = { pageEdges: DEFAULT_PAGE_EDGES, packShape: DEFAULT_PACK_SHAPE, ...(pageSize === undefined ? {} : { pageSize }) };
   log(`rig-parts compose: ${input.scene} -> ${input.out}, page edges ${mode.pageEdges}, pack shape ${mode.packShape}`);
-  let composed: ComposedScene;
+  let composed: ReturnType<typeof composeFromFiles>;
   try {
     composed = composeFromFiles(input.scene, input.requirements, mode, input.accept ?? []);
   } catch (err) {
@@ -1847,6 +1881,7 @@ export function composeStage(input: ComposeInput, run: ComposeRunners, log: Log)
     log(`compose: stopped at check; the composed rig's check is PASS${acceptedLine} (the composed rig and scene.json are written; the scene is for looking, not shipping)`);
     return { stoppedAt: 'check', composed, check: report };
   }
+  writeFileSync(join(input.out, COMPOSE_RUN_FILE), rigJsonText(composed.runRecord));
   log(`compose: PASS — ${report.bars.measured.length} of ${report.bars.measured.length + report.bars.skipped.length} bar(s) measured; the packed atlas under ${join(input.out, 'check', 'build')} is the artifact`);
   return { stoppedAt: null, composed, check: report };
 }

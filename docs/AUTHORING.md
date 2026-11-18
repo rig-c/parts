@@ -7412,6 +7412,45 @@ character's input arrives isolated); a composed `parts.json`, so the bars that
 read See-through tags are measured per character by its own `build`, not over the
 scene; a rig `build` did not write.
 
+
+#### Compose input record (issue #1348)
+
+A fully green compose writes `compose-run.json` at the `--out` root, beside
+`scene.json`, with spec `rig-compose-run/1`. It removes a previous record before
+the stage begins, including before stage option validation; a refused input,
+rig-c gate, check or accepted failing character leaves no record. The existing
+rig, scene report and check keep their bytes and paths. Core's nested
+`check/build/run.json` retains its own clocks; it is a different record.
+
+The fixed top-level key order is `spec`, `scene`, `characters`, `plate`, `plates`:
+
+| entry | exact binding |
+| --- | --- |
+| `scene` | `{path, sha256}`: `path` as supplied to compose and SHA-256 of the raw scene JSON bytes parsed, including whitespace |
+| `characters` | sorted by `id` in code-unit order; each `{id, build, files}`, with `build` as declared in the scene, and `files` sorted by build-relative `path`; each file is `{path, sha256}` |
+| `plate` | legacy plate `{path, sha256}`, with its image path as declared relative to the scene file, or `null` when absent |
+| `plates` | every named plate `{name, path, sha256}`, sorted by `name` in code-unit order; image paths as declared relative to the scene file; `[]` when absent |
+
+The character file inventory is exactly `check/check.json` (admission verdict),
+`parts.json` (rig dimensions, scale and art bounds), `rig/rig.json` (structure,
+skins and references), `rig/motion.json` (animation), and each distinct image
+named by the default skin under `rig/images/`, including a generator's depth
+image. These are the bytes compose parses or passes into the composed rig.
+It does not enumerate the build directory: unused images, packed pages,
+source configs and the character's own `run.json` are excluded. A declared
+`parts.json` painting binding and editor receipts keep their existing validation;
+their declarations are bound through the containing input bytes. This record
+inventories the listed compose inputs, not external requirements or CLI options.
+
+Hashes are captured from the same byte buffers consumed before the gate, never
+by rereading inputs after it. Image hashes bind encoded file bytes, including
+any trailing bytes, rather than decoded pixels. Identical inputs at identical
+supplied paths give identical record bytes; there are no clocks. A changed byte
+changes its input entry's hash; if multiple entries reference one physical file,
+each reference changes. Missing scene, build and plate files retain their named
+`SCENE_FILE`, `SCENE_BUILD_PRESENT` and `SCENE_PLATE_PRESENT` refusals.
+
+
 ### Declared requirements (`--requirements`)
 
 The bars above are this package's. What a *scene* asks of the rig's motion — that

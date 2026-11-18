@@ -51,7 +51,7 @@ import { REQUIREMENTS_SENTENCE } from './src/requirements.ts';
 import { composeStage, IMAGE_SEP, PLATE, PROVENANCES, SCENE_REPORT_FILE, SCENE_REPORT_SPEC, SCENE_SPEC } from './src/scene.ts';
 import { buildSheet, defaultCaption, type Tile, tilesFrom } from './src/sheet.ts';
 import { loadComparison, requiredProblems, structureLines } from './src/structure.ts';
-import { assembleOutputFiles, clearRunStamp, readPackageIdentity, rigOutputFiles, RUN_STAMP_FILE, RUN_STAMP_SPEC, writeRunStamp } from './src/runstamp.ts';
+import { assembleOutputFiles, clearComposeRun, clearRunStamp, readPackageIdentity, rigOutputFiles, RUN_STAMP_FILE, RUN_STAMP_SPEC, writeRunStamp } from './src/runstamp.ts';
 import { authorLayerLine } from './src/tags.ts';
 
 const EXIT_OK = 0;
@@ -2295,6 +2295,8 @@ function cmdBuild(args: string[]): number {
 function cmdCompose(args: string[]): number {
   const f = flags(args, 'compose', ['--scene', '--out']);
   if (typeof f === 'string') return usage(f);
+  const out = f.get('--out') as string;
+  clearComposeRun(out);
   let size: number | undefined;
   try {
     size = parsePageSize(f.get('--page-size'));
@@ -2312,7 +2314,7 @@ function cmdCompose(args: string[]): number {
     const req = f.get('--requirements');
     const accept = f.get('--accept');
     const r = composeStage(
-      { scene: f.get('--scene') as string, out: f.get('--out') as string, ...(size === undefined ? {} : { pageSize: size }), ...(req === undefined ? {} : { requirements: req }), ...(accept === undefined ? {} : { accept: accept.split(',') }) },
+      { scene: f.get('--scene') as string, out, ...(size === undefined ? {} : { pageSize: size }), ...(req === undefined ? {} : { requirements: req }), ...(accept === undefined ? {} : { accept: accept.split(',') }) },
       { rig: rigcRunner(bin), check: rigcRunner(bin), checkBin: bin, scratch: join(scratch, 'gate') },
       console.log,
     );
