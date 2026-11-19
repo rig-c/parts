@@ -18558,11 +18558,15 @@ function runSweepCheckCases(report: FixtureCaseReporter): void {
     );
 
     const keys = (fig: Record<string, unknown> | null): string => Object.keys(fig ?? {}).join(',');
-    // Issue #607: the two builds read two config files and each check.json names its own (config), so that record is
-    // set aside on both sides and held to plain.json here; every other byte is compared.
-    const without = covered.fig === null ? null : Object.fromEntries(Object.entries(covered.fig).filter(([k]) => k !== SWEEP_LINE && k !== 'config'));
-    const plainRaw = existsSync(join(dir, 'plain', 'check', 'check.json')) ? readFileSync(join(dir, 'plain', 'check', 'check.json')) : null;
-    const plainText = plainRaw === null ? '' : `${withoutConfigRecord(plainRaw, join('check', 'check.json')).toString('utf8')}\n`;
+    // Each build names its own config. The declared range also adds a legacy
+    // block and changes one outcome. Hold that outcome separately.
+    const withoutSweep = (fig: Record<string, unknown> | null): string => {
+      if (fig === null) return '';
+      const { [SWEEP_LINE]: _sweep, config: _config, ...rest } = fig;
+      const { [SWEEP_LINE]: _sweepOutcome, ...otherOutcomes } = checkBarOutcomes(fig);
+      return `${JSON.stringify({ ...rest, bar_outcomes: otherOutcomes }, null, 1)}\n`;
+    };
+    const sameOtherBytes = withoutSweep(covered.fig) === withoutSweep(plain.fig);
     const plainConfig = (plain.fig?.config ?? null) as Record<string, unknown> | null;
     const plainConfigNamed = plainConfig !== null && plainConfig.path === join(dir, 'plain.json') && plainConfig.sha256 === createHash('sha256').update(readFileSync(join(dir, 'plain.json'))).digest('hex');
     const coveredParts = readFileSync(join(dir, 'covered', 'parts.json'), 'utf8');
@@ -18576,11 +18580,13 @@ function runSweepCheckCases(report: FixtureCaseReporter): void {
         !plainParts.includes('"range"') &&
         coveredParts.split('\n').filter((l) => l.includes('"range"')).length === 1 &&
         coveredParts.replace(/,\n\s*"range": \[\n?\s*0,\n?\s*120\n?\s*\]/, '') === plainParts &&
-        `${JSON.stringify(without, null, 1)}\n` === plainText &&
+        checkBarIs(plain.fig, SWEEP_LINE, 'no-joint-range') &&
+        checkBarIs(covered.fig, SWEEP_LINE, 'PASS') &&
+        sameOtherBytes &&
         plainConfigNamed &&
         !existsSync(join(dir, 'covered', 'check', '_sweep')),
-      `without a range: exit ${plain.status}, keys ${keys(plain.fig)}; with one, less ${SWEEP_LINE}: ${`${JSON.stringify(without, null, 1)}\n` === plainText ? 'the same bytes' : 'DIFFERENT'}; parts.json with the range less it: ${coveredParts.replace(/,\n\s*"range": \[\n?\s*0,\n?\s*120\n?\s*\]/, '') === plainParts ? 'the same bytes' : 'DIFFERENT'}`,
-      'opt-in by construction: a limb with no declared range is not posed, so its check renders, prints and writes exactly what it did; the planted negative is the covered build, which differs from this one by the range in parts.json and the line in check.json, and by nothing else but the config record (issue #607), which names each build\'s own config file',
+      `without a range: exit ${plain.status}, keys ${keys(plain.fig)}; range outcome: ${JSON.stringify(checkBarOutcomes(plain.fig)[SWEEP_LINE])} -> ${JSON.stringify(checkBarOutcomes(covered.fig)[SWEEP_LINE])}; other check bytes: ${sameOtherBytes ? 'the same bytes' : 'DIFFERENT'}; parts.json with the range less it: ${coveredParts.replace(/,\n\s*"range": \[\n?\s*0,\n?\s*120\n?\s*\]/, '') === plainParts ? 'the same bytes' : 'DIFFERENT'}`,
+      'opt-in by construction: a limb with no declared range is not posed, so its check renders, prints and writes exactly what it did; the planted negative is the covered build, which differs from this one by the range in parts.json, the sweep block and its outcome in check.json, and each build\'s own config record (issue #607)',
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
