@@ -340,9 +340,12 @@ runs `--version`, the installed `rigc --version` (which must name the core
 entry), `layers` on a wrapper directory and on a PSD, `sheet`, `check` on a
 generated two-part rig from the install, and `build --all-sets` loaded through a
 fresh install of `@rig-c/play` (`--play-version <ver>`, default `latest`,
-`SMOKE_PLAY_LOADS_THE_BUILD`, issue #741). Four packages are broken on purpose —
-`src/layers.ts` out of the pack, `@rig-c/core` out of `dependencies`, `ag-psd`
-out of `dependencies`, `@esotericsoftware/spine-core` added to `dependencies` —
+`SMOKE_PLAY_LOADS_THE_BUILD`, issue #741). From that install, a Bun consumer
+imports the public `applyMeshEditAct` function from
+`@rig-c/parts/src/remesh-api.ts` (`SMOKE_REMESH_API_FROM_THE_INSTALL`, issue #1159).
+The plant cases remove `src/layers.ts` or `src/remesh-api.ts` from the pack,
+remove `@rig-c/core` or `ag-psd` from `dependencies`, or add
+`@esotericsoftware/spine-core` to `dependencies`,
 each patched into an extraction of the tarball, never the checkout; a plant case
 is green only when the smoke went red at the step it names, naming what went
 missing. A correct package installed at a path with spaces and non-ASCII in it

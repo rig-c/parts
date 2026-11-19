@@ -35,6 +35,7 @@
  * `rig` command and rigc's gate; and the installed `build --all-sets` output
  * (`skeleton.model.json` and `sets.json` with `focus`) loaded through a fresh
  * install of `@rig-c/play` (`loadModel` and `readSetupMesh`, issue #741).
+ * A Bun consumer imports the installed remesh API and checks its function export.
  *
  * 🔒 **Nothing under this repository is on the fixture's path at run time.** The
  * fixture generator below is authored as text into the install directory and
@@ -44,9 +45,9 @@
  * checkout is the tarball this script packed, which is the subject.
  *
  * 🌱 **The plants are part of the tool.** A smoke nobody has seen fail proves a
- * program ran, not that a program was checked, so four of the six cases
+ * program ran, not that a program was checked, so the plant cases
  * rebuild the tarball from a PATCHED COPY of the extracted package — a module
- * removed, each of the two dependencies removed, the Spine runtime added — and INVERT the
+ * or dependency removed, or the Spine runtime added — and INVERT the
  * verdict: such a case is green only when the smoke went red at the step it was
  * supposed to, naming what went missing. The worktree is never patched, and a
  * plant that removed nothing is itself a fault.
@@ -99,6 +100,7 @@ const ROOT = resolve(import.meta.dir, '..');
 const ROOT_PKG = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { name: string; devDependencies?: Record<string, string> };
 /** The package's name, read from the tree's package.json: the directory an install puts it in, the specifier the fixtures import it by, and the registry spec. */
 const PACKAGE = ROOT_PKG.name;
+const REMESH_API_PATH = 'src/remesh-api.ts';
 /**
  * The command the install puts on PATH. A scoped package's name is not a command, so the tool's command is its own
  * `bin` entry; every other command the installed package.json declares is run beside it (SMOKE_EVERY_BIN_RUNS_FROM_THE_INSTALL).
@@ -879,7 +881,7 @@ export function waitForRegistry(spec: string, minutes: number, cwd: string, into
 // the tarball, and the plants that patch a COPY of it
 // ---------------------------------------------------------------------------
 
-type Plant = 'none' | 'drop-src-module' | 'drop-rigc' | 'drop-psd' | 'add-spine-core';
+type Plant = 'none' | 'drop-src-module' | 'drop-remesh-api' | 'drop-rigc' | 'drop-psd' | 'add-spine-core';
 
 /** The runtime the add-spine-core plant puts into the packed package.json's dependencies, at the pin rig-c develops against. */
 const SPINE_CORE = '@esotericsoftware/spine-core';
@@ -890,6 +892,11 @@ const PLANTED: Record<Exclude<Plant, 'none'>, { names: string[]; steps: string[]
     names: ['layers.ts'],
     steps: ['layers'],
     what: '`src/layers.ts` removed from the packed tree. `files` names the `src` DIRECTORY, so a module leaves the package by leaving the tree, and the install is where `layers` cannot find its reader',
+  },
+  'drop-remesh-api': {
+    names: [REMESH_API_PATH],
+    steps: ['remesh-api'],
+    what: '`src/remesh-api.ts` removed from the packed tree. The installed Bun consumer must fail at the remesh API import',
   },
   'drop-rigc': {
     names: ['@rig-c/core'],
@@ -950,16 +957,17 @@ function tarballFor(work: string, source: { kind: 'tree' } | { kind: 'registry';
     return { tgz: '', faults, packedPaths: 0, evidence: '' };
   }
   const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { dependencies?: Record<string, string> };
+  const removedPath = plant === 'drop-src-module' ? 'src/layers.ts' : plant === 'drop-remesh-api' ? REMESH_API_PATH : null;
   if (plant === 'drop-rigc' || plant === 'drop-psd') {
     delete (pkg.dependencies ?? {})[plant === 'drop-rigc' ? '@rig-c/core' : 'ag-psd'];
     writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
   } else if (plant === 'add-spine-core') {
     pkg.dependencies = { ...(pkg.dependencies ?? {}), [SPINE_CORE]: SPINE_CORE_PIN };
     writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
-  } else {
-    const victim = join(pkgDir, 'src', 'layers.ts');
-    if (!existsSync(victim)) {
-      faults.push('SMOKE_PLANT_APPLIED: src/layers.ts is not in the packed tree, so removing it plants nothing');
+  } else if (removedPath !== null) {
+    const victim = join(pkgDir, removedPath);
+    if (!paths.includes(removedPath) || !existsSync(victim)) {
+      faults.push(`SMOKE_PLANT_APPLIED: ${removedPath} is not in the packed tree, so removing it plants nothing`);
       return { tgz: '', faults, packedPaths: 0, evidence: '' };
     }
     rmSync(victim);
@@ -978,10 +986,9 @@ function tarballFor(work: string, source: { kind: 'tree' } | { kind: 'registry';
   // report that a correct package fails.
   const after = tarPaths(second, work);
   let evidence = '';
-  if (plant === 'drop-src-module') {
-    const gone = paths.filter((p) => !after.includes(p));
-    if (gone.length === 0) faults.push(`SMOKE_PLANT_APPLIED: the plant left the packed path list unchanged at ${after.length} path(s)`);
-    else evidence = `the plant took ${gone.join(', ')} out of the pack`;
+  if (removedPath !== null) {
+    if (after.length === 0 || after.includes(removedPath)) faults.push(`SMOKE_PLANT_APPLIED: the repacked path list did not establish removal of ${removedPath}`);
+    else evidence = `the plant took ${removedPath} out of the pack`;
   } else {
     const dep = plant === 'drop-rigc' ? '@rig-c/core' : plant === 'drop-psd' ? 'ag-psd' : SPINE_CORE;
     const shipped = run('tar', ['-xzOf', second, 'package/package.json'], work);
@@ -1058,6 +1065,21 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, fetchedTgz?: strin
   }
   const installedPkg = JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf8')) as { version?: string; bin?: Record<string, string>; dependencies?: Record<string, string> };
   for (const name of Object.keys(installedPkg.bin ?? {})) smokePackages[name] = PACKAGE;
+  if (spec.plant === 'none' || spec.plant === 'drop-remesh-api') {
+    const remeshImport = `${PACKAGE}/${REMESH_API_PATH}`;
+    const probeFile = join(home, 'remesh_api_probe.ts');
+    writeFileSync(probeFile, `import { applyMeshEditAct } from ${JSON.stringify(remeshImport)};
+if (typeof applyMeshEditAct !== 'function') throw new Error('applyMeshEditAct must be a function');
+`);
+    const probe = run('bun', [probeFile], home);
+    output += probe.out;
+    if (probe.status !== 0) {
+      fault('remesh-api', `SMOKE_REMESH_API_FROM_THE_INSTALL: importing applyMeshEditAct from ${remeshImport} with Bun exited ${probe.status}. ${probe.out.trim().slice(0, 1500)}`);
+    } else {
+      notes.push(`Bun imported applyMeshEditAct as a function from ${remeshImport}`);
+    }
+    if (spec.plant === 'drop-remesh-api') return { faults, steps, notes, output };
+  }
   const installedVersion = installedPkg.version ?? '';
   const coreFault = coreInstallFault(home);
   if (coreFault !== null) fault('core-identity', coreFault);
@@ -1452,9 +1474,10 @@ exit codes:
      --wait (WAIT, naming the alias and how long it waited)
 
 cases:
-  clean            a correct package installs; --version, layers (wrapper and PSD), sheet, check, compose, the contour mesh, an auto-mode rig, and @rig-c/play loading \`rig-parts build --all-sets\` output run from it
+  clean            a correct package installs; the remesh API imports, and --version, layers (wrapper and PSD), sheet, check, compose, the contour mesh, an auto-mode rig, and @rig-c/play loading \`rig-parts build --all-sets\` output run from it
   unusual-path     the same, installed at an absolute path with spaces and non-ASCII in it
   drop-src-module  src/layers.ts out of the packed tree — the smoke has to go RED naming it
+  drop-remesh-api  src/remesh-api.ts out of the packed tree — the Bun import has to go RED naming it
   drop-rigc        @rig-c/core out of \`dependencies\` — the smoke has to go RED naming it
   drop-psd         ag-psd out of \`dependencies\` — the smoke has to go RED naming it
   add-spine-core   @esotericsoftware/spine-core INTO \`dependencies\` — RED at the rigc entry
@@ -1572,6 +1595,7 @@ function main(): number {
       // a pass about this machine's tidy temp directory.
       { name: 'unusual-path', source, installer, plant: 'none', dirName: 'install smoke ünïcode ñ', playVersion },
       { name: 'drop-src-module', source, installer, plant: 'drop-src-module', dirName: 'planted-src', playVersion },
+      { name: 'drop-remesh-api', source, installer, plant: 'drop-remesh-api', dirName: 'planted-remesh-api', playVersion },
       { name: 'drop-rigc', source, installer, plant: 'drop-rigc', dirName: 'planted-rigc', playVersion },
       { name: 'drop-psd', source, installer, plant: 'drop-psd', dirName: 'planted-psd', playVersion },
       { name: 'add-spine-core', source, installer, plant: 'add-spine-core', dirName: 'planted-spine-core', playVersion },
@@ -1605,6 +1629,9 @@ function main(): number {
         for (const step of planted.steps) if (!result.steps.includes(step)) missed.push(`no fault came from the ${step} step, where this plant has to bite`);
         const said = `${result.faults.join('\n')}\n${result.output}`;
         for (const name of planted.names) if (!said.includes(name)) missed.push(`nothing in the run named ${name}, so the failure does not say what is missing`);
+        if (spec.plant === 'drop-remesh-api' && !result.output.includes(`${PACKAGE}/${REMESH_API_PATH}`)) {
+          missed.push('the Bun import did not report the missing remesh API specifier');
+        }
         if (result.steps.includes('pack')) missed.push('the plant itself did not apply');
         if (missed.length === 0) {
           console.log(`  PASS  SMOKE_PLANT[${spec.name}]  ${planted.what}`);

@@ -4488,7 +4488,7 @@ existing hardlinks are refused before artifact output; the ordinary mode names
 | `mesh-draft --config <json> --parts <dir> --out <dir>` | draft contour meshes for configured lattices, keeping each only where it holds against its lattice through rig-c; write the revised config and measurement report |
 | `mesh-stats --config <json> --parts <dir>` | print each configured mesh's vertex and triangle counts and their total through the rig stage's construction; write nothing |
 | `painting --keypoints <json> [--person <id>] [--form standee\|illustration] <png>` | before See-through, read the painting against its declared joints (`standee` by default, or `illustration` for a framed illustration where standee border, 8-joint and gap rules report `SKIP`) and refuse named problems; write nothing |
-| `remesh --rig <dir> --config <json> --parts <dir> --part <name> --out <dir>` | with exactly one of `--mesh <entry.json>` or `--delta <mesh-edit.json>`, re-fit one part of a gated rig into a fresh revision, preserving the input |
+| `remesh --rig <dir> --config <json> --parts <dir> --part <name> --out <dir>` | with exactly one of `--mesh <entry.json>` or the legacy `--delta <mesh-edit.json>`, re-fit one part of a gated rig into a fresh revision, preserving the input |
 | `retune --rig <dir> --config <json> --parts <dir> --out <dir>` | splice the config's constraints and idle onto a gated rig in a fresh revision, carrying its attachments over as bytes |
 | `guide <RULE \| §<n> \| §<n>.<m> \| §<n>.<m>.<k>>` | print the one row of [docs/AUTHORING.md](AUTHORING.md) that names a rule (a refusal and the bar it enforces, `CHECK_<LINE>` and `<LINE>`, print together), or one section, `###` subsection or `####` under it, read from the installed file when it runs |
 
@@ -6078,6 +6078,9 @@ exits 0, and `mesh_draft.json` and the console name the reading and the amount.
 | <a id="REMESH_DELTA_JSON"></a>`REMESH_DELTA_JSON` | `--delta` is missing, does not parse, is not one object, its `schema` is not `rig-review-mesh-edit/1`, or `slot`, `skin`, `attachment` or `source` is not of its shape | export the mesh edit from rig-c/review as it writes it |
 | <a id="REMESH_DELTA_BASIS"></a>`REMESH_DELTA_BASIS` | the mesh edit's `basis` is not `"setup"`: it was drawn over a pose, and the producer binds setup positions, so it is refused rather than posed back (the basis found is quoted) | edit the mesh in setup space (rig-c/review #100) and export again |
 | <a id="REMESH_DELTA_OPS"></a>`REMESH_DELTA_OPS` | `ops` is not an array, or holds more than 300 ops — review's own cap per attachment | split the edit: apply the first part, then edit the revision |
+| <a id="REMESH_DELTA_ACT"></a>`REMESH_DELTA_ACT` | the act identity is malformed, a known key has a conflicting source hash or payload digest, its recorded edit is invalid, or its record fails to bind the current rig files | use the finalized act's identity and original binding together with the rig revision its record binds |
+| <a id="REMESH_DELTA_ACT_SUPERSEDED"></a>`REMESH_DELTA_ACT_SUPERSEDED` | the same act and edit were applied on an earlier, hash-bound revision. The refusal's object is the path to the record that binds the current revision | keep the current revision |
+| <a id="REMESH_DELTA_DIGEST"></a>`REMESH_DELTA_DIGEST` | the API refused the mesh edit's `payloadSha256` | pass the digest paired with the unchanged `edit` in the finalized act |
 | <a id="REMESH_DELTA_SOURCE"></a>`REMESH_DELTA_SOURCE` | the mesh edit was not drawn over this part's mesh: its `slot` or `attachment` is not `--part`, its skin is not `default`, a `source` count (`vertexCount`, `triangleCount`, `hullLength`) or `source.hash` is not the input's (both figures quoted; the hash is SHA-256 of the part's entry in rigc's `skeleton.model.json` over the input); or the input's bindings are not where its uvs and `parts.json` place the image, so no position can be bound | export the edit from the revision you pass as `--rig` |
 | <a id="REMESH_DELTA_OP"></a>`REMESH_DELTA_OP` | one op, named `ops[i]` and quoted, does not apply at its place in the replay: an unknown kind, a non-finite number, an id out of range or already removed, a `from` that is not the live position within 0.001 px, a position outside the part's image, a split of an edge the producer's triangulation does not hold or outside its triangles, a free `add` outside every triangle, a move that folds its ring, a removal that leaves fewer than 3 vertices, ends a constraint or leaves a ring no ear clips, an `edge` that duplicates a constraint, is a hull edge, runs through a vertex or crosses the hull or a constraint, or an `unedge` of any edge this edit did not constrain | read the op the line names; an edge the producer flipped is not one review can unedge — redraw it with `edge`, or move the vertices |
 | <a id="REMESH_DELTA_TOPOLOGY"></a>`REMESH_DELTA_TOPOLOGY` | the replayed mesh breaks an outline rule (`contourTopologyProblems`' code quoted: one loop, the hull first, every triangle wound one way, no self-intersection, no coincident vertices), or holds more interior edges that are not locally Delaunay than the input did; or the input's own triangles are not wound one way | read the quoted code; the ops that made it are the edit's last ones |
@@ -6136,7 +6139,43 @@ check measured from other bytes. The revision is always measured. `retune` reads
 record, so either command's serves the other over the same input. Without either flag
 nothing printed or written changes.
 
-**`--delta <mesh-edit.json>`** (in place of `--mesh`, exactly one of the two; issue
+#### Apply a mesh edit act in Bun
+
+Pass one edit from a finalized `rig-review/act@8` Request changes act to the typed,
+in-process API (issue #1159). Use the same rig, config and parts paths as for the
+CLI and choose a fresh revision directory for `out`.
+
+```ts
+import { applyMeshEditAct } from '@rig-c/parts/src/remesh-api.ts';
+
+const revision = applyMeshEditAct({
+  rig, config, parts, part, out,
+  edit: entry.edit,
+  actId: act.actId,
+  actSourceHash: act.source.sourceHash,
+  payloadSha256: entry.sha256,
+});
+```
+
+Here `entry` is the selected item in `act.value.meshEdits`. The caller supplies
+these values in memory. Before applying any op, Parts recomputes the canonical
+payload SHA-256 using recursively sorted object keys and checks `source.hash`
+against the target attachment in its gated model. It checks `source.frame` against
+the rig size and compares every recorded `source.positions` vertex, in attachment
+order, with its own position in setup crop pixels. A frame mismatch or a position
+more than 0.001 px away refuses the edit, including edits with only `add` or
+`edge` ops. See the [signed mesh-edit contract](https://github.com/rig-c/review/issues/952#issuecomment-7001413869).
+
+New revisions record the act identity and payload digest in `remesh.json`.
+Passing the same edit again with the current revision as `rig` returns that
+revision without writing another when that revision's record binds the rig
+files and matches the act source hash and payload digest. If the rig has moved
+past the matching edit, `REMESH_DELTA_ACT_SUPERSEDED` names the record that
+binds the current revision. A conflicting binding, including one on an earlier
+revision, or an unbound record still refuses `REMESH_DELTA_ACT`. A new edit
+bound to a stale source is refused before any output write.
+
+**Legacy `--delta <mesh-edit.json>`** (in place of `--mesh`, exactly one of the two; issue
 #526) reads rig-c/review's mesh edit, `rig-review-mesh-edit/1`: `slot`, `skin`,
 `attachment`, `source` (`vertexCount`, `triangleCount`, `hullLength`, `hash`), `units`,
 `basis` and up to 300 `ops`, each one of `move {v, from, to}`, `add {at, onEdge?}`,
@@ -6277,7 +6316,7 @@ outside the consumed inputs pending [#1177](https://github.com/rig-c/parts/issue
 
 | rule | means | change |
 | --- | --- | --- |
-| <a id="CHECK_RIGC_PRESENT"></a>`CHECK_RIGC_PRESENT` | no `rigc` binary found (every place looked is listed) | `bun install` |
+| <a id="CHECK_RIGC_PRESENT"></a>`CHECK_RIGC_PRESENT` | no `rigc` binary found in ancestor `node_modules/.bin` directories or on `PATH`. This also applies when the in-process remesh API needs to build a new revision | `bun install` |
 | <a id="CHECK_RIGC_PACKAGE"></a>`CHECK_RIGC_PACKAGE` | `node_modules/.bin/rigc` is missing under the package root named: this lookup (the selftest's, issue #337) takes this package's own rigc and no other — no directory above, no `PATH` | `bun install` in that root |
 | <a id="CHECK_INPUT_PRESENT"></a><a id="CHECK_INPUT_IS_JSON"></a><a id="CHECK_PART_PNG_PRESENT"></a><a id="CHECK_PART_PNG_MATCHES_BOX"></a><a id="CHECK_PART_SLOT_PRESENT"></a><a id="CHECK_RIG_STAGE_PRESENT"></a><a id="CHECK_RIG_STAGE_IS_THE_CANVAS"></a><a id="CHECK_RIG_ROOT_BONE"></a><a id="CHECK_IDLE_PRESENT"></a>`CHECK_INPUT_PRESENT`, `CHECK_INPUT_IS_JSON`, `CHECK_PART_PNG_PRESENT`, `CHECK_PART_PNG_MATCHES_BOX`, `CHECK_PART_SLOT_PRESENT`, `CHECK_RIG_STAGE_PRESENT`, `CHECK_RIG_STAGE_IS_THE_CANVAS`, `CHECK_RIG_ROOT_BONE`, `CHECK_IDLE_PRESENT` | the rig directory is incomplete or disagrees with `parts.json` (`CHECK_PART_SLOT_PRESENT`: a part with no slot of its own name, which the judgement lines render it by; `CHECK_INPUT_PRESENT` on `--set` / `--all-sets`: no `parts.json`, no `alternates`, or the named set is not in `alternates`). `motion.json` is required even with no animation in it, because `rigc build` takes `--motion` (a spec with `"animations": {}` builds green); `CHECK_IDLE_PRESENT` is an `idle` that is there with no positive `duration` — an absent `idle` is measured around (§7). `CHECK_INPUT_PRESENT` on `…/parts.json`: `--parts` named a directory without `parts.json` — most often `parts/` itself — or, without `--parts`, the rig directory has none while the directory above it does (build's layout, `<out>/rig` under `<out>/parts.json`). The detail says it: "--parts names the directory holding parts.json and parts/, not parts/ itself (after build, that is build's --out, whose rig is <out>/rig); without --parts it is --rig", and names the parent when the parent holds `parts.json`. With neither (no `--parts`, and no `parts.json` beside `rig.json` or above it), the rig is measured without parts and nothing is refused (§7) | re-run rig (`build` does both); for `…/parts.json`, `--parts` — the directory above `parts/` |
 | <a id="CHECK_SOURCE_SIZE"></a>`CHECK_SOURCE_SIZE` | the painting `--source` names is not this rig's: no single `rig_scale` takes its width and height to the stage's (assemble makes the canvas `trunc(w × rig_scale)` x `trunc(h × rig_scale)`), or, with `parts.json` read, its `scale_rig_per_source` does not; or the stage is not whole pixels. Refused before anything is built | the painting the rig was made from — the stage's own size, or the painting `assemble` was given |

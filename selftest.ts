@@ -778,8 +778,9 @@ import { FIELD_LATTICE_GRID, FIELD_POSES, fieldRegion, REGION_SPACINGS } from '.
 import { BASE_SPACINGS, CONTROL, describeWorst, displacement, frameOpenings, kindOf, neighbours, pickAtBudget, type PlacedMask, POSE_PHASE, ranked, regionPoses, regionSpacings, resolveSegments, seamOpening, seamPairs, sineAt, SWEEP_TOLERANCES, testRegion, toWorldPx, variantConfig } from './tools/real_compare.ts';
 import { BEND_DEGREES, BEND_WORST_SHARE, bendAnimationNames, bendAnimations, type BendFigure, bendLinks, CALIBRATED_SENTENCE, candidateMesh, carriedBy, islandsJoin, MORE_TRIANGLES_FLAG, RELATIVE_SENTENCE, DUST_MAX_PX, DUST_MAX_SHARE, dustOf, figureRules, type GateLine, gateVerdict, IDLE_BOUND_PX, jsonValueSpan, MEASURED_SENTENCE, MESH_DRAFT_REPORT, meshDraftStage, NOT_COMPARED_SENTENCE, notCompared, partsNamed, type PartReadings, type Reading, READINGS, scratchConfig, splicedConfig, TOLERANCE_FIGURE_DIVISOR } from './src/meshdraft.ts';
 import { type Built, type CheckSide, checkHeldProblems, deltaRow, PROVENANCE_FILE, type RemeshInput, type RemeshPlant, type RemeshProvenance, type RemeshResult, remeshStage, requestHeldProblems, targetProblems } from './src/remesh.ts';
-import { deltaFrames } from './src/remesh.ts';
+import { deltaFrames, encodeMeshEditPayload, meshEditPayloadSha256 } from './src/remesh.ts';
 import { INPUT_CHECK_FILE, INPUT_CHECK_SPEC, inputCheckBinding, inputCheckBoundProblems, inputCheckOf, inputCheckText, readInputCheck } from './src/remesh.ts';
+import type { ApplyMeshEditActInput } from './src/remesh-api.ts';
 import { RETUNE_FILE, RETUNE_SPEC, type RetuneInput, type RetunePlant, type RetuneProvenance, type RetuneResult, retuneStage } from './src/retune.ts';
 import { DRAFT_COARSE_GRID, DRAFT_CONTOUR_MARK, DRAFT_COSTLY_GRID, DRAFT_FIGURE, DRAFT_FINE_GRID, DRAFT_LINKS, DRAFT_SPECK_ALPHA, draftConfig, draftImages, draftParts, writeDraftFixture, writeDraftFixtureWithContour, writeDraftIslandsFixture } from './fixtures/meshdraft.ts';
 import { pyRound } from './src/round.ts';
@@ -43741,6 +43742,50 @@ function treeNamesCase(text: ReadonlyArray<readonly [string, string]>, say: Retu
 
 }
 
+function remeshApiExportFaults(path: string, source: string | undefined): string[] {
+  if (source === undefined) return [`${path}: source file missing`];
+  const expected = new Map([['ApplyMeshEditActInput', 'type-only'], ['RemeshResult', 'type-only'], ['applyMeshEditAct', 'runtime']]);
+  const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
+  const exports = new Map<string, string>();
+  const bindingNames = (name: ts.BindingName): string[] => ts.isIdentifier(name)
+    ? [name.text]
+    : name.elements.flatMap((element) => ts.isBindingElement(element) ? bindingNames(element.name) : []);
+  for (const statement of file.statements) {
+    if (ts.isExportDeclaration(statement)) {
+      const clause = statement.exportClause;
+      const kind = statement.isTypeOnly ? 'type-only' : 'runtime';
+      if (clause === undefined) exports.set('*', kind);
+      else if (ts.isNamespaceExport(clause)) exports.set(clause.name.text, kind);
+      else for (const element of clause.elements) exports.set(element.name.text, element.isTypeOnly ? 'type-only' : kind);
+      continue;
+    }
+    if (ts.isExportAssignment(statement)) {
+      exports.set(statement.isExportEquals ? 'export =' : 'default', 'runtime');
+      continue;
+    }
+    const modifiers = ts.canHaveModifiers(statement) ? ts.getModifiers(statement) ?? [] : [];
+    if (!modifiers.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) continue;
+    if (modifiers.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword)) exports.set('default', 'runtime');
+    else if (ts.isVariableStatement(statement)) {
+      for (const variable of statement.declarationList.declarations) {
+        for (const name of bindingNames(variable.name)) exports.set(name, 'runtime');
+      }
+    } else if (ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement) || ts.isInterfaceDeclaration(statement) ||
+      ts.isTypeAliasDeclaration(statement) || ts.isEnumDeclaration(statement) || ts.isModuleDeclaration(statement)) {
+      const kind = ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement) ? 'type-only' : 'runtime';
+      if (statement.name !== undefined) exports.set(statement.name.text, kind);
+    }
+  }
+  return [
+    ...[...expected].flatMap(([name, kind]) => {
+      const found = exports.get(name);
+      if (found === undefined) return [`${path}: missing export ${name}`];
+      return found === kind ? [] : [`${path}: ${name} is ${found}; expected ${kind}`];
+    }),
+    ...[...exports.keys()].filter((name) => !expected.has(name)).sort().map((name) => `${path}: unexpected export ${name}`),
+  ];
+}
+
 function runTreeSuite(_corpus: string | null = null, pre = false): number {
   section('tree: the rules CLAUDE.md states, held to the files');
   const { say, bad } = counter();
@@ -43905,6 +43950,27 @@ function runTreeSuite(_corpus: string | null = null, pre = false): number {
       plants39[4].length === 0,
     `${text.length} text file(s) scanned against ${allowedRigc39.size - 1} named export(s) in ${RIGC_PACKAGE} ('./*.ts' present: ${'./*.ts' in rigcExports39}): ${deepFaults39.length === 0 ? 'no deep path or unexported specifier' : deepFaults39.join('; ')}; planted: ${plants39.slice(0, 4).map((p) => p.join(', ') || 'MISSED').join(' | ')}; changelog + named entry -> ${plants39[4].join(', ') || 'quiet'}`,
     'issue #910: @rig-c/core 3.0.0 removed `./*.ts` from its exports map, so every import and doc reference must use a named entry',
+  );
+
+  const remeshApi = 'src/remesh-api.ts';
+  const remeshApiFaults = remeshApiExportFaults(remeshApi, sources.find(([path]) => path === remeshApi)?.[1]);
+  const apiPlant = "export { applyMeshEditAct } from './impl.ts';\nexport type { ApplyMeshEditActInput, RemeshResult } from './impl.ts';\n";
+  const apiControl = remeshApiExportFaults(remeshApi, apiPlant);
+  const apiMissingFile = remeshApiExportFaults(remeshApi, undefined);
+  const apiMissingType = remeshApiExportFaults(remeshApi, apiPlant.replace(', RemeshResult', ''));
+  const apiWrongKind = remeshApiExportFaults(remeshApi, apiPlant.replace('export {', 'export type {'));
+  const apiExtra = remeshApiExportFaults(remeshApi, apiPlant + 'export const implementationDetail = 1;\n');
+  const apiWildcard = remeshApiExportFaults(remeshApi, apiPlant + "export * from './impl.ts';\n");
+  say(
+    'TY41_REMESH_API_SOURCE_EXISTS_AND_EXPORTS_EXACTLY_THE_PROMISED_NAMES',
+    remeshApiFaults.length === 0 && apiControl.length === 0 &&
+      apiMissingFile.join() === `${remeshApi}: source file missing` &&
+      apiMissingType.join() === `${remeshApi}: missing export RemeshResult` &&
+      apiWrongKind.join() === `${remeshApi}: applyMeshEditAct is type-only; expected runtime` &&
+      apiExtra.join() === `${remeshApi}: unexpected export implementationDetail` &&
+      apiWildcard.join() === `${remeshApi}: unexpected export *`,
+    `entry: ${remeshApiFaults.join('; ') || 'all promised names present'}; plants: ${[apiMissingFile, apiMissingType, apiWrongKind, apiExtra, apiWildcard].map((faults) => faults.join('; ') || 'MISSED').join(' | ')}`,
+    'issue #1159: hold the stable Bun source entry to its documented function and types, and refuse extra or wildcard exports',
   );
 
   const declareCall = /(^|[^.\w$])declare\s*\(/;
@@ -50642,6 +50708,17 @@ function checkSideDrift(side: Pick<CheckSide, 'line' | 'status'>, stdout: string
   return out;
 }
 
+/** Independent encoding of the signed digest domain: sorted object keys, array order, ECMAScript JSON scalars. */
+function meshEditDigestBytes(edit: unknown): string {
+  const ordered = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(ordered);
+    if (typeof value !== 'object' || value === null) return value;
+    const obj = value as Record<string, unknown>;
+    return Object.fromEntries(Object.keys(obj).sort().map((key) => [key, ordered(obj[key])]));
+  };
+  return JSON.stringify(ordered(edit));
+}
+
 function runRemeshSuite(): number {
   section('remesh: one part of a gated rig re-fitted under a requested entry, every other byte kept, a new revision (issue #495)');
   const { say, bad } = counter();
@@ -50916,10 +50993,13 @@ function runRemeshSuite(): number {
     const px = (a: StripAtt, i: number): [number, number] => [Math.round(a.uvs[2 * i] * 24 * GRID) / GRID, Math.round(a.uvs[2 * i + 1] * 408 * GRID) / GRID];
     const layout = [[100, 10, 150], [110, 10, 250], [86, 10, 10], [87, 10, 20], [56, 0, 300], [35, 20, 330], [20, 20, 180], [21, 20, 190], [60, 0, 260]].every(([i, x, y]) => px(inStrip, i).join() === `${x},${y}`) && inStrip.hull === 86 && inStrip.uvs.length === 252;
     // The suite's own source.hash: rigc's build over the input, the strip's entry in its model document, hashed as review does.
-    const hashBuild = join(root, 'hash-build');
-    runner(['build', '--rig', join(input, 'rig.json'), '--motion', join(input, 'motion.json'), '--out', hashBuild]);
-    const modelSkins = (JSON.parse(readFileSync(join(hashBuild, RIGC_MODEL_DOCUMENT), 'utf8')) as { skins: Array<{ name: string; attachments: Record<string, Record<string, unknown>> }> }).skins;
-    const sourceHash = createHash('sha256').update(JSON.stringify(modelSkins.find((s) => s.name === 'default')?.attachments.strip.strip)).digest('hex');
+    const stripModelHash = (rig: string, out: string): string => {
+      const built = runner(['build', '--rig', join(rig, 'rig.json'), '--motion', join(rig, 'motion.json'), '--out', out]);
+      if (built.status !== 0) throw new Error(`strip model build exited ${built.status}: ${built.out.slice(0, 1000)}`);
+      const modelSkins = (JSON.parse(readFileSync(join(out, RIGC_MODEL_DOCUMENT), 'utf8')) as { skins: Array<{ name: string; attachments: Record<string, Record<string, unknown>> }> }).skins;
+      return createHash('sha256').update(JSON.stringify(modelSkins.find((s) => s.name === 'default')?.attachments.strip.strip)).digest('hex');
+    };
+    const sourceHash = stripModelHash(input, join(root, 'hash-build'));
     const deltaDoc = (ops: unknown[], over: Record<string, unknown> = {}): Record<string, unknown> => ({
       schema: 'rig-review-mesh-edit/1',
       slot: 'strip',
@@ -50948,7 +51028,7 @@ function runRemeshSuite(): number {
       { op: 'add', at: [18, 21], onEdge: [86, 87] },
       { op: 'remove', v: 110 },
       { op: 'edge', a: 56, b: 35 },
-    ];
+    ] satisfies ApplyMeshEditActInput['edit']['ops'];
     // Vertex 100's bindings by hand: both links point down the canvas (world rotation -90), so their local x runs down
     // the crop and local y to the right: a crop move of (+1.5, -2) is local (-2, +1.5) — tail1 (11, -2) -> (9, -0.5),
     // tail0 (144, -2) -> (142, -0.5); the shares are kept.
@@ -50962,6 +51042,47 @@ function runRemeshSuite(): number {
       const i = findUv(a, 11.5 / 24, 148 / 408);
       return i < 0 ? 'absent' : JSON.stringify(a.weights[i]);
     };
+
+    // Review #952's worked vector predates the signed positions clause, so it is outside
+    // the accepted edit shape. The frame and explicit positions are illustrative digest data.
+    const draftVector = {
+      slot: 'mesh', skin: 'default', attachment: 'mesh', basis: 'setup',
+      source: {
+        vertexCount: 4, triangleCount: 2, hullLength: 4,
+        hash: '576344044f966225f8e77ebf91bdbbc22b4408ab6b5c449283c2383d6f5b30c0',
+        frame: { width: 80, height: 64 },
+      },
+      ops: [
+        { op: 'move', v: 2, from: [58.3, 22.000000000000004], to: [58.5, 21.25] },
+        { op: 'add', at: [48, 32], onEdge: [1, 2] },
+        { op: 'edge', a: 0, b: 4 },
+      ],
+    };
+    const signedVector = {
+      ...draftVector,
+      source: { ...draftVector.source, positions: [[38, 42], [38, 22], [58.3, 22.000000000000004], [58, 42]] },
+    };
+    const draftBytes = meshEditDigestBytes(draftVector);
+    const signedBytes = meshEditDigestBytes(signedVector);
+    const digestText = (bytes: string): string => createHash('sha256').update(bytes, 'utf8').digest('hex');
+    const draftDigest = digestText(draftBytes);
+    const signedDigest = digestText(signedBytes);
+    const productionDraftDigest = meshEditPayloadSha256(draftVector);
+    const productionSignedDigest = meshEditPayloadSha256(signedVector);
+    const swappedVector = { ...signedVector, source: { ...signedVector.source, positions: [...signedVector.source.positions].reverse() } };
+    const swappedDigest = digestText(meshEditDigestBytes(swappedVector));
+    say(
+      'RM36_DRAFT_AND_SIGNED_MESH_EDIT_DIGESTS_HAVE_FIXED_BYTES_AND_HOLD_POSITION_ORDER',
+      Buffer.byteLength(draftBytes) === 381 &&
+        draftDigest === '5dc2eb0f2d51839764117b86deca3026c8a7ac2dce75b5948731fd11a4e4bda7' &&
+        Buffer.byteLength(signedBytes) === 445 &&
+        signedDigest === '00a3c311ea13ba5123f9351a64df1e616508be413e2e0388e48dfd205d768235' &&
+        encodeMeshEditPayload(draftVector) === draftBytes && productionDraftDigest === draftDigest &&
+        encodeMeshEditPayload(signedVector) === signedBytes && productionSignedDigest === signedDigest &&
+        swappedDigest !== signedDigest && meshEditPayloadSha256(swappedVector) === swappedDigest,
+      `draft ${Buffer.byteLength(draftBytes)} bytes ${draftDigest} (production ${productionDraftDigest}); signed ${Buffer.byteLength(signedBytes)} bytes ${signedDigest} (production ${productionSignedDigest})`,
+      'issue #1159 and review #952: the production codec and an independent encoder agree on the published draft vector and on the signed vector with ordered positions',
+    );
 
     // RM11 — the positive control, through the CLI.
     const doc11 = request('delta-cli', deltaDoc(FOUR_OPS));
@@ -50988,6 +51109,175 @@ function runRemeshSuite(): number {
         treeDigest(input) === inputDigest,
       `layout as written: ${layout}; exit ${run11.status}; ${counts11.join(' | ')}; request ops ${req11?.ops}, applied ${JSON.stringify(req11?.applied)}; check ${prov11?.check.revision.pass} over ${prov11?.check.revision.measured.length} bar(s), the input's ${prov11?.check.input.measured.length}; vertex 100 binds ${out11Strip === null ? 'nothing written' : movedBinding(out11Strip)}`,
       'issue #526 bar 1: a move, a split, a removal and a constraint are replayed over the input part\'s own mesh, the moved vertex rebound through the setup frames (held here to the hand figure), every other file the input\'s, rigc\'s gate green and check measuring the bars it measured on the input',
+    );
+
+    // Issue #1159: the in-process API reads the same generated strip, with an independently encoded edit.
+    const { applyMeshEditAct } = require('./src/remesh-api.ts') as typeof import('./src/remesh-api.ts');
+    const stripPositions = (a: StripAtt): Array<[number, number]> => Array.from({ length: a.uvs.length / 2 }, (_, i) => [
+      8 + 24 * a.uvs[2 * i], 6 + 408 * a.uvs[2 * i + 1],
+    ]);
+    const positions = stripPositions(inStrip);
+    // An unrounded positive reading within 1e-3 px exercises the tolerance as well as exact positions.
+    positions[0][0] += 0.0005;
+    const edit: ApplyMeshEditActInput['edit'] = {
+      slot: 'strip', skin: 'default', attachment: 'strip', basis: 'setup',
+      source: { vertexCount: 126, triangleCount: 164, hullLength: 86, hash: sourceHash, frame: { width: 40, height: 420 }, positions },
+      ops: FOUR_OPS,
+    };
+    const actId = 'act-strip-1159';
+    const actSourceHash = digestText('synthetic review source for the strip');
+    const actStage = (
+      name: string, value: unknown, over: Partial<Omit<ApplyMeshEditActInput, 'edit'>> = {},
+    ): { e: PartsError | null; out: string; r: RemeshResult | null } => {
+      const out = over.out ?? join(root, `out-act-${name}`);
+      let r: RemeshResult | null = null;
+      const e = refusals(() => {
+        r = applyMeshEditAct({
+          rig: input, config: fx.config, parts: fx.parts, part: 'strip', out,
+          edit: value as ApplyMeshEditActInput['edit'], actId, actSourceHash,
+          payloadSha256: digestText(meshEditDigestBytes(value)), ...over,
+        });
+      });
+      return { e, out, r };
+    };
+    const actRefused = (s: ReturnType<typeof actStage>, code: string, where: RegExp = /./): boolean =>
+      s.e?.problems.length === 1 && s.e.problems[0].code === code && where.test(s.e.problems[0].object) && !existsSync(s.out);
+    const payloadSha256 = digestText(meshEditDigestBytes(edit));
+    const appliedAct = actStage('applied', edit);
+    const apiRecord = readJsonFile(join(appliedAct.out, PROVENANCE_FILE));
+    const apiRequest = apiRecord?.request as Record<string, unknown> | undefined;
+    const withoutRemeshRecord = (tree: string): string =>
+      tree.split('\n').filter((line) => !line.startsWith(`${PROVENANCE_FILE} `)).join('\n');
+    const legacyRows = withoutRemeshRecord(treeDigest(out11));
+    const actRows = withoutRemeshRecord(treeDigest(appliedAct.out));
+    const parity = run11.status === 0 && appliedAct.r !== null && actRows === legacyRows;
+    say(
+      'RM37_AN_IN_MEMORY_MESH_EDIT_ACT_GATES_WRITES_PROVENANCE_AND_MATCHES_THE_LEGACY_RIG_BYTES',
+      layout && parity && apiRequest !== undefined && !('delta_sha256' in apiRequest) && !('delta' in apiRequest) &&
+        apiRequest.act_id === actId && apiRequest.act_source_hash === actSourceHash && apiRequest.payload_sha256 === payloadSha256 &&
+        meshEditDigestBytes(apiRequest.edit) === meshEditDigestBytes(edit) &&
+        appliedAct.r?.provenance.check.revision.pass === true &&
+        revisionRowsAgree(appliedAct.out, PROVENANCE_FILE, input) && treeDigest(input) === inputDigest,
+      `API ${codes(appliedAct.e)}; CLI exit ${run11.status}; matching rig files ${parity ? actRows.split('\n').length : 'no'}; provenance keys ${Object.keys(apiRequest ?? {}).join(', ')}`,
+      'issue #1159: the in-memory edit takes the same gated replay as RM11, with act provenance and byte-identical files outside its new provenance record',
+    );
+
+    const current = treeDigest(appliedAct.out);
+    const currentStrip = appliedAct.r === null ? null : stripOf(appliedAct.out);
+    const currentRig = { rig: appliedAct.out };
+    const replayAct = appliedAct.r === null ? null : actStage('replay', edit, currentRig);
+    say(
+      'RM38_REPLAY_OF_THE_SAME_ACT_RETURNS_THE_CURRENT_REVISION_WITHOUT_WRITING',
+      replayAct !== null && replayAct.r !== null &&
+        replayAct.r.written.length === 0 && !existsSync(replayAct.out) &&
+        JSON.stringify(replayAct.r.provenance) === JSON.stringify(apiRecord) &&
+        treeDigest(appliedAct.out) === current && treeDigest(input) === inputDigest,
+      replayAct === null ? `no current revision: ${codes(appliedAct.e)}` :
+        `replay ${codes(replayAct.e)}; wrote ${replayAct.r?.written.length ?? 'no result'}; out exists ${existsSync(replayAct.out)}; unchanged ${treeDigest(appliedAct.out) === current}`,
+      'issue #1159: matching act identity and digest return the current revision byte for byte without emitting another one',
+    );
+
+    const staleAct = currentStrip === null ? null : actStage(
+      'stale', { ...edit, source: { ...edit.source, positions: stripPositions(currentStrip) } },
+      { ...currentRig, actId: 'act-strip-stale-1159' },
+    );
+    say(
+      'RM39_A_NEW_ACT_WITH_A_STALE_SOURCE_HASH_IS_REFUSED_WITHOUT_WRITING',
+      staleAct !== null && actRefused(staleAct, 'REMESH_DELTA_SOURCE', /source\.hash$/) &&
+        treeDigest(appliedAct.out) === current && treeDigest(input) === inputDigest,
+      staleAct === null ? `no current revision: ${codes(appliedAct.e)}` : `stale act ${codes(staleAct.e)}; out exists ${existsSync(staleAct.out)}`,
+      'issue #1159: with the current positions and unchanged counts, a different act id carrying the old attachment hash is refused by name',
+    );
+
+    const changedPositions = positions.map((xy, i): [number, number] => {
+      if (i === 86) return [20, 19];
+      if (i === 87) return [22, 26];
+      return xy;
+    });
+    const addAndEdge = FOUR_OPS.filter((op) => op.op === 'add' || op.op === 'edge');
+    const posedAct = actStage('posed', { ...edit, source: { ...edit.source, positions: changedPositions }, ops: addAndEdge });
+    const posedProblem = posedAct.e?.problems[0];
+    const posedMessage = posedProblem === undefined ? '' : `${posedProblem.object}: ${posedProblem.detail}`;
+    const wrongFrameAct = actStage('frame', {
+      ...edit, source: { ...edit.source, frame: { width: 41, height: 420 } },
+      ops: [{ op: 'edge', a: 56, b: 999 }],
+    });
+    const frameMessage = wrongFrameAct.e?.problems[0]?.detail ?? '';
+    say(
+      'RM40_SOURCE_POSITIONS_AND_RIG_FRAME_REFUSE_A_POSED_ADD_AND_EDGE_BEFORE_WRITING',
+      actRefused(posedAct, 'REMESH_DELTA_SOURCE') && /(?:vertex\s+|positions\[)86\b/.test(posedMessage) &&
+        /\b20(?:\.0+)?\s*,\s*19(?:\.0+)?\b/.test(posedMessage) && /\b18(?:\.\d+)?\s*,\s*16(?:\.\d+)?\b/.test(posedMessage) &&
+        !/(?:vertex\s+|positions\[)87\b/.test(posedMessage) &&
+        actRefused(wrongFrameAct, 'REMESH_DELTA_SOURCE', /source\.frame/) &&
+        /(?:^|\D)41(?!\d)/.test(frameMessage) && /(?:^|\D)40(?!\d)/.test(frameMessage) &&
+        treeDigest(input) === inputDigest,
+      `positions: ${posedMessage || 'written'}; frame: ${codes(wrongFrameAct.e)} ${frameMessage}; outputs exist ${existsSync(posedAct.out)} / ${existsSync(wrongFrameAct.out)}`,
+      'issue #1159: the first posed vertex names its index and both crop positions; a mismatched frame is reported before the out-of-range edge can replay',
+    );
+
+    const draftAct = actStage('draft-shape', draftVector, { payloadSha256: draftDigest });
+    const draftProblems = draftAct.e?.problems ?? [];
+    const draftRefused = draftProblems.every((p) => p.code === 'REMESH_DELTA_JSON') &&
+      draftProblems.some((p) => p.object.endsWith('source.positions')) && !existsSync(draftAct.out);
+    const malformedActs = [
+      [actStage('basis', { ...edit, basis: 'idle@0.5' }), 'REMESH_DELTA_BASIS', /basis$/],
+      [actStage('ops', { ...edit, ops: Array.from({ length: 301 }, () => FOUR_OPS[0]) }), 'REMESH_DELTA_OPS', /ops$/],
+      [actStage('positions', { ...edit, source: { ...edit.source, positions: positions.slice(1) } }), 'REMESH_DELTA_SOURCE', /source\.positions$/],
+      [actStage('bad-op', { ...edit, ops: [FOUR_OPS[0], { op: 'split', v: 3 }] }), 'REMESH_DELTA_OP', /ops\[1\]$/],
+      [actStage('range', { ...edit, ops: [FOUR_OPS[0], { op: 'remove', v: 999 }] }), 'REMESH_DELTA_OP', /ops\[1\]$/],
+      [actStage('from', { ...edit, ops: [{ op: 'move', v: 100, from: [18, 157], to: [19.5, 154] }] }), 'REMESH_DELTA_OP', /ops\[0\]$/],
+    ] as const;
+    say(
+      'RM41_THE_TYPED_API_KEEPS_LEGACY_REFUSAL_CODES_AND_OP_INDICES',
+      draftRefused && malformedActs.every(([s, code, where]) => actRefused(s, code, where)) && treeDigest(input) === inputDigest,
+      [draftAct, ...malformedActs.map(([s]) => s)].map((s) => codes(s.e)).join(' | '),
+      'issue #1159: the draft-shaped value, a posed basis, too many ops, incomplete positions, malformed op kind, out-of-range id and incorrect move.from are refused by name',
+    );
+
+    const tamperedPositions = positions.map((xy, i): [number, number] => i === 0 ? [xy[0] + 0.0001, xy[1]] : xy);
+    const wrongDigestAct = actStage(
+      'digest', { ...edit, source: { ...edit.source, positions: tamperedPositions } }, { payloadSha256 },
+    );
+    const conflictingAct = appliedAct.r === null ? null : actStage(
+      'identity', { ...edit, source: { ...edit.source, positions: tamperedPositions } }, currentRig,
+    );
+    say(
+      'RM42_THE_ACT_DIGEST_BINDS_POSITIONS_AND_AN_APPLIED_ACT_ID_CANNOT_CHANGE_PAYLOAD',
+      actRefused(wrongDigestAct, 'REMESH_DELTA_DIGEST', /^payloadSha256$/) &&
+        conflictingAct !== null && actRefused(conflictingAct, 'REMESH_DELTA_ACT') &&
+        treeDigest(input) === inputDigest && treeDigest(appliedAct.out) === current,
+      `supplied digest ${codes(wrongDigestAct.e)}; same id with a different valid digest ${conflictingAct === null ? 'no current revision' : codes(conflictingAct.e)}`,
+      'issue #1159: a sub-tolerance position change still changes the payload digest, and a new payload on an already applied act id must be refused',
+    );
+
+    // Bind a new move to RM37's actual output. The vertex keeps its neighbours and moves
+    // a further quarter pixel right, from crop (19.5, 154) to (19.75, 154).
+    const movedId = currentStrip === null ? -1 : findUv(currentStrip, 11.5 / 24, 148 / 408);
+    const laterPositions = currentStrip === null ? [] : stripPositions(currentStrip);
+    const laterAct = movedId < 0 ? null : actStage('later', {
+      ...edit,
+      source: { ...edit.source, positions: laterPositions, hash: stripModelHash(appliedAct.out, join(root, 'hash-build-later')) },
+      ops: [{ op: 'move', v: movedId, from: laterPositions[movedId], to: [19.75, 154] }],
+    }, {
+      ...currentRig, actId: 'act-strip-later-1159', actSourceHash: digestText('synthetic review source for the next strip revision'),
+    });
+    const laterTree = laterAct?.r ? treeDigest(laterAct.out) : null;
+    const laterRig = laterTree === null || laterAct === null ? null : { rig: laterAct.out };
+    const superseded = laterRig === null ? null : actStage('superseded', edit, laterRig);
+    const earlierConflict = laterRig === null ? null : actStage('earlier-conflict', edit, {
+      ...laterRig, actSourceHash: digestText('conflicting source for the earlier act'),
+    });
+    say(
+      'RM43_EARLIER_ACT_REFUSES_AS_SUPERSEDED_OR_AS_A_BINDING_CONFLICT_ON_THE_LATER_REVISION',
+      laterAct !== null && laterAct.r !== null &&
+        findUv(stripOf(laterAct.out), 11.75 / 24, 148 / 408) >= 0 &&
+        revisionRowsAgree(laterAct.out, PROVENANCE_FILE, appliedAct.out) &&
+        superseded !== null && actRefused(superseded, 'REMESH_DELTA_ACT_SUPERSEDED') &&
+        superseded.e?.problems[0].object === join(laterAct.out, PROVENANCE_FILE) &&
+        earlierConflict !== null && actRefused(earlierConflict, 'REMESH_DELTA_ACT') &&
+        treeDigest(laterAct.out) === laterTree && treeDigest(appliedAct.out) === current && treeDigest(input) === inputDigest,
+      `later act ${laterAct === null ? 'no moved vertex' : codes(laterAct.e)}; old binding ${superseded === null ? 'no later revision' : codes(superseded.e)}; conflict ${earlierConflict === null ? 'no later revision' : codes(earlierConflict.e)}`,
+      'issue #1159: the current receipt names the superseded act before any write, and a different source hash for the earlier key remains a binding conflict',
     );
 
     // RM12 — refusals by name, each before anything is written.
