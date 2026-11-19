@@ -340,16 +340,21 @@ runs `--version`, the installed `rigc --version` (which must name the core
 entry), `layers` on a wrapper directory and on a PSD, `sheet`, `check` on a
 generated two-part rig from the install, and `build --all-sets` loaded through a
 fresh install of `@rig-c/play` (`--play-version <ver>`, default `latest`,
-`SMOKE_PLAY_LOADS_THE_BUILD`, issue #741). From that install, a Bun consumer
-imports the public `applyMeshEditAct` function from
-`@rig-c/parts/src/remesh-api.ts` (`SMOKE_REMESH_API_FROM_THE_INSTALL`, issue #1159).
-The plant cases remove `src/layers.ts` or `src/remesh-api.ts` from the pack,
+`SMOKE_PLAY_LOADS_THE_BUILD`, issue #741). A Bun consumer imports
+`applyMeshEditAct` from `@rig-c/parts/src/remesh-api.ts`, applies an in-memory
+edit to the auto rig's cloth, and verifies the resulting revision and act binding
+from disk (`SMOKE_REMESH_API_FROM_THE_INSTALL`, issue #1159). Run this positive
+control on its own with `bun run smoke -- --case remesh-api`.
+The plant cases remove `src/layers.ts`, `src/remesh-api.ts` or
+`tools/build-process.ts` from the pack,
 remove `@rig-c/core` or `ag-psd` from `dependencies`, or add
 `@esotericsoftware/spine-core` to `dependencies`,
 each patched into an extraction of the tarball, never the checkout; a plant case
 is green only when the smoke went red at the step it names, naming what went
 missing. A correct package installed at a path with spaces and non-ASCII in it
 must pass too.
+Both remesh plants run the same Bun consumer probe before CLI setup and require
+a missing-module diagnostic for the removed file.
 
 ⚖️ **The registry half is a confirmation, not the gate**: the last step of
 `release.yml` runs the same script with `--source registry --alias rig-parts

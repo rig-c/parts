@@ -35,7 +35,8 @@
  * `rig` command and rigc's gate; and the installed `build --all-sets` output
  * (`skeleton.model.json` and `sets.json` with `focus`) loaded through a fresh
  * install of `@rig-c/play` (`loadModel` and `readSetupMesh`, issue #741).
- * A Bun consumer imports the installed remesh API and checks its function export.
+ * A Bun consumer applies an in-memory mesh edit to the installed auto rig and
+ * reads the resulting revision and act binding from disk.
  *
  * 🔒 **Nothing under this repository is on the fixture's path at run time.** The
  * fixture generator below is authored as text into the install directory and
@@ -101,6 +102,8 @@ const ROOT_PKG = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as
 /** The package's name, read from the tree's package.json: the directory an install puts it in, the specifier the fixtures import it by, and the registry spec. */
 const PACKAGE = ROOT_PKG.name;
 const REMESH_API_PATH = 'src/remesh-api.ts';
+const REMESH_API_IMPORT = `${PACKAGE}/${REMESH_API_PATH}`;
+const BUILD_PROCESS_PATH = 'tools/build-process.ts';
 /**
  * The command the install puts on PATH. A scoped package's name is not a command, so the tool's command is its own
  * `bin` entry; every other command the installed package.json declares is run beside it (SMOKE_EVERY_BIN_RUNS_FROM_THE_INSTALL).
@@ -522,6 +525,94 @@ writeFileSync(join(DIR, 'config.json'), JSON.stringify({
 }, null, 1));
 `;
 
+// The same static import runs on the clean and planted installs. The clean case
+// supplies the existing auto rig and its compiled model. Missing modules must
+// refuse before the probe reaches argument or fixture processing.
+const REMESH_API_PROBE = `import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { applyMeshEditAct, type ApplyMeshEditActInput } from ${JSON.stringify(REMESH_API_IMPORT)};
+
+assert.equal(typeof applyMeshEditAct, 'function');
+const [, , parts, modelPath] = process.argv;
+assert.ok(parts && modelPath, 'the auto rig and source model are required');
+const part = 'cloth';
+const rig = join(parts, 'rig');
+const out = join(parts, 'remesh-revision');
+const readJson = (path: string) => JSON.parse(readFileSync(path, 'utf8'));
+const sha256 = (bytes: string | Uint8Array) => createHash('sha256').update(bytes).digest('hex');
+const sorted = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(sorted);
+  if (typeof value !== 'object' || value === null) return value;
+  const fields = value as Record<string, unknown>;
+  return Object.fromEntries(Object.keys(fields).sort().map(key => [key, sorted(fields[key])]));
+};
+
+const cloth = readJson(join(rig, 'rig.json')).skins.default.cloth.cloth;
+const { uvs, triangles, width, height } = cloth;
+const manifest = readJson(join(parts, 'parts.json'));
+const box = manifest.parts.find((row: { name: string }) => row.name === part);
+assert.ok(box, 'the auto fixture must have a cloth part');
+const modelEntry = readJson(modelPath).skins.find((skin: { name: string }) => skin.name === 'default')?.attachments.cloth.cloth;
+assert.equal(modelEntry?.kind, 'mesh');
+
+// Index the fixture's undirected edges by triangle incidence. An edge shared
+// by two triangles is interior. Constraining it avoids moving the weighted mesh.
+const edgeUses = new Map<string, { a: number; b: number; triangles: number }>();
+for (let i = 0; i < triangles.length; i += 3) {
+  for (let j = 0; j < 3; j++) {
+    const pair = [triangles[i + j], triangles[i + (j + 1) % 3]];
+    const a = Math.min(...pair), b = Math.max(...pair);
+    const key = a + ',' + b;
+    const edge = edgeUses.get(key) ?? { a, b, triangles: 0 };
+    edge.triangles++;
+    edgeUses.set(key, edge);
+  }
+}
+const edge = [...edgeUses.values()].find(e => e.triangles === 2);
+assert.ok(edge, 'the auto mesh must have an interior edge');
+const edit: ApplyMeshEditActInput['edit'] = {
+  slot: part, skin: 'default', attachment: part, basis: 'setup',
+  source: {
+    vertexCount: uvs.length / 2, triangleCount: triangles.length / 3, hullLength: cloth.hull,
+    hash: sha256(JSON.stringify(modelEntry)),
+    frame: { width: manifest.rig_size[0], height: manifest.rig_size[1] },
+    // Parts' setup crop origin is the manifest box less the four-pixel pad.
+    positions: Array.from({ length: uvs.length / 2 }, (_, i) => [
+      width * uvs[2 * i] + (box.x - 4), height * uvs[2 * i + 1] + (box.y - 4),
+    ]),
+  },
+  ops: [{ op: 'edge', a: edge.a, b: edge.b }],
+};
+const actId = 'smoke-remesh-cloth';
+const actSourceHash = sha256('packed auto fixture mesh edit');
+const payloadSha256 = sha256(JSON.stringify(sorted(edit)));
+const { written } = applyMeshEditAct({
+  rig, config: join(parts, 'config.json'), parts, part, out,
+  edit, actId, actSourceHash, payloadSha256,
+});
+
+const record = readJson(join(out, 'remesh.json'));
+assert.equal(record.spec, 'rig-parts-remesh/1');
+const request = record.request;
+assert.equal(request.part, part);
+assert.equal(request.act_id, actId);
+assert.equal(request.act_source_hash, actSourceHash);
+assert.equal(request.payload_sha256, payloadSha256);
+assert.equal(sha256(JSON.stringify(sorted(request.edit))), payloadSha256);
+assert.equal(request.ops, 1);
+assert.deepEqual(request.applied, { moved: 0, added: 0, removed: 0, constrained: 1 });
+assert.equal(readJson(join(out, 'mesh_report.json'))[0].mode, 'delta');
+assert.deepEqual([...written].sort(), ['remesh.json', ...record.revision.map((row: { path: string }) => row.path)].sort());
+for (const path of ['rig.json', 'motion.json', 'mesh_report.json', 'images/cloth.png']) {
+  const bytes = readFileSync(join(out, path));
+  const row = record.revision.find((entry: { path: string }) => entry.path === path);
+  assert.deepEqual(row, { path, bytes: bytes.length, sha256: sha256(bytes) });
+}
+console.log('REMESH_API ' + JSON.stringify({ part, ops: request.ops, constrained: request.applied.constrained, actId, payloadSha256, files: written.length }));
+`;
+
 // The installed `build --all-sets` output loaded through `@rig-c/play` (issue #741): an 80x80 painting scaled 0.5 to a
 // 40x40 rig with a `cloth` mesh (`full:neckwear`) and a `badge` region (`head:headwear`), plus two attachment sets —
 // `authored` with `focus: [60, 20]` (crop space -> `[10, 30]` in Spine world on the 40x40 rig) and `absent` without
@@ -881,13 +972,18 @@ export function waitForRegistry(spec: string, minutes: number, cwd: string, into
 // the tarball, and the plants that patch a COPY of it
 // ---------------------------------------------------------------------------
 
-type Plant = 'none' | 'drop-src-module' | 'drop-remesh-api' | 'drop-rigc' | 'drop-psd' | 'add-spine-core';
+type Plant = 'none' | 'drop-src-module' | 'drop-remesh-api' | 'drop-build-process' | 'drop-rigc' | 'drop-psd' | 'add-spine-core';
+const REMOVED_MODULES: Partial<Record<Plant, string>> = {
+  'drop-src-module': 'src/layers.ts',
+  'drop-remesh-api': REMESH_API_PATH,
+  'drop-build-process': BUILD_PROCESS_PATH,
+};
 
 /** The runtime the add-spine-core plant puts into the packed package.json's dependencies, at the pin rig-c develops against. */
 const SPINE_CORE = '@esotericsoftware/spine-core';
 const SPINE_CORE_PIN = '4.3.13';
 
-const PLANTED: Record<Exclude<Plant, 'none'>, { names: string[]; steps: string[]; what: string }> = {
+const PLANTED: Record<Exclude<Plant, 'none'>, { names: string[]; steps: string[]; what: string; missingImport?: string }> = {
   'drop-src-module': {
     names: ['layers.ts'],
     steps: ['layers'],
@@ -896,7 +992,14 @@ const PLANTED: Record<Exclude<Plant, 'none'>, { names: string[]; steps: string[]
   'drop-remesh-api': {
     names: [REMESH_API_PATH],
     steps: ['remesh-api'],
+    missingImport: REMESH_API_IMPORT,
     what: '`src/remesh-api.ts` removed from the packed tree. The installed Bun consumer must fail at the remesh API import',
+  },
+  'drop-build-process': {
+    names: [BUILD_PROCESS_PATH],
+    steps: ['remesh-api'],
+    missingImport: `../${BUILD_PROCESS_PATH}`,
+    what: '`tools/build-process.ts` removed from the packed tree. The installed Bun consumer must fail at the remesh API import',
   },
   'drop-rigc': {
     names: ['@rig-c/core'],
@@ -957,14 +1060,14 @@ function tarballFor(work: string, source: { kind: 'tree' } | { kind: 'registry';
     return { tgz: '', faults, packedPaths: 0, evidence: '' };
   }
   const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { dependencies?: Record<string, string> };
-  const removedPath = plant === 'drop-src-module' ? 'src/layers.ts' : plant === 'drop-remesh-api' ? REMESH_API_PATH : null;
+  const removedPath = REMOVED_MODULES[plant];
   if (plant === 'drop-rigc' || plant === 'drop-psd') {
     delete (pkg.dependencies ?? {})[plant === 'drop-rigc' ? '@rig-c/core' : 'ag-psd'];
     writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
   } else if (plant === 'add-spine-core') {
     pkg.dependencies = { ...(pkg.dependencies ?? {}), [SPINE_CORE]: SPINE_CORE_PIN };
     writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
-  } else if (removedPath !== null) {
+  } else if (removedPath !== undefined) {
     const victim = join(pkgDir, removedPath);
     if (!paths.includes(removedPath) || !existsSync(victim)) {
       faults.push(`SMOKE_PLANT_APPLIED: ${removedPath} is not in the packed tree, so removing it plants nothing`);
@@ -986,7 +1089,7 @@ function tarballFor(work: string, source: { kind: 'tree' } | { kind: 'registry';
   // report that a correct package fails.
   const after = tarPaths(second, work);
   let evidence = '';
-  if (removedPath !== null) {
+  if (removedPath !== undefined) {
     if (after.length === 0 || after.includes(removedPath)) faults.push(`SMOKE_PLANT_APPLIED: the repacked path list did not establish removal of ${removedPath}`);
     else evidence = `the plant took ${removedPath} out of the pack`;
   } else {
@@ -1065,21 +1168,23 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, fetchedTgz?: strin
   }
   const installedPkg = JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf8')) as { version?: string; bin?: Record<string, string>; dependencies?: Record<string, string> };
   for (const name of Object.keys(installedPkg.bin ?? {})) smokePackages[name] = PACKAGE;
-  if (spec.plant === 'none' || spec.plant === 'drop-remesh-api') {
-    const remeshImport = `${PACKAGE}/${REMESH_API_PATH}`;
+  const runRemeshApi = (args: string[]): void => {
     const probeFile = join(home, 'remesh_api_probe.ts');
-    writeFileSync(probeFile, `import { applyMeshEditAct } from ${JSON.stringify(remeshImport)};
-if (typeof applyMeshEditAct !== 'function') throw new Error('applyMeshEditAct must be a function');
-`);
-    const probe = run('bun', [probeFile], home);
+    writeFileSync(probeFile, REMESH_API_PROBE);
+    const probe = run('bun', [probeFile, ...args], home);
     output += probe.out;
-    if (probe.status !== 0) {
-      fault('remesh-api', `SMOKE_REMESH_API_FROM_THE_INSTALL: importing applyMeshEditAct from ${remeshImport} with Bun exited ${probe.status}. ${probe.out.trim().slice(0, 1500)}`);
+    const evidence = probe.out.split('\n').find(line => line.startsWith('REMESH_API '));
+    if (probe.status !== 0 || evidence === undefined) {
+      fault('remesh-api', `SMOKE_REMESH_API_FROM_THE_INSTALL: \`${REMESH_API_IMPORT}\` probe exited ${probe.status}. ${probe.out.trim().slice(0, 1500)}`);
     } else {
-      notes.push(`Bun imported applyMeshEditAct as a function from ${remeshImport}`);
+      notes.push(evidence);
     }
-    if (spec.plant === 'drop-remesh-api') return { faults, steps, notes, output };
+  };
+  if (spec.plant !== 'none' && PLANTED[spec.plant].missingImport !== undefined) {
+    runRemeshApi([]);
+    return { faults, steps, notes, output };
   }
+
   const installedVersion = installedPkg.version ?? '';
   const coreFault = coreInstallFault(home);
   if (coreFault !== null) fault('core-identity', coreFault);
@@ -1132,6 +1237,51 @@ if (typeof applyMeshEditAct !== 'function') throw new Error('applyMeshEditAct mu
       `SMOKE_RIGC_RUNS_THE_CORE_ENTRY: ${rigcVersion === null ? `no rigc at ${rigcBin}` : `\`rigc --version\` exited ${rigcVersion.status}, entry line ${JSON.stringify(entryLine)}`}; "entry: cli_core.ts — ${SPINE_CORE} absent — …" was required — an install of rig-parts carries no Spine runtime, so its build is gated by rigc's own validator`,
     );
   } else notes.push(`the installed rigc says ${entryLine}`);
+
+  const runAutoAndRemesh = (): void => {
+    // The automatic mesh mode, from the install, through the installed rig command and rigc's gate.
+    writeFileSync(join(home, 'make_auto.ts'), AUTO_GENERATOR);
+    const autoGen = run('bun', [join(home, 'make_auto.ts')], home);
+    output += autoGen.out;
+    const autoDir = join(home, 'auto-character');
+    const autoRig = autoGen.status === 0 ? run(bin, ['rig', '--config', join(autoDir, 'config.json'), '--parts', autoDir, '--out', join(autoDir, 'rig')], home) : null;
+    if (autoRig !== null) output += autoRig.out;
+    const autoReport = existsSync(join(autoDir, 'rig', 'mesh_report.json')) ? (JSON.parse(readFileSync(join(autoDir, 'rig', 'mesh_report.json'), 'utf8')) as Array<{ mode?: unknown; vertices?: unknown; deformation?: { verdict?: unknown } }>) : null;
+    const autoLine = autoRig?.out.split('\n').find((l) => l.includes('mesh cloth')) ?? '';
+    // Issue #126 item 3: the motion gate ran from the install too — rig-c/meshcompare with no Spine runtime — and passed.
+    if (autoRig === null || autoRig.status !== 0 || autoReport?.[0]?.mode !== 'auto' || autoReport[0].deformation?.verdict !== 'pass' || !/; motion \S+ <= 1 at idle@/.test(autoLine)) {
+      fault(
+        'auto',
+        `SMOKE_AUTO_MESH_FROM_THE_INSTALL: ${
+          autoRig === null
+            ? `\`bun make_auto.ts\` exited ${autoGen.status}. ${autoGen.out.trim().slice(0, 1500)}`
+            : `\`rig-parts rig\` exited ${autoRig.status}; mesh_report.json ${autoReport === null ? 'not written' : `mode ${JSON.stringify(autoReport[0]?.mode)}`}; exit 0, mode "auto", a motion verdict "pass" and a mesh line reading "motion <value> <= 1 at idle@…" were required. ${autoRig.out.trim().split('\n').filter((l) => /FAIL|rror|rigc/.test(l)).slice(0, 4).join(' | ').slice(0, 1500)}`
+        }`,
+      );
+      return;
+    }
+    notes.push(`an auto mesh built from the install, passed the installed rigc's gate and its motion gate: ${autoLine.trim()}`);
+
+    if (spec.plant === 'none') {
+      const rig = join(autoDir, 'rig');
+      const sourceBuild = join(autoDir, 'source-build');
+      const model = join(sourceBuild, 'skeleton.model.json');
+      const source = run(rigcBin, [
+        'build', '--rig', join(rig, 'rig.json'), '--motion', join(rig, 'motion.json'),
+        '--out', sourceBuild, '--profile', 'rig-play', '--pack', '--page-edges', 'free', '--pack-shape', 'polygon',
+      ], home);
+      output += source.out;
+      if (source.status !== 0 || !existsSync(model)) {
+        fault('remesh-api-source', `SMOKE_REMESH_API_SOURCE_MODEL: installed rigc build exited ${source.status} and must write skeleton.model.json. ${source.out.trim().slice(0, 1500)}`);
+        return;
+      }
+      runRemeshApi([autoDir, model]);
+    }
+  };
+  if (spec.name === 'remesh-api') {
+    runAutoAndRemesh();
+    return { faults, steps, notes, output };
+  }
 
   // The fixture: written here, generated by the package's own modules.
   writeFileSync(join(home, 'make_fixture.ts'), GENERATOR);
@@ -1324,26 +1474,7 @@ if (typeof applyMeshEditAct !== 'function') throw new Error('applyMeshEditAct mu
     }
   }
 
-  // The automatic mesh mode, from the install, through the installed rig command and rigc's gate.
-  writeFileSync(join(home, 'make_auto.ts'), AUTO_GENERATOR);
-  const autoGen = run('bun', [join(home, 'make_auto.ts')], home);
-  output += autoGen.out;
-  const autoDir = join(home, 'auto-character');
-  const autoRig = autoGen.status === 0 ? run(bin, ['rig', '--config', join(autoDir, 'config.json'), '--parts', autoDir, '--out', join(autoDir, 'rig')], home) : null;
-  if (autoRig !== null) output += autoRig.out;
-  const autoReport = existsSync(join(autoDir, 'rig', 'mesh_report.json')) ? (JSON.parse(readFileSync(join(autoDir, 'rig', 'mesh_report.json'), 'utf8')) as Array<{ mode?: unknown; vertices?: unknown; deformation?: { verdict?: unknown } }>) : null;
-  const autoLine = autoRig?.out.split('\n').find((l) => l.includes('mesh cloth')) ?? '';
-  // Issue #126 item 3: the motion gate ran from the install too — rig-c/meshcompare with no Spine runtime — and passed.
-  if (autoRig === null || autoRig.status !== 0 || autoReport?.[0]?.mode !== 'auto' || autoReport[0].deformation?.verdict !== 'pass' || !/; motion \S+ <= 1 at idle@/.test(autoLine)) {
-    fault(
-      'auto',
-      `SMOKE_AUTO_MESH_FROM_THE_INSTALL: ${
-        autoRig === null
-          ? `\`bun make_auto.ts\` exited ${autoGen.status}. ${autoGen.out.trim().slice(0, 1500)}`
-          : `\`rig-parts rig\` exited ${autoRig.status}; mesh_report.json ${autoReport === null ? 'not written' : `mode ${JSON.stringify(autoReport[0]?.mode)}`}; exit 0, mode "auto", a motion verdict "pass" and a mesh line reading "motion <value> <= 1 at idle@…" were required. ${autoRig.out.trim().split('\n').filter((l) => /FAIL|rror|rigc/.test(l)).slice(0, 4).join(' | ').slice(0, 1500)}`
-      }`,
-    );
-  } else notes.push(`an auto mesh built from the install, passed the installed rigc's gate and its motion gate: ${autoLine.trim()}`);
+  runAutoAndRemesh();
 
   // `@rig-c/play` loading the installed `rig-parts build --all-sets` output (`skeleton.model.json` + `sets.json`),
   // on the unplanted cases (`clean` and `unusual-path`). A `play` release can turn `parts` CI red on its own, so the
@@ -1474,10 +1605,12 @@ exit codes:
      --wait (WAIT, naming the alias and how long it waited)
 
 cases:
-  clean            a correct package installs; the remesh API imports, and --version, layers (wrapper and PSD), sheet, check, compose, the contour mesh, an auto-mode rig, and @rig-c/play loading \`rig-parts build --all-sets\` output run from it
+  clean            a correct package installs; --version, layers (wrapper and PSD), sheet, check, compose, both mesh modes, the remesh API, and the @rig-c/play gate run from it
   unusual-path     the same, installed at an absolute path with spaces and non-ASCII in it
+  remesh-api       opt-in: apply a cloth mesh edit to the installed auto rig and verify the revision on disk
   drop-src-module  src/layers.ts out of the packed tree — the smoke has to go RED naming it
   drop-remesh-api  src/remesh-api.ts out of the packed tree — the Bun import has to go RED naming it
+  drop-build-process  tools/build-process.ts out of the packed tree — the same Bun import has to go RED naming it
   drop-rigc        @rig-c/core out of \`dependencies\` — the smoke has to go RED naming it
   drop-psd         ag-psd out of \`dependencies\` — the smoke has to go RED naming it
   add-spine-core   @esotericsoftware/spine-core INTO \`dependencies\` — RED at the rigc entry
@@ -1594,13 +1727,15 @@ function main(): number {
       // A CORRECT package at a path nothing in the tree has seen, so a pass is not
       // a pass about this machine's tidy temp directory.
       { name: 'unusual-path', source, installer, plant: 'none', dirName: 'install smoke ünïcode ñ', playVersion },
+      { name: 'remesh-api', source, installer, plant: 'none', dirName: 'remesh-api', playVersion },
       { name: 'drop-src-module', source, installer, plant: 'drop-src-module', dirName: 'planted-src', playVersion },
       { name: 'drop-remesh-api', source, installer, plant: 'drop-remesh-api', dirName: 'planted-remesh-api', playVersion },
+      { name: 'drop-build-process', source, installer, plant: 'drop-build-process', dirName: 'planted-build-process', playVersion },
       { name: 'drop-rigc', source, installer, plant: 'drop-rigc', dirName: 'planted-rigc', playVersion },
       { name: 'drop-psd', source, installer, plant: 'drop-psd', dirName: 'planted-psd', playVersion },
       { name: 'add-spine-core', source, installer, plant: 'add-spine-core', dirName: 'planted-spine-core', playVersion },
     ];
-    const chosen = only === null ? battery : battery.filter((c) => c.name === only);
+    const chosen = battery.filter((c) => only === null ? c.name !== 'remesh-api' : c.name === only);
     if (chosen.length === 0) {
       console.log(`  FAIL  SMOKE_CASE_NAMED: no case is named "${only}" — ${battery.map((c) => c.name).join(', ')}`);
       return EXIT_RED;
@@ -1629,8 +1764,11 @@ function main(): number {
         for (const step of planted.steps) if (!result.steps.includes(step)) missed.push(`no fault came from the ${step} step, where this plant has to bite`);
         const said = `${result.faults.join('\n')}\n${result.output}`;
         for (const name of planted.names) if (!said.includes(name)) missed.push(`nothing in the run named ${name}, so the failure does not say what is missing`);
-        if (spec.plant === 'drop-remesh-api' && !result.output.includes(`${PACKAGE}/${REMESH_API_PATH}`)) {
-          missed.push('the Bun import did not report the missing remesh API specifier');
+        if (planted.missingImport !== undefined) {
+          const missing = [...result.output.matchAll(/(?:Cannot find module|Could not resolve)\s+['"]([^'"]+)['"]/gi)];
+          if (!missing.some(match => match[1] === planted.missingImport)) {
+            missed.push(`the Bun import did not report missing module ${planted.missingImport}`);
+          }
         }
         if (result.steps.includes('pack')) missed.push('the plant itself did not apply');
         if (missed.length === 0) {
