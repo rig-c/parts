@@ -405,7 +405,13 @@ export type Segment = string | [string, Point, Point];
  *   locally refined by rig-c's `reduceMesh` under the author's declared
  *   bounds (`src/automesh.ts`).
  */
-export type MeshSpec = (LatticeMeshSpec | ContourMeshSpec | AutoMeshSpec | InfluenceMeshSpec | ExplicitMeshSpec) & { gather?: false };
+export type MeshSpec = (LatticeMeshSpec | ContourMeshSpec | AutoMeshSpec | InfluenceMeshSpec | ExplicitMeshSpec) & { gather?: false; fixed_above?: FixedAbove };
+
+/** Candidate bones for vertices at or above the cloth root, in rig pixels. */
+export interface FixedAbove {
+  row: number;
+  bones: string[];
+}
 
 /**
  * One mesh in the influence mode (issue #378): rig-c's `segments` lattice over the part at `cell` px, every vertex
@@ -3450,9 +3456,27 @@ function checkMeshes(c: Check, v: Json, bones: Set<string>, chains: Map<string, 
     const at = `config.meshes.${part}`;
     // The known keys keep their old order (grid, r, segments) with contour after them, and `r` and `segments` are
     // required in the place and words the object check uses, so a lattice mesh's refusals read as they did.
-    const m = c.object(at, spec, [], ['grid', 'r', 'segments', 'contour', 'auto', 'exponent', 'rule', 'ribs', 'influences', 'stray', 'influence', 'gather', 'explicit']);
+    const m = c.object(at, spec, [], ['grid', 'r', 'segments', 'contour', 'auto', 'exponent', 'rule', 'ribs', 'influences', 'stray', 'influence', 'gather', 'explicit', 'fixed_above']);
     if (m === null) continue;
     checkGather(c, at, m);
+    if ('fixed_above' in m) {
+      const path = `${at}.fixed_above`;
+      const hold = c.object(path, m.fixed_above, ['row', 'bones'], []);
+      if ('auto' in m || 'explicit' in m || m.rule === 'heat') {
+        c.fail('CONFIG_FIELD_TYPE', path, 'requires a distance lattice, distance contour, or influence mesh');
+      }
+      if (hold !== null) {
+        if ('row' in hold) c.number(`${path}.row`, hold.row);
+        if ('bones' in hold && c.array(`${path}.bones`, hold.bones, true)) {
+          const segments = Array.isArray(m.segments) ? m.segments : [];
+          for (const bone of hold.bones as Json[]) {
+            if (typeof bone !== 'string' || !bones.has(bone) || !segments.some((segment) => segment === bone || (Array.isArray(segment) && segment[0] === bone))) {
+              c.fail('CONFIG_NAME_RESOLVES', `${path}.bones`, `names ${show(bone)}, which must be a fixed bone in this mesh's segments`);
+            }
+          }
+        }
+      }
+    }
     if ('explicit' in m) {
       checkExplicit(c, at, m, explicitBoneNames(bones, chains, stops), part);
       continue;
@@ -4843,7 +4867,7 @@ function checkCloth(c: Check, v: Json): void {
   for (const tag of CLOTH_TARGETS) {
     if (!(tag in v)) continue;
     const path = `${at}.${JSON.stringify(tag)}`;
-    const r = c.object(path, v[tag], ['links', 'wind', 'gravity'], ['chains', 'split', 'length_ratio', 'strength', 'damping', 'alternate_damping', 'translate', 'swing', 'part', 'parts', 'influence']);
+    const r = c.object(path, v[tag], ['links', 'wind', 'gravity'], ['chains', 'split', 'length_ratio', 'strength', 'damping', 'alternate_damping', 'translate', 'swing', 'part', 'parts', 'influence', 'extent']);
     if (r === null) continue;
     if (tag !== 'back hair' && !('chains' in r)) c.fail('CONFIG_FIELD_PRESENT', `${path}.chains`, 'is absent and required');
     const chains = 'chains' in r && c.int(`${path}.chains`, r.chains, 1) ? (r.chains as number) : null;
@@ -4860,6 +4884,14 @@ function checkCloth(c: Check, v: Json): void {
       }
     }
     if ('length_ratio' in r) c.number(`${path}.length_ratio`, r.length_ratio, 'positive');
+    if ('extent' in r) {
+      const extent = `${path}.extent`;
+      if (tag !== 'bottomwear' || 'parts' in r || Array.isArray(r.part)) {
+        c.fail('CONFIG_CLOTH_EXTENT', extent, 'is supported on a single bottomwear carrier only');
+      } else if (typeof r.extent !== 'number' || !Number.isFinite(r.extent) || r.extent <= 0 || r.extent > 1) {
+        c.fail('CONFIG_CLOTH_EXTENT', extent, `is ${show(r.extent)}; a finite fraction above 0 and at most 1 is required`);
+      }
+    }
     // Issue #518: the influence mode for the parts this recipe meshes; the three fields #513 did not vary are the
     // author's, each required, and radius, when stated, is kept as stated (the rig stage holds it to the reach).
     if ('influence' in r) {

@@ -88,6 +88,7 @@ export interface ClothRecipe {
   links: number;
   split?: { at: number; into: number; hold_tip?: boolean };
   length_ratio?: number;
+  extent?: number;
   strength?: ClothStrength;
   damping?: number;
   alternate_damping?: number;
@@ -315,7 +316,12 @@ export function draftTrees(input: TreeInput, r: ClothRecipe): TreeChain[] {
           : branchCols.length > 0
             ? Math.min(trunkCol.tipY, ...branchCols.map((bc) => bc?.tipY ?? trunkCol.tipY))
             : trunkCol.tipY;
-    const rows = mass !== undefined ? linkRows(mass.rootY, mass.tipY, r.links, ratio) : trunkTipY === input.tipY ? baseRows : linkRows(input.rootY, trunkTipY, r.links, ratio);
+    const rootY = r.extent === undefined ? input.rootY : trunkTipY - r.extent * (trunkTipY - input.rootY);
+    const rows = mass !== undefined
+      ? linkRows(mass.rootY, mass.tipY, r.links, ratio)
+      : r.extent === undefined && trunkTipY === input.tipY
+        ? baseRows
+        : linkRows(rootY, trunkTipY, r.links, ratio);
     const frame = mass === undefined ? input.frame : mass.frame;
     const xWith = (col: TreeColumnTip | null, y: number, f: number): number =>
       mass !== undefined ? (mass.xAt(y, f) ?? mass.fallbackX(f)) : ((col?.xAt ?? input.xAt)(y, f) ?? input.fallbackX(f));
@@ -349,7 +355,7 @@ export function draftTrees(input: TreeInput, r: ClothRecipe): TreeChain[] {
       const fb = mass === undefined ? (k + (b + 0.5) / into) / n : (tInMass + (b + 0.5) / into) / nInMass;
       const bCol = branchCols[b] ?? trunkCol;
       const bTipY = bCol?.tipY ?? trunkTipY;
-      const bRows = bTipY === trunkTipY ? rows : linkRows(input.rootY, bTipY, r.links, ratio);
+      const bRows = bTipY === trunkTipY ? rows : linkRows(rootY, bTipY, r.links, ratio);
       const ch: TreeChain = {
         chain: `${input.prefix}${k}${LETTERS[b]}_`,
         parent: `${trunk.chain}${trunkLinks - 1}`,

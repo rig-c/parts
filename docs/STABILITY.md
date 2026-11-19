@@ -434,6 +434,7 @@ part name, `[i]` an entry of a list):
 - **meshes.&lt;part&gt;.auto** — required: `source`, `sourceBounds`, `targets`, `influences`, `budget`, `minArtSamples`, `motion`; optional: `protect`, `regions`, the three Stage B opt-ins `boundaryRuns`, `retriangulate`, `removalOrder`, and `stimulus`
 - **meshes.&lt;part&gt;.auto.source** — required: `tolerance`, `margin`, `spacing`; optional: `stray`
 - **meshes.&lt;part&gt;.auto.sourceBounds** and **meshes.&lt;part&gt;.auto.targets.artFit** — required: `minCoverage`, `maxOvershoot`, `maxUndercut` (each of the last two a number or null, the bound declared absent)
+- **meshes.&lt;part&gt;.fixed_above** — optional on a distance lattice, distance contour or influence mesh; required when present: `row`, `bones` (non-empty list of fixed segment bone names)
 - **meshes.&lt;part&gt;.auto.targets** — required: `artFit`, `maxBoundaryDeviation`; optional: `minAngle`
 - **meshes.&lt;part&gt;.auto.influences** — required: `maxInfluences`, `minWeight`
 - **meshes.&lt;part&gt;.auto.budget** — required: `maxCandidates`
@@ -444,7 +445,7 @@ part name, `[i]` an entry of a list):
 - **meshes.&lt;part&gt;.auto.regions[i]** — required: `name`, `shape`, `maxEdgeLength`, `transition`, `grade`, `minArtSamples`, and `cx`, `cy`, `r` for a circle or `points` for a polygon; optional: `bone`, `band` (both or neither; with neither the region is density only)
 - **meshes.&lt;part&gt;.auto.boundaryRuns** — required: `maxVertices`
 - **meshes.&lt;part&gt;.auto.stimulus**, or each entry of it when a list — required: `chain`, `degrees`
-- **cloth.&lt;tag&gt;**, the tag bottomwear, back hair or front hair (issue #364; read by propose --cloth only) — required: `chains` (optional on `back hair`, issue #390), `links`, `wind`, `gravity`; optional: `split`, `length_ratio`, `strength`, `damping`, `alternate_damping`, `translate`, `swing` (on bottomwear only), `part` (a string on bottomwear, or a list of parts in root-to-tip order on any tag, issue #437), `parts` (a list of parts in root-to-tip order on any tag, issue #437)
+- **cloth.&lt;tag&gt;**, the tag bottomwear, back hair or front hair (issue #364; read by propose --cloth only) — required: `chains` (optional on `back hair`, issue #390), `links`, `wind`, `gravity`; optional: `split`, `length_ratio`, `extent` (one bottomwear carrier), `strength`, `damping`, `alternate_damping`, `translate`, `swing` (on bottomwear only), `part` (a string on bottomwear, or a list of parts in root-to-tip order on any tag, issue #437), `parts` (a list of parts in root-to-tip order on any tag, issue #437)
 - **cloth.&lt;tag&gt;.split** — required: `at`, `into`; optional: `hold_tip`
 - **cloth.&lt;tag&gt;.strength** — required: `trunk`, `branch`, `edge`
 - **cloth.&lt;tag&gt;.swing** — required: `scales`

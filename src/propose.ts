@@ -1668,6 +1668,23 @@ export function proposeWithBasis(
   const T = (p: PartRecord | readonly PartRecord[], tag: ClothTarget, r: ClothRecipe, input: TreeInput): TreeChain[] => {
     const partNames = Array.isArray(p) ? p.map((x) => x.name) : [(p as PartRecord).name];
     const trees = draftTrees(input, r);
+    if (r.extent !== undefined) {
+      const object = `config.cloth.${JSON.stringify(tag)}.extent`;
+      for (const tree of trees) {
+        const path = [...tree.points, tree.tip];
+        for (let i = 1; i < path.length; i++) {
+          if (path[i][1] <= path[i - 1][1]) {
+            throw new PartsError([{ code: 'PROPOSE_CLOTH_EXTENT', object, detail: `is ${r.extent}; ${tree.chain} link ${i - 1} has no downward span after rounding rows ${path[i - 1][1]} and ${path[i][1]}` }]);
+          }
+        }
+      }
+      const byChain = new Map(trees.map((tree) => [tree.chain, tree]));
+      const fractions = trees.filter((tree) => tree.last.some(Boolean)).map((tree) => {
+        const parent = tree.parent === input.parent ? tree : byChain.get(tree.parent.slice(0, tree.parent.lastIndexOf('_') + 1)) ?? tree;
+        return `${tree.chain} ${roundTo((tree.tip[1] - parent.points[0][1]) / (tree.tip[1] - input.rootY), 6)}`;
+      });
+      notes.push(`${partNames.join(', ')}: ${object} ${r.extent} sets the tree roots from the free end; fractions after row rounding: ${fractions.join(', ')}`);
+    }
     const constants = [konst('cloth_chains', input.masses !== undefined ? input.masses.length : (r.chains ?? RECIPE_BACK_HAIR_CHAINS)), konst('cloth_links', r.links), konst('length_ratio', roundTo(r.length_ratio ?? RECIPE_LENGTH_RATIO, 6))];
     for (const t of trees) {
       C(
@@ -3273,7 +3290,7 @@ export function proposeWithBasis(
         const cx = or(bandX(mask, y0, { frac: 0.5 }), p.x + 0.5 * p.w);
         const first = trees[0].points.length > 1 ? trees[0].points[1][1] : trees[0].tip[1];
         const at: [number, number] = [cx, y0];
-        const tipAt: [number, number] = [cx, first];
+        const tipAt: [number, number] = [cx, skirtRecipe.extent === undefined ? first : y0 + first - trees[0].points[0][1]];
         B(
           swingName(prefix),
           'hip',
@@ -3297,7 +3314,13 @@ export function proposeWithBasis(
           p === namedSkirt ? p.from : undefined,
         ),
       );
-      meshes[p.name] = { grid: g, r: skirtRecipe.split?.hold_tip === true ? Math.max(r, g) : r, segments: segs };
+      const fixedAbove = skirtRecipe.extent === undefined || trees.length === 0 ? {} : {
+        fixed_above: {
+          row: Math.min(...trees.filter((tree) => tree.parent === 'hip').map((tree) => tree.points[0][1])),
+          bones: fixed.map((segment) => typeof segment === 'string' ? segment : segment[0]),
+        },
+      };
+      meshes[p.name] = { grid: g, r: skirtRecipe.split?.hold_tip === true ? Math.max(r, g) : r, segments: segs, ...fixedAbove };
       clothMeshed.set(p.name, 'bottomwear');
       continue;
     }
@@ -3571,6 +3594,7 @@ export function proposeWithBasis(
       : []));
     const onChain = segments.some(segment => chains.has(typeof segment === 'string' ? segment : segment[0]));
     meshes[torsoName] = {
+      ...(lattice?.fixed_above === undefined ? {} : { fixed_above: lattice.fixed_above }),
       contour,
       r: lattice !== undefined && 'grid' in lattice ? lattice.r : radius,
       segments,
@@ -3660,7 +3684,7 @@ export function proposeWithBasis(
     // A declared max above the cap is kept.
     const held = recipeOf(tag)?.split?.hold_tip === true;
     const max = held ? Math.max(decl.max, FORK_SMOOTH_MAX_INFLUENCES) : decl.max;
-    meshes[name] = { influence: { cell, radius, across: decl.across, max, shape: decl.shape, ...(held ? { hold_tip: true as const } : {}) }, segments };
+    meshes[name] = { influence: { cell, radius, across: decl.across, max, shape: decl.shape, ...(held ? { hold_tip: true as const } : {}) }, segments, ...(m.fixed_above === undefined ? {} : { fixed_above: m.fixed_above }) };
   }
   const constrained = clothConstraints.length === 0 ? {} : { constraints: clothConstraints };
   const motionSeams = draftMotionSeams({ bones, meshes, regions, ...drafted }, P.recs);

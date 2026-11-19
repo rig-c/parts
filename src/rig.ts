@@ -1996,6 +1996,12 @@ export function buildWaistPairSource(
     }
   }
   const dressSegsAt = (p: PartsFile['parts'][number], segs: Segment[]): ((wy: number) => Segment[]) => {
+    const fixed = cfg.meshes[p.name]?.fixed_above;
+    const hold = fixed === undefined ? null : segs.filter((s) => fixed.bones.includes(s.bone));
+    const legacy = legacyDressSegsAt(p, segs);
+    return (wy) => fixed !== undefined && hold !== null && wy <= fixed.row ? hold : legacy(wy);
+  };
+  const legacyDressSegsAt = (p: PartsFile['parts'][number], segs: Segment[]): ((wy: number) => Segment[]) => {
     const hipBone = B.get('hip');
     if (hipBone === undefined) return () => segs;
     const isDress =
@@ -2201,10 +2207,15 @@ export function buildWaistPairSource(
     // Issue #615: `hold_tip: true`, declared on the mesh (propose writes it from the recipe's `split.hold_tip`), smooths
     // the pulled shares by the lattice's held-fork passes, capped at the declared `max`; absent, the shares are rig-c's.
     const shares = spec.influence.hold_tip === true ? smoothForkShares(pulled, lattice.triangles, spec.influence.max) : pulled;
+    const fixed = cfg.meshes[p.name]?.fixed_above;
+    const segsAt = dressSegsAt(p, [...segs]);
     for (const [vi, [x, y]] of lattice.points.entries()) {
       const wx = x + ox;
       const wy = y + oy;
-      const ent: WeightEntry[] = shares[vi].map(({ bone, weight }) => {
+      const row = fixed !== undefined && wy <= fixed.row
+        ? roundShares(influences([wx, wy], segsAt(wy), spec.influence.cell, { maxInfluences: spec.influence.max, minWeight: 0 }))
+        : shares[vi];
+      const ent: WeightEntry[] = row.map(({ bone, weight }) => {
         const [bx, by] = toBoneLocal(world.get(bone) as BoneTransform, spineX(wx), spineY(wy));
         return { bone, x: places(bx), y: places(by), weight };
       });
@@ -2685,7 +2696,9 @@ export function buildWaistPairSource(
     for (const [vi, [vx0, vy0]] of lm.vertices.entries()) {
       const wx = vx0 + ox;
       const wy = vy0 + oy;
-      const ent: WeightEntry[] = finalShares[vi].map(({ bone, weight }) => {
+      const fixed = mesh.fixed_above;
+      const row = fixed !== undefined && wy <= fixed.row ? rawShares[vi] : finalShares[vi];
+      const ent: WeightEntry[] = row.map(({ bone, weight }) => {
         const [x, y] = toBoneLocal(world.get(bone) as BoneTransform, spineX(wx), spineY(wy));
         return { bone, x: places(x), y: places(y), weight };
       });
