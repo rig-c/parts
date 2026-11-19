@@ -1129,8 +1129,10 @@ remains a diagnostic and the bar uses the precedence below.
 | Neither root nor required gate present | SKIP with `no-root-gate` |
 
 Version-aware consumers read the declared outcomes on the known spec.
-Compose and the remesh/retune input-check readers retain their historical
-interpretation, including for reports written before this version.
+Compose reads `bar_outcomes` on a report that declares this spec (issue
+#1373); on a report without it, and in the remesh/retune input-check
+readers, the historical interpretation is kept, including for reports
+written before this version.
 
 ### Run stamp (`run.json`, spec `rig-run/1`)
 

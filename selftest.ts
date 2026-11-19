@@ -769,7 +769,7 @@ import { block, constraintConfig, dustImages, dustParts, FACE_EXPECT, faceConfig
 import { FORK_SMOOTH_MAX_INFLUENCES, smoothForkShares } from './src/rig.ts';
 import { type AttachmentSetsFile, blinkHoldProblems, buildRig as originalBuildRig, influenceReachHolds, DEFAULT_IDLE_KEYS, expandSetAttachmentKeys, FACE_TIPS_AXIS_NAME, HEAD_UP_BONE, flattenRig, IDLE_DRIVES_MESHES_WHY, type MeshAttachment, PAD, type RegionAttachment, rigJsonText, type RigOutput, type RigSpec, roundShares, tipRoundingBound, writtenShares } from './src/rig.ts';
 import { readEditorReceipts } from './src/editreceipt.ts';
-import { type ComposedScene, composeFromFiles, composeStage, IMAGE_SEP, PLATE, PLATE_IMAGE, PREFIX_SEP, SCENE_REPORT_FILE, SCENE_SPEC, scaledConstraint, scaledStop, unprefixedNames, plateImageName } from './src/scene.ts';
+import { type ComposedScene, checkBarsFailed, composeFromFiles, composeStage, IMAGE_SEP, PLATE, PLATE_IMAGE, PREFIX_SEP, SCENE_REPORT_FILE, SCENE_SPEC, scaledConstraint, scaledStop, unprefixedNames, plateImageName } from './src/scene.ts';
 import { mergeSceneAnimations, readSceneAnimations, sceneClipLoopProblems, scenePoseState, sceneKeyedModel } from './src/sceneclips.ts';
 import { poseRawAnimation } from '@rig-c/core/core';
 import { compareSceneBytes } from './scripts/scene_parity.ts';
@@ -48481,20 +48481,59 @@ function runSceneSuite(): number {
       'issue #203: nothing is hidden — the composed rig is measured again and reports the bar as it finds it, and a scene taken with a failing bar is a picture to look at, never a green, even where the composed check cannot see the bar',
     );
 
-    const versionedFields = { spec: aFig?.spec, bar_outcomes: { ...checkBarOutcomes(aFig), loop: { status: 'PASS' } } };
-    writeSceneBuild(join(dir, 'loopy-versioned'), 'plain', redOn({ ...versionedFields, loop_max_diff: 7 }));
-    writeSceneBuild(join(dir, 'reqred-versioned'), 'plain', redOn({ ...versionedFields, loop_max_diff: 7, requirements: { lines: { reach_tip: { status: 'FAIL' } } } }));
-    writeSceneBuild(join(dir, 'gatered-versioned'), 'plain', redOn({ ...versionedFields, loop_max_diff: 7 }, false));
+    const baseOutcomes = { ...checkBarOutcomes(aFig), loop: { status: 'PASS' } };
+    const versionedWith = (over: Record<string, unknown>, extra: Record<string, unknown> = {}, gate = true) =>
+      redOn({ spec: 'rig-parts-check/1', bar_outcomes: { ...baseOutcomes, ...(gate ? {} : { gate: { status: 'FAIL' } }), ...over }, ...extra }, gate);
+    writeSceneBuild(join(dir, 'loopy-versioned'), 'plain', versionedWith({ loop: { status: 'FAIL' } }, { loop_max_diff: 7 }));
+    writeSceneBuild(join(dir, 'reqred-versioned'), 'plain', versionedWith({ loop: { status: 'FAIL' } }, { loop_max_diff: 7, requirements: { lines: { reach_tip: { status: 'FAIL' } } } }));
+    writeSceneBuild(join(dir, 'gatered-versioned'), 'plain', versionedWith({ loop: { status: 'FAIL' } }, { loop_max_diff: 7 }, false));
     const versionedLoop = composeA(withPlain('loopy-versioned'), ['loop']);
     const versionedRequirement = composeA(withPlain('reqred-versioned'), ['loop']);
     const versionedGate = composeA(withPlain('gatered-versioned'), ['loop']);
     say('SC1372_COMPOSE_KEEPS_LEGACY_ACCEPTANCE_ON_VERSIONED_REPORTS',
-      checkBarIs(aFig, 'loop', 'FAIL') && versionedFields.spec === 'rig-parts-check/1' &&
+      checkBarIs(aFig, 'loop', 'FAIL') && aFig?.spec === 'rig-parts-check/1' &&
         versionedLoop.err === null && JSON.stringify(rowOf(versionedLoop.ok, 'plain')?.accepted) === '["loop"]' &&
         has(versionedRequirement.err, 'SCENE_BUILD_GREEN', 'declared requirement(s) "reach_tip" not PASS') &&
         has(versionedGate.err, 'SCENE_BUILD_GREEN', 'gate is not accepted (the gate never is)'),
       JSON.stringify({ accepted: rowOf(versionedLoop.ok, 'plain')?.accepted, gate: codes(versionedGate.err), requirement: codes(versionedRequirement.err) }),
-      'A planted report map says the loop passes. Compose still accepts the explicitly named legacy loop failure and refuses a failed gate or a named requirement.');
+      'On a rig-parts-check/1 report declaring loop FAIL, compose accepts the named loop failure and refuses a failed gate or a named requirement.');
+
+    // Issue #1373: compose reads bar_outcomes on rig-parts-check/1 reports and keeps barsNotMet on unversioned reports.
+    const setupFailBlock = { status: 'FAIL', rgb_tolerance: 0, regions: [{ name: 'face', box: [0, 0, 10, 10], pixels: 100, diff_pixels: 5, max_pixels: 0, status: 'FAIL' }] };
+    const stretchSkipBlock = { status: 'SKIP', reason: 'no idle frame shows any of the rig\'s 1 mesh(es): "cloth"' };
+    writeSceneBuild(join(dir, 'setup-fail-alone'), 'plain', versionedWith({ SETUP_MATCHES_PAINTING: { status: 'FAIL' } }, { SETUP_MATCHES_PAINTING: setupFailBlock }));
+    writeSceneBuild(join(dir, 'setup-fail-beside'), 'plain', versionedWith({ loop: { status: 'FAIL' }, SETUP_MATCHES_PAINTING: { status: 'FAIL' } }, { loop_max_diff: 7, SETUP_MATCHES_PAINTING: setupFailBlock }));
+    writeSceneBuild(join(dir, 'stretch-skip-fail-alone'), 'plain', versionedWith({ TEXTURE_STRETCH: { status: 'FAIL' } }, { TEXTURE_STRETCH: stretchSkipBlock }));
+    writeSceneBuild(join(dir, 'stretch-skip-fail-beside'), 'plain', versionedWith({ loop: { status: 'FAIL' }, TEXTURE_STRETCH: { status: 'FAIL' } }, { loop_max_diff: 7, TEXTURE_STRETCH: stretchSkipBlock }));
+    const setupAlone = composeA(withPlain('setup-fail-alone'), ['loop']);
+    const setupBeside = composeA(withPlain('setup-fail-beside'), ['loop']);
+    const stretchAlone = composeA(withPlain('stretch-skip-fail-alone'), ['loop']);
+    const stretchBeside = composeA(withPlain('stretch-skip-fail-beside'), ['loop']);
+    const stretchAcceptedAlone = composeA(withPlain('stretch-skip-fail-alone'), ['TEXTURE_STRETCH']);
+    const wantRefusal = (failedList: string, notAccepted: string): string =>
+      `SCENE_BUILD_GREEN: character "plain" (${failedList.includes('loop') ? (failedList.includes('SETUP') ? 'setup-fail-beside' : 'stretch-skip-fail-beside') : (failedList.includes('SETUP') ? 'setup-fail-alone' : 'stretch-skip-fail-alone')}) — check/check.json says PASS false, gate_spine_html_green true, the bar(s) not met ${failedList}; accepted loop, and ${notAccepted} is not accepted — a build whose own check fails only accepted bars is required`;
+    // Plant that restores the legacy reading (removing spec so compose falls back to barsNotMet): before #1373,
+    // setup-fail-beside and stretch-skip-fail-beside were both accepted under --accept loop without naming the second red bar.
+    writeSceneBuild(join(dir, 'setup-fail-beside-legacy-plant'), 'plain', redOn({ loop_max_diff: 7, SETUP_MATCHES_PAINTING: setupFailBlock }));
+    writeSceneBuild(join(dir, 'stretch-skip-fail-beside-legacy-plant'), 'plain', redOn({ loop_max_diff: 7, TEXTURE_STRETCH: stretchSkipBlock }));
+    const plantSetupLegacy = composeA(withPlain('setup-fail-beside-legacy-plant'), ['loop']);
+    const plantStretchLegacy = composeA(withPlain('stretch-skip-fail-beside-legacy-plant'), ['loop']);
+    const setupBesideCheck = readJsonFile(join(dir, 'setup-fail-beside', 'check', 'check.json')) ?? {};
+    const stretchBesideCheck = readJsonFile(join(dir, 'stretch-skip-fail-beside', 'check', 'check.json')) ?? {};
+    const wantLegacyTwoOne = 'SCENE_BUILD_GREEN: character "plain" (twobars) — check/check.json says PASS false, gate_spine_html_green true, the bar(s) not met loop, CHAIN_LAG; accepted loop, and CHAIN_LAG is not accepted — a build whose own check fails only accepted bars is required';
+    say('SC1373_VERSIONED_BAR_OUTCOMES_REFUSE_UNACCEPTED_DECLARED_FAIL_BARS_AND_KEEP_LEGACY_WITHOUT_SPEC',
+      setupAlone.err?.problems.length === 1 && problemLine(setupAlone.err.problems[0]) === wantRefusal('SETUP_MATCHES_PAINTING', 'SETUP_MATCHES_PAINTING') &&
+        setupBeside.err?.problems.length === 1 && problemLine(setupBeside.err.problems[0]) === wantRefusal('loop, SETUP_MATCHES_PAINTING', 'SETUP_MATCHES_PAINTING') &&
+        stretchAlone.err?.problems.length === 1 && problemLine(stretchAlone.err.problems[0]) === wantRefusal('TEXTURE_STRETCH', 'TEXTURE_STRETCH') &&
+        stretchBeside.err?.problems.length === 1 && problemLine(stretchBeside.err.problems[0]) === wantRefusal('loop, TEXTURE_STRETCH', 'TEXTURE_STRETCH') &&
+        stretchAcceptedAlone.err === null && JSON.stringify(rowOf(stretchAcceptedAlone.ok, 'plain')?.accepted) === '["TEXTURE_STRETCH"]' &&
+        JSON.stringify(checkBarsFailed(setupBesideCheck)) === '["loop","SETUP_MATCHES_PAINTING"]' && JSON.stringify(barsNotMet(setupBesideCheck)) === '["loop"]' &&
+        JSON.stringify(checkBarsFailed(stretchBesideCheck)) === '["loop","TEXTURE_STRETCH"]' && JSON.stringify(barsNotMet(stretchBesideCheck)) === '["loop"]' &&
+        plantSetupLegacy.err === null && JSON.stringify(rowOf(plantSetupLegacy.ok, 'plain')?.accepted) === '["loop"]' &&
+        plantStretchLegacy.err === null && JSON.stringify(rowOf(plantStretchLegacy.ok, 'plain')?.accepted) === '["loop"]' &&
+        twoOne.err?.problems.length === 1 && problemLine(twoOne.err.problems[0]) === wantLegacyTwoOne,
+      `setup alone: ${setupAlone.err?.problems[0] ? problemLine(setupAlone.err.problems[0]) : 'accepted'}; setup beside loop: ${setupBeside.err?.problems[0] ? problemLine(setupBeside.err.problems[0]) : 'accepted'}; stretch (legacy SKIP) alone: ${stretchAlone.err?.problems[0] ? problemLine(stretchAlone.err.problems[0]) : 'accepted'}; stretch beside loop: ${stretchBeside.err?.problems[0] ? problemLine(stretchBeside.err.problems[0]) : 'accepted'}; stretch accepted alone: ${JSON.stringify(rowOf(stretchAcceptedAlone.ok, 'plain')?.accepted)}; legacy plant accepted=${plantSetupLegacy.err === null && plantStretchLegacy.err === null}; unversioned twobars exact=${twoOne.err?.problems[0] ? problemLine(twoOne.err.problems[0]) === wantLegacyTwoOne : false}`,
+      'issue #1373: on rig-parts-check/1 reports compose reads bar_outcomes (catching SETUP_MATCHES_PAINTING and degenerate-edge TEXTURE_STRETCH with legacy status SKIP), while reports without the spec keep barsNotMet byte-for-byte');
 
     const badCli = composeA(two(), ['LOOP', 'gate', '']);
     const badFile = composeA(two({ characters: [{ id: 'plain', build: 'plain', offset: [0, 20], accept: ['CHECK_LOOP_CLOSES'] }, { id: 'reach', build: 'reach', offset: [50, 10], accept: 'loop' }] }));
