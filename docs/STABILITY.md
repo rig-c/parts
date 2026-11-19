@@ -283,7 +283,8 @@ and do not certify visibility. See the
 <!-- stable:commands -->
 | command | flags |
 | --- | --- |
-| `edited-part` | `--config`, `--part`, `--file`, `--from`, `--editor`; optional `--rig-config`, `--help` (`-h`) (issue #1328; splice a receipt into explicit full configs, without reassembly) |
+| `edited-part` | `--config`, `--part`, `--file`, `--from`, exactly one of `--editor` or `--producer`; optional `--rig-config`, `--help` (`-h`) (issue #1328; splice a receipt into explicit full configs, without reassembly) |
+| `external-receipt` | `--kind` (mask), `--file`, `--painting`, `--producer`, `--out`; or `--verify`; or `--help` (`-h`) |
 | `diff-components` | `--stack`, `--painting`, `--parts`, `--floor`; optional `--threshold`, `--figure`, `--owners`, `--help` (`-h`); exactly one of `--out`, `--verify` (issues #1005, #1291; exhaustive native error inventory, `rig-parts-diff-components/1` by default and `rig-parts-diff-components/2` with `--owners`, and byte-bound reader for both) |
 | `depth-prepare` | `--parts`, `--config`, `--out`; optional `--help` (`-h`) (issue #897; separate numeric-depth recipe) |
 | `depth-bind` | `--map`, `--input`, `--part`; optional `--help` (`-h`) (issue #1284; exclusive receipt creation from current file bytes) |
@@ -406,7 +407,7 @@ part name, `[i]` an entry of a list):
 - **assemble.editor_receipts** — required: `receipts`; optional: `required` (issue #946, additive), `trace_parts` (issue #947, additive)
 - **assemble.editor_receipts.receipts[i]** — required: `file`, `sha256`, `from_sha256`, `editor` (issue #946)
 - **assemble.edited_parts** — required: `dir`, `receipts` (issue #1278; directory relative to the config)
-- **assemble.edited_parts.receipts[i]** — required: `part`, `file`, `sha256`, `from_sha256`, `editor` (issue #1278; file relative to the edited-parts directory)
+- **assemble.edited_parts.receipts[i]** — required: `part`, `file`, `sha256`, `from_sha256`; exactly one of `editor` or `producer` (issue #1278; file relative to the edited-parts directory)
 - **assemble.patches[i]** — required: `name`, `box`, `alpha`, `draw`
 - **assemble.patches[i].draw**, when an object — required: `before`
 - **assemble.cuts[i]** — required: `from`, `into`, `polygon`, `draw`, `overlap`; optional: `under`, `under_fill` (issue #1230: `under` is a path string or an object)
@@ -1427,8 +1428,13 @@ moves.
 
 ### Edited rig-space parts
 
+The [external mask receipt](AUTHORING.md#external-mask-receipt) is
+`rig-parts-external-receipt/1`. Its producer declaration is also accepted
+by `edited-part --producer`. Edited-part receipts with an `editor` string
+remain readable and keep their output bytes for identical inputs.
+
 `edited-part` (issue #1328) records `sha256` and `from_sha256` from the
-supplied PNG bytes and the non-empty `editor` declaration. It replaces the
+supplied PNG bytes, plus the supplied `producer` or nonblank `editor`. It replaces the
 named part's receipt in place or appends one, preserving every other row and
 unrelated config byte. Both explicit full configs are validated before either
 destination changes; each must already declare `assemble.edited_parts`. Paths are recorded
@@ -1439,7 +1445,7 @@ Writer validation refusals leave both configs unchanged. The shared staged
 writer validates full configs and their relative sidecars; all configs stage
 before the shared batch commits, restoring earlier originals on a later commit
 failure. The command prints shared config-change lines on stderr and one
-stdout line naming the part, both hashes and the declared editor. Repeated
+stdout line naming the part, both hashes and the author declaration. Repeated
 identical receipts preserve bytes and report `unchanged`.
 
 The optional `assemble.edited_parts` block (issue #1278, additive) replaces

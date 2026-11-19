@@ -61,6 +61,7 @@ import { runSeeThroughTransformChecks } from './tools/check_seethrough_transform
 import { runPlateChecks } from './tools/check_plate.ts';
 import { runEditorReceiptChecks } from './tools/check_editor_receipts.ts';
 import { runEditedPartChecks, runEditedReferenceCwdChecks } from './tools/check_edited_parts.ts';
+import { runExternalReceiptChecks } from './tools/check_external_receipt.ts';
 import { runEditedPartWriterChecks } from './tools/check_edited_part_writer.ts';
 import { runPartSourceChecks } from './tools/check_part_sources.ts';
 import { runReadmePolicyChecks } from './scripts/readme_policy.ts';
@@ -5988,6 +5989,12 @@ function runCliSuite(): number {
   const { say, bad } = counter();
   const diffDir1005 = temp('diff-cli');
   try { runDiffComponentCliChecks(diffDir1005, (name, ok, detail) => say(name, ok, detail, 'issue #1005: shipped command and reader on generated PNG bytes'), join(ROOT, 'cli.ts')); } finally { rmSync(diffDir1005, { recursive: true, force: true }); }
+  const externalDir = temp('external-receipt');
+  let externalIndex = 0;
+  try {
+    runExternalReceiptChecks(externalDir, (name, ok, detail) => say(`XR1368${++externalIndex}_${name}`, ok, detail,
+      'issue #1368: generated two-pixel masks and hashes, checked through shipped write and verify modes'));
+  } finally { rmSync(externalDir, { recursive: true, force: true }); }
   const measureArgs829 = ['check', '--rig', 'fixture', '--out', 'result'];
   const buildArgs829 = ['build', '--config', 'fixture.json', '--out', 'result'];
   const missingArgs829 = ['check', '--rig'];

@@ -31,6 +31,7 @@
  * of every file it names; `verifyPlateReceipt` reads it back against the bytes
  * on disk. Every path in it is relative to the receipt's own directory.
  */
+import { readBinaryMask } from './maskvalues.ts';
 import { readMatteSource } from './matte.ts';
 import { isSeeThroughTransform, inverseSeeThroughMask } from './seethrough-transform.ts';
 import { createHash } from 'node:crypto';
@@ -314,12 +315,7 @@ export function readSourceMask(source: MaskSource, dir: string, width: number, h
     if (r.width !== width || r.height !== height) {
       fail('PLATE_MASK_GRID', maskPath, `is ${r.width}x${r.height}; the painting's ${width}x${height} is required — the rig grid is not the painting's when the rig is scaled, and the mask is never fitted`);
     }
-    for (let p = 0; p < width * height; p++) {
-      const [R, G, B, A] = [r.data[p * 4], r.data[p * 4 + 1], r.data[p * 4 + 2], r.data[p * 4 + 3]];
-      const white = R === 255 && G === 255 && B === 255, black = R === 0 && G === 0 && B === 0;
-      if (A !== 255 || (!white && !black)) fail('PLATE_MASK_VALUES', maskPath, `holds (${R}, ${G}, ${B}, ${A}) at pixel ${p % width},${Math.floor(p / width)}; only opaque white and opaque black, as assemble writes it, are taken`);
-      if (white) inside[p] = 1;
-    }
+    inside = readBinaryMask(r, detail => fail('PLATE_MASK_VALUES', maskPath, detail));
   }
   if (!inside.some((v) => v === 1)) fail('PLATE_MASK_EMPTY', `${source}:${dir}`, 'holds no figure pixel on the painting grid; a figure to remove or matte is required');
   return { width, height, inside };

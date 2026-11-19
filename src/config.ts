@@ -103,9 +103,10 @@ import { REQUIREMENTS_SPEC, type RequirementsFile } from './requirements.ts';
 import { setupPaintingFilePath } from './setuppainting.ts';
 import { CLOTH_TARGETS, type ClothRecipes, isSleeveCloth, RECIPE_STRENGTH, RIGC_DEFAULT_DAMPING, springStable } from './cloth.ts';
 import { GRID, MAX_SIDE } from './contour.ts';
-import { foldName, type Problem, refuseIfAny } from './errors.ts';
+import { foldName, PartsError, type Problem, refuseIfAny } from './errors.ts';
 import { edgeLength } from './length.ts';
 import { setFocusProblems } from './setfocus.ts';
+import { parseReceiptProducer } from './receiptproducer.ts';
 import { type EditorReceipts, SHA256_PATTERN, SHA256_RULE } from './editreceipt.ts';
 import { isSkeletonName, KEYPOINT_NAMES, type KeypointName, type PosePoints, scaledPoints, SKELETON_NAMES, type SkeletonName } from './skeleton.ts';
 import { acceptedTagNames, AUTHOR_LABEL_RULE, AUTHOR_PREFIX, readLayerTag } from './tags.ts';
@@ -2848,8 +2849,17 @@ function checkEditedParts(c: Check, value: Json, plan: Json | undefined): void {
   const seen = new Map<string, number>();
   (o.receipts as Json[]).forEach((value, i) => {
     const p = at + '.receipts[' + i + ']';
-    const r = c.object(p, value, ['part', 'file', 'sha256', 'from_sha256', 'editor'], []);
+    const r = c.object(p, value, ['part', 'file', 'sha256', 'from_sha256'], ['editor', 'producer']);
     if (r === null) return;
+    if (!('editor' in r) && !('producer' in r)) c.fail('CONFIG_FIELD_PRESENT', p, 'requires either editor or producer');
+    if ('editor' in r && 'producer' in r) c.fail('CONFIG_KEY_KNOWN', p + '.producer', 'cannot accompany editor; one producer declaration is required');
+    if ('producer' in r) {
+      try { parseReceiptProducer(r.producer, p + '.producer'); }
+      catch (error) {
+        if (!(error instanceof PartsError)) throw error;
+        c.problems.push(...error.problems);
+      }
+    }
     if ('part' in r && c.string(p + '.part', r.part)) {
       const part = r.part as string;
       if (seen.has(part)) c.fail('ASSEMBLE_EDITED_PART_DUPLICATE', p + '.part', `names "${part}" again (first at receipts[${seen.get(part)}]); one receipt per part is required`);

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import type { EditorReceipt } from './editreceipt.ts';
+import { parseReceiptProducer, type ReceiptProducer } from './receiptproducer.ts';
 import { refuseIfAny, type Problem } from './errors.ts';
 import { OPAQUE_ALPHA_ABOVE } from './layers.ts';
 import { AUTOMATIC_WRITERS, EXCLUDED_PIXEL, NOT_OVERRIDDEN_PIXEL, rgbaEqual, type AutomaticWriter, type PartStageMap, type PixelProvenance, type StageMap, type ValueBaseline } from './provenance.ts';
@@ -12,7 +13,15 @@ import type { PlacedPart } from './assemble.ts';
 import type { PartDepthReference } from './depthsheets.ts';
 import type { PaintingOwner } from './paintingowner.ts';
 
-export interface EditedPartReceipt extends EditorReceipt { part: string }
+export type EditedPartReceipt = Omit<EditorReceipt, 'editor'> & { part: string } &
+  ({ editor: string; producer?: never } | { producer: ReceiptProducer; editor?: never });
+
+export function orderedEditedPartReceipt(receipt: EditedPartReceipt): EditedPartReceipt {
+  const { part, file, sha256, from_sha256, editor, producer } = receipt;
+  const fields = { part, file, sha256, from_sha256 };
+  if (editor !== undefined) return { ...fields, editor };
+  return { ...fields, producer: parseReceiptProducer(producer, 'edited part producer') };
+}
 export interface EditedParts { dir: string; receipts: EditedPartReceipt[] }
 export interface VerifiedEditedPart {
   index: number;
@@ -135,7 +144,7 @@ export function replaceEditedParts(
     let id = map.edits.indexOf(name) + 1;
     if (id === 0) { map.edits.push(name); id = map.edits.length; }
     const metadata: EditedPartProvenance = { edit: name, dir: edit.dir,
-      receipt: { part: edit.receipt.part, file: edit.receipt.file, sha256: edit.receipt.sha256, from_sha256: edit.receipt.from_sha256, editor: edit.receipt.editor },
+      receipt: orderedEditedPartReceipt(edit.receipt),
       changed_px: 0, changed_counted_px: 0, changed_excluded_px: 0, removed_opaque_px: 0 };
     const next: PartStageMap = { name: stage.name, x: stage.x, y: stage.y, w: stage.w, h: stage.h,
       excluded_px: 0, runs: [], pre_seam_writer_runs: [], edited_part: metadata };
