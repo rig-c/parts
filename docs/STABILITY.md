@@ -1081,9 +1081,12 @@ A completed report starts with `spec: "rig-parts-check/1"`, `bar_outcomes`,
 and `build: { "model_sha256": "<64 lowercase hex>" }` — the SHA-256 of the
 exact bytes of the primary `check/build/skeleton.model.json` the check read
 (auxiliary `_loop`, `_still` and `_behind_seams_turn` builds are not hashed).
-The check only records; a consumer holding the report and the build can detect
-a report that does not belong to it by hashing the model file. Existing keys
-retain their relative order after `build`, with `PASS` last.
+The model file carries paths relative to the rig's images, so the same rig
+checked into another folder records another hash; the key identifies a build
+output, not rig content. The check only records; a consumer holding the report
+and the build can detect a report that does not belong to it by hashing the
+model file. Existing keys retain their relative order after `build`, with
+`PASS` last.
 `check --json` emits the same report as the file. The bar map has every id
 in the order below. Its values are `{"status":"PASS"}`, `{"status":"FAIL"}`,
 or `{"status":"SKIP","reason":"<stable reason>"}`. The `reason` field appears

@@ -22918,16 +22918,29 @@ function runCheckStretchCases(dir: string, say: ReturnType<typeof counter>['say'
   );
 
   const stretchAgain = stretchRun('stretch-mild-2', stretchBy);
+  // Issue #1378: the model file carries image paths relative to the check's output folder, so build is set aside while both reports' build.model_sha256 are held to their model files.
+  const withoutBuildRecord = (bytes: Buffer | null): Buffer | null => {
+    if (bytes === null) return null;
+    const { build: _build, ...rest } = JSON.parse(bytes.toString('utf8')) as Record<string, unknown>;
+    return Buffer.from(`${JSON.stringify(rest, null, 1)}\n`);
+  };
+  const { build: _mildBuild, ...mildWithoutBuild } = mild.fig ?? {};
+  const { build: _againBuild, ...againWithoutBuild } = stretchAgain.fig ?? {};
   const sameGeo = existsSync(mild.geo) && existsSync(stretchAgain.geo) && Buffer.compare(readFileSync(mild.geo), readFileSync(stretchAgain.geo)) === 0;
-  const sameCheck = mild.fig !== null && stretchAgain.fig !== null && JSON.stringify(mild.fig) === JSON.stringify(stretchAgain.fig);
+  const sameCheck = mild.fig !== null && stretchAgain.fig !== null && JSON.stringify(mildWithoutBuild) === JSON.stringify(againWithoutBuild);
   const firstCheckBytes = existsSync(mild.checkFile) ? readFileSync(mild.checkFile) : null;
   const secondCheckBytes = existsSync(stretchAgain.checkFile) ? readFileSync(stretchAgain.checkFile) : null;
-  const sameCheckBytes = firstCheckBytes !== null && secondCheckBytes !== null && Buffer.compare(firstCheckBytes, secondCheckBytes) === 0;
+  const firstWithoutBuild = withoutBuildRecord(firstCheckBytes);
+  const secondWithoutBuild = withoutBuildRecord(secondCheckBytes);
+  const sameCheckBytes = firstWithoutBuild !== null && secondWithoutBuild !== null && Buffer.compare(firstWithoutBuild, secondWithoutBuild) === 0;
+  const bothBuildMatch =
+    checkBuildMatchesModel(mild.checkFile, join(dir, 'stretch-mild-out', 'build', 'skeleton.model.json')) &&
+    checkBuildMatchesModel(stretchAgain.checkFile, join(dir, 'stretch-mild-2-out', 'build', 'skeleton.model.json'));
   say(
     'CK33_TWO_RUNS_ON_A_STRETCHED_MESH_WRITE_THE_SAME_GEOMETRY_AND_BYTE_IDENTICAL_CHECK_JSON',
-    stretchAgain.status === 0 && sameGeo && sameCheck && sameCheckBytes,
-    `second run exit ${stretchAgain.status}; geometry.json ${sameGeo ? 'byte-identical' : 'DIFFERS'}; check.json ${sameCheck ? 'identical' : 'DIFFERS'}; actual bytes ${sameCheckBytes ? 'byte-identical' : 'DIFFERS'} (TEXTURE_STRETCH ${JSON.stringify((stretchAgain.fig?.TEXTURE_STRETCH as StretchFig | undefined)?.worst ?? null)})` +
-      (stretchAgain.status === 0 && sameGeo && sameCheck && sameCheckBytes ? '' : `; exact comparison ${JSON.stringify({ firstLabel: 'stretch-mild', firstRawSHA256: firstCheckBytes === null ? null : createHash('sha256').update(firstCheckBytes).digest('hex'), first: mild.fig, secondLabel: 'stretch-mild-2', secondRawSHA256: secondCheckBytes === null ? null : createHash('sha256').update(secondCheckBytes).digest('hex'), second: stretchAgain.fig })}`),
+    stretchAgain.status === 0 && sameGeo && sameCheck && sameCheckBytes && bothBuildMatch,
+    `second run exit ${stretchAgain.status}; geometry.json ${sameGeo ? 'byte-identical' : 'DIFFERS'}; check.json ${sameCheck ? 'identical' : 'DIFFERS'}; actual bytes ${sameCheckBytes ? 'byte-identical' : 'DIFFERS'}; build.model_sha256 ${bothBuildMatch ? 'matches both model files' : 'MISMATCH'} (TEXTURE_STRETCH ${JSON.stringify((stretchAgain.fig?.TEXTURE_STRETCH as StretchFig | undefined)?.worst ?? null)})` +
+      (stretchAgain.status === 0 && sameGeo && sameCheck && sameCheckBytes && bothBuildMatch ? '' : `; exact comparison ${JSON.stringify({ firstLabel: 'stretch-mild', firstRawSHA256: firstCheckBytes === null ? null : createHash('sha256').update(firstCheckBytes).digest('hex'), first: mild.fig, secondLabel: 'stretch-mild-2', secondRawSHA256: secondCheckBytes === null ? null : createHash('sha256').update(secondCheckBytes).digest('hex'), second: stretchAgain.fig })}`),
     "CK02 compares two runs of the fixture with no mesh, where this line is a SKIP; determinism of a figure has to be shown where there is a figure",
   );
 
@@ -25386,14 +25399,25 @@ function runWindBandCases(
   );
 
   // WB05: check without --wind-band is byte-identical to check with --wind-band minus WIND_BAND, and guide resolves both names.
+  // Issue #1378: the model file carries image paths relative to the check's output folder, so build is set aside while both reports' build.model_sha256 are held to their model files.
   const bareText = existsSync(join(bare.checkOut, 'check.json')) ? readFileSync(join(bare.checkOut, 'check.json'), 'utf8') : null;
   const bareJson = bareText === null ? null : (JSON.parse(bareText) as Record<string, unknown>);
+  const strippedBareText = (() => {
+    if (bareJson === null) return null;
+    const copy = { ...bareJson };
+    delete copy.build;
+    return `${JSON.stringify(copy, null, 1)}\n`;
+  })();
   const strippedGoodText = (() => {
     if (goodJson === null) return null;
     const copy = { ...goodJson };
     delete copy[WIND_BAND_LINE];
+    delete copy.build;
     return `${JSON.stringify(copy, null, 1)}\n`;
   })();
+  const wbBuildMatches =
+    checkBuildMatchesModel(join(bare.checkOut, 'check.json'), join(bare.checkOut, 'build', 'skeleton.model.json')) &&
+    checkBuildMatchesModel(join(checkOut, 'check.json'), join(checkOut, 'build', 'skeleton.model.json'));
   const guideRuleRun = runCli(['guide', WIND_BAND_RULE]);
   const guideLineRun = runCli(['guide', WIND_BAND_LINE]);
   say(
@@ -25402,12 +25426,13 @@ function runWindBandCases(
       bareJson !== null &&
       !(WIND_BAND_LINE in bareJson) &&
       !(bare.check?.out ?? '').includes(`${WIND_BAND_LINE}:`) &&
-      strippedGoodText === bareText &&
+      strippedGoodText === strippedBareText &&
+      wbBuildMatches &&
       guideRuleRun.status === 0 &&
       guideRuleRun.out.includes(WIND_BAND_RULE) &&
       guideLineRun.status === 0 &&
       guideLineRun.out.includes(WIND_BAND_LINE),
-    `bare has WIND_BAND=${bareJson !== null && WIND_BAND_LINE in bareJson}; strippedGood===bare=${strippedGoodText === bareText}; guide ${WIND_BAND_RULE}=${guideRuleRun.status}, guide ${WIND_BAND_LINE}=${guideLineRun.status}`,
+    `bare has WIND_BAND=${bareJson !== null && WIND_BAND_LINE in bareJson}; strippedGood===bare=${strippedGoodText === strippedBareText}; buildMatch=${wbBuildMatches}; guide ${WIND_BAND_RULE}=${guideRuleRun.status}, guide ${WIND_BAND_LINE}=${guideLineRun.status}`,
     'issue #590: check without --wind-band writes no WIND_BAND key or console line and is byte-for-byte identical to the --wind-band check.json minus WIND_BAND; rig-parts guide resolves both CHECK_WIND_BAND and WIND_BAND',
   );
 }
@@ -28538,9 +28563,13 @@ function runBuildSuite(): number {
     const fwdPairs = pairLinesOf(fwd.out, '[check] ');
     const handPairs = pairLinesOf(hand.out, '');
     const pairsTwice = runBuildCli([...buildArgs(cutDir, join(cutDir, 'out-pairs-twice')), '--seam-pairs', '--seam-pairs']);
-    const { [COINCIDE_LINE]: forwardedSupport, ...forwardedLegacy } = fwdFig ?? {};
-    const { [COINCIDE_LINE]: handSupport, ...handLegacy } = handFig ?? {};
-    const fwdSameAsHand = withoutConfigRecord(Buffer.from(JSON.stringify(forwardedLegacy)), join('check', 'check.json')).equals(Buffer.from(JSON.stringify(handLegacy, null, 1)));
+    // Issue #1378: the model file carries image paths relative to the check's output folder, so build is set aside here while both reports' build.model_sha256 are held to their model files.
+    const { [COINCIDE_LINE]: forwardedSupport, build: _forwardedBuild, ...forwardedLegacy } = fwdFig ?? {};
+    const { [COINCIDE_LINE]: handSupport, build: _handBuild, ...handLegacy } = handFig ?? {};
+    const fwdBuildMatches =
+      checkBuildMatchesModel(join(fwdCheck, 'check.json'), join(fwdCheck, 'build', 'skeleton.model.json')) &&
+      checkBuildMatchesModel(join(byHand, 'check.json'), join(byHand, 'build', 'skeleton.model.json'));
+    const fwdSameAsHand = fwdBuildMatches && withoutConfigRecord(Buffer.from(JSON.stringify(forwardedLegacy)), join('check', 'check.json')).equals(Buffer.from(JSON.stringify(handLegacy, null, 1)));
     say('BU981_BUILD_PAINTING_REACHES_ONLY_SUPPORT_REPORT',
       (forwardedSupport as SupportReport | undefined)?.unowned.status === 'measured' &&
       (handSupport as SupportReport | undefined)?.unowned.status === 'unavailable' &&
@@ -29136,9 +29165,13 @@ function runBuildSuite(): number {
     const alone = runIn(['check', '--rig', join(relOut, 'rig'), '--parts', relOut, '--out', aloneOut]);
     const aloneText = existsSync(join(aloneOut, 'check.json')) ? readFileSync(join(aloneOut, 'check.json')) : Buffer.from('');
     const aloneFig = readJsonFile(join(aloneOut, 'check.json'));
-    const { [COINCIDE_LINE]: _buildSupport, ...buildLegacy } = readJsonFile(join(relOut, 'check', 'check.json')) ?? {};
-    const { [COINCIDE_LINE]: _aloneSupport, ...aloneLegacy } = aloneFig ?? {};
-    const sameAsBuild = aloneText.length > 0 && withoutConfigRecord(Buffer.from(JSON.stringify(buildLegacy)), join('check', 'check.json')).equals(Buffer.from(JSON.stringify(aloneLegacy, null, 1)));
+    // Issue #1378: the model file carries image paths relative to the check's output folder, so build is set aside here while both reports' build.model_sha256 are held to their model files.
+    const { [COINCIDE_LINE]: _buildSupport, build: _buildModel, ...buildLegacy } = readJsonFile(join(relOut, 'check', 'check.json')) ?? {};
+    const { [COINCIDE_LINE]: _aloneSupport, build: _aloneModel, ...aloneLegacy } = aloneFig ?? {};
+    const aloneBuildMatches =
+      checkBuildMatchesModel(join(relOut, 'check', 'check.json'), join(relOut, 'check', 'build', 'skeleton.model.json')) &&
+      checkBuildMatchesModel(join(aloneOut, 'check.json'), join(aloneOut, 'build', 'skeleton.model.json'));
+    const sameAsBuild = aloneText.length > 0 && aloneBuildMatches && withoutConfigRecord(Buffer.from(JSON.stringify(buildLegacy)), join('check', 'check.json')).equals(Buffer.from(JSON.stringify(aloneLegacy, null, 1)));
     say(
       'BU212_CHECK_ALONE_READS_NO_CONFIG_AND_WRITES_NO_CONFIG_RECORD_AND_OTHERWISE_THE_BUILD_S_CHECK_JSON',
       alone.status === 0 && aloneFig !== null && !('config' in aloneFig) && sameAsBuild,
@@ -44436,6 +44469,7 @@ function runTreeSuite(_corpus: string | null = null, pre = false): number {
     const flat = s.replace(/\s+/g, ' ');
     return flat.includes('starts with `spec: "rig-parts-check/1"`, `bar_outcomes`, and `build: { "model_sha256": "<64 lowercase hex>" }`') &&
       flat.includes('primary `check/build/skeleton.model.json` the check read (auxiliary `_loop`, `_still` and `_behind_seams_turn` builds are not hashed)') &&
+      flat.includes("The model file carries paths relative to the rig's images, so the same rig checked into another folder records another hash; the key identifies a build output, not rig content.") &&
       flat.includes('The check only records; a consumer holding the report and the build can detect a report that does not belong to it by hashing the model file.');
   };
   const missingBuild1378 = demo1372 !== null && checkOutcomeFaults(Object.fromEntries(Object.entries(demo1372).filter(([k]) => k !== 'build'))).includes('version or top-level order');
