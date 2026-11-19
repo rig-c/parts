@@ -26669,7 +26669,7 @@ function runRequirementsSuite(): number {
     const cutMaterial = join(dir, 'cut-material');
     runCutMaterialChecks(cutMaterial, (name, pass, detail) => say(name, pass, detail, 'issue #888: fixed public source-support controls, no calibrated threshold'), rigcRunnerAt(suiteRigc(), spawnRigc));
     reportCheckBarPlant(say, 'JC1372_CUT_MATERIAL_FAILURE_HAS_ITS_OWN_BAR_ID', 'CUT_JOINT_MATERIAL',
-      join(cutMaterial, 'actual-check', 'check.json'), join(cutMaterial, 'undeclared-check', 'check.json'), 'undeclared');
+      join(cutMaterial, 'static-material-red', 'check.json'), join(cutMaterial, 'static-material-control', 'check.json'), 'undeclared');
     const file = (name: string, body: Record<string, unknown>): string => {
       const p = join(dir, `${name}.json`);
       writeFileSync(p, `${JSON.stringify(body, null, 2)}\n`);
