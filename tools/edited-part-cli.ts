@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { parseConfig } from '../src/config.ts';
 import type { EditedPartReceipt } from '../src/editedparts.ts';
+import { receiptProducerJson } from '../src/receiptproducer.ts';
 import { PartsError } from '../src/errors.ts';
 import { decodePngBytes } from '../src/raster/png.ts';
 import { readConfigWriteTarget, stageConfigWriteBatch, type StagedConfigWriteBatch } from './configwrite.ts';
@@ -14,7 +15,8 @@ export interface EditedPartInput {
   part: string;
   file: string;
   from: string;
-  editor: string;
+  editor?: string;
+  producer?: string;
 }
 function refuse(code: string, object: string, detail: string): never {
   throw new PartsError([{ code, object, detail }]);
@@ -37,13 +39,20 @@ export interface EditedPartWriteResult { receipt: EditedPartReceipt; writes: Sta
 export function writeEditedPart(input: EditedPartInput): EditedPartWriteResult {
   for (const [flag, value] of [
     ['--config', input.config], ['--part', input.part], ['--file', input.file],
-    ['--from', input.from], ['--editor', input.editor],
+    ['--from', input.from],
+    ...(input.editor === undefined ? [] : [['--editor', input.editor]]),
     ...(input.rigConfig === undefined ? [] : [['--rig-config', input.rigConfig]]),
   ]) if (typeof value !== 'string' || value.trim() === '') refuse('EDITED_PART_ARGUMENT', flag, 'is missing or blank; a non-empty value is required');
+  if ((input.editor === undefined) === (input.producer === undefined)) {
+    refuse('EDITED_PART_ARGUMENT', 'edited-part', 'requires exactly one of --producer or --editor');
+  }
+  const author = input.editor === undefined
+    ? { producer: receiptProducerJson(input.producer!, '--producer') }
+    : { editor: input.editor };
   const edited = png(input.file, '--file'), from = png(input.from, '--from');
   if (edited.width !== from.width || edited.height !== from.height) refuse('EDITED_PART_SIZE', input.part,
     `edited PNG is ${edited.width}x${edited.height}; --from PNG dimensions ${from.width}x${from.height} are required`);
-  const receipt = { part: input.part, file: input.file, sha256: hash(edited.bytes), from_sha256: hash(from.bytes), editor: input.editor };
+  const receipt = { part: input.part, file: input.file, sha256: hash(edited.bytes), from_sha256: hash(from.bytes), ...author };
   const targets = [input.config, ...(input.rigConfig === undefined ? [] : [input.rigConfig])].map(readConfigWriteTarget);
   const receipts: EditedPartReceipt[] = [];
   const requests = targets.map(target => {

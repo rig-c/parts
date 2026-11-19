@@ -1,3 +1,5 @@
+import { orderedEditedPartReceipt, type EditedPartReceipt } from './editedparts.ts';
+import { parseReceiptProducer, receiptText } from './receiptproducer.ts';
 import { takenSourceProblems, type TakenLayerSource } from './takesource.ts';
 import { AUTOMATIC_WRITERS, provenanceAddsUp, type PixelProvenance, type CutOwnership } from './provenance.ts';
 import { baseAnchorProblems, orderedBaseAnchor, type BaseAnchor } from './baseanchor.ts';
@@ -544,6 +546,14 @@ export function tagOf(from: string): string | null {
   return f === null || f.run === 'painting' ? null : f.tag;
 }
 
+function validEditedPartAuthor(receipt: EditedPartReceipt): boolean {
+  const keys = Object.keys(receipt).sort().join(',');
+  if (keys === 'editor,file,from_sha256,part,sha256') return receiptText(receipt.editor);
+  if (keys !== 'file,from_sha256,part,producer,sha256') return false;
+  try { parseReceiptProducer(receipt.producer, 'edited part producer'); return true; }
+  catch { return false; }
+}
+
 const OWNERSHIP_KEYS = ['edit', 'from', 'into', 'moved_in_opaque_px', 'retained_band_opaque_px', 'cleared_opaque_px', 'under_filled_px', 'under_filled_opaque_px', 'net_cleared_opaque_px', 'under_plate'] as const;
 const REQUIRED_OWNERSHIP_KEYS = OWNERSHIP_KEYS.filter((k) => k !== 'under_plate');
 function orderedOwnership(rows: readonly CutOwnership[]): Array<Record<string, unknown>> {
@@ -595,8 +605,7 @@ function orderedProvenance(p: PixelProvenance): PixelProvenance {
     ...(p.depth === undefined ? {} : { depth: { kind: p.depth.kind, values: p.depth.values.map(v => ({ group: v.group, ...(v.bone === undefined ? {} : { bone: v.bone }), value: v.value })) } }),
     ...(p.edited_part === undefined ? {} : { edited_part: {
       edit: p.edited_part.edit, dir: p.edited_part.dir,
-      receipt: { part: p.edited_part.receipt.part, file: p.edited_part.receipt.file,
-        sha256: p.edited_part.receipt.sha256, from_sha256: p.edited_part.receipt.from_sha256, editor: p.edited_part.receipt.editor },
+      receipt: orderedEditedPartReceipt(p.edited_part.receipt),
       changed_px: p.edited_part.changed_px, changed_counted_px: p.edited_part.changed_counted_px,
       changed_excluded_px: p.edited_part.changed_excluded_px, removed_opaque_px: p.edited_part.removed_opaque_px,
     } }) };
@@ -821,10 +830,10 @@ function checkProvenance(raw: unknown, opaque: unknown, object: string, fail: (c
       typeof e.edit === 'string' && /^edited_parts\[\d+\]$/.test(e.edit) && relativePath(e.dir) &&
       [e.changed_px, e.changed_counted_px, e.changed_excluded_px, e.removed_opaque_px].every(count) &&
       e.receipt !== null && typeof e.receipt === 'object' && !Array.isArray(e.receipt) &&
-      Object.keys(e.receipt).sort().join(',') === 'editor,file,from_sha256,part,sha256' &&
-      nonempty(e.receipt.part) && e.receipt.part === identity?.name && relativePath(e.receipt.file) && nonempty(e.receipt.editor) &&
+      validEditedPartAuthor(e.receipt) &&
+      nonempty(e.receipt.part) && e.receipt.part === identity?.name && relativePath(e.receipt.file) &&
       [e.receipt.sha256, e.receipt.from_sha256].every(s => typeof s === 'string' && /^[a-f0-9]{64}$/.test(s));
-    if (!valid) fail('PARTS_FIELD_TYPE', object + ' edited_part', 'requires edited_parts[i], a config-relative dir, a receipt with the enclosing part name, dir-relative file, two lowercase sha256 hashes and editor, and four nonnegative safe integer change counts');
+    if (!valid) fail('PARTS_FIELD_TYPE', object + ' edited_part', 'requires edited_parts[i], a config-relative dir, a receipt with the enclosing part name, dir-relative file, two lowercase sha256 hashes and either editor or producer, and four nonnegative safe integer change counts');
     else {
       const area = typeof identity?.w === 'number' && typeof identity.h === 'number' ? identity.w * identity.h : NaN;
       if (!Number.isSafeInteger(area) || !count(opaque) || e.changed_px !== e.changed_counted_px + e.changed_excluded_px ||

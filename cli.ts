@@ -2,6 +2,7 @@
 import { diffComponentsCommand } from './src/diffcomponents.ts';
 import { applyTakenLayers } from './src/takelayers.ts';
 import { applyDepth, bindDepthMap, prepareDepth } from './src/depthworkflow.ts';
+import { externalReceipt } from './src/externalreceipt.ts';
 import { writeEditedPart } from './tools/edited-part-cli.ts';
 /**
  * rig-parts — one painting and its See-through layers in, Spine-ready parts
@@ -74,7 +75,9 @@ const LATER: ReadonlyArray<[string, string]> = [];
 const HELP = `rig-parts ${version()} — Spine-ready parts from one painting and its See-through layers
 
 usage:
-  rig-parts edited-part --config <config.json> --part <name> --file <edited.png> --from <assembled.png> --editor <text> [--rig-config <config.json>]
+  rig-parts edited-part --config <config.json> --part <name> --file <edited.png> --from <assembled.png> (--producer <json> | --editor <text>) [--rig-config <config.json>]
+  rig-parts external-receipt --kind mask --file <png> --painting <png> --producer <json> --out <receipt.json>
+  rig-parts external-receipt --verify <receipt.json>
       Record both file hashes and the declared editor in one edited_parts receipt.
       Update only explicitly named configs; build verifies the assembled baseline.
 
@@ -1190,7 +1193,8 @@ function printLayerTable(set: LayerSet): void {
  * no row; `layers` takes one positional path beside its flags (issue #359).
  */
 const TAKES = {
-  'edited-part': { valued: ['--config', '--part', '--file', '--from', '--editor', '--rig-config'], switches: ['--help'] },
+  'edited-part': { valued: ['--config', '--part', '--file', '--from', '--editor', '--producer', '--rig-config'], switches: ['--help'] },
+  'external-receipt': { valued: ['--kind', '--file', '--painting', '--producer', '--out', '--verify'], switches: ['--help'] },
   'check-parts': { valued: ['--parts', '--out'], switches: ['--json', '--help'] },
   'diff-components': { valued: ['--stack', '--painting', '--parts', '--figure', '--floor', '--threshold', '--out', '--verify'], switches: ['--owners', '--help'] },
   'depth-bind': { valued: ['--map', '--input', '--part'], switches: ['--help'] },
@@ -2608,12 +2612,22 @@ function cmdDepthPrepare(args: string[]): number {
 }
 
 function cmdEditedPart(args: string[]): number {
-  const f = flags(args, 'edited-part', ['--config', '--part', '--file', '--from', '--editor']);
+  const f = flags(args, 'edited-part', ['--config', '--part', '--file', '--from']);
   if (typeof f === 'string') return usage(f);
+  if (!f.has('--editor') && !f.has('--producer')) return usage('edited-part needs --producer <json> or --editor <text>');
   try {
-    const { receipt, writes } = writeEditedPart({ config: f.get('--config')!, part: f.get('--part')!, file: f.get('--file')!, from: f.get('--from')!, editor: f.get('--editor')!, rigConfig: f.get('--rig-config') });
+    const { receipt, writes } = writeEditedPart({ config: f.get('--config')!, part: f.get('--part')!, file: f.get('--file')!, from: f.get('--from')!, editor: f.get('--editor'), producer: f.get('--producer'), rigConfig: f.get('--rig-config') });
     for (const { target, changes } of writes) for (const line of configWriteLines(target, changes)) console.error(line);
-    console.log(`edited-part: part ${JSON.stringify(receipt.part)} sha256=${receipt.sha256} from_sha256=${receipt.from_sha256} editor=${JSON.stringify(receipt.editor)}`);
+    console.log(`edited-part: part ${JSON.stringify(receipt.part)} sha256=${receipt.sha256} from_sha256=${receipt.from_sha256} ${receipt.editor === undefined ? 'producer' : 'editor'}=${JSON.stringify(receipt.editor ?? receipt.producer)}`);
+    return EXIT_OK;
+  } catch (error) { return printRefusal(error); }
+}
+
+function cmdExternalReceipt(args: string[]): number {
+  const f = flags(args, 'external-receipt', []);
+  try {
+    if (typeof f === 'string') throw new PartsError([{ code: 'EXTERNAL_RECEIPT_ARGUMENT', object: 'external-receipt', detail: f }]);
+    externalReceipt(f);
     return EXIT_OK;
   } catch (error) { return printRefusal(error); }
 }
@@ -2656,6 +2670,7 @@ function main(argv: string[]): number | Promise<number> {
   if (command === 'layers') return cmdLayers(rest);
   if (command === 'depth-prepare') return cmdDepthPrepare(rest);
   if (command === 'edited-part') return cmdEditedPart(rest);
+  if (command === 'external-receipt') return cmdExternalReceipt(rest);
   if (command === 'depth-bind') return cmdDepthBind(rest);
   if (command === 'depth-apply') return cmdDepthApply(rest);
   if (command === 'sheet') return cmdSheet(rest);

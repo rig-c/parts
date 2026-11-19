@@ -1115,6 +1115,41 @@ receipt is demanded, and a run with no author-made or hidden-art layer, no
 `under` and no `cap` demands none either. Absent the block, no file is read and
 every output is byte-identical to a build without it.
 
+### External mask receipt
+
+Record an externally produced mask with
+`rig-parts external-receipt --kind mask --file <mask.png> --painting <painting.png> --producer <json> --out <receipt.json>`.
+Both inputs must decode as PNG and their measured widths and heights must
+match. Pixel coordinates start at the upper left and no resampling is applied.
+Each mask pixel must be opaque black (outside) or opaque white (inside), using
+the same pixel check as `comfy plate`. These checks measure pixel dimensions
+and values. Content alignment is the producer's responsibility.
+
+Command paths resolve from the working directory. Use an unused output path
+in an existing writable directory. The command publishes the receipt only
+after validation. It reads the image files without altering them. The receipt
+is UTF-8 JSON with two-space indentation and a trailing newline.
+
+| Key in write order | Type and source |
+| --- | --- |
+| `spec` | Literal string `rig-parts-external-receipt/1`. |
+| `kind` | Literal string `mask`. |
+| `file` | Object with `path` then `sha256`. The path is relative to the receipt directory, uses forward slashes and may include `../`. The lowercase 64-hex SHA-256 is measured from the mask PNG bytes. |
+| `painting` | Object with the same ordered keys and types as `file`, measured from the painting path and PNG bytes. |
+| `grid` | Object with `width` then `height`, positive integers measured by decoding the painting PNG. |
+| `producer` | Object with required nonblank string `tool`, optional nonblank string `model`, then exactly one lowercase 64-hex SHA-256 string in `checkpoint_sha256`, `graph_sha256` or `script_sha256`. These values come from the caller's JSON argument. |
+
+The producer declaration does not prove which tool generated the mask or
+verify the digest of the declared producer artifact. No polygon, coordinates
+or typed geometry are inputs.
+
+Run `rig-parts external-receipt --verify <receipt.json>` by itself to validate
+the receipt version and shape, resolve its paths relative to its directory,
+recompute both hashes, and recheck the pixel dimensions and mask values.
+Verify writes nothing. `setup_painting.figure_mask` continues to take the
+mask's own path and hash. See the [refusal ledger](#EXTERNAL_RECEIPT_ARGUMENT).
+
+
 ### Edited rig-space parts (`assemble.edited_parts`, issue #1278)
 
 Use this block for a PNG edited at the exact crop and scale written by
@@ -1136,14 +1171,14 @@ alone does not apply a replacement.
 ```
 
 The block belongs in `assemble`. Both fields are required; `receipts` may be
-empty. Every receipt takes all five fields. `part` must name an existing part
+empty. Each receipt requires the four common fields and one author field. `part` must name an existing part
 in the base plan, once only. `dir` resolves relative to the config's directory;
 `file` resolves relative to that directory and must be a relative path.
 Hashes are lowercase SHA-256 of encoded file bytes, including PNG metadata;
 `from_sha256` is checked against the PNG the normal assemble would write for
-this config, rather than merely accepted as a declaration. `editor` remains
-the author's non-empty declaration; the tool cannot verify which editor was
-used. The decoded width and height must equal the assembled part's box.
+this config. Supply either the structured `producer` described under
+[External mask receipt](#external-mask-receipt) or a legacy nonblank `editor`
+string. Both forms are caller declarations. The decoded width and height must equal the assembled part's box.
 A changed crop, scale, name or order needs a plan or cut change instead.
 
 Record a receipt with the shipped writer (issue #1328), after declaring
@@ -1151,9 +1186,9 @@ Record a receipt with the shipped writer (issue #1328), after declaring
 each full character config:
 
 ```sh
-rig-parts edited-part --config draft/config.json --part sleeve_r --file retouched/sleeve_r.png --from assembled/parts/sleeve_r.png --editor "image editor"
+rig-parts edited-part --config draft/config.json --part sleeve_r --file retouched/sleeve_r.png --from assembled/parts/sleeve_r.png --producer '{"tool":"image-editor","script_sha256":"<lowercase 64-hex digest>"}'
 # Update a second full config only when explicitly named:
-rig-parts edited-part --config draft/config.json --part sleeve_r --file retouched/sleeve_r.png --from assembled/parts/sleeve_r.png --editor "image editor" --rig-config rig/config.json
+rig-parts edited-part --config draft/config.json --part sleeve_r --file retouched/sleeve_r.png --from assembled/parts/sleeve_r.png --producer '{"tool":"image-editor","script_sha256":"<lowercase 64-hex digest>"}' --rig-config rig/config.json
 ```
 
 CLI paths resolve from the working directory; the stored `file` resolves from
@@ -1161,15 +1196,19 @@ each config's own `edited_parts.dir`. The writer hashes the encoded PNG bytes,
 checks that both files decode and have equal dimensions, and validates every
 candidate config before writing either destination. It replaces the existing row for that
 part or appends at the array's length. New rows use key order `part`, `file`,
-`sha256`, `from_sha256`, `editor`; other rows and unrelated config bytes retain
+`sha256`, `from_sha256`, then `producer` or `editor`. Supply exactly one of
+`--producer <json>` and `--editor <text>`. Omitting both is a usage error
+(exit 2). Other rows and unrelated config bytes retain
 their original spelling and whitespace. No matching config is discovered.
 
 The writer never reassembles or certifies the baseline. A wrong same-size
 `--from` is recorded; the next build refuses `ASSEMBLE_EDITED_PART_BASELINE`,
 naming the current assembled hash and the recorded hash. Supply the exact PNG
 from a normal build of this config. A successful writer prints one stdout line
-with the part, both hashes and the declared editor; it does not prove which
-editor was used. The shared writer prints `config <path>: added/replaced
+with the part, both hashes and the producer or editor declaration. In
+`parts.json`, `provenance.edited_part.receipt` carries the same five ordered
+fields. For a legacy row the last field remains `editor` and both the
+`parts.json` and edited PNG bytes are unchanged for the same inputs. The shared writer prints `config <path>: added/replaced
 assemble.edited_parts.receipts[index]` or `config <path>: unchanged` on stderr.
 Validation refusals leave all named configs byte-identical.
 
@@ -5802,7 +5841,17 @@ recorded transform. The record fields and sampling formula are specified in
 | <a id="ASSEMBLE_TAKE_UNIQUE"></a>`ASSEMBLE_TAKE_UNIQUE` | repeated donor for one target tag at runtime | declare each target run/tag once |
 | <a id="CONFIG_TAKE_UNIQUE"></a>`CONFIG_TAKE_UNIQUE` | config selects the same target run/tag more than once | retain one donor per target tag |
 | <a id="ASSEMBLE_PART_SOURCE"></a>`ASSEMBLE_PART_SOURCE` | `assemble.editor_receipts.trace_parts` is `true` and a part's pixels are decided by a shape drawn in the config — an `assemble.cuts` (or an alternate set's `cuts`) `polygon`, `seethrough.arm_split`, a limb's `split.line`, an `assemble.patches` `box`, an `assemble.extend_painting` `band`; the object names the part and where the shape is declared, the detail the shape found (issue #947) | `config.json`: remove that entry and paint the piece as an author layer (`author:<label>`) in an image editor with its receipt in `assemble.editor_receipts.receipts`, or take the part whole from a layer of the split (a limb split may use `"edge": "painting"`) |
-| <a id="EDITED_PART_ARGUMENT"></a>`EDITED_PART_ARGUMENT` | A writer argument is missing or blank. | Supply a non-empty config, part, file, from and editor; omit rig-config or name a non-empty path. |
+| <a id="EDITED_PART_ARGUMENT"></a>`EDITED_PART_ARGUMENT` | A writer argument is missing or blank, or both author flags are present. | Supply config, part, file and from, plus exactly one of producer or editor. Omit rig-config or name a non-empty path. |
+| <a id="EXTERNAL_RECEIPT_ARGUMENT"></a>`EXTERNAL_RECEIPT_ARGUMENT` | Write or verify arguments are absent, malformed or incompatible, or kind is outside the accepted set. | Give one complete write or verify invocation. The accepted kind is mask. |
+| <a id="EXTERNAL_RECEIPT_SCHEMA"></a>`EXTERNAL_RECEIPT_SCHEMA` | The receipt is unreadable or has invalid JSON, version, keys or field values. | Supply a rig-parts-external-receipt/1 receipt. |
+| <a id="RECEIPT_PRODUCER"></a>`RECEIPT_PRODUCER` | Producer JSON or its fields are invalid. | Give a nonblank tool, optional nonblank model and exactly one declared lowercase SHA-256 digest. |
+| <a id="EXTERNAL_RECEIPT_INPUT"></a>`EXTERNAL_RECEIPT_INPUT` | The painting or mask cannot be read. | Supply the named readable PNG. |
+| <a id="EXTERNAL_RECEIPT_FILE_HASH"></a>`EXTERNAL_RECEIPT_FILE_HASH` | The mask bytes differ from the recorded SHA-256. | Restore the recorded mask bytes. |
+| <a id="EXTERNAL_RECEIPT_PAINTING_HASH"></a>`EXTERNAL_RECEIPT_PAINTING_HASH` | The painting bytes differ from the recorded SHA-256. | Restore the recorded painting bytes. |
+| <a id="EXTERNAL_RECEIPT_PNG"></a>`EXTERNAL_RECEIPT_PNG` | An input does not decode as PNG. | Supply a decodable PNG. |
+| <a id="EXTERNAL_RECEIPT_GRID"></a>`EXTERNAL_RECEIPT_GRID` | The mask or recorded grid differs from the painting dimensions. | Supply the mask on the painting grid and record the measured dimensions. |
+| <a id="EXTERNAL_RECEIPT_MASK_VALUES"></a>`EXTERNAL_RECEIPT_MASK_VALUES` | The mask contains a pixel outside opaque black and opaque white. | Supply a binary mask with opaque pixels. |
+| <a id="EXTERNAL_RECEIPT_OUTPUT"></a>`EXTERNAL_RECEIPT_OUTPUT` | The receipt destination cannot be published. | Use an unused path in a writable directory. |
 | <a id="EDITED_PART_BLOCK"></a>`EDITED_PART_BLOCK` | A named config has no assemble.edited_parts. | Declare its directory and receipts array before recording. |
 | <a id="EDITED_PART_FILE"></a>`EDITED_PART_FILE` | The file or from path is unreadable. | Supply readable PNG files at both explicit paths. |
 | <a id="EDITED_PART_PNG"></a>`EDITED_PART_PNG` | The file or from bytes are not a decodable PNG. | Supply PNGs supported by the existing codec. |

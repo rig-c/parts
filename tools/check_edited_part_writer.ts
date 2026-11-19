@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { writeEditorReceiptFixture } from '../fixtures/editor_receipts.ts';
+import { readParts } from '../src/parts.ts';
 import { assembleStage, build, type BuildStages } from '../src/build.ts';
 import { DEFAULT_PAGE_EDGES } from '../src/check.ts';
 import { loadConfig } from '../src/config.ts';
@@ -80,7 +81,7 @@ export function runEditedPartWriterChecks(dir: string, say: Say): void {
     `exit ${replaced.status}; only the body row changes, reported by the shared writer`);
   const checked = loadConfig(config), editedSpec = checked.assemble.edited_parts!;
   const verified = readEditedParts(editedSpec, config, checked.assemble.plan);
-  const legacy = readEditorReceipts({ receipts: editedSpec.receipts.map(r => ({ ...r, file: relative(dirname(config), resolve(dirname(config), editedSpec.dir, r.file)).replaceAll('\\', '/') })) }, config);
+  const legacy = readEditorReceipts({ receipts: editedSpec.receipts.flatMap(r => r.editor === undefined ? [] : [{ ...r, editor: r.editor, file: relative(dirname(config), resolve(dirname(config), editedSpec.dir, r.file)).replaceAll('\\', '/') }]) }, config);
   say('EXISTING_RECEIPT_READERS_VERIFY_WRITTEN_HASHES', verified.length === 2 && legacy.problems.length === 0 && legacy.bySha.has(expected.sha256),
     'readEditedParts and readEditorReceipts both verify the writer output without changing either reader');
   const tampered = { ...expected, sha256: '0'.repeat(64) };
@@ -171,6 +172,42 @@ export function runEditedPartWriterChecks(dir: string, say: Say): void {
     !correctBuild.lines.some(line => line.includes('ASSEMBLE_EDITED_PART_BASELINE:')) &&
     readFileSync(join(dir, 'correct-build', 'parts', 'body.png')).equals(readFileSync(file)),
     `writer exit ${correctWriter.status}; real build/assemble accepts receipt and emits exact edited bytes, then reaches injected rig sentinel`);
+  const digest = '1'.repeat(64);
+  const producer = { tool: 'fixture script', script_sha256: digest };
+  const producerArgs = [...args.slice(0, -2), '--producer', JSON.stringify({ script_sha256: digest, tool: producer.tool })];
+  const structuredWriter = cli(producerArgs), structuredBuild = runBuild('structured-build');
+  const structured = readParts(join(dir, 'structured-build', 'parts.json')).parts.find(part => part.name === 'body')?.provenance?.edited_part?.receipt;
+  const { editor: _editor, ...fields } = expected;
+  say('STRUCTURED_AUTHOR_ROUND_TRIPS', structuredWriter.status === 0 && structuredBuild.result.stoppedAt === 'rig' &&
+    JSON.stringify(structured) === JSON.stringify({ ...fields, producer }) &&
+    readFileSync(join(dir, 'structured-build', 'parts', 'body.png')).equals(readFileSync(file)),
+    `writer exit ${structuredWriter.status}; producer replaces only editor in ordered provenance; same edited PNG bytes`);
+  const structuredConfig = text(config);
+  for (const [name, mutant, code] of [
+    ['BOTH_AUTHOR_FLAGS', [...producerArgs, '--editor', editor], 'EDITED_PART_ARGUMENT'],
+    ['BAD_PRODUCER', [...args.slice(0, -2), '--producer', '{}'], 'RECEIPT_PRODUCER'],
+  ] as const) {
+    const result = cli([...mutant]);
+    say(name, result.status === 1 && result.out.includes(code + ':') && text(config) === structuredConfig,
+      `exit ${result.status}; ${code}; config bytes preserved`);
+  }
+  for (const [name, author, code] of [
+    ['BOTH_RECEIPT_AUTHORS', { editor, producer }, 'CONFIG_KEY_KNOWN'],
+    ['NO_RECEIPT_AUTHOR', {}, 'CONFIG_FIELD_PRESENT'],
+    ['BAD_RECEIPT_PRODUCER', { producer: { tool: 'fixture script' } }, 'RECEIPT_PRODUCER'],
+  ] as const) {
+    const mutant = raw(config);
+    assembly(mutant).edited_parts = { dir: '.', receipts: [{ ...fields, ...author }] };
+    save(config, mutant);
+    let refused = false;
+    try { loadConfig(config); }
+    catch (error) {
+      if (!(error instanceof PartsError)) throw error;
+      refused = error.problems.some(problem => problem.code === code && problem.object.includes('edited_parts.receipts[0]'));
+    }
+    say(name, refused, `${code} names the mutated receipt`);
+  }
+  writeFileSync(config, structuredConfig);
   say('NO_STAGED_FILES_LEFT', [dir, rigDir].every(at => readdirSync(at).every(name => !name.includes('.edited-part-') && !name.includes('.rig-parts-'))),
     'successful writes and validation refusals leave no staging files');
 }
