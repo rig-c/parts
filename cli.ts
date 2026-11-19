@@ -2625,8 +2625,8 @@ function cmdEditedPart(args: string[]): number {
 
 function cmdExternalReceipt(args: string[]): number {
   const f = flags(args, 'external-receipt', []);
+  if (typeof f === 'string') return usage(f);
   try {
-    if (typeof f === 'string') throw new PartsError([{ code: 'EXTERNAL_RECEIPT_ARGUMENT', object: 'external-receipt', detail: f }]);
     externalReceipt(f);
     return EXIT_OK;
   } catch (error) { return printRefusal(error); }

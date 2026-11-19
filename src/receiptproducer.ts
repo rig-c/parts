@@ -2,10 +2,11 @@ import { SHA256_PATTERN } from './editreceipt.ts';
 import { PartsError } from './errors.ts';
 
 const DIGEST_KEYS = ['checkpoint_sha256', 'graph_sha256', 'script_sha256'] as const;
-type DigestKey = typeof DIGEST_KEYS[number];
-export type ReceiptProducer = { tool: string; model?: string } & {
-  [K in DigestKey]: Record<K, string> & Partial<Record<Exclude<DigestKey, K>, never>>
-}[DigestKey];
+export type ReceiptProducer = { tool: string; model?: string } & (
+  | { checkpoint_sha256: string; graph_sha256?: never; script_sha256?: never }
+  | { graph_sha256: string; checkpoint_sha256?: never; script_sha256?: never }
+  | { script_sha256: string; checkpoint_sha256?: never; graph_sha256?: never }
+);
 
 export function receiptObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
