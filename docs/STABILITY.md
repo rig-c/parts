@@ -286,6 +286,7 @@ and do not certify visibility. See the
 | `edited-part` | `--config`, `--part`, `--file`, `--from`, exactly one of `--editor` or `--producer`; optional `--rig-config`, `--help` (`-h`) (issue #1328; splice a receipt into explicit full configs, without reassembly) |
 | `external-receipt` | `--kind` (mask), `--file`, `--painting`, `--producer`, `--out`; or `--verify`; or `--help` (`-h`) |
 | `diff-components` | `--stack`, `--painting`, `--parts`, `--floor`; optional `--threshold`, `--figure`, `--owners`, `--help` (`-h`); exactly one of `--out`, `--verify` (issues #1005, #1291; exhaustive native error inventory, `rig-parts-diff-components/1` by default and `rig-parts-diff-components/2` with `--owners`, and byte-bound reader for both) |
+| `diff-drafts` | `--left`, `--right`, `--out`; optional `--help` (`-h`) (issue #1369; draft-to-draft assemble comparison, `rig-parts-draft-diff/1`) |
 | `depth-prepare` | `--parts`, `--config`, `--out`; optional `--help` (`-h`) (issue #897; separate numeric-depth recipe) |
 | `depth-bind` | `--map`, `--input`, `--part`; optional `--help` (`-h`) (issue #1284; exclusive receipt creation from current file bytes) |
 | `depth-apply` | `--parts`, `--manifest`, `--config`, `--rig-config`, `--out`; optional `--help` (`-h`) (issue #897; original character config is read-only) |
