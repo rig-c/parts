@@ -145,13 +145,20 @@ export function runDiffDraftChecks(dir: string, say: Say): void {
   const repB = diffDraftsCommand(['--left', rightBuild, '--right', leftAssemble, '--out', outIdenticalB]);
   const bytesA = readFileSync(outIdenticalA, 'utf8');
   const bytesB = readFileSync(outIdenticalB, 'utf8');
+  const leftCompSha = sha256(new Uint8Array(readFileSync(join(leftAssemble, 'render', 'recomposite_rig.png'))));
+  const rightBuildCompSha = sha256(new Uint8Array(readFileSync(join(rightBuild, 'recomposite_rig.png'))));
   const identicalOk =
     repA.spec === DIFF_DRAFTS_SPEC &&
     Object.keys(repA).join(',') === 'spec,left,right,canvas,order,parts,composite,summary' &&
+    Object.keys(repA.left).join(',') === 'parts_sha256,part_count,composite_sha256' &&
+    Object.keys(repA.right).join(',') === 'parts_sha256,part_count,composite_sha256' &&
     repA.left.parts_sha256 === leftMeta.partsSha256 &&
     repA.left.part_count === 3 &&
+    repA.left.composite_sha256 === leftCompSha &&
     repA.right.parts_sha256 === rightMeta.partsSha256 &&
     repA.right.part_count === 3 &&
+    repA.right.composite_sha256 === rightBuildCompSha &&
+    repA.left.composite_sha256 === repA.right.composite_sha256 &&
     JSON.stringify(repA.canvas) === '{"width":20,"height":16}' &&
     repA.order === 'same' &&
     JSON.stringify(repA.summary) === '{"same":3,"changed":0,"added":0,"removed":0}' &&
@@ -322,8 +329,8 @@ export function runDiffDraftChecks(dir: string, say: Say): void {
   const collectedErr = caught(() => diffDraftsCommand(['--left', leftAssemble, '--right', otherCanvasDir, '--out', join(leftAssemble, 'inside.json')]));
   const directBadCanvas = caught(() =>
     measureDiffDrafts(
-      { partsSha256: leftMeta.partsSha256, rigSize: [20, 16], parts: [], recomposite: newRaster(20, 16) },
-      { partsSha256: rightMeta.partsSha256, rigSize: [20, 18], parts: [], recomposite: newRaster(20, 18) },
+      { partsSha256: leftMeta.partsSha256, compositeSha256: leftCompSha, rigSize: [20, 16], parts: [], recomposite: newRaster(20, 16) },
+      { partsSha256: rightMeta.partsSha256, compositeSha256: rightBuildCompSha, rigSize: [20, 18], parts: [], recomposite: newRaster(20, 18) },
     ),
   );
 
@@ -356,6 +363,23 @@ export function runDiffDraftChecks(dir: string, say: Say): void {
     'AS1369_05_REFUSALS_COLLECT_AND_THROW_ONCE_FOR_MISSING_LAYOUT_CANVAS_MISMATCH_AND_OUT_COLLISIONS',
     refusalsOk,
     `missing=${missingPartsErr?.problems[0]?.code}, bothLayouts=${bothLayoutsErr?.problems[0]?.code}, canvas=${canvasErr?.problems[0]?.code}, outExists=${outExistsErr?.problems[0]?.code}, insideLeft=${outInsideLeftErr?.problems[0]?.code}, insideRight=${outInsideRightErr?.problems[0]?.code}, collected=${collectedErr?.problems.map((p) => p.code).join('+')}`,
+  );
+
+  // 6. composite_sha256 matches direct file hashes on disk: equal on identical outputs, distinct when composites differ.
+  const rightRepaintCompSha = sha256(new Uint8Array(readFileSync(join(rightRepaint, 'recomposite_rig.png'))));
+  const compositeShaOk =
+    Object.keys(repRepaint.left).join(',') === 'parts_sha256,part_count,composite_sha256' &&
+    Object.keys(repRepaint.right).join(',') === 'parts_sha256,part_count,composite_sha256' &&
+    repA.left.composite_sha256 === leftCompSha &&
+    repA.right.composite_sha256 === rightBuildCompSha &&
+    repA.left.composite_sha256 === repA.right.composite_sha256 &&
+    repRepaint.left.composite_sha256 === leftCompSha &&
+    repRepaint.right.composite_sha256 === rightRepaintCompSha &&
+    repRepaint.left.composite_sha256 !== repRepaint.right.composite_sha256;
+  say(
+    'AS1369_06_COMPOSITE_SHA256_MATCHES_DIRECT_FILE_HASH_AND_DISTINGUISHES_DIFFERING_COMPOSITES',
+    compositeShaOk,
+    `identicalEqual=${repA.left.composite_sha256 === repA.right.composite_sha256}, diffLeftMatch=${repRepaint.left.composite_sha256 === leftCompSha}, diffRightMatch=${repRepaint.right.composite_sha256 === rightRepaintCompSha}, diffDistinct=${repRepaint.left.composite_sha256 !== repRepaint.right.composite_sha256}`,
   );
 }
 

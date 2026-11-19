@@ -12,6 +12,7 @@ export const DIFF_DRAFTS_SPEC = 'rig-parts-draft-diff/1';
 export interface DiffDraftSideSummary {
   parts_sha256: string;
   part_count: number;
+  composite_sha256: string;
 }
 
 export interface DiffDraftBox {
@@ -78,6 +79,7 @@ export interface DiffDraftPartInput {
 
 export interface DiffDraftSideInput {
   partsSha256: string;
+  compositeSha256: string;
   rigSize: readonly [number, number];
   parts: readonly DiffDraftPartInput[];
   recomposite: Raster;
@@ -203,6 +205,13 @@ function validateSideInput(side: DiffDraftSideInput, label: 'left' | 'right', pr
       detail: `is ${JSON.stringify(side.partsSha256)}; 64 lowercase hex characters are required`,
     });
   }
+  if (!/^[a-f0-9]{64}$/.test(side.compositeSha256)) {
+    problems.push({
+      code: 'DIFF_DRAFTS_INPUT',
+      object: `${label}.composite_sha256`,
+      detail: `is ${JSON.stringify(side.compositeSha256)}; 64 lowercase hex characters are required`,
+    });
+  }
   if (side.recomposite.width !== W || side.recomposite.height !== H || side.recomposite.data.length < W * H * 4) {
     problems.push({
       code: 'DIFF_DRAFTS_INPUT',
@@ -322,8 +331,8 @@ export function measureDiffDrafts(left: DiffDraftSideInput, right: DiffDraftSide
 
   return {
     spec: DIFF_DRAFTS_SPEC,
-    left: { parts_sha256: left.partsSha256, part_count: left.parts.length },
-    right: { parts_sha256: right.partsSha256, part_count: right.parts.length },
+    left: { parts_sha256: left.partsSha256, part_count: left.parts.length, composite_sha256: left.compositeSha256 },
+    right: { parts_sha256: right.partsSha256, part_count: right.parts.length, composite_sha256: right.compositeSha256 },
     canvas: { width: W, height: H },
     order,
     parts,
@@ -417,6 +426,7 @@ function readSideDirectory(dir: string, flag: '--left' | '--right', problems: Pr
   }
 
   let recomposite: Raster | null = null;
+  let compositeBytes: Uint8Array | null = null;
   if (!isRegularFile(layout.recompositePath)) {
     problems.push({
       code: 'DIFF_DRAFTS_INPUT',
@@ -426,6 +436,7 @@ function readSideDirectory(dir: string, flag: '--left' | '--right', problems: Pr
   } else {
     try {
       const bytes = new Uint8Array(readFileSync(layout.recompositePath));
+      compositeBytes = bytes;
       recomposite = decodePngBytes(bytes, layout.recompositePath);
     } catch (err) {
       problems.push({
@@ -482,7 +493,7 @@ function readSideDirectory(dir: string, flag: '--left' | '--right', problems: Pr
     }
   }
 
-  if (partsBytes === null || partsFile === null || recomposite === null || partInputs.length !== partsFile.parts.length) {
+  if (partsBytes === null || partsFile === null || compositeBytes === null || recomposite === null || partInputs.length !== partsFile.parts.length) {
     return { partsFile, input: null };
   }
 
@@ -490,6 +501,7 @@ function readSideDirectory(dir: string, flag: '--left' | '--right', problems: Pr
     partsFile,
     input: {
       partsSha256: sha256Hex(partsBytes),
+      compositeSha256: sha256Hex(compositeBytes),
       rigSize: partsFile.rig_size,
       parts: partInputs,
       recomposite,

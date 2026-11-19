@@ -9308,8 +9308,8 @@ The top-level fields of `rig-parts-draft-diff/1`, in key order:
 | Field | Shape | Meaning |
 | --- | --- | --- |
 | `spec` | `"rig-parts-draft-diff/1"` | Schema identifier. |
-| `left` | `{ parts_sha256: string, part_count: number }` | Lowercase 64-hex SHA-256 of the raw left `parts.json` bytes and `parts.length`. |
-| `right` | `{ parts_sha256: string, part_count: number }` | Lowercase 64-hex SHA-256 of the raw right `parts.json` bytes and `parts.length`. |
+| `left` | `{ parts_sha256: string, part_count: number, composite_sha256: string }` | Lowercase 64-hex SHA-256 of the raw left `parts.json` bytes, `parts.length`, and lowercase 64-hex SHA-256 of the left `recomposite_rig.png` bytes. The command only records these hashes; a consumer that holds the two pictures can detect a report that does not belong to them by comparing hashes. |
+| `right` | `{ parts_sha256: string, part_count: number, composite_sha256: string }` | Lowercase 64-hex SHA-256 of the raw right `parts.json` bytes, `parts.length`, and lowercase 64-hex SHA-256 of the right `recomposite_rig.png` bytes. |
 | `canvas` | `{ width: number, height: number }` | Shared `rig_size` dimensions `[width, height]` in rig pixels. |
 | `order` | `"same" \| "changed"` | `"same"` when the part names in `parts.json` draw order are equal as lists; `"changed"` otherwise. |
 | `parts` | `DiffDraftPart[]` | One entry per part name in the union of left and right, sorted by `name` in UTF-16 code-unit order. |
