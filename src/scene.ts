@@ -96,7 +96,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { dirname, join, resolve } from 'node:path';
 import type { RigStop } from '@rig-c/core/rig';
 import { checkStage, gateThroughRigc, type Log } from './build.ts';
-import { ACCEPTABLE_BARS, barsNotMet, type CheckReport, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, type PackMode, parsePageSize, requirementsNotPass, type RigcRunner } from './check.ts';
+import { ACCEPTABLE_BARS, barsNotMet, CHECK_SPEC, type CheckReport, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, type PackMode, parsePageSize, requirementsNotPass, type RigcRunner } from './check.ts';
 import { CONSTRAINT_BONE_FIELDS, editorReceiptProblems, ROOT_BONE } from './config.ts';
 import { cropToSpineY } from './coords.ts';
 import { failLine, PartsError, type Problem, refuseIfAny } from './errors.ts';
@@ -498,6 +498,22 @@ function readJson(path: string, what: string, problems: Problem[], consumed: (by
 }
 
 /**
+ * The bars a character's `check/check.json` says failed: on a versioned
+ * {@link CHECK_SPEC} report, the declared `bar_outcomes` ids whose outcome
+ * status is `'FAIL'` in the report's order (issue #1373); on a report without
+ * that spec, {@link barsNotMet}'s legacy figure reading.
+ */
+export function checkBarsFailed(ck: Readonly<Record<string, unknown>>): string[] {
+  if (ck.spec === CHECK_SPEC) {
+    const outcomes = isRecord(ck.bar_outcomes) ? ck.bar_outcomes : {};
+    return Object.entries(outcomes)
+      .filter(([, outcome]) => isRecord(outcome) && outcome.status === 'FAIL')
+      .map(([id]) => id);
+  }
+  return barsNotMet(ck);
+}
+
+/**
  * Read one character's build, collecting every problem: the files `build`
  * writes (`SCENE_BUILD_PRESENT`), its own check green (`SCENE_BUILD_GREEN`:
  * `check/check.json` with `PASS` and `gate_spine_html_green` both true — a
@@ -507,8 +523,11 @@ function readJson(path: string, what: string, problems: Problem[], consumed: (by
  * `accept` (issue #203) is `compose --accept`, joined with the character's own
  * `accept`: a check that is not green is taken when every bar it failed is
  * named in that join, its gate green and every declared requirement PASS;
- * otherwise it is `SCENE_BUILD_GREEN`, naming the bars not accepted. Without
- * an accept list the refusal reads as it always did.
+ * otherwise it is `SCENE_BUILD_GREEN`, naming the bars not accepted. When the
+ * report declares `spec: "rig-parts-check/1"`, the failing bars are read from
+ * `bar_outcomes` ({@link checkBarsFailed}, issue #1373); without that spec,
+ * from {@link barsNotMet}. Without an accept list the refusal reads as it
+ * always did.
  */
 export function readCharacterBuild(c: SceneCharacter, problems: Problem[], accept: readonly string[] = []): CharacterBuild | null {
   const before = problems.length;
@@ -529,7 +548,7 @@ export function readCharacterBuild(c: SceneCharacter, problems: Problem[], accep
   if (check !== undefined) {
     const ck = isRecord(check) ? check : {};
     if ((ck.PASS !== true || ck.gate_spine_html_green !== true) && joined.size > 0) {
-      const failed = barsNotMet(ck);
+      const failed = checkBarsFailed(ck);
       const reqs = requirementsNotPass(ck);
       const not = failed.filter((b) => !joined.has(b));
       if (not.length === 0 && reqs.length === 0 && failed.length > 0) accepted = failed;
