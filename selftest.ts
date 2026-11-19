@@ -39,6 +39,7 @@ import { runSupportDomainChecks } from './tools/check_support_domains.ts';
 import { runCoincideChecks, runCoincideSetupChecks, runCoincideMutants } from './tools/check_coincide.ts';
 import { COINCIDE_LINE, type SupportReport } from './src/coincide.ts';
 import { runDiffComponentChecks, runDiffComponentCliChecks, publicDiffControl } from './tools/check_diffcomponents.ts';
+import { runDiffDraftChecks, runDiffDraftCliChecks } from './tools/check_diffdrafts.ts';
 import { runPaintingEdgeChecks } from './tools/check_painting_edges.ts';
 import { runProjectConfigChecks } from './tools/check_project_config.ts';
 import { runGroundConfigChecks, runGroundExampleChecks, runGroundUnitChecks } from './tools/check_ground.ts';
@@ -5989,7 +5990,10 @@ function runCliSuite(): number {
   section('cli: the command surface');
   const { say, bad } = counter();
   const diffDir1005 = temp('diff-cli');
-  try { runDiffComponentCliChecks(diffDir1005, (name, ok, detail) => say(name, ok, detail, 'issue #1005: shipped command and reader on generated PNG bytes'), join(ROOT, 'cli.ts')); } finally { rmSync(diffDir1005, { recursive: true, force: true }); }
+  try {
+    runDiffComponentCliChecks(diffDir1005, (name, ok, detail) => say(name, ok, detail, 'issue #1005: shipped command and reader on generated PNG bytes'), join(ROOT, 'cli.ts'));
+    runDiffDraftCliChecks(diffDir1005, (name, ok, detail) => say(name, ok, detail, 'issue #1369: draft-to-draft assemble diff CLI surface and refusals'), join(ROOT, 'cli.ts'));
+  } finally { rmSync(diffDir1005, { recursive: true, force: true }); }
   const externalDir = temp('external-receipt');
   let externalIndex = 0;
   try {
@@ -34859,6 +34863,7 @@ function runAssembleSuite(): number {
     runOccluderConfigChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #1230: config.assemble.occluders at every config door, each plant refused by its code'));
     runOccluderCopyChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #1230: copied occluder colour is named with its count, silent without it, and moves no byte'));
     runDiffComponentChecks((name, ok, detail) => say(name, ok, detail, 'issue #1005: hand-counted whole-error components and planted report mutations'));
+    runDiffDraftChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #1369: hand-counted draft-to-draft assemble diff controls and planted refusals'));
     runPaintingExtensionChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #848: public generated controls; explicit ownership, bounds and exact painting samples'));
     runPaintingEdgeChecks((name, ok, detail) => say(name, ok, detail, 'issue #953: under visible, a part edge takes the painting\'s line and coverage; every skip reason planted next to a positive strip'));
     runGroundUnitChecks((name, ok, detail) => say(name, ok, detail, 'issue #996: the ring share and its cut-off, and the busy-ground rules on a strip next to the plain mutant that takes the ground'));

@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { diffComponentsCommand } from './src/diffcomponents.ts';
+import { DIFF_DRAFTS_SPEC, diffDraftsCommand } from './src/diffdrafts.ts';
 import { applyTakenLayers } from './src/takelayers.ts';
 import { applyDepth, bindDepthMap, prepareDepth } from './src/depthworkflow.ts';
 import { externalReceipt } from './src/externalreceipt.ts';
@@ -84,6 +85,12 @@ usage:
   rig-parts diff-components --stack <png> --painting <png> --parts <parts.json> --floor <px>
       [--threshold <channel>] [--figure <binary-png>] [--owners] (--out <json> | --verify <json>)
       Exhaustive native difference inventory; default max RGB channel > 40.
+
+  rig-parts diff-drafts --left <dir> --right <dir> --out <json>
+      Compare two assemble or build outputs and write ${DIFF_DRAFTS_SPEC} JSON:
+      per-part status (same, changed, added, removed), file sha256, rig-pixel
+      box and draw-order index per present side, pixels_equal and rig-space
+      pixel diff counts/bounds on changed parts, and the composite pixel diff.
 
 
   rig-parts depth-prepare --parts <assembled-dir> --config <depth-recipe.json> --out <empty-dir>
@@ -1105,6 +1112,14 @@ function cmdDiffComponents(args: string[]): number {
   try { diffComponentsCommand(args); return EXIT_OK; } catch (err) { return printRefusal(err); }
 }
 
+function cmdDiffDrafts(args: string[]): number {
+  for (let i = 0; i < args.length; i += 2) {
+    if (!takesValued('diff-drafts', args[i])) return usage(notTaken('diff-drafts', args[i]));
+    if (args[i + 1] === undefined || args[i + 1].startsWith('--')) return usage(`diff-drafts ${args[i]} requires a value`);
+  }
+  try { diffDraftsCommand(args); return EXIT_OK; } catch (err) { return printRefusal(err); }
+}
+
 /** `guide`: one argument, a rule name or a section; the slice printed, or the refusal. */
 function cmdGuide(args: string[]): number {
   if (args.length !== 1) return usage(`guide takes one rule name or one §<n> / §<n>.<m> / §<n>.<m>.<k>; got ${args.length} argument(s)`);
@@ -1197,6 +1212,7 @@ const TAKES = {
   'external-receipt': { valued: ['--kind', '--file', '--painting', '--producer', '--out', '--verify'], switches: ['--help'] },
   'check-parts': { valued: ['--parts', '--out'], switches: ['--json', '--help'] },
   'diff-components': { valued: ['--stack', '--painting', '--parts', '--figure', '--floor', '--threshold', '--out', '--verify'], switches: ['--owners', '--help'] },
+  'diff-drafts': { valued: ['--left', '--right', '--out'], switches: ['--help'] },
   'depth-bind': { valued: ['--map', '--input', '--part'], switches: ['--help'] },
   'depth-prepare': { valued: ['--parts', '--config', '--out'], switches: ['--help'] },
   'depth-apply': { valued: ['--parts', '--manifest', '--config', '--rig-config', '--out'], switches: ['--help'] },
@@ -2667,6 +2683,7 @@ function main(argv: string[]): number | Promise<number> {
   const helped = maybeCommandHelp(command, rest);
   if (helped !== null) return helped;
   if (command === 'diff-components') return cmdDiffComponents(rest);
+  if (command === 'diff-drafts') return cmdDiffDrafts(rest);
   if (command === 'layers') return cmdLayers(rest);
   if (command === 'depth-prepare') return cmdDepthPrepare(rest);
   if (command === 'edited-part') return cmdEditedPart(rest);

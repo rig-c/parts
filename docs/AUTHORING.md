@@ -4472,6 +4472,7 @@ existing hardlinks are refused before artifact output; the ordinary mode names
 | `sheet --source <png> --layers <path>… --out <png>` | a labelled contact sheet of the painting and every layer or part |
 | `assemble --propose-plan … [--write-config <config>]` | propose `assemble.plan` and `extend_below_crop` from the two runs, leaving out an implausible layer with a note naming the rule, naming in a note any full-run body no planned part covers, and naming every layer no row takes with why (empty, taken from the other run only, a plausibility rule; `nose`, never planned, with the row that lets `propose` read the head's pitch). Front/back hair reaching more than 8 rig pixels beyond a side or top edge receives explicit `edges`; each explicit edge has the same strict reach bar. The legacy bottom entry is retained unchanged; qualifying side/top edges receive a separate entry without bottom. With no qualifying side/top edge, the proposal remains unchanged. |
 | `assemble --source --full --head --config --out [--seam] [--project]` | merge the two runs into rig-space parts, `parts.json`, the recomposite and its error map, and `run.json` (`spec` `rig-run/1`), and list the uncovered holes |
+| `diff-drafts --left <dir> --right <dir> --out <json>` | compare two assemble or build outputs (`rig/parts.json` + `rig/parts/` + `render/recomposite_rig.png`, or `parts.json` + `parts/` + `recomposite_rig.png`) and write `rig-parts-draft-diff/1` JSON: per-part status (`same`, `changed`, `added`, `removed`), file `sha256`, rig-pixel `box` and draw-order `index` per present side, `pixels_equal` and rig-space `pixels` (`changed_px`, `colour_px`, `alpha_px`, `bounds`) on changed parts, and `composite` ([Draft-to-draft assemble comparison](#draft-to-draft-assemble-comparison-issue-1369)) |
 | `head-crop-preflight --full <run> --canvas WxH --head-box '[left,top,right,bottom]'` | before the head run: JSON on stdout, one advice line per hit tag on stderr, exit 0 even when clipped. Counts original alpha > 8 full-run samples after centre registration through the square pad into painting coordinates: centres below left/top or at/above right/bottom are outside. Fractional boxes are accepted; corner samples count on both edges. No ghost cleanup, resampling, head run or assemble is needed. These counts cannot be compared with `ASSEMBLE_CROP_CLIPPED`, which counts rig pixels at alpha >= 128 after `cleanGhosts`. Preflight reads original samples before the head run exists, so soft fringes and ghost specks can be hits only here. Bottom is distinct because `extend_below_crop` handles it. Zero-hit tags remain in JSON. Existing pipeline outputs stay unchanged; help adds this command and guide reflects these documentation edits. |
 | `propose --head-box --full <run> --canvas WxH [--no-back-hair] [--write-config <config>]` | propose `seethrough.head_box` from the full run, held inside the painting; `--no-back-hair` leaves the back-hair layer out of that proposal |
 | `propose --parts --source --out [--compare <config>] [--write-config <config> [--only-missing]]` | propose bones, meshes, regions and an idle; draw the overlay; print, per bone, which check read it or that none did and why (its role, its kind of segment), and write `basis.json` beside the proposal — what each bone rests on (a joint, a part's mask, a ratio, other bones) and, with `--compare`, whether the config's bone differs |
@@ -5905,6 +5906,9 @@ recorded transform. The record fields and sampling formula are specified in
 | <a id="DIFF_COMPONENTS_INPUT"></a>`DIFF_COMPONENTS_INPUT` | `diff-components` needs readable PNG stack/painting/part images, a writable `--out` target when writing, explicit parts, positive integer floor, a finite threshold in [0,255], matching native dimensions and valid coverage/domain inputs; flags must be unique and known, with nonempty values | Supply the named missing or invalid input; no resampling or inferred figure is performed |
 | <a id="DIFF_COMPONENTS_BINDING"></a>`DIFF_COMPONENTS_BINDING` | The shipped report reader found a stack or painting SHA-256 different from the supplied bytes; found and required digests are printed | Regenerate against the bytes being reviewed |
 | <a id="DIFF_COMPONENTS_REPORT"></a>`DIFF_COMPONENTS_REPORT` | Invalid report JSON/spec (`rig-parts-diff-components/1` or `rig-parts-diff-components/2` is required, or the spec requested by a narrow reader), or its exhaustive inventory, definition, paths, domain, coverage or topmost `owners` (on `/2`) differs from remeasurement; capped inventories are refused | Regenerate the complete versioned report against the same input paths, bytes, parts and figure domain |
+| <a id="DIFF_DRAFTS_INPUT"></a>`DIFF_DRAFTS_INPUT` | `diff-drafts` requires unique `--left`, `--right` and `--out` flags with non-empty paths; each input directory must hold either the standalone `assemble` layout (`rig/parts.json`, `rig/parts/<name>.png`, `render/recomposite_rig.png`) or the `build` layout (`parts.json`, `parts/<name>.png`, `recomposite_rig.png`), with readable PNG bytes whose dimensions match `parts.json` | Supply two readable assemble or build output directories |
+| <a id="DIFF_DRAFTS_CANVAS"></a>`DIFF_DRAFTS_CANVAS` | `--left` and `--right` declare different `rig_size` canvas dimensions in `parts.json`, so the two outputs are not drafts of one rig | Compare two drafts assembled at the same `rig_size` canvas |
+| <a id="DIFF_DRAFTS_OUT"></a>`DIFF_DRAFTS_OUT` | `--out` already exists, lies inside `--left` or `--right`, or cannot be written | Name a fresh writable output file path outside both input directories |
 | <a id="ASSEMBLE_PINHOLES"></a>`ASSEMBLE_PINHOLES` | the requirements file declares `pinholes.required: true` and the flat parts stack holds a pinhole: an 8-connected opening (alpha 0 on every part, enclosed by the parts' alpha above 0) whose every pixel the painting shows as figure. One refusal per pinhole, largest first, naming its box, its px and the parts bordering it; nothing is written (issue #944, [Pinholes at rest](#pinholes-at-rest-issue-944)) | `assemble.plan` / `assemble.take` / the head pass: take the pinhole's pixels from a layer that holds them ([Source before scissors](#source-before-scissors)); where no layer holds them, the defect is the input's. Without the declaration the bar reports SKIP |
 | <a id="ASSEMBLE_PATCH_BOX_INSIDE"></a>`ASSEMBLE_PATCH_BOX_INSIDE` | a patch's box reaches past the rig (the painting times `rig_scale`; the detail gives the size) | that patch's `box` — it is in rig pixels, not painting pixels |
 | <a id="ASSEMBLE_PATCH_OPAQUE"></a>`ASSEMBLE_PATCH_OPAQUE` | a patch takes no pixel: a `"silhouette"` patch whose box holds none of the figure | move the box onto the figure, or `"alpha": "box"` |
@@ -9322,6 +9326,64 @@ It does not authenticate a caller's chosen threshold or floor: consumers must
 compare those to their own policy. The report does not choose which components
 a consumer accepts. The named refusals are `DIFF_COMPONENTS_INPUT`,
 `DIFF_COMPONENTS_BINDING` and `DIFF_COMPONENTS_REPORT` in the rule table.
+
+### Draft-to-draft assemble comparison (issue #1369)
+
+`rig-parts diff-drafts --left <dir> --right <dir> --out <json>` reads two
+assemble outputs and writes one JSON report, spec `rig-parts-draft-diff/1`, with
+fixed key order, no clock and no file paths. Each input directory may use either
+the standalone `assemble --out <dir>` layout (`<dir>/rig/parts.json`,
+`<dir>/rig/parts/<name>.png`, `<dir>/render/recomposite_rig.png`) or the
+`build --out <dir>` layout (`<dir>/parts.json`, `<dir>/parts/<name>.png`,
+`<dir>/recomposite_rig.png`); a directory holding neither layout (or both) is
+refused by name (`DIFF_DRAFTS_INPUT`). `--out` must not already exist and must
+not lie inside `--left` or `--right` (`DIFF_DRAFTS_OUT`). Different `rig_size`
+canvas dimensions between `--left` and `--right` are refused by name
+(`DIFF_DRAFTS_CANVAS`). The command records no threshold and makes no verdict;
+it exits 0 whenever the report is written.
+
+The top-level fields of `rig-parts-draft-diff/1`, in key order:
+
+| Field | Shape | Meaning |
+| --- | --- | --- |
+| `spec` | `"rig-parts-draft-diff/1"` | Schema identifier. |
+| `left` | `{ parts_sha256: string, part_count: number, composite_sha256: string }` | Lowercase 64-hex SHA-256 of the raw left `parts.json` bytes, `parts.length`, and lowercase 64-hex SHA-256 of the left `recomposite_rig.png` bytes. The command only records these hashes; a consumer that holds the two pictures can detect a report that does not belong to them by comparing hashes. |
+| `right` | `{ parts_sha256: string, part_count: number, composite_sha256: string }` | Lowercase 64-hex SHA-256 of the raw right `parts.json` bytes, `parts.length`, and lowercase 64-hex SHA-256 of the right `recomposite_rig.png` bytes. |
+| `canvas` | `{ width: number, height: number }` | Shared `rig_size` dimensions `[width, height]` in rig pixels. |
+| `order` | `"same" \| "changed"` | `"same"` when the part names in `parts.json` draw order are equal as lists; `"changed"` otherwise. |
+| `parts` | `DiffDraftPart[]` | One entry per part name in the union of left and right, sorted by `name` in UTF-16 code-unit order. |
+| `composite` | `{ changed_px: number, colour_px: number, alpha_px: number, bounds: { x: number, y: number, w: number, h: number } \| null }` | Pixel comparison in rig-pixel space between the two `recomposite_rig.png` rasters. The recomposite is drawn on opaque white, so an alpha change there shows as a colour change; alpha is read from the per-part rows. |
+| `summary` | `{ same: number, changed: number, added: number, removed: number }` | Counts of `parts` entries by `status`. |
+
+Each `parts[i]` entry carries, in key order:
+
+- `name`: the part name.
+- `status`: `"same"` when the part is present on both sides with equal PNG file
+  `sha256` and equal `box`; `"added"` when only `right` has it; `"removed"` when
+  only `left` has it; otherwise `"changed"`.
+- `left` (present on `"same"`, `"changed"` and `"removed"`):
+  `{ sha256: string, box: { x: number, y: number, w: number, h: number }, index: number }`,
+  where `sha256` is the lowercase 64-hex SHA-256 of the part PNG file bytes,
+  `box` is the part's rig-pixel crop box from `parts.json`, and `index` is its
+  0-based draw-order index in `parts.json`.
+- `right` (present on `"same"`, `"changed"` and `"added"`):
+  `{ sha256: string, box: { x: number, y: number, w: number, h: number }, index: number }`.
+- `pixels_equal` (present on `"changed"` only): `true` or `false`. `true`
+  exactly when the two decoded part images have the same width and height and
+  are equal in every RGBA channel at every position of the part's own crop,
+  whatever their boxes. A re-encoded PNG with identical decoded RGBA pixels has
+  `status: "changed"`, `pixels_equal: true` and `pixels.changed_px: 0`; a part
+  that moved (`left.box` != `right.box`) with the same art has
+  `status: "changed"`, `pixels_equal: true` and non-zero rig-space `pixels`
+  counts; a repaint has `status: "changed"` and `pixels_equal: false`.
+- `pixels` (present on `"changed"` only):
+  `{ changed_px: number, colour_px: number, alpha_px: number, bounds: { x: number, y: number, w: number, h: number } \| null }`,
+  compared in rig-pixel space over the union of `left.box` and `right.box`, with
+  any position outside a side's box counting as RGBA `0, 0, 0, 0`. `changed_px`
+  counts rig pixels where any of R, G, B or A differs; `colour_px` where any of
+  R, G or B differs; `alpha_px` where A differs; `bounds` is the bounding box
+  `{ x, y, w, h }` of the changed rig positions, or `null` when
+  `changed_px` is `0`.
 
 
 ### Consumer check rows (issue #1089)
