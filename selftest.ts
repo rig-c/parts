@@ -23540,7 +23540,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
     const lag = runCli(['check', '--rig', lagRig, '--out', lagOut]);
     const lagFig = readJsonFile(join(lagOut, 'check.json'));
     const lagProblems = lag.out.split('\n').filter(line => line.startsWith('  FAIL  '));
-    say('CK1373_REVERSED_PHASE_FAILS_ONLY_CHAIN_LAG_IN_THE_COMPLETED_REPORT',
+    say('CK1372_REVERSED_PHASE_FAILS_ONLY_CHAIN_LAG_IN_THE_COMPLETED_REPORT',
       lag.status === 1 && onlyFailedCheckBar(lagFig, 'CHAIN_LAG') && lagProblems.length === 1 &&
         lagProblems[0].startsWith('  FAIL  CHECK_CHAIN_LAG:') && lagProblems[0].includes('"lag_child"'),
       JSON.stringify({ exit: lag.status, failed: failedCheckBars(lagFig), problems: lagProblems }),
