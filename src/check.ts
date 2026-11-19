@@ -2757,10 +2757,17 @@ export const REPORTED_LINES = ['RECOMPOSITE_HOLES'] as const;
 
 export const CHECK_SPEC = 'rig-parts-check/1';
 
-/** The completed check.json, with its version and bar outcomes first and PASS last. */
+/** The primary packed model document `check` read (`check/build/skeleton.model.json`). */
+export interface CheckBuildRecord {
+  model_sha256: string;
+}
+
+/** The completed check.json, with its version, bar outcomes and build identity first and PASS last. */
 export interface CheckFigures {
   spec: typeof CHECK_SPEC;
   bar_outcomes: CheckBarOutcomes;
+  /** The primary `check/build/skeleton.model.json` `check` read (issue #1378): provenance, not a bar. */
+  build: CheckBuildRecord;
   gate_spine_html_green: boolean;
   /** Which rigc entry gated the build ({@link readRigcEntry}): provenance, not a bar. */
   rigc_entry: RigcEntryRecord;
@@ -3313,7 +3320,7 @@ export type CheckStatus = 'PASS' | 'FAIL' | 'SKIP' | 'WARN' | 'CLEAR' | 'REPORTE
  * {@link SWEEP_LINE}, {@link MOTION_SEAM_LINE}, {@link CLOTH_LINE}, the reported lines, {@link SOURCE_LINE} and
  * {@link WIND_BAND_LINE}, each where the file writes it. The `requirements` block's lines are not bars and are not read here.
  */
-export function checkStatuses(fig: Omit<CheckFigures, 'spec' | 'bar_outcomes'>): Record<string, CheckStatus> {
+export function checkStatuses(fig: Omit<CheckFigures, 'spec' | 'bar_outcomes' | 'build'>): Record<string, CheckStatus> {
   const raw = fig as unknown as Record<string, unknown>;
   const bar = (id: 'gate' | 'loop' | 'seam', measured: boolean): CheckStatus => (!measured ? 'SKIP' : checkBarStatus(raw, id) === 'FAIL' ? 'FAIL' : 'PASS');
   const out: Record<string, CheckStatus> = { gate: bar('gate', true), loop: bar('loop', fig.loop_max_diff !== null), seam: bar('seam', fig.seam_mean !== null) };
@@ -6911,6 +6918,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const pack = parsePackLines(gateHtml);
   refuseIfAny(packEdgeProblems(pack, mode));
   const packOpaque = pack.filter((p) => existsSync(join(buildDir, p.page))).map((p) => ({ page: p.page, share: opaqueShare(readPng(join(buildDir, p.page))) }));
+  const modelSha256 = createHash('sha256').update(readFileSync(join(buildDir, 'skeleton.model.json'))).digest('hex');
 
   // 2. no second gate: `rigc validate --profile spine` of this build measured no rule the build's own two passes
   // had not (14 of the build's 23 on the demo, rigc 1.5.1 and 2.0.3 alike; selftest CH09 holds it), and on rigc's
@@ -7679,7 +7687,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const skipped: { loop?: string; seam?: string } = {};
   if (inp.noIdle !== null) skipped.loop = inp.noIdle;
   if (inp.noParts !== null) skipped.seam = inp.noParts;
-  const readings: Omit<CheckFigures, 'spec' | 'bar_outcomes' | 'PASS'> = {
+  const readings: Omit<CheckFigures, 'spec' | 'bar_outcomes' | 'build' | 'PASS'> = {
     gate_spine_html_green: htmlGreen,
     rigc_entry: rigcEntry,
     pack_mode: { page_edges: mode.pageEdges, pack_shape: mode.packShape, ...(pageSize === undefined ? {} : { page_size: pageSize }) },
@@ -7765,6 +7773,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const figures: CheckFigures = {
     spec: CHECK_SPEC,
     bar_outcomes: checkBarOutcomes(readings, skipReasons, stretchFailedWithoutReading),
+    build: { model_sha256: modelSha256 },
     ...readings,
     PASS: problems.length === 0,
   };

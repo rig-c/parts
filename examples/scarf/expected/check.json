@@ -71,6 +71,9 @@
    "reason": "no-root-gate"
   }
  },
+ "build": {
+  "model_sha256": "25a07809f41b47b6a6cc52247087bc81b99e7aba812630b737441b56ab53cda3"
+ },
  "gate_spine_html_green": true,
  "rigc_entry": {
   "entry": "cli.ts",
