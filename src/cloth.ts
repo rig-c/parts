@@ -72,8 +72,13 @@ import { pyRound } from './round.ts';
 import { segmentDistance } from './weights.ts';
 
 /** The tags a `cloth` recipe may name: the parts the proposer drafts chains on that hang. */
-export const CLOTH_TARGETS = ['bottomwear', 'back hair', 'front hair'] as const;
+export const CLOTH_TARGETS = ['bottomwear', 'back hair', 'front hair', 'handwear-r', 'handwear-l'] as const;
 export type ClothTarget = (typeof CLOTH_TARGETS)[number];
+export type SleeveClothTarget = Extract<ClothTarget, `handwear-${string}`>;
+
+export function isSleeveCloth(target: ClothTarget): target is SleeveClothTarget {
+  return target === 'handwear-r' || target === 'handwear-l';
+}
 
 /** The per-branch stiffness of a tree. */
 export interface ClothStrength {

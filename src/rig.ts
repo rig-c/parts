@@ -3015,7 +3015,9 @@ export function buildWaistPairSource(
         const w = img.width;
         const h = img.height;
         const limits: InfluenceLimits = meshLimits('influences' in mesh ? mesh.influences : undefined);
-        const segsAt = dressSegsAt(p, segs);
+        const fixed = mesh.fixed_above;
+        const heldRow = fixed === undefined ? undefined : fixedTriangleRow(fixed.row, oy, lm.vertices, lm.triangles);
+        const segsAt = dressSegsAt(p, segs, heldRow);
         const exponent = ('exponent' in mesh ? mesh.exponent : undefined) ?? DISTANCE_EXPONENT;
         let touchesArt: boolean[] | null = null;
         if (band === null && drawn !== undefined && limits.maxInfluences === 1) {

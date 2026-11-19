@@ -101,7 +101,7 @@ import { pyRound } from './round.ts';
 import { motionSeamProblems, type MotionSeamDeclaration } from './motionseams.ts';
 import { REQUIREMENTS_SPEC, type RequirementsFile } from './requirements.ts';
 import { setupPaintingFilePath } from './setuppainting.ts';
-import { CLOTH_TARGETS, type ClothRecipes, RECIPE_STRENGTH, RIGC_DEFAULT_DAMPING, springStable } from './cloth.ts';
+import { CLOTH_TARGETS, type ClothRecipes, isSleeveCloth, RECIPE_STRENGTH, RIGC_DEFAULT_DAMPING, springStable } from './cloth.ts';
 import { GRID, MAX_SIDE } from './contour.ts';
 import { foldName, type Problem, refuseIfAny } from './errors.ts';
 import { edgeLength } from './length.ts';
@@ -4869,6 +4869,10 @@ function checkCloth(c: Check, v: Json): void {
     const path = `${at}.${JSON.stringify(tag)}`;
     const r = c.object(path, v[tag], ['links', 'wind', 'gravity'], ['chains', 'split', 'length_ratio', 'strength', 'damping', 'alternate_damping', 'translate', 'swing', 'part', 'parts', 'influence', 'extent']);
     if (r === null) continue;
+    const sleeve = isSleeveCloth(tag);
+    if (sleeve && (!('part' in r) || Array.isArray(r.part) || 'parts' in r)) {
+      c.fail('CONFIG_CLOTH_SLEEVE_PART', `${path}.part`, 'one sleeve carrier name is required in part; leave parts out');
+    }
     if (tag !== 'back hair' && !('chains' in r)) c.fail('CONFIG_FIELD_PRESENT', `${path}.chains`, 'is absent and required');
     const chains = 'chains' in r && c.int(`${path}.chains`, r.chains, 1) ? (r.chains as number) : null;
     const links = 'links' in r && c.int(`${path}.links`, r.links, 1) ? (r.links as number) : null;
@@ -4886,8 +4890,8 @@ function checkCloth(c: Check, v: Json): void {
     if ('length_ratio' in r) c.number(`${path}.length_ratio`, r.length_ratio, 'positive');
     if ('extent' in r) {
       const extent = `${path}.extent`;
-      if (tag !== 'bottomwear' || 'parts' in r || Array.isArray(r.part)) {
-        c.fail('CONFIG_CLOTH_EXTENT', extent, 'is supported on a single bottomwear carrier only');
+      if ((tag !== 'bottomwear' && !sleeve) || 'parts' in r || Array.isArray(r.part)) {
+        c.fail('CONFIG_CLOTH_EXTENT', extent, 'is supported on a single bottomwear or sleeve carrier only');
       } else if (typeof r.extent !== 'number' || !Number.isFinite(r.extent) || r.extent <= 0 || r.extent > 1) {
         c.fail('CONFIG_CLOTH_EXTENT', extent, `is ${show(r.extent)}; a finite fraction above 0 and at most 1 is required`);
       }
@@ -4960,7 +4964,7 @@ function checkCloth(c: Check, v: Json): void {
     if ('part' in r) {
       if (Array.isArray(r.part)) {
         checkPartList(`${path}.part`, r.part);
-      } else if (tag !== 'bottomwear') {
+      } else if (tag !== 'bottomwear' && !sleeve) {
         c.fail('CONFIG_CLOTH_PART_ON_BOTTOMWEAR', `${path}.part`, `is declared on "${tag}"; part hands the skirt's recipe (bottomwear) to a topwear part or its cut skirt piece (a dress) — leave it out here`);
       } else c.string(`${path}.part`, r.part);
     }

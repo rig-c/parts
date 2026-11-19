@@ -50084,6 +50084,57 @@ function runInfluenceSuite(): number {
       same(legacyCompared) && !same(legacyCompared.map((bytes) => Buffer.concat([bytes, Buffer.from(' ')]))),
       `propose exit ${legacy.status}; SHA-256 ${legacyCompared.map(hash).join(', ')}`,
       'the two raw outputs match the pre-extent control; adding one byte to each is rejected');
+    const sleeveInput = { ...extentRecipe, chains: 1, links: 2, part: 'sleeve_a' };
+    const sleeveRecipes: ClothRecipes = { 'handwear-r': sleeveInput, 'handwear-l': { ...sleeveInput, part: 'sleeve_b' } };
+    const sleeveCfg = join(root, 'sleeve-recipe.json');
+    const sleeveKeys = join(root, 'sleeve-keypoints.json');
+    const sleeveOut = join(root, 'sleeve-proposal');
+    const paintSize = { width: CLOTH_RIG.w, height: CLOTH_RIG.h };
+    writeFileSync(sleeveCfg, JSON.stringify({ key: 'fixture', cloth: sleeveRecipes }));
+    writeFileSync(sleeveKeys, JSON.stringify({
+      spec: 'spine-parts-keypoints/1', space: { units: 'painting-px', origin: 'top-left', y: 'down' },
+      ...paintSize, source: 'synthetic cloth fixture', people: [{
+        id: 'fixture', joints: { r_elbow: { state: 'observed', at: [30, 122] }, l_elbow: { state: 'observed', at: [170, 122] } },
+      }],
+    }));
+    const sleeveDraft = runCli(['propose', '--parts', legacyParts, '--source', legacyPainting, '--out', sleeveOut, '--no-bust', 'synthetic cloth fixture', '--keypoints', sleeveKeys, '--cloth', sleeveCfg]);
+    const draftedSleeves = sleeveDraft.status === 0 ? JSON.parse(readFileSync(join(sleeveOut, 'proposal.json'), 'utf8')) as Proposal : null;
+    const sleeveTrees = draftedSleeves?.bones.filter((bone): bone is Extract<BoneEntry, { chain: string }> => 'chain' in bone && bone.chain.startsWith('sleeve_')) ?? [];
+    const sleeveP = readPartSet(legacyParts);
+    const sleeveRigConfig = join(root, 'sleeve-rig.json');
+    const sleeveRigDir = join(root, 'sleeve-rig');
+    let sleeveRigExit: number | null = null;
+    if (draftedSleeves !== null) {
+      writeFileSync(sleeveRigConfig, JSON.stringify(proposalAsConfig(sleeveP, draftedSleeves)));
+      sleeveRigExit = runCli(['rig', '--parts', legacyParts, '--config', sleeveRigConfig, '--out', sleeveRigDir]).status;
+    }
+    const sleeveJ = dressHipJoints();
+    sleeveJ.joints.r_elbow = { state: 'observed', at: [30, 122], score: null, listed: true };
+    sleeveJ.joints.l_elbow = { state: 'observed', at: [170, 122], score: null, listed: true };
+    const missingElbow = refusals(() => propose(sleeveP, undefined, null, DEFAULT_GRID_RULE, sleeveRecipes, true, { noBust: 'synthetic cloth fixture' }));
+    const wrongSide = refusals(() => propose(sleeveP, sleeveJ, null, DEFAULT_GRID_RULE, { 'handwear-r': { ...sleeveInput, part: 'sleeve_b' } }, true, { noBust: 'synthetic cloth fixture' }));
+    writeFileSync(sleeveCfg, JSON.stringify({ key: 'fixture', cloth: { 'handwear-r': { ...sleeveInput, part: undefined } } }));
+    const missingPart = refusals(() => loadClothConfig(sleeveCfg));
+    const mixedJoints = { ...sleeveJ, joints: { ...sleeveJ.joints, l_elbow: { ...sleeveJ.joints.l_elbow, at: [32, 122] as [number, number] } } };
+    const mixedSleeve = refusals(() => propose(sleeveP, mixedJoints, null, DEFAULT_GRID_RULE, sleeveRecipes, true, { noBust: 'synthetic cloth fixture' }));
+    const cutSleeve = new PartSet({
+      ...readParts(join(legacyParts, 'parts.json')),
+      parts: sleeveP.recs.map((part) => part.name === 'sleeve_a' ? { ...part, limb: { name: 'arm_r', segment: 0, of: 'sleeve_a', bone: 'sleeve_r0' } } : part),
+    }, sleeveP.images);
+    const jointCut = refusals(() => propose(cutSleeve, sleeveJ, null, DEFAULT_GRID_RULE, sleeveRecipes, true, { noBust: 'synthetic cloth fixture' }));
+    const field = 'config.cloth."handwear-r".part';
+    say('IF44_NAMED_SLEEVE_CARRIERS_DRAFT_FROM_THE_ELBOW_AND_REFUSE_MISSING_OR_WRONG_INPUT',
+      sleeveRigExit === 0 && sleeveTrees.map((b) => b.chain).join(',') === 'sleeve_r_0_,sleeve_l_0_' &&
+      sleeveTrees.every((b) => b.parent === 'chest' && b.points[0][1] === 147 && b.tip?.[1] === 159) &&
+      draftedSleeves?.constraints?.filter((c) => c.type === 'physics' && typeof c.bone === 'string' && c.bone.startsWith('sleeve')).length === 4 &&
+      draftedSleeves?.limbs === undefined &&
+      missingElbow?.problems[0]?.object === field && missingElbow.problems[0].detail.includes('r_elbow has no resolved position') &&
+      wrongSide?.problems[0]?.object === field && wrongSide.problems[0].detail.includes('tagged "handwear-r"') &&
+      missingPart?.problems[0]?.code === 'CONFIG_CLOTH_SLEEVE_PART' && missingPart.problems[0].object === field &&
+      mixedSleeve?.problems[0]?.object === field && mixedSleeve.problems[0].detail.includes('opposite arm') &&
+      jointCut?.problems[0]?.object === field && jointCut.problems[0].detail.includes('joint-cut limb'),
+      `propose exit ${sleeveDraft.status}; rig exit ${sleeveRigExit}; ${sleeveTrees.map((b) => `${b.chain} rows ${b.points[0][1]}..${b.tip?.[1]}`).join(', ')}; missing elbow ${codes(missingElbow)}; wrong side ${codes(wrongSide)}; missing part ${codes(missingPart)}; mixed carrier ${codes(mixedSleeve)}; cut carrier ${codes(jointCut)}`,
+      'the 60 px rectangles end on opaque row 159; elbow y122 and extent 0.33 place the new roots at y147, parent chest');
     const lat = runCli(['rig', '--config', fx.lattice, '--parts', fx.parts, '--out', join(root, 'rig-lattice')]);
     const inf = runCli(['rig', '--config', fx.influence, '--parts', fx.parts, '--out', join(root, 'rig-influence')]);
     const latRows = lat.status === 0 ? rowsOf(join(root, 'rig-lattice')) : [];
