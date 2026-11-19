@@ -2755,8 +2755,12 @@ export type ReportedLine = { status: 'REPORTED'; [figure: string]: unknown } | {
 /** The reported lines, after the judgement lines, in the order check.json and the console carry them. */
 export const REPORTED_LINES = ['RECOMPOSITE_HOLES'] as const;
 
-/** check.json — the reference's fields in its order, then the judgement lines, then PASS. */
+export const CHECK_SPEC = 'rig-parts-check/1';
+
+/** The completed check.json, with its version and bar outcomes first and PASS last. */
 export interface CheckFigures {
+  spec: typeof CHECK_SPEC;
+  bar_outcomes: CheckBarOutcomes;
   gate_spine_html_green: boolean;
   /** Which rigc entry gated the build ({@link readRigcEntry}): provenance, not a bar. */
   rigc_entry: RigcEntryRecord;
@@ -3082,6 +3086,117 @@ export const MOTION_SEAM_LINE = 'SEAM_OVER_MOTION';
  */
 export const ACCEPTABLE_BARS: readonly string[] = [...BARS.filter((b) => b !== 'gate'), FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, MOTION_SEAM_LINE];
 
+function checkBarIds() {
+  return [...BARS, FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, ART_JOINT_LINE, CUT_MATERIAL_LINE, SETUP_PAINTING_LINE, BOUNDARY_COLOUR_LINE, BEHIND_SEAM_LINE, MOTION_SEAM_LINE] as const;
+}
+export type CheckBarId = ReturnType<typeof checkBarIds>[number];
+
+/** Reading-level reasons recorded where the legacy judgement chooses to skip. */
+export interface CheckBarSkipReasons {
+  BREATH_VISIBLE?: 'no-eligible-region' | 'no-reading';
+  BLINK_NO_HOLE?: 'no-eye-parts' | 'no-blink-track' | 'no-reading';
+  TIP_OVER_ROOT?: 'no-swing-parts' | 'no-reading';
+  STILL_REGIONS_DARK?: 'no-eligible-region' | 'no-reading';
+  TEXTURE_STRETCH?: 'no-reading' | 'no-meshes' | 'no-visible-meshes';
+}
+
+export type CheckBarSkipReason = NonNullable<CheckBarSkipReasons[keyof CheckBarSkipReasons]>
+  | 'no-idle' | 'no-parts' | 'no-comparable-tracks' | 'no-animation' | 'no-hanging-footwear' | 'no-posed-footwear'
+  | 'no-handwear' | 'no-readable-binding' | 'no-limb-segments' | 'no-joint-range' | 'undeclared' | 'no-limit'
+  | 'no-complete-threshold-reading' | 'no-root-gate' | 'no-complete-root-reading';
+
+export type CheckBarOutcome = { status: 'PASS' | 'FAIL' } | { status: 'SKIP'; reason: CheckBarSkipReason };
+export type CheckBarOutcomes = Record<CheckBarId, CheckBarOutcome>;
+
+function lineStatus(line: unknown): unknown {
+  return typeof line === 'object' && line !== null ? (line as { status?: unknown }).status : undefined;
+}
+
+function seamFigureFailed(fig: Readonly<Record<string, unknown>>): boolean {
+  // A check.json written before issue #216 used frame pixels, so absent scale means 1.
+  return typeof fig.seam_mean === 'number' && typeof fig.seam_px_over_40 === 'number'
+    && seamFails(fig.seam_mean, fig.seam_px_over_40, typeof fig.seam_frame_scale === 'number' ? fig.seam_frame_scale : 1);
+}
+
+/** Classify the legacy figures once for both the legacy and versioned views. */
+function checkBarStatus(fig: Readonly<Record<string, unknown>>, id: CheckBarId): CheckBarOutcome['status'] {
+  switch (id) {
+    case 'gate':
+      return fig.gate_spine_html_green === true ? 'PASS' : 'FAIL';
+    case 'loop':
+      return typeof fig.loop_max_diff !== 'number' ? 'SKIP' : fig.loop_max_diff === LOOP_MAX_BAR ? 'PASS' : 'FAIL';
+    case 'seam':
+      if (seamFigureFailed(fig) || (isRecord(fig.sets) && Object.values(fig.sets).some(s => isRecord(s) && seamFigureFailed(s)))) return 'FAIL';
+      return typeof fig.seam_mean === 'number' ? 'PASS' : 'SKIP';
+    case MOTION_SEAM_LINE: {
+      const motion = fig[id];
+      if (!isRecord(motion)) return 'SKIP';
+      const root = isRecord(motion.roots) ? motion.roots.status : undefined;
+      const required = isRecord(motion.required) ? motion.required.status : undefined;
+      if (root === 'FAIL' || required === 'FAIL') return 'FAIL';
+      return required === 'PASS' || (motion.required === undefined && root === 'PASS') ? 'PASS' : 'SKIP';
+    }
+    default: {
+      const status = lineStatus(fig[id]);
+      return status === 'PASS' || status === 'FAIL' ? status : 'SKIP';
+    }
+  }
+}
+
+function checkBarSkipReason(fig: Readonly<Record<string, unknown>>, id: Exclude<CheckBarId, 'gate'>, readings: CheckBarSkipReasons): CheckBarSkipReason {
+  const hasIdle = typeof fig.loop_max_diff === 'number';
+  const hasParts = typeof fig.seam_mean === 'number';
+  const hasAnimation = fig[FOLD_LINE] !== undefined;
+  switch (id) {
+    case 'loop': return 'no-idle';
+    case 'seam': return 'no-parts';
+    case 'BREATH_VISIBLE':
+    case 'BLINK_NO_HOLE':
+    case 'TIP_OVER_ROOT':
+    case 'STILL_REGIONS_DARK':
+      if (!hasIdle) return 'no-idle';
+      if (!hasParts) return 'no-parts';
+      break;
+    case 'TEXTURE_STRETCH':
+      if (!hasIdle) return 'no-idle';
+      break;
+    case 'CHAIN_LAG': return hasIdle ? 'no-comparable-tracks' : 'no-idle';
+    case FOLD_LINE: return 'no-animation';
+    case LEVEL_LINE: return !hasAnimation ? 'no-animation' : !hasParts ? 'no-parts' : fig[id] === undefined ? 'no-hanging-footwear' : 'no-posed-footwear';
+    case STRESS_LINE: return !hasIdle ? 'no-idle' : !hasParts ? 'no-parts' : fig[id] === undefined ? 'no-handwear' : 'no-readable-binding';
+    case LIMB_LINE: return hasParts ? 'no-limb-segments' : 'no-parts';
+    case SWEEP_LINE: return hasParts ? 'no-joint-range' : 'no-parts';
+    case ART_JOINT_LINE: return fig[id] === undefined ? 'undeclared' : 'no-limit';
+    case CUT_MATERIAL_LINE:
+    case BOUNDARY_COLOUR_LINE:
+      return 'undeclared';
+    case SETUP_PAINTING_LINE: {
+      const painting = fig[id];
+      return isRecord(painting) && 'regions' in painting ? 'no-limit' : 'undeclared';
+    }
+    case BEHIND_SEAM_LINE: return fig[id] === undefined ? 'undeclared' : 'no-complete-threshold-reading';
+    case MOTION_SEAM_LINE: {
+      const motion = fig[id];
+      if (!isRecord(motion) || !isRecord(motion.roots)) return 'no-root-gate';
+      return Array.isArray(motion.animations) && motion.animations.length === 0 ? 'no-animation' : 'no-complete-root-reading';
+    }
+  }
+  const reason = readings[id];
+  if (reason === undefined) throw new Error(`check bar ${id} skipped without a reading-level reason`);
+  return reason;
+}
+
+/** The ordered producer view. A degenerate rest edge can fail stretch even when no ratio was read. */
+export function checkBarOutcomes(fig: Readonly<Record<string, unknown>>, skipReasons: CheckBarSkipReasons, stretchFailedWithoutReading = false): CheckBarOutcomes {
+  return Object.fromEntries(checkBarIds().map(id => {
+    const status = id === 'TEXTURE_STRETCH' && stretchFailedWithoutReading ? 'FAIL' : checkBarStatus(fig, id);
+    const outcome: CheckBarOutcome = status === 'SKIP' && id !== 'gate'
+      ? { status, reason: checkBarSkipReason(fig, id, skipReasons) }
+      : { status: status === 'SKIP' ? 'FAIL' : status };
+    return [id, outcome];
+  })) as CheckBarOutcomes;
+}
+
 /**
  * The bars a `check.json`, as `check` writes it, says were not met, in
  * {@link BARS} order: the gate when `gate_spine_html_green` is not true, the
@@ -3094,22 +3209,7 @@ export const ACCEPTABLE_BARS: readonly string[] = [...BARS.filter((b) => b !== '
  * all a finished build leaves (issue #203).
  */
 export function barsNotMet(fig: Readonly<Record<string, unknown>>): string[] {
-  const out: string[] = [];
-  if (fig.gate_spine_html_green !== true) out.push('gate');
-  if (typeof fig.loop_max_diff === 'number' && fig.loop_max_diff !== LOOP_MAX_BAR) out.push('loop');
-  // A check.json written before issue #216 has no seam_frame_scale; it is read by the frame count, the bar it was written under.
-  const scale = typeof fig.seam_frame_scale === 'number' ? fig.seam_frame_scale : 1;
-  const setFailed =
-    isRecord(fig.sets) &&
-    Object.values(fig.sets).some((s) => isRecord(s) && typeof s.seam_mean === 'number' && typeof s.seam_px_over_40 === 'number' && seamFails(s.seam_mean, s.seam_px_over_40, typeof s.seam_frame_scale === 'number' ? s.seam_frame_scale : 1));
-  if ((typeof fig.seam_mean === 'number' && typeof fig.seam_px_over_40 === 'number' && seamFails(fig.seam_mean, fig.seam_px_over_40, scale)) || setFailed) out.push('seam');
-  for (const n of [...JUDGEMENT_LINES, FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, ART_JOINT_LINE, CUT_MATERIAL_LINE, BOUNDARY_COLOUR_LINE, BEHIND_SEAM_LINE]) {
-    const l = fig[n];
-    if (typeof l === 'object' && l !== null && (l as { status?: unknown }).status === 'FAIL') out.push(n);
-  }
-  const motion = fig[MOTION_SEAM_LINE];
-  if (isRecord(motion) && ((isRecord(motion.roots) && motion.roots.status === 'FAIL') || (isRecord(motion.required) && motion.required.status === 'FAIL'))) out.push(MOTION_SEAM_LINE);
-  return out;
+  return checkBarIds().filter(id => id !== SETUP_PAINTING_LINE && checkBarStatus(fig, id) === 'FAIL');
 }
 
 /** The declared requirements a `check.json` says were not PASS (FAIL or NOT MEASURABLE), by name, in the file's order; none without a `requirements` block. */
@@ -3213,9 +3313,9 @@ export type CheckStatus = 'PASS' | 'FAIL' | 'SKIP' | 'WARN' | 'CLEAR' | 'REPORTE
  * {@link SWEEP_LINE}, {@link MOTION_SEAM_LINE}, {@link CLOTH_LINE}, the reported lines, {@link SOURCE_LINE} and
  * {@link WIND_BAND_LINE}, each where the file writes it. The `requirements` block's lines are not bars and are not read here.
  */
-export function checkStatuses(fig: CheckFigures): Record<string, CheckStatus> {
-  const notMet = barsNotMet(fig as unknown as Record<string, unknown>);
-  const bar = (name: string, measured: boolean): CheckStatus => (!measured ? 'SKIP' : notMet.includes(name) ? 'FAIL' : 'PASS');
+export function checkStatuses(fig: Omit<CheckFigures, 'spec' | 'bar_outcomes'>): Record<string, CheckStatus> {
+  const raw = fig as unknown as Record<string, unknown>;
+  const bar = (id: 'gate' | 'loop' | 'seam', measured: boolean): CheckStatus => (!measured ? 'SKIP' : checkBarStatus(raw, id) === 'FAIL' ? 'FAIL' : 'PASS');
   const out: Record<string, CheckStatus> = { gate: bar('gate', true), loop: bar('loop', fig.loop_max_diff !== null), seam: bar('seam', fig.seam_mean !== null) };
   for (const n of JUDGEMENT_LINES) out[n] = fig[n].status;
   for (const n of [FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, MOTION_SEAM_LINE, CLOTH_LINE, ...REPORTED_LINES, 'figure_openings', SOURCE_LINE, WIND_BAND_LINE, ART_JOINT_LINE, CUT_MATERIAL_LINE, SETUP_PAINTING_LINE, BOUNDARY_COLOUR_LINE, BEHIND_SEAM_LINE, COINCIDE_LINE] as const) {
@@ -6821,6 +6921,11 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const full: FullInputs | null = inp.parts !== null && inp.idleDuration !== null ? { ...inp, parts: inp.parts, idleDuration: inp.idleDuration } : null;
   const lacking = [inp.noParts, inp.noIdle].filter((r): r is string => r !== null).join('; ');
   const problems: Problem[] = [];
+  const skipReasons: CheckBarSkipReasons = {};
+  const readingSkip = <Id extends keyof CheckBarSkipReasons>(id: Id): ReadingSkip<Id> => (reason, code) => {
+    skipReasons[id] = code;
+    return skip(reason);
+  };
 
   // 3. the idle, the loop, the heat — only when there is an idle
   let idle: FrameSet | null = null;
@@ -7049,14 +7154,15 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   let tip: JudgementLine = skip(lacking);
   if (full !== null) {
     try {
-      breath = breathLine(full, isolated, breathPair, problems, notPlanted);
-      if (idle !== null) tip = tipLine(full, join(idle.dir, GEOMETRY_FILE), idle.written, problems, reqFile === null ? NO_TIP_EXCEPTIONS : { path: reqFile.path, not_swinging: reqFile.not_swinging, rises: reqFile.rises, rests: reqFile.rests });
+      breath = breathLine(full, isolated, breathPair, problems, notPlanted, readingSkip('BREATH_VISIBLE'));
+      if (idle !== null) tip = tipLine(full, join(idle.dir, GEOMETRY_FILE), idle.written, problems, reqFile === null ? NO_TIP_EXCEPTIONS : { path: reqFile.path, not_swinging: reqFile.not_swinging, rises: reqFile.rises, rests: reqFile.rests }, readingSkip('TIP_OVER_ROOT'));
     } finally {
       rmSync(isoDir, { recursive: true, force: true });
     }
   }
   let chain: JudgementLine = skip(inp.noIdle ?? '');
   let stretch: JudgementLine = skip(inp.noIdle ?? '');
+  let stretchFailedWithoutReading = false;
   let still: JudgementLine = skip(lacking);
   let idleGeometry: IdleGeometry | null = null;
   if (idle !== null) {
@@ -7065,8 +7171,10 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     const geometryPath = join(idle.dir, GEOMETRY_FILE);
     const geometry = readGeometry(geometryPath, idle.written);
     idleGeometry = geometry;
-    stretch = stretchLine(geometry, geometryPath, problems, { ...inp, config }, checkSlotParts(inp.rig, inp.parts?.parts.map(p => p.name) ?? [], inp.parts?.alternates?.map(set => set.name) ?? []));
-    if (full !== null) still = stillLine(full, idle, geometry, geometryPath, problems, notPlanted);
+    const beforeStretch = problems.length;
+    stretch = stretchLine(geometry, geometryPath, problems, { ...inp, config }, checkSlotParts(inp.rig, inp.parts?.parts.map(p => p.name) ?? [], inp.parts?.alternates?.map(set => set.name) ?? []), readingSkip('TEXTURE_STRETCH'));
+    stretchFailedWithoutReading = stretch.status === 'SKIP' && problems.length > beforeStretch;
+    if (full !== null) still = stillLine(full, idle, geometry, geometryPath, problems, notPlanted, readingSkip('STILL_REGIONS_DARK'));
   }
 
   // 3c. a sleeve on one chain, its first link turned large (issue #347): a throwaway copy, physics left out, posed by rigc
@@ -7497,12 +7605,14 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
       }
       if (full !== null) {
         const H = full.parts.rig_size[1];
-        if (eyes.length === 0) blink = skip(`no part comes from a See-through ${tagWords(EYE_TAGS)} layer, so there is no eye to look behind`);
-        else if (shut.length === 0) blink = skip(`no idle "scaley" track on the bones of ${quoteParts(eyes)} goes below its first key, so the idle has no blink`);
+        const blinkSkip = readingSkip('BLINK_NO_HOLE');
+        if (eyes.length === 0) blink = blinkSkip(`no part comes from a See-through ${tagWords(EYE_TAGS)} layer, so there is no eye to look behind`, 'no-eye-parts');
+        else if (shut.length === 0) blink = blinkSkip(`no idle "scaley" track on the bones of ${quoteParts(eyes)} goes below its first key, so the idle has no blink`, 'no-blink-track');
         else {
           const br = rigc(['render', '--candidate', join(stillDir, 'build'), '--animation', BLINK_ANIMATION, '--fps', String(STILL_FPS), '--max', String(maxSide), '--out', join(stillDir, 'blink')]);
           if (br.status !== 0) refuseIfAny(rigcFailed(`render (the setup pose with the eyes shut, "${BLINK_ANIMATION}")`, br, br.out.split('\n').filter((l) => l.includes('FAIL'))));
           blink = blinkLine(full, eyes, shut, stillSet, readFrameSet(join(stillDir, 'blink')), idle as FrameSet, H, problems);
+          if (blink.status === 'SKIP') skipReasons.BLINK_NO_HOLE = 'no-reading';
         }
       }
     } finally {
@@ -7569,7 +7679,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const skipped: { loop?: string; seam?: string } = {};
   if (inp.noIdle !== null) skipped.loop = inp.noIdle;
   if (inp.noParts !== null) skipped.seam = inp.noParts;
-  const figures: CheckFigures = {
+  const readings: Omit<CheckFigures, 'spec' | 'bar_outcomes' | 'PASS'> = {
     gate_spine_html_green: htmlGreen,
     rigc_entry: rigcEntry,
     pack_mode: { page_edges: mode.pageEdges, pack_shape: mode.packShape, ...(pageSize === undefined ? {} : { page_size: pageSize }) },
@@ -7610,7 +7720,6 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     ...(behindSeams === null ? {} : { [BEHIND_SEAM_LINE]: behindSeams }),
     ...(cutMaterial === null ? {} : { [CUT_MATERIAL_LINE]: cutMaterial }),
     ...(reqBlock === null ? {} : { requirements: reqBlock }),
-    PASS: false,
   };
   const barProblems: Problem[] = [];
   if (!htmlGreen) barProblems.push(...rigcFailed(packedBuildLabel(mode), build, gateHtml));
@@ -7622,13 +7731,13 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
       detail: `max |d| ${loop.max}/255, first at pixel ${loop.x},${loop.y} of ${loopSet.viewport.pixelWidth}x${loopSet.viewport.pixelHeight}; ${LOOP_MAX_BAR} is required — the idle's last key must equal its first`,
     });
   }
-  if (figures.seam_mean !== null && figures.seam_px_over_40 !== null && figures.seam_frame_scale !== null && seamFails(figures.seam_mean, figures.seam_px_over_40, figures.seam_frame_scale)) {
+  if (readings.seam_mean !== null && readings.seam_px_over_40 !== null && readings.seam_frame_scale !== null && seamFigureFailed(readings)) {
     const worst = seamPairs === null || seamPairs.length === 0 ? null : seamPairs[0];
     barProblems.push({
       code: 'CHECK_SEAM_WITHIN_BAR',
       object: 'the source-grid setup-pose render vs the flat composite of parts/ (base, judged once)',
       detail:
-        `mean |d| ${figures.seam_mean}/255 and ${figures.seam_px_over_40} frame px over ${SEAM_PX_LEVEL} (${figures.seam_px_over_80} over ${SEAM_PX_LEVEL_HIGH}) at frame scale ${figures.seam_frame_scale}, ${seamRigPxText(figures.seam_px_over_40, figures.seam_frame_scale)} rig px (the count / s²); mean <= ${SEAM_MEAN_BAR.toFixed(1)} and <= ${SEAM_PX_BAR} rig px over ${SEAM_PX_LEVEL} are required` +
+        `mean |d| ${readings.seam_mean}/255 and ${readings.seam_px_over_40} frame px over ${SEAM_PX_LEVEL} (${readings.seam_px_over_80} over ${SEAM_PX_LEVEL_HIGH}) at frame scale ${readings.seam_frame_scale}, ${seamRigPxText(readings.seam_px_over_40, readings.seam_frame_scale)} rig px (the count / s²); mean <= ${SEAM_MEAN_BAR.toFixed(1)} and <= ${SEAM_PX_BAR} rig px over ${SEAM_PX_LEVEL} are required` +
         (worst === null
           ? `; no pixel is over ${SEAM_PX_LEVEL}, so the mean alone fails and there is no pair to name`
           : `; worst of ${(seamPairs as SeamPairRow[]).length} pair(s): ${seamPairText(worst)} — every pair is a \`seam pair\` line above and a row of check.json's seam_pairs`),
@@ -7653,7 +7762,12 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   problems.sort((a, b) => rank(a) - rank(b));
   problems.unshift(...barProblems);
   problems.push(...cutMaterialProblems, ...foldProblems, ...levelProblems, ...stressProblems, ...limbProblems, ...sweepProblems, ...motionRootProblems, ...reqProblems);
-  figures.PASS = problems.length === 0;
+  const figures: CheckFigures = {
+    spec: CHECK_SPEC,
+    bar_outcomes: checkBarOutcomes(readings, skipReasons, stretchFailedWithoutReading),
+    ...readings,
+    PASS: problems.length === 0,
+  };
   const publishCheck = (): void => {
     publishMotionSeamCells(out, motionSeam.required, motionCellEvidence, () => write('check.json', serializeCheckRows(figures)));
     if (motionSeam.required?.cells !== undefined) written.push(MOTION_CELLS_FILE);
@@ -7957,9 +8071,11 @@ function boxText(h: { x: number; y: number; w: number; h: number }): string {
 /** The throwaway animation that holds the blink tracks at their closed value, rendered beside the setup-pose still. */
 export const BLINK_ANIMATION = 'blink_shut';
 
-function skip(reason: string): JudgementLine {
+function skip(reason: string): Extract<JudgementLine, { status: 'SKIP' }> {
   return { status: 'SKIP', reason };
 }
+
+type ReadingSkip<Id extends keyof CheckBarSkipReasons> = (reason: string, code: NonNullable<CheckBarSkipReasons[Id]>) => ReturnType<typeof skip>;
 
 function tagWords(tags: readonly BaseTag[]): string {
   return tags.map((t) => `"${t}"`).join(' or ');
@@ -8063,20 +8179,20 @@ function noneHeldText(declared: readonly string[]): string {
  * or a physics response to the world inside the torso's box passed the bar
  * for a torso that did not breathe.
  */
-function breathLine(inp: FullInputs, isolated: Isolate, pair: BreathPairRender, problems: Problem[], notPlanted: readonly string[] = []): JudgementLine {
+function breathLine(inp: FullInputs, isolated: Isolate, pair: BreathPairRender, problems: Problem[], notPlanted: readonly string[], skipped: ReadingSkip<'BREATH_VISIBLE'>): JudgementLine {
   const torso = partsTagged(inp.parts, TORSO_TAGS);
   const { all: allFeet, held: feet, declared } = plantedFeet(inp.parts, notPlanted);
   const noTorso = `no part comes from a See-through ${tagWords(TORSO_TAGS)} layer, so there is no torso to see breathe`;
   const noFeet = `no part comes from a See-through ${tagWords(FEET_TAGS)} layer, so there are no feet to hold still`;
   // Issue #323: a figure without one of the two halves still has the other read; with neither, the SKIP it always was.
-  if (torso.length === 0 && feet.length === 0) return skip(`${noTorso}${declared.length === 0 ? '' : `; ${declared.map((n) => `"${n}"`).join(', ')} declared not planted`}`);
-  if (torso.length === 0) return oneHalf(inp, isolated, pair, problems, 'feet', feet, noTorso, declared);
-  if (allFeet.length === 0) return oneHalf(inp, isolated, pair, problems, 'torso', torso, noFeet, []);
+  if (torso.length === 0 && feet.length === 0) return skipped(`${noTorso}${declared.length === 0 ? '' : `; ${declared.map((n) => `"${n}"`).join(', ')} declared not planted`}`, 'no-eligible-region');
+  if (torso.length === 0) return oneHalf(inp, isolated, pair, problems, 'feet', feet, noTorso, declared, skipped);
+  if (allFeet.length === 0) return oneHalf(inp, isolated, pair, problems, 'torso', torso, noFeet, [], skipped);
   const H = inp.parts.rig_size[1];
   const tr = torsoBreath(inp, torso, pair);
   const fs = feet.length === 0 ? null : isolated('feet', feet);
   const fb = fs === null ? null : frameBox(feet, H, inp.stage, fs.viewport);
-  if ('skip' in tr || (fs !== null && fb === null)) return skip(`the ${'skip' in tr ? 'torso' : 'feet'} box falls outside the idle frame`);
+  if ('skip' in tr || (fs !== null && fb === null)) return skipped(`the ${'skip' in tr ? 'torso' : 'feet'} box falls outside the idle frame`, 'no-reading');
   const fh = fs === null || fb === null ? null : regionHeat(heatField(fs.frames.map((f) => f.image)), fs.viewport.pixelWidth, fb);
   const mean = tr.mean;
   const ok = mean >= BREATH_TORSO_MEAN_FLOOR && (fh === null || fh.max <= BREATH_FEET_MAX_CEILING);
@@ -8108,12 +8224,12 @@ function breathLine(inp: FullInputs, isolated: Isolate, pair: BreathPairRender, 
  * `halves_measured`, says `1 of 2` — after `declared_not_planted` when the scene
  * file declares some of the feet read (issue #231), which stays the first.
  */
-function oneHalf(inp: FullInputs, isolated: Isolate, pair: BreathPairRender, problems: Problem[], half: 'torso' | 'feet', ps: readonly PartRecord[], reason: string, declared: readonly string[]): JudgementLine {
+function oneHalf(inp: FullInputs, isolated: Isolate, pair: BreathPairRender, problems: Problem[], half: 'torso' | 'feet', ps: readonly PartRecord[], reason: string, declared: readonly string[], skipped: ReadingSkip<'BREATH_VISIBLE'>): JudgementLine {
   const H = inp.parts.rig_size[1];
   if (half === 'torso') {
     // Issue #411: the torso half is the breath alone.
     const tr = torsoBreath(inp, ps, pair);
-    if ('skip' in tr) return skip(`the ${half} box falls outside the idle frame, and ${reason}`);
+    if ('skip' in tr) return skipped(`the ${half} box falls outside the idle frame, and ${reason}`, 'no-reading');
     const mean = tr.mean;
     const ok = mean >= BREATH_TORSO_MEAN_FLOOR;
     if (!ok) problems.push(torsoProblem(ps, tr, `; the feet half not measured: ${reason}`));
@@ -8130,7 +8246,7 @@ function oneHalf(inp: FullInputs, isolated: Isolate, pair: BreathPairRender, pro
   }
   const fs = isolated(half, ps);
   const box = frameBox(ps, H, inp.stage, fs.viewport);
-  if (box === null) return skip(`the ${half} box falls outside the idle frame, and ${reason}`);
+  if (box === null) return skipped(`the ${half} box falls outside the idle frame, and ${reason}`, 'no-reading');
   const heat = regionHeat(heatField(fs.frames.map((f) => f.image)), fs.viewport.pixelWidth, box);
   const ok = heat.max <= BREATH_FEET_MAX_CEILING;
   if (!ok) {
@@ -8490,9 +8606,9 @@ export function carrierExcitation(rig: Record<string, unknown>, geo: IdleGeometr
  * with CHECK_CARRIER_NOT_EXCITED; incomplete excitation data keeps the prior
  * failure. Below-floor rows retain their policy and name the measured driver.
  */
-function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems: Problem[], excepted: TipExceptions = NO_TIP_EXCEPTIONS): JudgementLine {
+function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems: Problem[], excepted: TipExceptions, skipped: ReadingSkip<'TIP_OVER_ROOT'>): JudgementLine {
   const swing = partsTagged(inp.parts, SWING_TAGS);
-  if (swing.length === 0) return skip(`no part comes from a See-through ${tagWords(SWING_TAGS)} layer, so there is no hem or sleeve to swing`);
+  if (swing.length === 0) return skipped(`no part comes from a See-through ${tagWords(SWING_TAGS)} layer, so there is no hem or sleeve to swing`, 'no-swing-parts');
   const poses = attachmentPoses(geometryPath, frames);
   const idleGeo = readGeometry(geometryPath, frames);
   // Issue #231: a part declared `rises` is read up only when the chain carrying it does rise, measured at the setup pose.
@@ -8635,7 +8751,7 @@ function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems
       const travel = r.travel_floor_rig_px === undefined ? '' : `; root ${String(r.root_rig_px)} rig px, tip ${String(r.tip_rig_px)} rig px, floor ${String(r.travel_floor_rig_px)} rig px; measured driver ${String(r.measured_driver)}`;
       return `${String(r.part)}: ${String(r.unmeasured)}${travel}`;
     });
-    return { status: 'SKIP', reason: `none of ${quoteParts(swing)} could be measured: ${reasons.join('; ')}`,
+    return { ...skipped(`none of ${quoteParts(swing)} could be measured: ${reasons.join('; ')}`, 'no-reading'),
       ...(belowGrid === 0 ? {} : figures) };
   }
   return { status: failed ? 'FAIL' : 'PASS', ...figures };
@@ -9097,12 +9213,13 @@ interface StillHalf {
  * features go; `footwear` on top) is reported per slot, `crossing`, with no
  * bar ({@link crossingOf}). No render grid enters either half.
  */
-export function stillLine(inp: FullInputs, idle: FrameSet, geo: IdleGeometry | null, geometryPath: string, problems: Problem[], notPlanted: readonly string[] = []): JudgementLine {
+export function stillLine(inp: FullInputs, idle: FrameSet, geo: IdleGeometry | null, geometryPath: string, problems: Problem[], notPlanted: readonly string[] = [], skipped: ReadingSkip<'STILL_REGIONS_DARK'> = skip): JudgementLine {
   const slotParts = checkSlotParts(inp.rig, inp.parts.parts.map(p => p.name), inp.parts.alternates?.map(set => set.name) ?? []);
   const face = partsTagged(inp.parts, FACE_TAGS);
   const { all: allFeet, held: feet, declared } = plantedFeet(inp.parts, notPlanted);
-  if (face.length === 0 && allFeet.length === 0) return skip(`no part comes from a See-through ${tagWords([...FACE_TAGS, ...FEET_TAGS])} layer, so there is no still region to read`);
-  if (geo === null) return skip(`${geometryPath} does not exist; \`rigc render --geometry\` (rig-c ${RIGC_GEOMETRY_VERSION} or later) writes it, and the still regions are read off it`);
+  const eligible = face.length > 0 || feet.length > 0;
+  if (face.length === 0 && allFeet.length === 0) return skipped(`no part comes from a See-through ${tagWords([...FACE_TAGS, ...FEET_TAGS])} layer, so there is no still region to read`, 'no-eligible-region');
+  if (geo === null) return skipped(`${geometryPath} does not exist; \`rigc render --geometry\` (rig-c ${RIGC_GEOMETRY_VERSION} or later) writes it, and the still regions are read off it`, eligible ? 'no-reading' : 'no-eligible-region');
   const H = inp.parts.rig_size[1];
   const W = inp.parts.rig_size[0];
   const poses = attachmentPoses(geometryPath, idle.written);
@@ -9258,7 +9375,7 @@ export function stillLine(inp: FullInputs, idle: FrameSet, geo: IdleGeometry | n
 
   const f = faceHalf();
   const t = feetHalf();
-  if (typeof f === 'string' && typeof t === 'string') return skip(`face: ${f}; feet: ${t}`);
+  if (typeof f === 'string' && typeof t === 'string') return skipped(`face: ${f}; feet: ${t}`, eligible ? 'no-reading' : 'no-eligible-region');
   const failed = problems.some((q) => q.code === 'CHECK_STILL_REGIONS_DARK');
   // Issue #231: a declaration is the feet half's first figure, measured or not.
   const said = declared.length === 0 ? {} : { declared_not_planted: declared };
@@ -9782,9 +9899,9 @@ export function edgeBonesText(rig: Record<string, unknown>, motion: Record<strin
  * bones its two vertices hang on and their chains ({@link edgeBonesText}, issue
  * #314).
  */
-export function stretchLine(geo: IdleGeometry | null, path: string, problems: Problem[], bound?: Pick<CheckInputs, 'rig' | 'motion'> & WeightStepContext, slotParts?: ReadonlyMap<string, string>): JudgementLine {
-  if (geo === null) return skip(`${path} does not exist; \`rigc render --geometry\` (rig-c ${RIGC_GEOMETRY_VERSION} or later) writes it, and the skinned mesh vertices are read from it`);
-  if (geo.meshes.length === 0) return skip('the rig draws no mesh attachment (every slot is a region), so there is no triangle to stretch');
+export function stretchLine(geo: IdleGeometry | null, path: string, problems: Problem[], bound?: Pick<CheckInputs, 'rig' | 'motion'> & WeightStepContext, slotParts?: ReadonlyMap<string, string>, skipped: ReadingSkip<'TEXTURE_STRETCH'> = skip): JudgementLine {
+  if (geo === null) return skipped(`${path} does not exist; \`rigc render --geometry\` (rig-c ${RIGC_GEOMETRY_VERSION} or later) writes it, and the skinned mesh vertices are read from it`, 'no-reading');
+  if (geo.meshes.length === 0) return skipped('the rig draws no mesh attachment (every slot is a region), so there is no triangle to stretch', 'no-meshes');
   const figures = stretchFigures(geo.meshes, geo.frames);
   const rows: Array<Record<string, unknown>> = [];
   let worst: { mesh: (typeof figures)[number]; at: NonNullable<(typeof figures)[number]['max']>; severity: number } | null = null;
@@ -9822,7 +9939,7 @@ export function stretchLine(geo: IdleGeometry | null, path: string, problems: Pr
       });
     }
   }
-  if (worst === null) return { status: 'SKIP', reason: `no idle frame shows any of the rig's ${figures.length} mesh(es): ${figures.map((m) => `"${m.slot}"`).join(', ')}` };
+  if (worst === null) return skipped(`no idle frame shows any of the rig's ${figures.length} mesh(es): ${figures.map((m) => `"${m.slot}"`).join(', ')}`, 'no-visible-meshes');
   return {
     status: failed ? 'FAIL' : 'PASS',
     meshes: figures.length,

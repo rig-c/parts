@@ -365,6 +365,9 @@ import {
   attachmentPoses,
   BARS,
   barsNotMet,
+  checkStatuses,
+  requirementsNotPass,
+  type CheckFigures,
   besideIdleLine,
   blackRig,
   boneTrackOf,
@@ -17632,7 +17635,94 @@ function readJsonFile(path: string): Record<string, unknown> | null {
 }
 
 // Issue #333: the fold bar reads the idle too, so every rig whose motion holds an animation writes it after the judgement lines.
-const CHECK_KEYS = ['gate_spine_html_green', 'rigc_entry', 'pack_mode', 'loop_max_diff', 'seam_mean', 'seam_px_over_40', 'seam_px_over_80', 'seam_frame_scale', 'seam_scope', ...JUDGEMENT_LINES, FOLD_LINE, ...REPORTED_LINES, 'figure_openings', COINCIDE_LINE, 'PASS'];
+const CHECK_KEYS = ['spec', 'bar_outcomes', 'gate_spine_html_green', 'rigc_entry', 'pack_mode', 'loop_max_diff', 'seam_mean', 'seam_px_over_40', 'seam_px_over_80', 'seam_frame_scale', 'seam_scope', ...JUDGEMENT_LINES, FOLD_LINE, ...REPORTED_LINES, 'figure_openings', COINCIDE_LINE, 'PASS'];
+
+// The signed wire contract, independent of the producer's classifier and legacy reader.
+const CHECK_SKIP_REASONS = {
+  gate: [],
+  loop: ['no-idle'],
+  seam: ['no-parts'],
+  BREATH_VISIBLE: ['no-idle', 'no-parts', 'no-eligible-region', 'no-reading'],
+  BLINK_NO_HOLE: ['no-idle', 'no-parts', 'no-eye-parts', 'no-blink-track', 'no-reading'],
+  CHAIN_LAG: ['no-idle', 'no-comparable-tracks'],
+  TIP_OVER_ROOT: ['no-idle', 'no-parts', 'no-swing-parts', 'no-reading'],
+  STILL_REGIONS_DARK: ['no-idle', 'no-parts', 'no-eligible-region', 'no-reading'],
+  TEXTURE_STRETCH: ['no-idle', 'no-reading', 'no-meshes', 'no-visible-meshes'],
+  ANIMATIONS_DO_NOT_FOLD: ['no-animation'],
+  FEET_STAY_LEVEL: ['no-animation', 'no-parts', 'no-hanging-footwear', 'no-posed-footwear'],
+  STRESS_OFF_CHAIN: ['no-idle', 'no-parts', 'no-handwear', 'no-readable-binding'],
+  LIMB_ONE_BONE: ['no-parts', 'no-limb-segments'],
+  SEAM_OVER_RANGE: ['no-parts', 'no-joint-range'],
+  ART_JOINT_DISTANCE: ['undeclared', 'no-limit'],
+  CUT_JOINT_MATERIAL: ['undeclared'],
+  SETUP_MATCHES_PAINTING: ['undeclared', 'no-limit'],
+  BOUNDARY_COLOUR_STEP: ['undeclared'],
+  BEHIND_PART_SEAMS: ['undeclared', 'no-complete-threshold-reading'],
+  SEAM_OVER_MOTION: ['no-root-gate', 'no-animation', 'no-complete-root-reading'],
+} as const satisfies Record<string, readonly string[]>;
+type CheckBarId = keyof typeof CHECK_SKIP_REASONS;
+
+function checkBarOutcomes(fig: Record<string, unknown> | null): Record<string, unknown> {
+  return isDriveRecord(fig?.bar_outcomes) ? fig.bar_outcomes : {};
+}
+
+function checkBarIs<Id extends CheckBarId>(fig: Record<string, unknown> | null, id: Id, wanted: 'PASS' | 'FAIL' | (typeof CHECK_SKIP_REASONS)[Id][number]): boolean {
+  const outcome = wanted === 'PASS' || wanted === 'FAIL' ? { status: wanted } : { status: 'SKIP', reason: wanted };
+  return JSON.stringify(checkBarOutcomes(fig)[id]) === JSON.stringify(outcome);
+}
+
+function failedCheckBars(fig: Record<string, unknown> | null): string[] {
+  return Object.entries(checkBarOutcomes(fig)).filter(([, outcome]) => isDriveRecord(outcome) && outcome.status === 'FAIL').map(([id]) => id);
+}
+
+function checkRequirementStatuses(fig: Record<string, unknown> | null): Record<string, unknown> {
+  const requirements = fig?.requirements;
+  if (!isDriveRecord(requirements) || !isDriveRecord(requirements.lines)) return {};
+  return Object.fromEntries(Object.entries(requirements.lines).map(([id, line]) => [id, isDriveRecord(line) ? line.status : undefined]));
+}
+
+function checkOutcomeFaults(fig: Record<string, unknown> | null): string[] {
+  if (fig === null) return ['missing completed report'];
+  const faults: string[] = [];
+  const keys = Object.keys(fig);
+  if (fig.spec !== 'rig-parts-check/1' || keys.slice(0, 2).join(',') !== 'spec,bar_outcomes' || keys.at(-1) !== 'PASS') faults.push('version or top-level order');
+  const bars = checkBarOutcomes(fig);
+  if (Object.keys(bars).join(',') !== Object.keys(CHECK_SKIP_REASONS).join(',')) faults.push('bar ids or order');
+  for (const [id, reasons] of Object.entries(CHECK_SKIP_REASONS)) {
+    const outcome = bars[id];
+    if (!isDriveRecord(outcome)) { faults.push(`${id}: missing outcome`); continue; }
+    const fields = Object.keys(outcome).join(',');
+    const allowed: readonly string[] = reasons;
+    if (outcome.status === 'SKIP' && fields === 'status,reason' && typeof outcome.reason === 'string' && allowed.includes(outcome.reason)) continue;
+    if ((outcome.status === 'PASS' || outcome.status === 'FAIL') && fields === 'status') continue;
+    faults.push(`${id}: ${JSON.stringify(outcome)}`);
+  }
+  const statuses = Object.values(checkRequirementStatuses(fig));
+  if (statuses.some(status => status !== 'PASS' && status !== 'FAIL' && status !== 'NOT MEASURABLE')) faults.push('requirement status');
+  const passes = failedCheckBars(fig).length === 0 && statuses.every(status => status === 'PASS');
+  if (fig.PASS !== passes) faults.push('overall verdict');
+  return faults;
+}
+
+function onlyFailedCheckBar(fig: Record<string, unknown> | null, id: CheckBarId): boolean {
+  return fig?.PASS === false && failedCheckBars(fig).join(',') === id &&
+    Object.values(checkRequirementStatuses(fig)).every(status => status === 'PASS');
+}
+
+function reportCheckBarPlant<Id extends CheckBarId>(
+  say: FixtureCaseReporter, name: string, id: Id, failed: string, control: string, expected: 'PASS' | (typeof CHECK_SKIP_REASONS)[Id][number],
+): void {
+  const red = readJsonFile(failed);
+  const green = readJsonFile(control);
+  say(name, onlyFailedCheckBar(red, id) && checkBarIs(green, id, expected) && green?.PASS === true,
+    JSON.stringify({ control: checkBarOutcomes(green)[id], failed: failedCheckBars(red) }),
+    'Compare the completed reports from the existing positive control and the isolated bar defect.');
+}
+
+function checkLegacyProjection(fig: Record<string, unknown>): Record<string, unknown> {
+  const { spec: _spec, bar_outcomes: _outcomes, ...legacy } = fig;
+  return legacy;
+}
 
 /** A judgement line's status in a check.json read back, or null. */
 function lineStatus(fig: Record<string, unknown> | null, name: string): string | null {
@@ -17735,6 +17825,11 @@ function runSourceCases(dir: string, say: (name: string, ok: boolean, detail: st
     withIdle.status === 0 &&
       withIdle.fig !== null &&
       Object.keys(withIdle.fig).join(',') === sourceKeys &&
+      checkBarIs(withIdle.fig, 'gate', 'PASS') && checkBarIs(withIdle.fig, 'loop', 'PASS') &&
+      checkBarIs(withIdle.fig, 'seam', 'no-parts') &&
+      PARTS_LINES.every(id => checkBarIs(withIdle.fig, id, 'no-parts')) &&
+      checkBarIs(withIdle.fig, 'LIMB_ONE_BONE', 'no-parts') &&
+      checkBarIs(withIdle.fig, 'SEAM_OVER_RANGE', 'no-parts') &&
       withIdle.fig.PASS === true &&
       withIdle.fig.gate_spine_html_green === true &&
       withIdle.fig.loop_max_diff === 0 &&
@@ -17763,6 +17858,11 @@ function runSourceCases(dir: string, say: (name: string, ok: boolean, detail: st
     'CK57_WITHOUT_AN_IDLE_ONLY_THE_GATE_MEASURES_AND_THE_PASS_LINE_CARRIES_THE_SKIP_COUNT',
     noIdle.status === 0 &&
       noIdle.fig?.PASS === true &&
+      checkBarIs(noIdle.fig, 'loop', 'no-idle') && checkBarIs(noIdle.fig, 'seam', 'no-parts') &&
+      PARTS_LINES.every(id => checkBarIs(noIdle.fig, id, 'no-idle')) &&
+      checkBarIs(noIdle.fig, 'CHAIN_LAG', 'no-idle') && checkBarIs(noIdle.fig, 'TEXTURE_STRETCH', 'no-idle') &&
+      checkBarIs(noIdle.fig, 'ANIMATIONS_DO_NOT_FOLD', 'no-animation') &&
+      checkBarIs(noIdle.fig, 'FEET_STAY_LEVEL', 'no-animation') &&
       noIdle.fig.loop_max_diff === null &&
       (skippedNo?.loop ?? '').startsWith(NO_IDLE) &&
       (skippedNo?.seam ?? '').startsWith(NO_PARTS) &&
@@ -17935,7 +18035,7 @@ function runSourceCases(dir: string, say: (name: string, ok: boolean, detail: st
     'CK67_THE_DEFAULT_RUN_COUNTS_ITS_BARS_AND_WRITES_NO_KEY_IT_DID_NOT_WRITE_BEFORE',
     defaultRun.status === 0 && defaultSummary === `check: PASS; 5 of ${BARS.length + 1} bar(s) measured, 5 skipped (${JUDGEMENT_LINES.filter((n) => n !== 'BREATH_VISIBLE').join(', ')})` && !defaultRun.out.includes(`${SOURCE_LINE}:`),
     `"${defaultSummary}"; ${SOURCE_LINE} printed: ${defaultRun.out.includes(`${SOURCE_LINE}:`)}`,
-    "with parts.json and an idle and no --source, check.json keeps exactly its keys (CK01) and the examples' check.json and gate file their bytes (CH04, CH05); the summary now says how many of the bars measured — on this fixture the gate, the loop, the seam, since issue #323 BREATH_VISIBLE's torso half, and since issue #333 the fold bar over the idle: its two topwear parts give the torso half something to read and the other judgement lines nothing",
+    'The default console summary keeps its existing count. The gate, loop, seam, torso breath and idle folds measure on this two-part fixture. CK01 checks the report keys and the closed outcome map.',
   );
 }
 
@@ -18040,10 +18140,14 @@ function runRequirementCases(dir: string, say: (name: string, ok: boolean, detai
   const red = run('neg', neg);
   const short = line(red, 'HAND_ON_GRIP');
   const shortFail = failLine(red.text, 'CHECK_REQUIREMENT_MET: requirement "HAND_ON_GRIP"');
+  const redStatuses = checkRequirementStatuses(red.fig);
   const gap = OVERREACH_TO - (UPPER_LEN + LOWER_LEN);
   say(
     'CK71_A_CHAIN_TOO_SHORT_FAILS_ITS_CONTACT_NAMING_THE_DISTANCE_AND_THE_FRAME',
-    red.status === 1 && short.status === 'FAIL' && close(short.largest_px, gap, 1e-4) && short.at === 'frame 4 (t = 1s)' && shortFail !== null && shortFail.includes(`largest distance ${String(short.largest_px)} px at frame 4 (t = 1s)`) && shortFail.includes('<= 0.01 px is required'),
+    red.status === 1 && red.fig?.PASS === false && checkOutcomeFaults(red.fig).length === 0 && failedCheckBars(red.fig).length === 0 &&
+      redStatuses.HAND_ON_GRIP === 'FAIL' && redStatuses.VANE_KEYED === 'FAIL' &&
+      requirementsNotPass(red.fig).includes('HAND_ON_GRIP') &&
+      short.status === 'FAIL' && close(short.largest_px, gap, 1e-4) && short.at === 'frame 4 (t = 1s)' && shortFail !== null && shortFail.includes(`largest distance ${String(short.largest_px)} px at frame 4 (t = 1s)`) && shortFail.includes('<= 0.01 px is required'),
     `${printed(red, 'HAND_ON_GRIP')} | ${shortFail?.trim() ?? 'no FAIL line'}`,
     `the grip slides from world x ${OVERREACH_FROM} to ${OVERREACH_TO}; the straightened chain reaches ${UPPER_LEN + LOWER_LEN}, so the last frame is ${gap} px short by hand, and the line names that frame — an IK at mix 1 that cannot reach is the defect #87's contact exists for, which the gate does not score`,
   );
@@ -18099,6 +18203,9 @@ function runRequirementCases(dir: string, say: (name: string, ok: boolean, detai
     'CK75_A_FOLLOW_WHOSE_TARGET_ASKS_NOTHING_AND_A_TIP_ON_A_ZERO_LENGTH_BONE_ARE_NOT_MEASURABLE_AND_THE_RUN_IS_NOT_PASS',
     nm.status === 1 &&
       vs.status === 'NOT MEASURABLE' &&
+      checkOutcomeFaults(nm.fig).length === 0 && failedCheckBars(nm.fig).length === 0 &&
+      JSON.stringify(checkRequirementStatuses(nm.fig)) === '{"VANE_STILL":"NOT MEASURABLE","STUB_TIP":"NOT MEASURABLE"}' &&
+      requirementsNotPass(nm.fig ?? {}).join(',') === 'VANE_STILL,STUB_TIP' &&
       close(vs.largest_drive_degrees, 0, 1e-6) &&
       line(nm, 'STUB_TIP').status === 'NOT MEASURABLE' &&
       finalLine(nm).startsWith('check: FAIL — 0 bar(s) not met, 2 declared requirement(s) not PASS') &&
@@ -18416,6 +18523,7 @@ function runSweepCheckCases(report: FixtureCaseReporter): void {
       clearedParts > 0 &&
         clearedRig === clearedParts &&
         plantedRun.status === 1 &&
+        onlyFailedCheckBar(plantedFig, SWEEP_LINE) &&
         pl !== null &&
         pl.status === 'FAIL' &&
         pl.joints.length === 1 &&
@@ -19537,7 +19645,8 @@ function runMotionRootRendererCases(home: string, legacyOutput: string, report: 
   const rawPlant = namedPlant + '\n' + namedPlant;
   const escapedPlant = soRootDiagnostic({ child: rawPlant });
   const escapedControls = !escapedPlant.includes('\n') && rawPlant.includes('\n');
-  const forwarded = matcherControls && escapedControls && torn.status === 1 && torn.fig?.PASS === false && direct.status === 1 && directFig?.PASS === false &&
+  const forwarded = matcherControls && escapedControls && torn.status === 1 && direct.status === 1 &&
+    onlyFailedCheckBar(torn.fig, MOTION_SEAM_LINE) && onlyFailedCheckBar(directFig, MOTION_SEAM_LINE) &&
     JSON.stringify(barsNotMet(torn.fig ?? {})) === JSON.stringify([MOTION_SEAM_LINE]) &&
     JSON.stringify(barsNotMet(directFig ?? {})) === JSON.stringify([MOTION_SEAM_LINE]) &&
     legacyBars !== null && normalBars === legacyBars + 1 && totalBars(torn.out) === normalBars && totalBars(direct.out) === normalBars &&
@@ -19748,7 +19857,7 @@ function runSeamRequiredCases(dir: string, built: SoBuilt, say: (name: string, o
       `SO27_REQUIRED_REFUSES_BACKGROUND_ON_ONE_UNSAMPLED_FRAME_OF_AN_${cls === 'explicit' ? 'EXPLICIT' : 'INTERNAL_JOINT'}_PAIR_BY_NAME`,
       plain.status === 0 && plain.fig?.PASS === true && lineOf(plain.fig)?.required === undefined &&
         hits.length === 1 && worst !== undefined && worst.px > 0 && !sampled(hits.map((h) => h.index)) &&
-        planted.status === 1 && planted.fig?.PASS === false && f.length === 1 && f[0].startsWith(want) && f[0].includes('declares seam_over_motion.required: true') &&
+        planted.status === 1 && onlyFailedCheckBar(planted.fig, MOTION_SEAM_LINE) && f.length === 1 && f[0].startsWith(want) && f[0].includes('declares seam_over_motion.required: true') &&
         req?.status === 'FAIL' && req.failed === 1 && readMotionSeamCellSidecar(join(planted.stage, 'check'), req)?.frames.length === 1 && JSON.stringify(withoutCheckRows(req.pairs.map(({ open_frames: _evidence, ...pair }) => pair))) === JSON.stringify([{ pair: 'upperarm_r|forearm_r', class: cls, frames: 26, background_frames: 1, max_px: worst.px }]) &&
         barsNotMet(planted.fig ?? {}).includes(MOTION_SEAM_LINE) && planted.out.includes('build: stopped at check'),
       `undeclared: exit ${plain.status}, PASS ${String(plain.fig?.PASS)}, required ${lineOf(plain.fig)?.required === undefined ? 'absent' : 'PRESENT'}; stock gapOpen frames ${JSON.stringify(hits)}; declared: exit ${planted.status}, ${f[0] ?? 'no refusal'}; block ${JSON.stringify(req)}`,
@@ -19835,27 +19944,31 @@ function runSeamRequiredCases(dir: string, built: SoBuilt, say: (name: string, o
     }
   }
 
-  // The clean twin, declared: PASS, measured, and check.json is the undeclared twin's but for the two declared blocks.
+  // The clean twin changes the motion-seam outcome and adds the declared evidence.
   const holdPlain = built('hold-plain', true, motion('anim-hold.json'));
   const hold = built('hold', true, { ...motion('anim-hold.json'), requirements: required });
   const strip = (fig: Record<string, unknown> | null): string => {
     if (fig === null) return 'null';
-    const copy = JSON.parse(JSON.stringify(fig)) as Record<string, unknown>;
+    const copy = checkLegacyProjection(structuredClone(fig));
     delete copy.requirements;
     delete copy.config;
     const ln = copy[MOTION_SEAM_LINE] as Record<string, unknown> | undefined;
     if (ln !== undefined) delete ln.required;
     return JSON.stringify(copy);
   };
+  const otherBars = (fig: Record<string, unknown> | null): string =>
+    JSON.stringify(Object.entries(checkBarOutcomes(fig)).filter(([id]) => id !== MOTION_SEAM_LINE));
   const holdReq = lineOf(hold.fig)?.required;
   say(
     'SO28_REQUIRED_PASSES_A_SEAM_THAT_HOLDS_ON_EVERY_FRAME_AND_MOVES_NOTHING_ELSE',
     hold.status === 0 && hold.fig?.PASS === true && fails(hold.out).length === 0 &&
       holdReq?.status === 'PASS' && holdReq.failed === 0 && JSON.stringify(withoutCheckRows(holdReq.pairs)) === JSON.stringify([{ pair: 'upperarm_r|forearm_r', class: 'internal-joint', frames: 26, background_frames: 0, max_px: 0 }]) &&
       hold.out.includes(`${MOTION_SEAM_LINE} required: PASS — 1 declared pair(s) (0 body-root, 1 internal-joint, 0 explicit), 26 pair-frame(s) read`) &&
-      holdPlain.status === 0 && strip(hold.fig) === strip(holdPlain.fig) && !holdPlain.out.includes(`${MOTION_SEAM_LINE} required`),
-    `declared: exit ${hold.status}, ${JSON.stringify(holdReq)}; undeclared twin: exit ${holdPlain.status}; check.json less the declared blocks ${strip(hold.fig) === strip(holdPlain.fig) ? 'identical' : 'DIFFERENT'}`,
-    'issue #941, the positive control: the same rig, its forearm keyed at 0 on every frame, holds 0 background cells over all 26 pair-frames (13 idle, 13 hold), passes, and its check.json is the undeclared build\'s but for the requirements block and the required block the declaration adds',
+      holdPlain.status === 0 && strip(hold.fig) === strip(holdPlain.fig) && !holdPlain.out.includes(`${MOTION_SEAM_LINE} required`) &&
+      checkBarIs(holdPlain.fig, MOTION_SEAM_LINE, 'no-root-gate') && checkBarIs(hold.fig, MOTION_SEAM_LINE, 'PASS') &&
+      otherBars(hold.fig) === otherBars(holdPlain.fig),
+    `declared: exit ${hold.status}, ${JSON.stringify(holdReq)}; undeclared twin: exit ${holdPlain.status}; legacy projection ${strip(hold.fig) === strip(holdPlain.fig) ? 'identical' : 'DIFFERENT'}; ${MOTION_SEAM_LINE} ${JSON.stringify(checkBarOutcomes(holdPlain.fig)[MOTION_SEAM_LINE])} -> ${JSON.stringify(checkBarOutcomes(hold.fig)[MOTION_SEAM_LINE])}`,
+    'The required seam holds on all 26 pair-frames and changes the motion-seam outcome from SKIP to PASS. All other bar outcomes and the existing projection retain their values.',
   );
 
   // Nothing declared to read, and the declaration's own shape.
@@ -20018,6 +20131,7 @@ function runMotionSeamCases(report: FixtureCaseReporter): void {
       r.status === 0 &&
         cut.status === 0 &&
         cut.fig?.PASS === true &&
+        checkBarIs(cut.fig, MOTION_SEAM_LINE, 'no-root-gate') && failedCheckBars(cut.fig).length === 0 &&
         ln !== null &&
         ln.status === 'WARN' &&
         ln.warnings === 1 &&
@@ -20683,6 +20797,7 @@ function runLimbCheckCases(say: (name: string, ok: boolean, detail: string, why:
         rows(regions.fig) === `PASS ${all}` &&
         summary(regions.out).startsWith('check: PASS') &&
         pinned.status === 1 &&
+        onlyFailedCheckBar(pinned.fig, LIMB_LINE) &&
         rows(pinned.fig) === `FAIL ${all.replace('forearm_r:PASS', 'forearm_r:FAIL+hip')}` &&
         failed.trim() === wantFail &&
         summary(pinned.out) === 'check: FAIL — 1 bar(s) not met; 9 of 13 bar(s) measured, 4 skipped (BLINK_NO_HOLE, TIP_OVER_ROOT, FEET_STAY_LEVEL, STRESS_OFF_CHAIN); 0 warning(s) (SEAM_OVER_MOTION, not a bar)' &&
@@ -21663,7 +21778,7 @@ function runCheckJudgementCases(dir: string, say: ReturnType<typeof counter>['sa
   const stillFail = failLine(still.out, 'CHECK_BREATH_VISIBLE');
   say(
     'CK09_A_TORSO_THE_IDLE_DOES_NOT_MOVE_FAILS_BREATH_VISIBLE_BY_NAME',
-    still.status === 1 && lineStatus(still.fig, 'BREATH_VISIBLE') === 'FAIL' && stillFail !== null && stillFail.includes('torso') && stillFail.includes('heat mean 0/255') && failLine(still.out, 'CHECK_LOOP_CLOSES') === null,
+    still.status === 1 && onlyFailedCheckBar(still.fig, 'BREATH_VISIBLE') && lineStatus(still.fig, 'BREATH_VISIBLE') === 'FAIL' && stillFail !== null && stillFail.includes('torso') && stillFail.includes('heat mean 0/255') && failLine(still.out, 'CHECK_LOOP_CLOSES') === null,
     `exit ${still.status}; ${checkFixtureLine(still.out, 'BREATH_VISIBLE')}; ${stillFail?.trim() ?? 'no CHECK_BREATH_VISIBLE line'}`,
     'a zero-amplitude breath is a closed loop and an exact seam — the gate and both old bars pass it — so the torso rendered alone is the only thing that sees it does not breathe',
   );
@@ -21763,7 +21878,7 @@ function runCheckJudgementCases(dir: string, say: ReturnType<typeof counter>['sa
   const tipFail = failLine(slide.out, 'CHECK_TIP_OVER_ROOT');
   say(
     'CK11_A_SLEEVE_THAT_SLIDES_WHOLE_FAILS_TIP_OVER_ROOT',
-    slide.status === 1 && tipFail !== null && tipFail.includes('(ratio undefined: nothing moves against `root`; in the world ') && /in the world [0-9.]+ and [0-9.]+, ratio 1\)/.test(tipFail),
+    slide.status === 1 && onlyFailedCheckBar(slide.fig, 'TIP_OVER_ROOT') && tipFail !== null && tipFail.includes('(ratio undefined: nothing moves against `root`; in the world ') && /in the world [0-9.]+ and [0-9.]+, ratio 1\)/.test(tipFail),
     `exit ${slide.status}; ${tipFail?.trim() ?? 'no CHECK_TIP_OVER_ROOT line'}`,
     'a sleeve translated whole has its tip travel exactly as far as its root — the swing a chain is for is absent; since issue #987 the halves are read against the bone the part hangs from (`root`, which the slide moves), where nothing moves, and the world ratio 1 is beside it',
   );
@@ -22454,6 +22569,7 @@ function runCheckJudgementCases(dir: string, say: ReturnType<typeof counter>['sa
   say(
     'CK41_A_FACE_MESH_WEIGHTED_TO_A_BONE_OTHER_THAN_THE_HEAD_FAILS_BY_THE_SLIDE_IT_MAKES',
     slid.status === 1 &&
+      onlyFailedCheckBar(slid.fig, 'STILL_REGIONS_DARK') &&
       lineStatus(slid.fig, 'STILL_REGIONS_DARK') === 'FAIL' &&
       sf2.max_rig_px === 2 &&
       sf2.at?.slot === 'back' &&
@@ -22564,7 +22680,7 @@ function runCheckJudgementCases(dir: string, say: ReturnType<typeof counter>['sa
   const holeFig = shut.fig?.BLINK_NO_HOLE as { hole_px?: number; idle_frames_closed?: number[] } | undefined;
   say(
     'CK12_A_SHUT_EYE_OVER_NOTHING_FAILS_BLINK_NO_HOLE_WITH_THE_COUNT_AND_THE_FRAMES',
-    shut.status === 1 && holeFail !== null && holeFig !== undefined && (holeFig.hole_px ?? 0) > 0 && holeFail.includes(`${holeFig.hole_px} px show the background`) && JSON.stringify(holeFig.idle_frames_closed) === '[6,7]',
+    shut.status === 1 && onlyFailedCheckBar(shut.fig, 'BLINK_NO_HOLE') && holeFail !== null && holeFig !== undefined && (holeFig.hole_px ?? 0) > 0 && holeFail.includes(`${holeFig.hole_px} px show the background`) && JSON.stringify(holeFig.idle_frames_closed) === '[6,7]',
     `exit ${shut.status}; ${holeFail?.trim() ?? 'no CHECK_BLINK_NO_HOLE line'}; idle frames closed ${JSON.stringify(holeFig?.idle_frames_closed)}`,
     'the eye part reaches past the face on one side, so squashing it shows the page there; the blink holds 0.5 s to 0.6 s, which at 12 fps is frames 6 and 7 (0.5 and 0.583 s)',
   );
@@ -22774,6 +22890,7 @@ function runCheckStretchCases(dir: string, say: ReturnType<typeof counter>['say'
   say(
     'CK32_A_MESH_THE_IDLE_STRETCHES_TO_TWICE_ITS_LENGTH_FAILS_THE_CHECK_END_TO_END_AND_NOTHING_ELSE_DOES',
     hard.status === 1 &&
+      onlyFailedCheckBar(hard.fig, 'TEXTURE_STRETCH') &&
       hard.fig?.PASS === false &&
       lineStatus(hard.fig, 'TEXTURE_STRETCH') === 'FAIL' &&
       hardFail === `  FAIL  CHECK_TEXTURE_STRETCH: mesh "${CHECK_PARTS[0].name}" triangle 0 (vertices 0 1 2), edge 1-2, idle frame ${IDLE_FPS / 2} — the edge is 2 times its rest length (max(ratio, 1/ratio) 2); <= ${TEXTURE_STRETCH_CEILING} is required; vertex 1 is weighted to "yoke" 1 and vertex 2 to "hem" 1; none of these bones hangs on a chain of the idle; weight step edge 1-2 bone "yoke": vertex 1 share 1, vertex 2 share 0; pre-cut shares unavailable; if the influence cut made this step: meshes.back.influences {"maxInfluences": null, "floor": "continuous"} — the texture on it is stretched: the bones this mesh is weighted to move apart (amplitudes too large down a chain), or a vertex blends bones that move against each other (see rig-parts guide CHECK_TEXTURE_STRETCH)` &&
@@ -23349,12 +23466,21 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
     const pack = parsePackLines(existsSync(join(out, 'gate_spine-html.txt')) ? readFileSync(join(out, 'gate_spine-html.txt'), 'utf8').split('\n') : []);
     const outputs = ['gate_spine-html.txt', 'contact.png', 'motion_heat.png', 'check.json', 'build/skeleton.json', 'build/skeleton.atlas', 'build/skeleton.png', 'idle_frames/frames.json', 'idle_frames/idle/f0000.png'];
     const missing = outputs.filter((o) => !existsSync(join(out, o)));
+    const outcomeFaults = checkOutcomeFaults(fig);
     say(
       'CK01_THE_AUTHORED_RIG_PASSES_AND_EVERY_OUTPUT_IS_WRITTEN_OUTSIDE_THE_RIG',
       ok.status === 0 &&
         ok.out.includes('check: PASS') &&
         fig !== null &&
         Object.keys(fig).join(',') === CHECK_KEYS.join(',') &&
+        outcomeFaults.length === 0 &&
+        (['gate', 'loop', 'seam', 'BREATH_VISIBLE', FOLD_LINE] as const).every(id => checkBarIs(fig, id, 'PASS')) &&
+        checkBarIs(fig, 'BLINK_NO_HOLE', 'no-eye-parts') &&
+        checkBarIs(fig, 'CHAIN_LAG', 'no-comparable-tracks') &&
+        checkBarIs(fig, 'TIP_OVER_ROOT', 'no-swing-parts') &&
+        checkBarIs(fig, 'STILL_REGIONS_DARK', 'no-eligible-region') &&
+        checkBarIs(fig, 'TEXTURE_STRETCH', 'no-meshes') &&
+        checkBarIs(fig, 'STRESS_OFF_CHAIN', 'no-handwear') &&
         fig.PASS === true &&
         missing.length === 0 &&
         existsSync(join(out, 'extremes', 'idle', 'extremes.png')) && ok.out.includes('EXTREMES \"idle\" geometry pair') &&
@@ -23367,20 +23493,58 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
         JUDGEMENT_LINES.every((n) => (n === 'BREATH_VISIBLE' ? lineStatus(fig, n) === 'PASS' && ok.out.includes(`  ${n}: PASS — halves_measured 1 of 2; `) : lineStatus(fig, n) === 'SKIP' && ok.out.includes(`  ${n}: SKIP — `))) &&
         lineStatus(fig, 'RECOMPOSITE_HOLES') === 'SKIP' &&
         ok.out.includes('  RECOMPOSITE_HOLES: SKIP — parts.json has no "recomposite" block'),
-      `exit ${ok.status}; check.json ${fig === null ? 'absent' : JSON.stringify(fig).slice(0, 220)}…; judgement lines ${JUDGEMENT_LINES.map((n) => `${n} ${lineStatus(fig, n) ?? 'absent'}`).join(', ')}; RECOMPOSITE_HOLES ${lineStatus(fig, 'RECOMPOSITE_HOLES') ?? 'absent'}; missing outputs: ${missing.join(', ') || 'none'}; pack ${pack.map((p) => p.line).join(' | ') || 'none'} for ${CHECK_PARTS.length} part(s); --rig ${listing(rig).join('|') === before.join('|') ? 'unchanged' : 'CHANGED'}`,
-      "the positive control: a two-part, one-bone rig with a closed idle and an exact stack must come back green from the rig-play gate, with the reference's check.json keys in its order (gate_spine_green gone with the second gate, rigc_entry after the gate, pack_mode after it) and the six judgement lines, the fold bar over the idle (issue #333) and the reported line between the seam and PASS, the packed page as the build, and nothing written into the input; its two parts are both topwear, so every judgement line but BREATH_VISIBLE has nothing to read (and neither part is a mesh, so neither has TEXTURE_STRETCH) and must say SKIP, by name, with its reason — never PASS — while BREATH_VISIBLE reads its torso half and says it measured 1 of 2 halves (issue #323) — and its hand-written parts.json has no recomposite block, so RECOMPOSITE_HOLES says SKIP too",
+      `exit ${ok.status}; keys ${Object.keys(fig ?? {}).join(',')}; outcomes ${JSON.stringify(checkBarOutcomes(fig))}; contract faults ${outcomeFaults.join(', ') || 'none'}; missing outputs ${missing.join(', ') || 'none'}; pack ${pack.map(p => p.line).join(' | ') || 'none'}; --rig ${listing(rig).join('|') === before.join('|') ? 'unchanged' : 'CHANGED'}`,
+      'The two topwear parts close their idle and match their setup composite. Only the torso half of breath has eligible art. The version and closed map lead the report, legacy keys retain their order, and the input stays read-only.',
     );
 
-    const again = runCli(['check', '--rig', rig, '--out', join(dir, 'out2')]);
+    const again = runCli(['check', '--rig', rig, '--out', join(dir, 'out2'), '--json']);
     const same = ['check.json', 'motion_heat.png', 'gate_spine-html.txt', 'build/skeleton.json', 'build/skeleton.png'].filter(
       (f) => existsSync(join(out, f)) && existsSync(join(dir, 'out2', f)) && Buffer.compare(readFileSync(join(out, f)), readFileSync(join(dir, 'out2', f))) === 0,
     );
     say(
       'CK02_TWO_RUNS_WRITE_THE_SAME_BYTES',
-      again.status === 0 && same.length === 5 && !existsSync(join(dir, 'out2', 'extremes')) && !again.out.includes('EXTREMES '),
+      again.status === 0 && same.length === 5 && !existsSync(join(dir, 'out2', 'extremes')) && again.out === readFileSync(join(out, 'check.json'), 'utf8'),
       `second run exit ${again.status}; ${same.length} of 5 outputs byte-identical (${same.join(', ')})`,
-      'determinism is a contract: the same rig must write the same check.json, heat map and gate file, or no diff of them means anything',
+      'The same rig writes the same report, heat map and gate file. In JSON mode stdout is exactly the completed report.',
     );
+
+    // Keep the actual packed output and plant a bad assertion summary. CK05
+    // separately holds the nonzero rigc exit, which refuses before a report.
+    const stock = rigcRunnerAt(suiteRigc(), spawnRigc);
+    const gateOut = join(dir, 'bad-gate-summary');
+    const badGate = runCheck(rig, gateOut, args => {
+      const result = stock(args);
+      if (args[0] !== 'build' || !args.includes('--pack') || result.status !== 0) return result;
+      return { ...result, out: result.out.replace(/(?<= passed, )0 failed/g, '1 failed') + '\n  FAIL  PLANTED_GATE_SUMMARY: packed assertion\n' };
+    }, undefined, DEFAULT_PACK_MODE, undefined, undefined, false, false, undefined, false, undefined, undefined, undefined, undefined, true);
+    const badGateFig = readJsonFile(join(gateOut, 'check.json'));
+    say('CK1372_PACKED_GATE_SUMMARY_FAILS_ITS_OWN_OUTCOME',
+      onlyFailedCheckBar(badGateFig, 'gate') && badGateFig?.gate_spine_html_green === false &&
+        badGate.problems.length === 1 && badGate.problems[0].code === 'CHECK_RIGC_GREEN' && badGate.problems[0].detail.includes('PLANTED_GATE_SUMMARY'),
+      JSON.stringify({ failed: failedCheckBars(badGateFig), problems: badGate.problems }),
+      'A completed stage with a red packed assertion summary records a gate failure. The stock pack and all other bar inputs are the positive control.');
+
+    const lagRig = join(dir, 'lag');
+    writeCheckRig(lagRig);
+    const lagSpec = readJsonFile(join(lagRig, 'rig.json')) as unknown as RigSpec;
+    const lagMotion = readJsonFile(join(lagRig, 'motion.json')) as unknown as MotionSpec;
+    lagSpec.bones.push({ name: 'lag_parent', parent: 'root', x: 0, y: 0 }, { name: 'lag_child', parent: 'lag_parent', x: 0, y: 0 });
+    const lagIdle = lagMotion.animations.idle;
+    lagIdle.tracks.push(
+      sineTrack('lag_parent', 'rotate', 1, lagIdle.duration, 0.3, 0, lagIdle.duration),
+      sineTrack('lag_child', 'rotate', 2, lagIdle.duration, 0.2, 0, lagIdle.duration),
+    );
+    writeFileSync(join(lagRig, 'rig.json'), rigJsonText(lagSpec));
+    writeFileSync(join(lagRig, 'motion.json'), rigJsonText(lagMotion));
+    const lagOut = join(dir, 'lag-out');
+    const lag = runCli(['check', '--rig', lagRig, '--out', lagOut]);
+    const lagFig = readJsonFile(join(lagOut, 'check.json'));
+    const lagProblems = lag.out.split('\n').filter(line => line.startsWith('  FAIL  '));
+    say('CK1373_REVERSED_PHASE_FAILS_ONLY_CHAIN_LAG_IN_THE_COMPLETED_REPORT',
+      lag.status === 1 && onlyFailedCheckBar(lagFig, 'CHAIN_LAG') && lagProblems.length === 1 &&
+        lagProblems[0].startsWith('  FAIL  CHECK_CHAIN_LAG:') && lagProblems[0].includes('"lag_child"'),
+      JSON.stringify({ exit: lag.status, failed: failedCheckBars(lagFig), problems: lagProblems }),
+      'The two new bones draw no art. The child leads its keyed parent, using CK13’s reversed phase pair, while the original loop and drawings are preserved.');
 
     // rig-c 2.50.0 renamed the gate's profile from spine-html to rig-play, and rig-c 3.0.0 removed the former name
     // (exit 2, USAGE). Every rigc build a stage runs takes its profile from packedBuildArgs or REFERENCE_BUILD_ARGS;
@@ -23417,7 +23581,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
     const quoted = ll === null ? null : /max \|d\| (\d+)\/255/.exec(ll);
     say(
       'CK03_AN_IDLE_WHOSE_LAST_KEY_IS_NOT_ITS_FIRST_FAILS_THE_LOOP_WITH_THE_MAX_QUOTED',
-      loop.status === 1 && quoted !== null && Number(quoted[1]) > 0 && lf !== null && lf.loop_max_diff === Number(quoted[1]) && lf.PASS === false && failLine(loop.out, 'CHECK_SEAM') === null,
+      loop.status === 1 && onlyFailedCheckBar(lf, 'loop') && quoted !== null && Number(quoted[1]) > 0 && lf !== null && lf.loop_max_diff === Number(quoted[1]) && lf.PASS === false && failLine(loop.out, 'CHECK_SEAM') === null,
       `exit ${loop.status}; ${ll?.trim() ?? 'no CHECK_LOOP_CLOSES line'}; check.json loop_max_diff ${lf?.loop_max_diff ?? 'absent'}`,
       'the gate cannot see a loop that jumps — it passes it — so the loop check is the only thing between that idle and a README; the setup pose is unchanged, so the seam must stay quiet',
     );
@@ -23500,9 +23664,14 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
         cp.out.includes('check: PASS') &&
         failLine(cp.out, 'CHECK_LOOP_CLOSES') === null &&
         cpf !== null &&
+        checkBarIs(cpf, 'loop', 'PASS') &&
         cpf.loop_max_diff === 0 &&
         JSON.stringify(cpf.loop_physics) === '[{"name":"bob_phys","bone":"bob","in":"rig.json","row_scope":"rig","row_kind":"evidence","row_subjects":[]}]' &&
-        Object.keys(cpf).join(',') === [...CHECK_KEYS.slice(0, 4), 'loop_physics', ...CHECK_KEYS.slice(4, CHECK_KEYS.indexOf('RECOMPOSITE_HOLES')), CLOTH_LINE, ...CHECK_KEYS.slice(CHECK_KEYS.indexOf('RECOMPOSITE_HOLES'))].join(',') &&
+        Object.keys(cpf).join(',') === CHECK_KEYS.flatMap(key => {
+          if (key === 'loop_max_diff') return [key, 'loop_physics'];
+          if (key === 'RECOMPOSITE_HOLES') return [CLOTH_LINE, key];
+          return [key];
+        }).join(',') &&
         cp.out.split('\n').filter((l) => l.startsWith('  loop physics: ')).length === 1 &&
         cp.out.includes(physLine) &&
         withSim !== null &&
@@ -23544,7 +23713,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
     const sl = failLine(seam.out, 'CHECK_SEAM_WITHIN_BAR');
     say(
       'CK04_A_PART_SHIFTED_THREE_PIXELS_FAILS_THE_SEAM_WITH_THE_NUMBERS',
-      seam.status === 1 && sl !== null && sf !== null && sl.includes(`mean |d| ${String(sf.seam_mean)}/255`) && sl.includes(`${String(sf.seam_px_over_40)} frame px over`) && typeof sf.seam_frame_scale === 'number' && sl.includes(`${seamRigPxText(sf.seam_px_over_40 as number, sf.seam_frame_scale)} rig px`) && sf.loop_max_diff === 0 && sf.gate_spine_html_green === true,
+      seam.status === 1 && onlyFailedCheckBar(sf, 'seam') && sl !== null && sf !== null && sl.includes(`mean |d| ${String(sf.seam_mean)}/255`) && sl.includes(`${String(sf.seam_px_over_40)} frame px over`) && typeof sf.seam_frame_scale === 'number' && sl.includes(`${seamRigPxText(sf.seam_px_over_40 as number, sf.seam_frame_scale)} rig px`) && sf.loop_max_diff === 0 && sf.gate_spine_html_green === true,
       `exit ${seam.status}; ${sl?.trim() ?? 'no CHECK_SEAM_WITHIN_BAR line'}`,
       'parts/ is what the seam composites and images/ is what rigc draws; a part moved 3 px in one and not the other is the drift an assembler bug produces, and the gate passes it',
     );
@@ -24802,7 +24971,7 @@ function runEnvironmentCheckCases(say: (name: string, ok: boolean, detail: strin
         withoutEnv(initial.text) === none.text &&
         noneHashes.length > 0 &&
         JSON.stringify(idleHashes(initial.dir)) === JSON.stringify(noneHashes) &&
-        JSON.stringify(Object.keys(fig(initial.text)).slice(0, 4)) === JSON.stringify(['gate_spine_html_green', 'rigc_entry', 'pack_mode', 'environment']) &&
+        Object.keys(fig(initial.text)).slice(0, 7).join(',') === 'spec,bar_outcomes,gate_spine_html_green,rigc_entry,pack_mode,environment,loop_max_diff' &&
         JSON.stringify(initialRecord) === JSON.stringify({ path: initialPath, sha256: sha(initialPath), steps: 1 }) &&
         calm.status === 0 &&
         withoutEnv(calm.text) !== none.text &&
@@ -25702,6 +25871,7 @@ function runFeetLevelCases(say: (name: string, ok: boolean, detail: string, why:
     say(
       'CK405_A_SHOE_THAT_TURNS_WITH_ITS_SHIN_FAILS_NAMING_THE_BONE_AND_WITH_INHERIT_DECLARED_IT_PASSES',
       tilted.status === 1 &&
+        onlyFailedCheckBar(tilted.fig, LEVEL_LINE) &&
         lineOf(tilted.fig)?.status === 'FAIL' &&
         footOf(tilted.fig).bone === 'foot' &&
         footOf(tilted.fig).hangs_from === 'shin' &&
@@ -25858,6 +26028,7 @@ function runAnimationFoldCases(say: (name: string, ok: boolean, detail: string, 
         red.status === 1 &&
         red.fig?.PASS === false &&
         foldOf(red.fig)?.status === 'FAIL' &&
+        onlyFailedCheckBar(red.fig, FOLD_LINE) &&
         JSON.stringify(foldOf(red.fig)?.animations) === '["idle","nod","bend"]' &&
         redRows.length === 1 &&
         redRows[0].animation === 'bend' &&
@@ -26418,6 +26589,7 @@ function runStressCases(say: (name: string, ok: boolean, detail: string, why: st
       'CK367_A_SLEEVE_PINNED_BY_A_SEGMENT_ON_A_BONE_OFF_ITS_CHAIN_FAILS_AT_EVERY_TURN_NAMING_THAT_BONE',
       pinned.status === 0 &&
         red.status === 1 &&
+        onlyFailedCheckBar(red.fig, STRESS_LINE) &&
         lineOf(red.fig)?.status === 'FAIL' &&
         readings(red.fig).length === STRESS_TURNS.length &&
         readings(red.fig).every((r) => r > STRESS_RIGID) &&
@@ -26494,7 +26666,10 @@ function runRequirementsSuite(): number {
   const { say, bad } = counter();
   const dir = temp('requirements');
   try {
-    runCutMaterialChecks(join(dir, 'cut-material'), (name, pass, detail) => say(name, pass, detail, 'issue #888: fixed public source-support controls, no calibrated threshold'), rigcRunnerAt(suiteRigc(), spawnRigc));
+    const cutMaterial = join(dir, 'cut-material');
+    runCutMaterialChecks(cutMaterial, (name, pass, detail) => say(name, pass, detail, 'issue #888: fixed public source-support controls, no calibrated threshold'), rigcRunnerAt(suiteRigc(), spawnRigc));
+    reportCheckBarPlant(say, 'JC1372_CUT_MATERIAL_FAILURE_HAS_ITS_OWN_BAR_ID', 'CUT_JOINT_MATERIAL',
+      join(cutMaterial, 'actual-check', 'check.json'), join(cutMaterial, 'undeclared-check', 'check.json'), 'undeclared');
     const file = (name: string, body: Record<string, unknown>): string => {
       const p = join(dir, `${name}.json`);
       writeFileSync(p, `${JSON.stringify(body, null, 2)}\n`);
@@ -29251,6 +29426,7 @@ function runBuildSuite(): number {
     const posedSets = existsSync(join(posedOut, 'rig', 'sets.json')) ? readJsonFile(join(posedOut, 'rig', 'sets.json')) : null;
     const posedSetDrawn = (posedSets?.sets as Record<string, Record<string, unknown>> | undefined)?.posed?.drawn;
     const badSetRun = runBuildCli(['check', '--rig', join(posedOut, 'rig'), '--parts', posedOut, '--out', join(posedDir, 'bad-set'), '--set', 'no_such_set']);
+    const posedCheck = readJsonFile(join(posedOut, 'check', 'check.json'));
     const posedRigPath = join(posedOut, 'rig', 'rig.json');
     const posedRigDoc = JSON.parse(readFileSync(posedRigPath, 'utf8')) as { skins: { default: Record<string, Record<string, unknown>> } };
     posedRigDoc.skins.default.bottomwear.posed_bottomwear = {
@@ -29259,9 +29435,11 @@ function runBuildSuite(): number {
     };
     writeFileSync(posedRigPath, `${JSON.stringify(posedRigDoc, null, 2)}\n`);
     const uncompRun = runBuildCli(['check', '--rig', join(posedOut, 'rig'), '--parts', posedOut, '--out', join(posedDir, 'uncomp-check'), '--set', 'posed']);
+    const uncompCheck = readJsonFile(join(posedDir, 'uncomp-check', 'check.json'));
     say(
       'BU170_POSED_ALTERNATE_SET_COMPENSATES_DRAWN_BONE_ANGLES_AND_DROPPING_COMPENSATION_FAILS_SEAM_AND_FOLDS',
       posedRun.status === 0 &&
+        checkBarIs(posedCheck, 'seam', 'PASS') &&
         posedRun.out.includes('[check]   seam (posed): setup pose at ') &&
         posedRun.out.includes('0 px over 40, 0.00 rig px') &&
         posedRun.out.includes('ANIMATIONS_DO_NOT_FOLD: PASS') &&
@@ -29269,6 +29447,7 @@ function runBuildSuite(): number {
         badSetRun.status === 1 &&
         badSetRun.out.includes('FAIL  CHECK_INPUT_PRESENT:') &&
         uncompRun.status === 1 &&
+        failedCheckBars(uncompCheck).join(',') === `seam,${FOLD_LINE}` &&
         uncompRun.out.includes('FAIL  CHECK_SEAM_WITHIN_BAR: the source-grid setup-pose render of set "posed"') &&
         uncompRun.out.includes('FAIL  CHECK_ANIMATIONS_DO_NOT_FOLD: animation "pose_set", mesh "posed_bottomwear"'),
       `compensated build --all-sets exit ${posedRun.status}, sets.json drawn ${JSON.stringify(posedSetDrawn ?? null)}; unknown --set exit ${badSetRun.status}; uncompensated mutant check --set posed exit ${uncompRun.status} (seam fail: ${uncompRun.out.includes('FAIL  CHECK_SEAM_WITHIN_BAR:')}, fold fail: ${uncompRun.out.includes('FAIL  CHECK_ANIMATIONS_DO_NOT_FOLD:')})`,
@@ -31909,13 +32088,18 @@ function sampleSupportCoverage(support: SupportReport | undefined): boolean {
 
 function chainCheckGoldenCase(ex: string, out: string, key: string, say: ReturnType<typeof counter>['say']) {
       const exp = join(ex, 'expected');
-      const expectedCheck = readJsonAt(join(exp, 'check.json'));
+      const expectedCheck = readJsonAt(join(exp, 'check.json')) as Record<string, unknown>;
       const current = readJsonAt(join(out, 'check', 'check.json')) as Record<string, unknown>;
       // Historical field-by-field oracle stays intact. The additive report has
       // its own controls and coverage assertion, with no new acceptance bar.
-      const { [COINCIDE_LINE]: report, ...legacy } = current;
+      const report = current[COINCIDE_LINE];
       const rowFaults1089 = checkRowFaults(current);
-      const check = jsonDiffs(expectedCheck, current, chainTolerance('check.json', expectedCheck));
+      const legacySnapshot = !Object.hasOwn(expectedCheck, 'spec') && !Object.hasOwn(expectedCheck, 'bar_outcomes');
+      const comparable = legacySnapshot ? checkLegacyProjection(current) : current;
+      const check = jsonDiffs(expectedCheck, comparable, chainTolerance('check.json', expectedCheck));
+      const outcomeFaults = checkOutcomeFaults(current);
+      const outcomesMatch = legacySnapshot ||
+        (expectedCheck.spec === current.spec && JSON.stringify(expectedCheck.bar_outcomes) === JSON.stringify(current.bar_outcomes));
       const support = report as SupportReport | undefined;
       const droppedPair = support === undefined ? undefined : { ...support, pairs: support.pairs.slice(1) };
       say(`CH943_SUPPORT_COVERAGE_IS_EXPLICIT[${key}]`, sampleSupportCoverage(support) && !sampleSupportCoverage(droppedPair),
@@ -31926,6 +32110,10 @@ function chainCheckGoldenCase(ex: string, out: string, key: string, say: ReturnT
         `${summarise(check)}; row metadata: ${rowFaults1089.join('; ') || 'complete'}`,
         "The actual check report retains every measured figure and its row metadata under the existing tolerances.",
       );
+      say(`CH1372_COMPLETED_CHAIN_REPORT_HAS_THE_DECLARED_OUTCOMES[${key}]`,
+        outcomeFaults.length === 0 && current.PASS === true && outcomesMatch,
+        JSON.stringify({ faults: outcomeFaults, expected: expectedCheck.bar_outcomes, actual: current.bar_outcomes }),
+        'Compare the outcome map exactly where the snapshot declares one. Older sample snapshots still hold the legacy fields under CH04.');
 
 }
 function chainGateGoldenCase(ex: string, out: string, key: string, partCount: number, say: ReturnType<typeof counter>['say']) {
@@ -44114,6 +44302,36 @@ function runTreeSuite(_corpus: string | null = null, pre = false): number {
     'issue #640: the tracked records from CK107 belong to tree; CK106 keeps the generated record positive/negative, and each stale input is refused by its actual file:line',
   );
 
+  const examples1372 = ['demo', 'reference-demo', 'reference-sample', 'scarf', 'wind'].map(key => {
+    const fig = readJsonFile(join(ROOT, 'examples', key, 'expected', 'check.json'));
+    const faults = checkOutcomeFaults(fig);
+    if (fig === null) return { key, faults };
+    const legacy = checkLegacyProjection(fig);
+    const legacyStatuses = checkStatuses(legacy as unknown as CheckFigures);
+    const withVersion = checkStatuses(fig as unknown as CheckFigures);
+    if (JSON.stringify(withVersion) !== JSON.stringify(legacyStatuses) ||
+        JSON.stringify(barsNotMet(fig)) !== JSON.stringify(barsNotMet(legacy)) ||
+        JSON.stringify(requirementsNotPass(fig)) !== JSON.stringify(requirementsNotPass(legacy))) faults.push('legacy reader drift');
+    if (fig.PASS !== true || failedCheckBars(fig).length !== 0) faults.push('expected green report');
+    for (const id of Object.keys(CHECK_SKIP_REASONS) as CheckBarId[]) {
+      const status = legacyStatuses[id];
+      if (id !== MOTION_SEAM_LINE && (status === 'PASS' || status === 'FAIL') && !checkBarIs(fig, id, status)) faults.push(`${id}: legacy verdict differs`);
+    }
+    const seamMatches = key === 'wind' ? checkBarIs(fig, MOTION_SEAM_LINE, 'PASS') : checkBarIs(fig, MOTION_SEAM_LINE, 'no-root-gate');
+    if (!seamMatches) faults.push('motion-seam gate outcome');
+    return { key, faults };
+  });
+  const demo1372 = readJsonFile(join(ROOT, 'examples', 'demo', 'expected', 'check.json'));
+  const missingIds1372 = (Object.keys(CHECK_SKIP_REASONS) as CheckBarId[]).filter(id => {
+    const outcomes = { ...checkBarOutcomes(demo1372) };
+    delete outcomes[id];
+    return checkOutcomeFaults({ ...demo1372, bar_outcomes: outcomes }).includes(`${id}: missing outcome`);
+  });
+  say('TY1372_FIVE_TRACKED_CHECK_REPORTS_KEEP_THE_VERSIONED_OUTCOMES_AND_LEGACY_VIEWS',
+    examples1372.every(({ faults }) => faults.length === 0) && missingIds1372.length === Object.keys(CHECK_SKIP_REASONS).length,
+    JSON.stringify({ examples: examples1372, omittedBarMutantsCaught: missingIds1372.length }),
+    'All five tracked reports satisfy the closed outcome contract. Dropping each id in turn is caught. The existing readers return the same views with the additive fields present.');
+
   // TY27 — issue #753 item 1: AUTHORING §4 step 8 and SKILL.md step 6 write the full propose --from-config invocation
   // with --parts, --source and --out, never eliding required flags with `… --from-config`.
   const skill24 = text.find(([file]) => file === 'skills/rig-parts/SKILL.md')?.[1] ?? '';
@@ -48185,6 +48403,21 @@ function runSceneSuite(): number {
       `--accept loop on the build whose loop is open -> exit ${accepted.status}; "${plainLine.slice(plainLine.indexOf('; its own check'))}"; scene.json accepted ${JSON.stringify(aRow?.accepted)}; the composed check: loop max |d| ${String(aFig?.loop_max_diff)}, PASS ${String(aFig?.PASS)}, ${(loopFail ?? 'no CHECK_LOOP_CLOSES line').slice(0, 120)}; without --accept -> exit ${refusedLoop.status}, ${composeFail(refusedLoop.out, 'SCENE_BUILD_GREEN') === null ? 'no SCENE_BUILD_GREEN line' : 'SCENE_BUILD_GREEN'}, rig/ written ${existsSync(join(refusedLoopOut, 'rig'))}; --accept seam on a build red on the seam, which the composed rig (no parts.json) cannot measure -> composed check PASS ${String(sFig?.PASS)}, exit ${seamTaken.status}: ${lastLines(seamTaken.out, 1).join('').slice(0, 160)}`,
       'issue #203: nothing is hidden — the composed rig is measured again and reports the bar as it finds it, and a scene taken with a failing bar is a picture to look at, never a green, even where the composed check cannot see the bar',
     );
+
+    const versionedFields = { spec: aFig?.spec, bar_outcomes: { ...checkBarOutcomes(aFig), loop: { status: 'PASS' } } };
+    writeSceneBuild(join(dir, 'loopy-versioned'), 'plain', redOn({ ...versionedFields, loop_max_diff: 7 }));
+    writeSceneBuild(join(dir, 'reqred-versioned'), 'plain', redOn({ ...versionedFields, loop_max_diff: 7, requirements: { lines: { reach_tip: { status: 'FAIL' } } } }));
+    writeSceneBuild(join(dir, 'gatered-versioned'), 'plain', redOn({ ...versionedFields, loop_max_diff: 7 }, false));
+    const versionedLoop = composeA(withPlain('loopy-versioned'), ['loop']);
+    const versionedRequirement = composeA(withPlain('reqred-versioned'), ['loop']);
+    const versionedGate = composeA(withPlain('gatered-versioned'), ['loop']);
+    say('SC1372_COMPOSE_KEEPS_LEGACY_ACCEPTANCE_ON_VERSIONED_REPORTS',
+      checkBarIs(aFig, 'loop', 'FAIL') && versionedFields.spec === 'rig-parts-check/1' &&
+        versionedLoop.err === null && JSON.stringify(rowOf(versionedLoop.ok, 'plain')?.accepted) === '["loop"]' &&
+        has(versionedRequirement.err, 'SCENE_BUILD_GREEN', 'declared requirement(s) "reach_tip" not PASS') &&
+        has(versionedGate.err, 'SCENE_BUILD_GREEN', 'gate is not accepted (the gate never is)'),
+      JSON.stringify({ accepted: rowOf(versionedLoop.ok, 'plain')?.accepted, gate: codes(versionedGate.err), requirement: codes(versionedRequirement.err) }),
+      'A planted report map says the loop passes. Compose still accepts the explicitly named legacy loop failure and refuses a failed gate or a named requirement.');
 
     const badCli = composeA(two(), ['LOOP', 'gate', '']);
     const badFile = composeA(two({ characters: [{ id: 'plain', build: 'plain', offset: [0, 20], accept: ['CHECK_LOOP_CLOSES'] }, { id: 'reach', build: 'reach', offset: [50, 10], accept: 'loop' }] }));
@@ -58411,8 +58644,19 @@ function runSetupPaintingSuite(): number {
   section('setup-painting: authored source limits over actual textured setup');
   const { say, bad } = counter();
   const dir = temp('setup-painting');
-  try { runSetupPaintingChecks(dir, (name, pass, detail) => say(name, pass, detail,
-    'issue #887: source-painting differences, native renderer ownership, declared limits and inverted-source controls'), rigcRunnerAt(suiteRigc(), spawnRigc)); }
+  try {
+    runSetupPaintingChecks(dir, (name, pass, detail) => say(name, pass, detail,
+      'issue #887: source-painting differences, native renderer ownership, declared limits and inverted-source controls'), rigcRunnerAt(suiteRigc(), spawnRigc));
+    const defect = readJsonFile(join(dir, 'json-defect', 'check.json'));
+    const clean = readJsonFile(join(dir, 'json-clean', 'check.json'));
+    const unlimited = readJsonFile(join(dir, 'skip', 'check.json'));
+    say('ZO1372_SETUP_PAINTING_FAILURE_IS_REPORTED_WITHOUT_CHANGING_LEGACY_ACCEPTANCE',
+      onlyFailedCheckBar(defect, SETUP_PAINTING_LINE978) && barsNotMet(defect ?? {}).length === 0 &&
+        checkBarIs(clean, SETUP_PAINTING_LINE978, 'PASS') && clean?.PASS === true &&
+        checkBarIs(unlimited, SETUP_PAINTING_LINE978, 'no-limit') && unlimited?.PASS === true,
+      JSON.stringify({ failed: failedCheckBars(defect), legacy: barsNotMet(defect ?? {}), clean: checkBarOutcomes(clean)[SETUP_PAINTING_LINE978], unlimited: checkBarOutcomes(unlimited)[SETUP_PAINTING_LINE978] }),
+      'The existing source-pixel CLI plant exits red with its own bar id. The legacy barsNotMet reader continues to omit this id.');
+  }
   finally { rmSync(dir, { recursive: true, force: true }); }
   return bad();
 }
@@ -58421,8 +58665,12 @@ function runBoundaryColourSuite(): number {
   section('boundary-colour: part-boundary colour step against the rig\'s own pieces');
   const { say, bad } = counter();
   const dir = temp('boundary-colour');
-  try { runBoundaryColourChecks(dir, (name, pass, detail) => say(name, pass, detail,
-    'issue #942: the step at every part boundary of the setup and every idle frame against the rig\'s own flat pieces and their rest colours, under a declared allowance only; the stretch and notch plants refused by name'), rigcRunnerAt(suiteRigc(), spawnRigc)); }
+  try {
+    runBoundaryColourChecks(dir, (name, pass, detail) => say(name, pass, detail,
+      'issue #942: the step at every part boundary of the setup and every idle frame against the rig\'s own flat pieces and their rest colours, under a declared allowance only; the stretch and notch plants refused by name'), rigcRunnerAt(suiteRigc(), spawnRigc));
+    reportCheckBarPlant(say, 'BK1372_BOUNDARY_COLOUR_NOTCH_FAILS_ITS_OWN_BAR', BOUNDARY_COLOUR_LINE,
+      join(dir, 'cli-notch', 'cli', 'check.json'), join(dir, 'declared-clean', 'out', 'check.json'), 'PASS');
+  }
   finally { rmSync(dir, { recursive: true, force: true }); }
   return bad();
 }
@@ -58431,8 +58679,12 @@ function runArtJointSuite(): number {
   section('fixed-skeleton: declared art joints versus setup bone origins');
   const { say, bad } = counter();
   const dir = temp('fixed-skeleton');
-  try { runArtJointChecks(dir, (name, pass, detail) => say(name, pass, detail,
-    'issue #880: independent stage-pixel measurements, declared limits and unchanged nonfixed rigs'), rigcRunnerAt(suiteRigc(), spawnRigc)); }
+  try {
+    runArtJointChecks(dir, (name, pass, detail) => say(name, pass, detail,
+      'issue #880: independent stage-pixel measurements, declared limits and unchanged nonfixed rigs'), rigcRunnerAt(suiteRigc(), spawnRigc));
+    reportCheckBarPlant(say, 'FJ1372_ART_JOINT_DISTANCE_FAILS_ITS_OWN_BAR', 'ART_JOINT_DISTANCE',
+      join(dir, 'cli-off', 'check.json'), join(dir, 'no-limit', 'check.json'), 'no-limit');
+  }
   finally { rmSync(dir, { recursive: true, force: true }); }
   return bad();
 }
@@ -58807,9 +59059,13 @@ function runBehindSeamSuite(): number {
   section('behind-seams: synthetic rear visibility on the official seam grid');
   const { say, bad } = counter();
   const dir = temp('behind-seams');
-  try { runBehindSeamChecks(dir, (name, ok, detail) => say(name, ok, detail,
-    'Hand-computable blocks; official grid, raster callbacks, attachment transport and declared checkStage wiring.'),
-  rigcRunnerAt(suiteRigc(), spawnRigc)); }
+  try {
+    runBehindSeamChecks(dir, (name, ok, detail) => say(name, ok, detail,
+      'Hand-computable blocks; official grid, raster callbacks, attachment transport and declared checkStage wiring.'),
+    rigcRunnerAt(suiteRigc(), spawnRigc));
+    reportCheckBarPlant(say, 'BHS1372_BEHIND_PART_SEAM_FAILURE_HAS_ITS_OWN_BAR_ID', BEHIND_SEAM_LINE,
+      join(dir, 'pipeline', 'declared-mutant', 'check.json'), join(dir, 'pipeline', 'undeclared', 'check.json'), 'undeclared');
+  }
   finally { rmSync(dir, { recursive: true, force: true }); }
   return bad();
 }

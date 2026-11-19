@@ -134,9 +134,11 @@ export function runBoundaryColourChecks(dir: string, say: Say, rigc: RigcRunner)
   const cleanRig = rigFor('clean');
   const undeclared = run('undeclared', cleanRig);
   const skipLines = (logs.get('undeclared') ?? []).filter((l) => l.includes(`${BOUNDARY_COLOUR_LINE}: SKIP — not measured, not a pass`) && l.includes('boundary_colour') && l.includes('max_step_excess'));
-  const undeclaredJson = readFileSync(join(dir, 'undeclared', 'out', 'check.json'), 'utf8');
-  say('BK03_UNDECLARED_WRITES_NOTHING_AND_PRINTS_SKIP', undeclared.figures.PASS && undeclared.figures[BOUNDARY_COLOUR_LINE] === undefined && !undeclaredJson.includes(BOUNDARY_COLOUR_LINE) && !undeclared.bars.measured.includes(BOUNDARY_COLOUR_LINE) && !undeclared.bars.skipped.some((b) => b.bar === BOUNDARY_COLOUR_LINE) && skipLines.length === 1 && undeclared.boundaryColour === null,
-    JSON.stringify({ pass: undeclared.figures.PASS, key: undeclaredJson.includes(BOUNDARY_COLOUR_LINE), skip: skipLines.map((l) => l.slice(0, 80)) }));
+  const undeclaredJson = JSON.parse(readFileSync(join(dir, 'undeclared', 'out', 'check.json'), 'utf8')) as typeof undeclared.figures;
+  const hasLegacyBlock = Object.hasOwn(undeclaredJson, BOUNDARY_COLOUR_LINE);
+  const outcome = undeclaredJson.bar_outcomes[BOUNDARY_COLOUR_LINE];
+  say('BK03_UNDECLARED_WRITES_NOTHING_AND_PRINTS_SKIP', undeclared.figures.PASS && undeclared.figures[BOUNDARY_COLOUR_LINE] === undefined && !hasLegacyBlock && outcome.status === 'SKIP' && outcome.reason === 'undeclared' && !undeclared.bars.measured.includes(BOUNDARY_COLOUR_LINE) && !undeclared.bars.skipped.some((b) => b.bar === BOUNDARY_COLOUR_LINE) && skipLines.length === 1 && undeclared.boundaryColour === null,
+    JSON.stringify({ pass: undeclared.figures.PASS, key: hasLegacyBlock, outcome, skip: skipLines.map((l) => l.slice(0, 80)) }));
   const empty = run('empty', cleanRig, req('empty'));
   say('BK04_A_REQUIREMENTS_FILE_WITHOUT_THE_KEY_IS_UNDECLARED', empty.figures.PASS && empty.figures[BOUNDARY_COLOUR_LINE] === undefined && (logs.get('empty') ?? []).some((l) => l.includes(`${BOUNDARY_COLOUR_LINE}: SKIP`)), 'the same SKIP, no key');
   const clean = run('declared-clean', cleanRig, declared);
