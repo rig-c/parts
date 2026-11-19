@@ -1077,8 +1077,13 @@ the rename still reads. They do not change at 1.0.
 
 ### Check report (`rig-parts-check/1`)
 
-A completed report starts with `spec: "rig-parts-check/1"` followed by
-`bar_outcomes`. Existing keys retain their relative order, with `PASS` last.
+A completed report starts with `spec: "rig-parts-check/1"`, `bar_outcomes`,
+and `build: { "model_sha256": "<64 lowercase hex>" }` — the SHA-256 of the
+exact bytes of the primary `check/build/skeleton.model.json` the check read
+(auxiliary `_loop`, `_still` and `_behind_seams_turn` builds are not hashed).
+The check only records; a consumer holding the report and the build can detect
+a report that does not belong to it by hashing the model file. Existing keys
+retain their relative order after `build`, with `PASS` last.
 `check --json` emits the same report as the file. The bar map has every id
 in the order below. Its values are `{"status":"PASS"}`, `{"status":"FAIL"}`,
 or `{"status":"SKIP","reason":"<stable reason>"}`. The `reason` field appears

@@ -17640,7 +17640,7 @@ function readJsonFile(path: string): Record<string, unknown> | null {
 }
 
 // Issue #333: the fold bar reads the idle too, so every rig whose motion holds an animation writes it after the judgement lines.
-const CHECK_KEYS = ['spec', 'bar_outcomes', 'gate_spine_html_green', 'rigc_entry', 'pack_mode', 'loop_max_diff', 'seam_mean', 'seam_px_over_40', 'seam_px_over_80', 'seam_frame_scale', 'seam_scope', ...JUDGEMENT_LINES, FOLD_LINE, ...REPORTED_LINES, 'figure_openings', COINCIDE_LINE, 'PASS'];
+const CHECK_KEYS = ['spec', 'bar_outcomes', 'build', 'gate_spine_html_green', 'rigc_entry', 'pack_mode', 'loop_max_diff', 'seam_mean', 'seam_px_over_40', 'seam_px_over_80', 'seam_frame_scale', 'seam_scope', ...JUDGEMENT_LINES, FOLD_LINE, ...REPORTED_LINES, 'figure_openings', COINCIDE_LINE, 'PASS'];
 
 // The signed wire contract, independent of the producer's classifier and legacy reader.
 const CHECK_SKIP_REASONS = {
@@ -17686,11 +17686,18 @@ function checkRequirementStatuses(fig: Record<string, unknown> | null): Record<s
   return Object.fromEntries(Object.entries(requirements.lines).map(([id, line]) => [id, isDriveRecord(line) ? line.status : undefined]));
 }
 
+function checkBuildMatchesModel(reportPath: string, modelPath: string): boolean {
+  const fig = readJsonFile(reportPath);
+  if (!isDriveRecord(fig?.build) || typeof fig.build.model_sha256 !== 'string' || !existsSync(modelPath)) return false;
+  return fig.build.model_sha256 === createHash('sha256').update(readFileSync(modelPath)).digest('hex');
+}
+
 function checkOutcomeFaults(fig: Record<string, unknown> | null): string[] {
   if (fig === null) return ['missing completed report'];
   const faults: string[] = [];
   const keys = Object.keys(fig);
-  if (fig.spec !== 'rig-parts-check/1' || keys.slice(0, 2).join(',') !== 'spec,bar_outcomes' || keys.at(-1) !== 'PASS') faults.push('version or top-level order');
+  if (fig.spec !== 'rig-parts-check/1' || keys.slice(0, 3).join(',') !== 'spec,bar_outcomes,build' || keys.at(-1) !== 'PASS') faults.push('version or top-level order');
+  if (!isDriveRecord(fig.build) || Object.keys(fig.build).join(',') !== 'model_sha256' || typeof fig.build.model_sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(fig.build.model_sha256)) faults.push('build.model_sha256');
   const bars = checkBarOutcomes(fig);
   if (Object.keys(bars).join(',') !== Object.keys(CHECK_SKIP_REASONS).join(',')) faults.push('bar ids or order');
   for (const [id, reasons] of Object.entries(CHECK_SKIP_REASONS)) {
@@ -17725,7 +17732,7 @@ function reportCheckBarPlant<Id extends CheckBarId>(
 }
 
 function checkLegacyProjection(fig: Record<string, unknown>): Record<string, unknown> {
-  const { spec: _spec, bar_outcomes: _outcomes, ...legacy } = fig;
+  const { spec: _spec, bar_outcomes: _outcomes, build: _build, ...legacy } = fig;
   return legacy;
 }
 
@@ -23508,6 +23515,22 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
       'The two topwear parts close their idle and match their setup composite. Only the torso half of breath has eligible art. The version and closed map lead the report, legacy keys retain their order, and the input stays read-only.',
     );
 
+    const modelFile = join(out, 'build', 'skeleton.model.json');
+    const modelSha = existsSync(modelFile) ? createHash('sha256').update(readFileSync(modelFile)).digest('hex') : '';
+    const plantedReport = join(dir, 'planted-wrong-model-check.json');
+    if (fig !== null) {
+      writeFileSync(plantedReport, `${JSON.stringify({ ...fig, build: { model_sha256: `${modelSha.slice(0, -1)}${modelSha.endsWith('0') ? '1' : '0'}` } }, null, 1)}\n`);
+    }
+    say(
+      'CK1378_CHECK_JSON_RECORDS_THE_PRIMARY_MODEL_SHA256_AND_A_MISMATCHED_REPORT_IS_DETECTABLE_FROM_THE_TWO_FILES',
+      fig !== null &&
+        checkBuildMatchesModel(join(out, 'check.json'), modelFile) &&
+        !checkBuildMatchesModel(plantedReport, modelFile) &&
+        checkOutcomeFaults({ ...fig, build: { model_sha256: 'not-a-sha256' } }).includes('build.model_sha256'),
+      `recorded ${(fig?.build as { model_sha256?: string } | undefined)?.model_sha256 ?? 'absent'} vs disk ${modelSha}; planted report match=${checkBuildMatchesModel(plantedReport, modelFile)}`,
+      'check.json records build.model_sha256 of the primary check/build/skeleton.model.json it read, and a planted report whose hash differs from the model file beside it is detectable by reading those two files alone.',
+    );
+
     const again = runCli(['check', '--rig', rig, '--out', join(dir, 'out2'), '--json']);
     const same = ['check.json', 'motion_heat.png', 'gate_spine-html.txt', 'build/skeleton.json', 'build/skeleton.png'].filter(
       (f) => existsSync(join(out, f)) && existsSync(join(dir, 'out2', f)) && Buffer.compare(readFileSync(join(out, f)), readFileSync(join(dir, 'out2', f))) === 0,
@@ -24982,7 +25005,7 @@ function runEnvironmentCheckCases(say: (name: string, ok: boolean, detail: strin
         withoutEnv(initial.text) === none.text &&
         noneHashes.length > 0 &&
         JSON.stringify(idleHashes(initial.dir)) === JSON.stringify(noneHashes) &&
-        Object.keys(fig(initial.text)).slice(0, 7).join(',') === 'spec,bar_outcomes,gate_spine_html_green,rigc_entry,pack_mode,environment,loop_max_diff' &&
+        Object.keys(fig(initial.text)).slice(0, 8).join(',') === 'spec,bar_outcomes,build,gate_spine_html_green,rigc_entry,pack_mode,environment,loop_max_diff' &&
         JSON.stringify(initialRecord) === JSON.stringify({ path: initialPath, sha256: sha(initialPath), steps: 1 }) &&
         calm.status === 0 &&
         withoutEnv(calm.text) !== none.text &&
@@ -32109,8 +32132,11 @@ function chainCheckGoldenCase(ex: string, out: string, key: string, say: ReturnT
       const comparable = legacySnapshot ? checkLegacyProjection(current) : current;
       const check = jsonDiffs(expectedCheck, comparable, chainTolerance('check.json', expectedCheck));
       const outcomeFaults = checkOutcomeFaults(current);
+      const modelMatch = checkBuildMatchesModel(join(out, 'check', 'check.json'), join(out, 'check', 'build', 'skeleton.model.json'));
       const outcomesMatch = legacySnapshot ||
-        (expectedCheck.spec === current.spec && JSON.stringify(expectedCheck.bar_outcomes) === JSON.stringify(current.bar_outcomes));
+        (expectedCheck.spec === current.spec &&
+          JSON.stringify(expectedCheck.bar_outcomes) === JSON.stringify(current.bar_outcomes) &&
+          JSON.stringify(expectedCheck.build) === JSON.stringify(current.build));
       const support = report as SupportReport | undefined;
       const droppedPair = support === undefined ? undefined : { ...support, pairs: support.pairs.slice(1) };
       say(`CH943_SUPPORT_COVERAGE_IS_EXPLICIT[${key}]`, sampleSupportCoverage(support) && !sampleSupportCoverage(droppedPair),
@@ -32122,9 +32148,9 @@ function chainCheckGoldenCase(ex: string, out: string, key: string, say: ReturnT
         "The actual check report retains every measured figure and its row metadata under the existing tolerances.",
       );
       say(`CH1372_COMPLETED_CHAIN_REPORT_HAS_THE_DECLARED_OUTCOMES[${key}]`,
-        outcomeFaults.length === 0 && current.PASS === true && outcomesMatch,
-        JSON.stringify({ faults: outcomeFaults, expected: expectedCheck.bar_outcomes, actual: current.bar_outcomes }),
-        'Compare the outcome map exactly where the snapshot declares one. Older sample snapshots still hold the legacy fields under CH04.');
+        outcomeFaults.length === 0 && current.PASS === true && outcomesMatch && modelMatch,
+        JSON.stringify({ faults: outcomeFaults, modelMatch, build: current.build, expected: expectedCheck.bar_outcomes, actual: current.bar_outcomes }),
+        'Compare the outcome map and primary build model digest where the snapshot declares them. Older sample snapshots still hold the legacy fields under CH04.');
 
 }
 function chainGateGoldenCase(ex: string, out: string, key: string, partCount: number, say: ReturnType<typeof counter>['say']) {
@@ -44404,10 +44430,21 @@ function runTreeSuite(_corpus: string | null = null, pre = false): number {
     delete outcomes[id];
     return checkOutcomeFaults({ ...demo1372, bar_outcomes: outcomes }).includes(`${id}: missing outcome`);
   });
+  const stability1378 = text.find(([file]) => file === STABILITY_DOC)?.[1] ?? '';
+  const checkSection1378 = stability1378.slice(stability1378.indexOf('### Check report (`rig-parts-check/1`)'), stability1378.indexOf('### Run stamp (`run.json`, spec `rig-run/1`)'));
+  const holdsStability1378 = (s: string): boolean => {
+    const flat = s.replace(/\s+/g, ' ');
+    return flat.includes('starts with `spec: "rig-parts-check/1"`, `bar_outcomes`, and `build: { "model_sha256": "<64 lowercase hex>" }`') &&
+      flat.includes('primary `check/build/skeleton.model.json` the check read (auxiliary `_loop`, `_still` and `_behind_seams_turn` builds are not hashed)') &&
+      flat.includes('The check only records; a consumer holding the report and the build can detect a report that does not belong to it by hashing the model file.');
+  };
+  const missingBuild1378 = demo1372 !== null && checkOutcomeFaults(Object.fromEntries(Object.entries(demo1372).filter(([k]) => k !== 'build'))).includes('version or top-level order');
+  const badSha1378 = demo1372 !== null && checkOutcomeFaults({ ...demo1372, build: { model_sha256: '00' } }).includes('build.model_sha256');
   say('TY1372_FIVE_TRACKED_CHECK_REPORTS_KEEP_THE_VERSIONED_OUTCOMES_AND_LEGACY_VIEWS',
-    examples1372.every(({ faults }) => faults.length === 0) && missingIds1372.length === Object.keys(CHECK_SKIP_REASONS).length,
-    JSON.stringify({ examples: examples1372, omittedBarMutantsCaught: missingIds1372.length }),
-    'All five tracked reports satisfy the closed outcome contract. Dropping each id in turn is caught. The existing readers return the same views with the additive fields present.');
+    examples1372.every(({ faults }) => faults.length === 0) && missingIds1372.length === Object.keys(CHECK_SKIP_REASONS).length && missingBuild1378 && badSha1378 &&
+      holdsStability1378(checkSection1378) && !holdsStability1378(checkSection1378.replace('model_sha256', 'model_sha')),
+    JSON.stringify({ examples: examples1372, omittedBarMutantsCaught: missingIds1372.length, missingBuild1378, badSha1378, stability: holdsStability1378(checkSection1378) }),
+    'All five tracked reports satisfy the closed outcome and build.model_sha256 contract. Dropping each id or build is caught. The existing readers return the same views with the additive fields present.');
 
   // TY27 — issue #753 item 1: AUTHORING §4 step 8 and SKILL.md step 6 write the full propose --from-config invocation
   // with --parts, --source and --out, never eliding required flags with `… --from-config`.

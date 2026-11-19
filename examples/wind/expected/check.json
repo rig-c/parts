@@ -70,6 +70,9 @@
    "status": "PASS"
   }
  },
+ "build": {
+  "model_sha256": "ec2a97a5a14c273ad08e48c297f35e6c60efe765854b91bfe45988f666ec169c"
+ },
  "gate_spine_html_green": true,
  "rigc_entry": {
   "entry": "cli.ts",
