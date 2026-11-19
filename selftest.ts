@@ -8544,6 +8544,32 @@ function runRigSuite(): number {
     const stampB = stampBRaw !== '' ? (JSON.parse(stampBRaw) as RunStamp) : null;
     const stripStampTimes = (s: RunStamp): RunStamp => ({ ...s, started_at: 'T0', finished_at: 'T1' });
     const expectedOutputs1 = [...files1].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).map((p) => ({ path: p, sha256: sha256Hex(join(dir, 'one', 'out', p)) }));
+    const rigStampOutputHashDiffs = (
+      stamp: RunStamp | null,
+      expected: ReadonlyArray<{ path: string; sha256: string }>,
+    ): string[] => {
+      if (stamp === null) return [`missing ${RUN_STAMP_FILE}`];
+      const diskByPath = new Map(expected.map((e) => [e.path, e.sha256] as const));
+      const recordedByPath = new Map(stamp.outputs.map((o) => [o.path, o.sha256] as const));
+      const diffs: string[] = [];
+      for (const o of stamp.outputs) {
+        const diskSha = diskByPath.get(o.path);
+        if (diskSha === undefined) {
+          diffs.push(`${o.path} (recorded ${o.sha256}, on disk absent)`);
+        } else if (o.sha256 !== diskSha) {
+          diffs.push(`${o.path} (recorded ${o.sha256}, on disk ${diskSha})`);
+        }
+      }
+      for (const e of expected) {
+        if (!recordedByPath.has(e.path)) {
+          diffs.push(`${e.path} (recorded absent, on disk ${e.sha256})`);
+        }
+      }
+      if (diffs.length === 0 && JSON.stringify(stamp.outputs) !== JSON.stringify(expected)) {
+        diffs.push(`outputs JSON mismatch (recorded ${JSON.stringify(stamp.outputs)}, on disk ${JSON.stringify(expected)})`);
+      }
+      return diffs;
+    };
     const rigEqFaults = [
       ...rigStampFileSetFaults('plain', join(dir, 'one', 'out'), stamp1),
       ...rigStampFileSetFaults('alt', altRigOut, altRigStamp),
@@ -8570,22 +8596,40 @@ function runRigSuite(): number {
       rigEqFaults.length === 0 &&
       rigPlantedMissing.join(';') === 'planted-missing: on disk but missing from outputs[].path: mesh_report.json' &&
       rigPlantedExtra.join(';') === 'planted-extra: in outputs[].path but not on disk: ghost.json';
-    const stamp1Valid =
+    const oneConfigSha = sha256Hex(one.config);
+    const stamp1KeysOk =
       stamp1 !== null &&
       Object.keys(stamp1).join(',') === 'spec,package,command,started_at,finished_at,config,outputs' &&
       Object.keys(stamp1.package).join(',') === 'name,version' &&
-      Object.keys(stamp1.config).join(',') === 'path,sha256' &&
+      Object.keys(stamp1.config).join(',') === 'path,sha256';
+    const stamp1HeaderOk =
+      stamp1 !== null &&
       stamp1.spec === RUN_STAMP_SPEC &&
       stamp1.package.name === rigPkg.name &&
       stamp1.package.version === rigPkg.version &&
-      stamp1.command === 'rig' &&
+      stamp1.command === 'rig';
+    const stamp1TimesOk =
+      stamp1 !== null &&
       isoUtcMs.test(stamp1.started_at) &&
       isoUtcMs.test(stamp1.finished_at) &&
-      Date.parse(stamp1.started_at) <= Date.parse(stamp1.finished_at) &&
+      Date.parse(stamp1.started_at) <= Date.parse(stamp1.finished_at);
+    const stamp1ConfigOk =
+      stamp1 !== null &&
       stamp1.config.path === '../config.json' &&
-      stamp1.config.sha256 === sha256Hex(one.config) &&
-      JSON.stringify(stamp1.outputs) === JSON.stringify(expectedOutputs1) &&
+      stamp1.config.sha256 === oneConfigSha;
+    const stamp1HashDiffs = rigStampOutputHashDiffs(stamp1, expectedOutputs1);
+    const stamp1OutputsMatch = stamp1 !== null && JSON.stringify(stamp1.outputs) === JSON.stringify(expectedOutputs1);
+    const stamp1OutputEntriesOk =
+      stamp1 !== null &&
       stamp1.outputs.every((o) => Object.keys(o).join(',') === 'path,sha256' && !o.path.startsWith('/') && !o.path.startsWith('~') && o.path !== RUN_STAMP_FILE);
+    const stamp1Valid =
+      stamp1KeysOk &&
+      stamp1HeaderOk &&
+      stamp1TimesOk &&
+      stamp1ConfigOk &&
+      stamp1OutputsMatch &&
+      stamp1OutputEntriesOk;
+    const stampAHashDiffs = rigStampOutputHashDiffs(stampA, expectedOutputs1);
     const strayExcluded =
       stampA !== null &&
       existsSync(join(outParentA, 'stray.txt')) &&
@@ -8610,11 +8654,20 @@ function runRigSuite(): number {
       reusedRigRed.status === 1 &&
       !existsSync(join(reusedRigOut, RUN_STAMP_FILE)) &&
       codes(badPkgErr) === `RUN_STAMP_PACKAGE ${badPkgPath}`;
-    const plantedBadSha = stamp1 !== null && JSON.stringify({ ...stamp1, outputs: stamp1.outputs.map((o, i) => (i === 0 ? { ...o, sha256: '0'.repeat(64) } : o)).map((o) => o) }) !== JSON.stringify({ ...stamp1, outputs: expectedOutputs1 });
+    const plantedBadShaStamp =
+      stamp1 === null
+        ? null
+        : { ...stamp1, outputs: stamp1.outputs.map((o, i) => (i === 0 ? { ...o, sha256: '0'.repeat(64) } : o)).map((o) => o) };
+    const plantedBadShaDiffs = rigStampOutputHashDiffs(plantedBadShaStamp, expectedOutputs1);
+    const plantedBadShaExpected = `${expectedOutputs1[0]?.path ?? 'none'} (recorded ${'0'.repeat(64)}, on disk ${expectedOutputs1[0]?.sha256 ?? 'none'})`;
+    const plantedBadSha =
+      stamp1 !== null &&
+      JSON.stringify(plantedBadShaStamp) !== JSON.stringify({ ...stamp1, outputs: expectedOutputs1 }) &&
+      plantedBadShaDiffs.join('; ') === plantedBadShaExpected;
     say(
       'RG1165_RIG_WRITES_RUN_STAMP_AFTER_GREEN_GATE_WITH_RELATIVE_PATHS_AND_DISK_HASHES',
       stamp1Valid && sameBytes && strayExcluded && twoParentsMatch && redNoStamp && plantedBadSha && rigEqualityOk,
-      `spec ${stamp1?.spec ?? 'none'}, package ${stamp1?.package.name ?? 'none'}@${stamp1?.package.version ?? 'none'}, command ${stamp1?.command ?? 'none'}, config.path ${stamp1?.config.path ?? 'none'} (under parent-a/parent-b: ${stampA?.config.path ?? 'none'}/${stampB?.config.path ?? 'none'}), ${stamp1?.outputs.length ?? 0} output hash(es) match disk (stray.txt & images/old.png excluded: ${strayExcluded}): ${stamp1Valid}; fresh-dir file-set equality (plain ${stamp1?.outputs.length ?? 0} files, alt ${altRigStamp?.outputs.length ?? 0} files incl. sets.json & images/alt1_eye.png): ${rigEqFaults.length === 0 ? 'exact' : rigEqFaults.join(' | ')} (planted drop -> "${rigPlantedMissing.join(';')}"); two runs differ only in started_at/finished_at: ${twoParentsMatch}; green->refused clears ${RUN_STAMP_FILE} and bad package.json -> ${codes(badPkgErr)}: ${redNoStamp}`,
+      `keys (${stamp1 === null ? 'none' : `${Object.keys(stamp1).join(',')} / pkg:${Object.keys(stamp1.package).join(',')} / cfg:${Object.keys(stamp1.config).join(',')}`}): ${stamp1KeysOk}; header (spec ${stamp1?.spec ?? 'none'}===${RUN_STAMP_SPEC}, package ${stamp1?.package.name ?? 'none'}@${stamp1?.package.version ?? 'none'}===${rigPkg.name}@${rigPkg.version}, command ${stamp1?.command ?? 'none'}===rig): ${stamp1HeaderOk}; timestamps (${stamp1?.started_at ?? 'none'} <= ${stamp1?.finished_at ?? 'none'}, iso ${stamp1 !== null && isoUtcMs.test(stamp1.started_at)}/${stamp1 !== null && isoUtcMs.test(stamp1.finished_at)}): ${stamp1TimesOk}; config (path ${stamp1?.config.path ?? 'none'}===../config.json, sha256 ${stamp1?.config.sha256 ?? 'none'}===${oneConfigSha}): ${stamp1ConfigOk}; ${stamp1?.outputs.length ?? 0} output hash(es) match disk (diffs: ${stamp1HashDiffs.length === 0 ? 'none' : stamp1HashDiffs.join(', ')}; planted bad sha -> "${plantedBadShaDiffs.join('; ')}": ${plantedBadSha}): ${stamp1OutputsMatch}; output entries relative & keyed path,sha256: ${stamp1OutputEntriesOk}; two builds byte-identical (${files1.length}/${files2.length} files): ${sameBytes}; stray.txt & images/old.png excluded (on disk ${existsSync(join(outParentA, 'stray.txt'))}/${existsSync(join(outParentA, 'images', 'old.png'))}, parent-a diffs: ${stampAHashDiffs.length === 0 ? 'none' : stampAHashDiffs.join(', ')}): ${strayExcluded}; fresh-dir file-set equality (plain ${stamp1?.outputs.length ?? 0} files, alt exit ${altRigRun.status} ${altRigStamp?.outputs.length ?? 0} files incl. sets.json=${altRigStamp?.outputs.some((o) => o.path === 'sets.json') ?? false} & images/alt1_eye.png=${altRigStamp?.outputs.some((o) => o.path === 'images/alt1_eye.png') ?? false}, faults: ${rigEqFaults.length === 0 ? 'exact' : rigEqFaults.join(' | ')}, planted drop -> "${rigPlantedMissing.join(';')}", planted extra -> "${rigPlantedExtra.join(';')}"): ${rigEqualityOk}; two runs differ only in started_at/finished_at (parent-a/b exits ${runParentA.status}/${runParentB.status}, config.path ${stampA?.config.path ?? 'none'}/${stampB?.config.path ?? 'none'}, raw!= ${stampARaw !== stampBRaw}, stripped== ${stampA !== null && stampB !== null && rigJsonText(stripStampTimes(stampA)) === rigJsonText(stripStampTimes(stampB))}; one/two raw!= ${stamp1Raw !== stamp2Raw}, stripped== ${stamp1 !== null && stamp2 !== null && rigJsonText(stripStampTimes(stamp1)) === rigJsonText(stripStampTimes(stamp2))}): ${twoParentsMatch}; green->refused clears ${RUN_STAMP_FILE} (red absent ${!existsSync(join(dir, 'red', 'out', RUN_STAMP_FILE))}, reused had stamp ${reusedRigHadStamp}, reused red exit ${reusedRigRed.status} clears stamp ${!existsSync(join(reusedRigOut, RUN_STAMP_FILE))}, bad package.json -> ${codes(badPkgErr)}): ${redNoStamp}`,
       'issue #1165: rig writes run.json (spec rig-run/1) beside its outputs only after rig-c is green, clears any prior run.json before starting, lists the exact stage outputs on disk, and reads timestamps in cli.ts',
     );
 
