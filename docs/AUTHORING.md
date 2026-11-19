@@ -9313,7 +9313,7 @@ The top-level fields of `rig-parts-draft-diff/1`, in key order:
 | `canvas` | `{ width: number, height: number }` | Shared `rig_size` dimensions `[width, height]` in rig pixels. |
 | `order` | `"same" \| "changed"` | `"same"` when the part names in `parts.json` draw order are equal as lists; `"changed"` otherwise. |
 | `parts` | `DiffDraftPart[]` | One entry per part name in the union of left and right, sorted by `name` in UTF-16 code-unit order. |
-| `composite` | `{ changed_px: number, colour_px: number, alpha_px: number, bounds: { x: number, y: number, width: number, height: number } \| null }` | Pixel comparison in rig-pixel space between the two `recomposite_rig.png` rasters. |
+| `composite` | `{ changed_px: number, colour_px: number, alpha_px: number, bounds: { x: number, y: number, w: number, h: number } \| null }` | Pixel comparison in rig-pixel space between the two `recomposite_rig.png` rasters. The recomposite is drawn on opaque white, so an alpha change there shows as a colour change; alpha is read from the per-part rows. |
 | `summary` | `{ same: number, changed: number, added: number, removed: number }` | Counts of `parts` entries by `status`. |
 
 Each `parts[i]` entry carries, in key order:
@@ -9338,12 +9338,12 @@ Each `parts[i]` entry carries, in key order:
   `status: "changed"`, `pixels_equal: true` and non-zero rig-space `pixels`
   counts; a repaint has `status: "changed"` and `pixels_equal: false`.
 - `pixels` (present on `"changed"` only):
-  `{ changed_px: number, colour_px: number, alpha_px: number, bounds: { x: number, y: number, width: number, height: number } \| null }`,
+  `{ changed_px: number, colour_px: number, alpha_px: number, bounds: { x: number, y: number, w: number, h: number } \| null }`,
   compared in rig-pixel space over the union of `left.box` and `right.box`, with
   any position outside a side's box counting as RGBA `0, 0, 0, 0`. `changed_px`
   counts rig pixels where any of R, G, B or A differs; `colour_px` where any of
   R, G or B differs; `alpha_px` where A differs; `bounds` is the bounding box
-  `{ x, y, width, height }` of the changed rig positions, or `null` when
+  `{ x, y, w, h }` of the changed rig positions, or `null` when
   `changed_px` is `0`.
 
 

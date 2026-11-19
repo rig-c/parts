@@ -24,8 +24,8 @@ export interface DiffDraftBox {
 export interface DiffDraftBounds {
   x: number;
   y: number;
-  width: number;
-  height: number;
+  w: number;
+  h: number;
 }
 
 export interface DiffDraftPixels {
@@ -182,7 +182,7 @@ export function compareRigPixels(leftBox: DiffDraftBox, leftImage: Raster, right
     changed_px: changedPx,
     colour_px: colourPx,
     alpha_px: alphaPx,
-    bounds: changedPx === 0 ? null : { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 },
+    bounds: changedPx === 0 ? null : { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 },
   };
 }
 

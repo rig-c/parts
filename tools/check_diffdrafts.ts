@@ -182,7 +182,7 @@ export function runDiffDraftChecks(dir: string, say: Say): void {
   //    - 3 pure-colour edits at crop (1,1)->rig(13,4), (2,1)->rig(14,4), (1,2)->rig(13,5)
   //    - 1 pure-alpha edit at crop (3,4)->rig(15,7)
   //    - 1 colour+alpha edit at crop (2,4)->rig(14,7)
-  //    Expected: changed_px=5, colour_px=4, alpha_px=2, bounds={x:13, y:4, width:3, height:4}, pixels_equal=false.
+  //    Expected: changed_px=5, colour_px=4, alpha_px=2, bounds={x:13, y:4, w:3, h:4}, pixels_equal=false.
   const repaintedSpecs = baseDraftSpecs();
   const hairSpec = repaintedSpecs[2];
   const setHairPixel = (cx: number, cy: number, rgba: readonly [number, number, number, number]): void => {
@@ -198,9 +198,9 @@ export function runDiffDraftChecks(dir: string, say: Say): void {
   const outRepaint = join(root, 'repaint.json');
   const repRepaint = diffDraftsCommand(['--left', leftAssemble, '--right', rightRepaint, '--out', outRepaint]);
   const hairRepaint = repRepaint.parts.find((p) => p.name === 'hair');
-  const wantRepaintPixels = { changed_px: 5, colour_px: 4, alpha_px: 2, bounds: { x: 13, y: 4, width: 3, height: 4 } };
+  const wantRepaintPixels = { changed_px: 5, colour_px: 4, alpha_px: 2, bounds: { x: 13, y: 4, w: 3, h: 4 } };
   // recomposite composites over opaque white [255,255,255,255], so the pure-alpha edit at (15,7) blends with white and changes composite RGB while composite alpha stays 255 everywhere.
-  const wantRepaintComposite = { changed_px: 5, colour_px: 5, alpha_px: 0, bounds: { x: 13, y: 4, width: 3, height: 4 } };
+  const wantRepaintComposite = { changed_px: 5, colour_px: 5, alpha_px: 0, bounds: { x: 13, y: 4, w: 3, h: 4 } };
   const repaintOk =
     JSON.stringify(repRepaint.summary) === '{"same":2,"changed":1,"added":0,"removed":0}' &&
     repRepaint.parts.filter((p) => p.name !== 'hair').every((p) => p.status === 'same' && !('pixels' in p) && !('pixels_equal' in p)) &&
@@ -231,8 +231,8 @@ export function runDiffDraftChecks(dir: string, say: Say): void {
   writeDraftDirectory(rightMoved, 'build', [20, 16], movedSpecs);
   const repMoved = diffDraftsCommand(['--left', leftAssemble, '--right', rightMoved, '--out', join(root, 'moved.json')]);
   const hairMoved = repMoved.parts.find((p) => p.name === 'hair');
-  const wantMovedPixels = { changed_px: 24, colour_px: 24, alpha_px: 24, bounds: { x: 12, y: 3, width: 6, height: 6 } };
-  const wantMovedComposite = { changed_px: 24, colour_px: 24, alpha_px: 0, bounds: { x: 12, y: 3, width: 6, height: 6 } };
+  const wantMovedPixels = { changed_px: 24, colour_px: 24, alpha_px: 24, bounds: { x: 12, y: 3, w: 6, h: 6 } };
+  const wantMovedComposite = { changed_px: 24, colour_px: 24, alpha_px: 0, bounds: { x: 12, y: 3, w: 6, h: 6 } };
 
   const reencodedAndMovedOk =
     hairReencoded?.status === 'changed' &&
