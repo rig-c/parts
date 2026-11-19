@@ -40,6 +40,7 @@
  * weight entries byte for byte; only its index may change, since the hull loop is written first.
  */
 import { contourTopologyProblems, delaunayViolations, GRID, inCircle } from './contour.ts';
+import { inspect } from 'node:util';
 import { type BoneTransform, cropToSpineY, toBoneLocal } from './coords.ts';
 import type { Problem } from './errors.ts';
 import { type MeshAttachment, OFFSET_PLACES, PAD, roundShares, type WeightEntry } from './rig.ts';
@@ -83,11 +84,50 @@ export interface MeshEditDocument {
   ops: MeshEditOp[];
 }
 
+/** An attachment edit carried by a finalized act. Positions are unrounded crop pixels in vertex order. */
+export interface MeshEditActValue {
+  slot: string;
+  skin: string;
+  attachment: string;
+  basis: typeof MESH_EDIT_BASIS;
+  source: MeshEditDocument['source'] & { frame: { width: number; height: number }; positions: Vec[] };
+  ops: MeshEditOp[];
+}
+
 type Json = Record<string, unknown>;
 const isRecord = (v: unknown): v is Json => typeof v === 'object' && v !== null && !Array.isArray(v);
-const isVec = (v: unknown): v is Vec => Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === 'number' && Number.isFinite(n));
+const isNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+const isVec = (v: unknown): v is Vec => Array.isArray(v) && v.length === 2 && isNumber(v[0]) && isNumber(v[1]);
 const isId = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+export const isSha256 = (v: unknown): v is string => typeof v === 'string' && v.length === 64 && /^[0-9a-f]+$/.test(v);
 const OP_FIELDS: Record<MeshEditOp['op'], readonly string[]> = { move: ['op', 'v', 'from', 'to'], add: ['op', 'at', 'onEdge'], remove: ['op', 'v'], edge: ['op', 'a', 'b'], unedge: ['op', 'a', 'b'] };
+const ACT_FIELDS = ['slot', 'skin', 'attachment', 'source', 'basis', 'ops'];
+const ACT_SOURCE_FIELDS = ['vertexCount', 'triangleCount', 'hullLength', 'hash', 'frame', 'positions'];
+
+function ownData(value: object, key: PropertyKey): boolean {
+  const desc = Object.getOwnPropertyDescriptor(value, key);
+  return desc !== undefined && desc.enumerable === true && Object.hasOwn(desc, 'value');
+}
+
+function isActRecord(value: unknown): value is Json {
+  if (!isRecord(value)) return false;
+  const proto: unknown = Object.getPrototypeOf(value);
+  return (proto === null || proto === Object.prototype) &&
+    Reflect.ownKeys(value).every(key => typeof key === 'string' && ownData(value, key));
+}
+
+function isActArray(value: unknown): value is unknown[] {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Reflect.ownKeys(value).length !== value.length + 1) return false;
+  for (let i = 0; i < value.length; i++) if (!ownData(value, i)) return false;
+  return true;
+}
+
+function hasFields(value: Json, required: readonly string[]): boolean {
+  return Object.keys(value).length === required.length && required.every(k => Object.hasOwn(value, k));
+}
+
+const isActVec = (v: unknown): v is Vec => isActArray(v) && isVec(v) && !v.some(n => Object.is(n, -0));
+const isRoundedActVec = (v: Vec): boolean => v.every(n => Number(n.toFixed(2)) === n);
 
 /**
  * The document, read and held to its shape: `schema` (`REMESH_DELTA_JSON`), `basis` (`REMESH_DELTA_BASIS`), `ops` an
@@ -95,7 +135,6 @@ const OP_FIELDS: Record<MeshEditOp['op'], readonly string[]> = { move: ['op', 'v
  * whole ids (`REMESH_DELTA_OP`). Every problem is collected and thrown once; whether an id is live is the replay's.
  */
 export function readMeshEdit(text: string, object: string): { doc: MeshEditDocument | null; problems: Problem[] } {
-  const problems: Problem[] = [];
   let value: unknown;
   try {
     value = JSON.parse(text);
@@ -103,43 +142,91 @@ export function readMeshEdit(text: string, object: string): { doc: MeshEditDocum
     return { doc: null, problems: [{ code: 'REMESH_DELTA_JSON', object, detail: `does not parse as JSON: ${(err as Error).message}` }] };
   }
   if (!isRecord(value)) return { doc: null, problems: [{ code: 'REMESH_DELTA_JSON', object, detail: `is ${Array.isArray(value) ? 'an array' : JSON.stringify(value)}; one ${MESH_EDIT_SCHEMA} document is required` }] };
-  if (value.schema !== MESH_EDIT_SCHEMA) problems.push({ code: 'REMESH_DELTA_JSON', object: `${object} schema`, detail: `is ${JSON.stringify(value.schema)}; "${MESH_EDIT_SCHEMA}" (rig-c/review's mesh edit) is required` });
-  for (const k of ['slot', 'skin', 'attachment']) if (typeof value[k] !== 'string') problems.push({ code: 'REMESH_DELTA_JSON', object: `${object} ${k}`, detail: `is ${JSON.stringify(value[k])}; a string is required` });
-  const src = value.source;
-  if (!isRecord(src) || !isId(src.vertexCount) || !isId(src.triangleCount) || !isId(src.hullLength) || typeof src.hash !== 'string') {
-    problems.push({ code: 'REMESH_DELTA_JSON', object: `${object} source`, detail: `is ${JSON.stringify(src)}; { vertexCount, triangleCount, hullLength: whole numbers, hash: a string } is required` });
+  const problems = meshEditProblems(value, object, false);
+  return { doc: problems.length === 0 ? (value as unknown as MeshEditDocument) : null, problems };
+}
+
+export function meshEditActProblems(value: unknown, object: string): Problem[] {
+  if (!isActRecord(value)) return [{ code: 'REMESH_DELTA_JSON', object, detail: 'must be one plain mesh edit JSON object with enumerable data fields' }];
+  return meshEditProblems(value, object, true);
+}
+
+function meshEditProblems(value: Json, object: string, act: boolean): Problem[] {
+  const problems: Problem[] = [];
+  const show = act ? (v: unknown): string => inspect(v, { depth: 1, breakLength: Infinity, customInspect: false }) : JSON.stringify;
+  if (act) {
+    // Let the field-specific refusals below name missing required data.
+    const extra = Object.keys(value).filter(k => !ACT_FIELDS.includes(k));
+    if (extra.length > 0) problems.push({ code: 'REMESH_DELTA_JSON', object, detail: `has keys ${extra.join(', ')}; only ${ACT_FIELDS.join(', ')} are allowed` });
+  } else if (value.schema !== MESH_EDIT_SCHEMA) problems.push({ code: 'REMESH_DELTA_JSON', object: `${object} schema`, detail: `is ${JSON.stringify(value.schema)}; "${MESH_EDIT_SCHEMA}" (rig-c/review's mesh edit) is required` });
+  for (const k of ['slot', 'skin', 'attachment']) {
+    const name = value[k];
+    if (typeof name !== 'string' || (act && (!Object.hasOwn(value, k) || name.length === 0))) problems.push({ code: 'REMESH_DELTA_JSON', object: `${object} ${k}`, detail: `is ${show(name)}; a ${act ? 'non-empty ' : ''}string is required` });
   }
-  if (value.basis !== MESH_EDIT_BASIS) {
-    problems.push({ code: 'REMESH_DELTA_BASIS', object: `${object} basis`, detail: `is ${JSON.stringify(value.basis)}; "${MESH_EDIT_BASIS}" is required — the producer binds setup positions, and a delta drawn over a pose (review before rig-c/review #100) is refused rather than posed back` });
+  const src = act && !Object.hasOwn(value, 'source') ? undefined : value.source;
+  const validId = act ? (v: unknown): v is number => isId(v) && !Object.is(v, -0) : isId;
+  if (!isRecord(src) || (act && !isActRecord(src)) || !validId(src.vertexCount) || !validId(src.triangleCount) || !validId(src.hullLength) || (act ? !isSha256(src.hash) : typeof src.hash !== 'string')) {
+    const required = act ? 'vertexCount, triangleCount and hullLength must be whole numbers and hash must be 64 lowercase hex digits' : '{ vertexCount, triangleCount, hullLength: whole numbers, hash: a string } is required';
+    problems.push({ code: 'REMESH_DELTA_JSON', object: `${object} source`, detail: `is ${show(src)}; ${required}` });
+  } else if (act) {
+    if (!hasFields(src, ACT_SOURCE_FIELDS)) problems.push({ code: 'REMESH_DELTA_JSON', object: `${object} source`, detail: `has keys ${Object.keys(src).join(', ')}; requires exactly ${ACT_SOURCE_FIELDS.join(', ')}` });
+    const { frame, positions } = src;
+    if (!isActRecord(frame) || !hasFields(frame, ['width', 'height']) || !isNumber(frame.width) || frame.width <= 0 || !isNumber(frame.height) || frame.height <= 0) {
+      problems.push({ code: 'REMESH_DELTA_JSON', object: `${object} source.frame`, detail: `is ${show(frame)}; width and height must each be positive finite numbers` });
+    }
+    if (!isActArray(positions)) problems.push({ code: 'REMESH_DELTA_JSON', object: `${object} source.positions`, detail: 'must be a dense array of unrounded crop-pixel coordinate pairs in source-vertex order' });
+    else if (positions.length !== src.vertexCount) problems.push({ code: 'REMESH_DELTA_SOURCE', object: `${object} source.positions`, detail: `holds ${positions.length} positions; source.vertexCount requires ${src.vertexCount}` });
+    else {
+      const bad = positions.findIndex(p => !isActVec(p));
+      if (bad >= 0) problems.push({ code: 'REMESH_DELTA_JSON', object: `${object} source.positions[${bad}]`, detail: `is ${show(positions[bad])}; two finite coordinates without negative zero are required` });
+    }
   }
-  const ops = value.ops;
-  if (!Array.isArray(ops)) problems.push({ code: 'REMESH_DELTA_OPS', object: `${object} ops`, detail: `is ${JSON.stringify(ops)}; an array of ops is required` });
+  if (value.basis !== MESH_EDIT_BASIS || (act && !Object.hasOwn(value, 'basis'))) {
+    problems.push({ code: 'REMESH_DELTA_BASIS', object: `${object} basis`, detail: `is ${show(value.basis)}; "${MESH_EDIT_BASIS}" is required — the producer binds setup positions, and a delta drawn over a pose (review before rig-c/review #100) is refused rather than posed back` });
+  }
+  const ops = act && !Object.hasOwn(value, 'ops') ? undefined : value.ops;
+  if (!Array.isArray(ops)) problems.push({ code: 'REMESH_DELTA_OPS', object: `${object} ops`, detail: `is ${show(ops)}; an array of ops is required` });
   else if (ops.length > MESH_EDIT_MAX_OPS) problems.push({ code: 'REMESH_DELTA_OPS', object: `${object} ops`, detail: `holds ${ops.length} ops; at most ${MESH_EDIT_MAX_OPS} (review's own cap per attachment) are read` });
+  else if (act && !isActArray(ops)) problems.push({ code: 'REMESH_DELTA_OPS', object: `${object} ops`, detail: 'must be a dense array of ops' });
+  else if (act && ops.length === 0) problems.push({ code: 'REMESH_DELTA_OPS', object: `${object} ops`, detail: 'holds 0 ops; at least 1 is required' });
   else {
-    ops.forEach((op: unknown, i: number) => {
+    const vec = act ? isActVec : isVec;
+    for (const [i, op] of ops.entries()) {
       const bad = (why: string): void => {
-        problems.push({ code: 'REMESH_DELTA_OP', object: `${object} ops[${i}]`, detail: `${JSON.stringify(op)} ${why}` });
+        problems.push({ code: 'REMESH_DELTA_OP', object: `${object} ops[${i}]`, detail: `${show(op)} ${why}` });
       };
-      if (!isRecord(op) || typeof op.op !== 'string' || !(op.op in OP_FIELDS)) {
-        bad(`has an unknown op kind ${isRecord(op) ? JSON.stringify(op.op) : ''}; one of move, add, remove, edge, unedge is required`);
-        return;
+      if (!isRecord(op) || (act && !isActRecord(op))) {
+        bad(act ? 'must be a plain JSON object with enumerable data fields' : 'has an unknown op kind ; one of move, add, remove, edge, unedge is required');
+        continue;
+      }
+      if (typeof op.op !== 'string' || !Object.hasOwn(OP_FIELDS, op.op) || (act && !Object.hasOwn(op, 'op'))) {
+        bad(`has an unknown op kind ${show(op.op)}; one of move, add, remove, edge, unedge is required`);
+        continue;
       }
       const kind = op.op as MeshEditOp['op'];
-      const extra = Object.keys(op).filter((k) => !OP_FIELDS[kind].includes(k));
+      const fields = OP_FIELDS[kind];
+      const extra = Object.keys(op).filter(k => !fields.includes(k));
       if (extra.length > 0) bad(`carries ${extra.join(', ')}, which a ${kind} op does not take`);
+      if (act) {
+        const required = kind === 'add' ? ['op', 'at'] : fields;
+        const missing = required.filter(k => !Object.hasOwn(op, k));
+        if (missing.length > 0) bad(`is missing the required field(s) ${missing.join(', ')}`);
+      }
       if (kind === 'move') {
-        if (!isId(op.v)) bad('needs a whole vertex id v');
-        if (!isVec(op.from) || !isVec(op.to)) bad('needs finite from and to pairs');
+        if (!validId(op.v)) bad('needs a whole vertex id v');
+        if (!vec(op.from) || !vec(op.to)) bad('needs finite from and to pairs');
+        else if (act && !isRoundedActVec(op.to)) bad('needs a to pair rounded to 0.01 px');
       } else if (kind === 'add') {
-        if (!isVec(op.at)) bad('needs a finite at pair');
-        if (op.onEdge !== undefined && !(Array.isArray(op.onEdge) && op.onEdge.length === 2 && op.onEdge.every(isId))) bad('needs onEdge as a pair of whole vertex ids, when it is given');
+        if (!vec(op.at)) bad('needs a finite at pair');
+        else if (act && !isRoundedActVec(op.at)) bad('needs an at pair rounded to 0.01 px');
+        if ((op.onEdge !== undefined || (act && Object.hasOwn(op, 'onEdge'))) && !(Array.isArray(op.onEdge) && (!act || isActArray(op.onEdge)) && op.onEdge.length === 2 && validId(op.onEdge[0]) && validId(op.onEdge[1]))) bad('needs onEdge as a pair of whole vertex ids, when it is given');
       } else if (kind === 'remove') {
-        if (!isId(op.v)) bad('needs a whole vertex id v');
-      } else if (!isId(op.a) || !isId(op.b)) bad('needs whole vertex ids a and b');
+        if (!validId(op.v)) bad('needs a whole vertex id v');
+      } else if (!validId(op.a) || !validId(op.b)) bad('needs whole vertex ids a and b');
       else if (op.a === op.b) bad('joins a vertex to itself');
-    });
+    }
   }
-  return { doc: problems.length === 0 ? (value as unknown as MeshEditDocument) : null, problems };
+  return problems;
 }
 
 /** The input the replay reads: the part's attachment, where `rig` placed it, and the setup frames of the rig's bones. */
@@ -205,10 +292,15 @@ class OpRefused extends Error {
  * The source checks a document is held to before any op is replayed: it names this part's attachment in the default
  * skin, and its source counts are this attachment's (`REMESH_DELTA_SOURCE`, naming the field and both figures).
  */
-export function deltaSourceProblems(doc: MeshEditDocument, part: string, att: MeshAttachment, object: string): Problem[] {
+export function deltaTargetProblems(doc: Pick<MeshEditDocument, 'slot' | 'skin' | 'attachment'>, part: string, object: string): Problem[] {
   const out: Problem[] = [];
   for (const k of ['slot', 'attachment'] as const) if (doc[k] !== part) out.push({ code: 'REMESH_DELTA_SOURCE', object: `${object} ${k}`, detail: `is "${doc[k]}"; the delta must name --part "${part}", whose slot and attachment the rig stage names after the part` });
   if (doc.skin !== 'default') out.push({ code: 'REMESH_DELTA_SOURCE', object: `${object} skin`, detail: `is "${doc.skin}"; this package writes every mesh into the default skin, so "default" is required` });
+  return out;
+}
+
+export function deltaSourceProblems(doc: Pick<MeshEditDocument, 'source' | 'slot' | 'skin' | 'attachment'>, part: string, att: MeshAttachment, object: string): Problem[] {
+  const out = deltaTargetProblems(doc, part, object);
   const counts: Array<[string, number, number]> = [
     ['vertexCount', doc.source.vertexCount, att.uvs.length / 2],
     ['triangleCount', doc.source.triangleCount, att.triangles.length / 3],
@@ -218,16 +310,36 @@ export function deltaSourceProblems(doc: MeshEditDocument, part: string, att: Me
   return out;
 }
 
+const partOrigin = ([x, y]: Vec): Vec => [x - PAD, y - PAD];
+const vertexPartPosition = (att: MeshAttachment, i: number): Vec => [att.uvs[2 * i] * att.width, att.uvs[2 * i + 1] * att.height];
+
+/** Name the first position that misses, even when an independent count check has already found a difference. */
+export function meshEditPositionProblems(input: Pick<DeltaInput, 'attachment' | 'box'>, positions: readonly Vec[], object: string): Problem[] {
+  const { attachment } = input;
+  const [ox, oy] = partOrigin(input.box);
+  const available = Math.min(positions.length, attachment.uvs.length / 2);
+  for (let i = 0; i < available; i++) {
+    const [px, py] = vertexPartPosition(attachment, i);
+    const [x, y] = positions[i];
+    const wantedX = px + ox;
+    const wantedY = py + oy;
+    if (Math.abs(x - wantedX) > FROM_TOLERANCE_PX || Math.abs(y - wantedY) > FROM_TOLERANCE_PX) {
+      return [{ code: 'REMESH_DELTA_SOURCE', object: `${object} source.positions[${i}]`,
+        detail: `vertex ${i} is (${x}, ${y}); this input requires (${wantedX}, ${wantedY}) within ${FROM_TOLERANCE_PX} px` }];
+    }
+  }
+  return [];
+}
+
 /**
  * The replay: the document's ops over the input's mesh, in order, and the result held to the outline and Delaunay
  * rules. Returns the problems (the first op that does not apply ends the replay, since every later op reads its
  * state) or the new attachment.
  */
-export function applyMeshEdit(input: DeltaInput, doc: MeshEditDocument, object: string, plant: DeltaPlant = {}): DeltaResult | Problem[] {
+export function applyMeshEdit(input: DeltaInput, doc: MeshEditDocument | MeshEditActValue, object: string, plant: DeltaPlant = {}): DeltaResult | Problem[] {
   const att = input.attachment;
   const { width: w, height: h } = att;
-  const ox = input.box[0] - PAD;
-  const oy = input.box[1] - PAD;
+  const [ox, oy] = partOrigin(input.box);
   const CX = input.rigSize[0] / 2;
   const H = input.rigSize[1];
   const V0 = att.uvs.length / 2;
@@ -258,7 +370,8 @@ export function applyMeshEdit(input: DeltaInput, doc: MeshEditDocument, object: 
     });
   const problems: Problem[] = [];
   for (let i = 0; i < V0; i++) {
-    setPos(i, att.uvs[2 * i] * w, att.uvs[2 * i + 1] * h);
+    const [x, y] = vertexPartPosition(att, i);
+    setPos(i, x, y);
     uv.push([att.uvs[2 * i], att.uvs[2 * i + 1]]);
     wt.push(att.weights[i]);
     live.push(true);

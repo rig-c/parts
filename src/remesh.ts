@@ -64,6 +64,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
+import { inspect } from 'node:util';
 import { checkStage, gateThroughRigc, type Log, RIGC_MODEL_DOCUMENT, rigStage } from './build.ts';
 import { barsNotMet, type CheckReport, checkStatuses, type CheckStatus, checkSummaryLine, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, type PackMode, type PackShape, type PageEdges, parsePageSize, rigcRanClause, type RigcRunner } from './check.ts';
 import { loadConfigAndAnimations } from './config.ts';
@@ -71,7 +72,7 @@ import { PartsError, type Problem, problemLine, refuseIfAny } from './errors.ts'
 import { jsonValueSpan, scratchConfig } from './meshdraft.ts';
 import { type BoneTransform, computeExactFrameTransforms } from './coords.ts';
 import { type PartsFile } from './parts.ts';
-import { applyMeshEdit, type DeltaApplied, type DeltaPlant, deltaSourceProblems, type MeshEditDocument, readMeshEdit } from './remeshdelta.ts';
+import { applyMeshEdit, type DeltaApplied, type DeltaPlant, deltaSourceProblems, deltaTargetProblems, isSha256, meshEditActProblems, type MeshEditActValue, type MeshEditDocument, meshEditPositionProblems, readMeshEdit } from './remeshdelta.ts';
 import { DEFAULT_IDLE_KEYS, type IdleKeys, type MeshAttachment, meshBoundBones, rigJsonText, type RigSpec } from './rig.ts';
 import { readRequirements } from './requirements.ts';
 import { pyRound } from './round.ts';
@@ -119,6 +120,14 @@ export interface RemeshInput {
   inputCheck?: string;
   /** Issue #617: write {@link INPUT_CHECK_FILE} into `out` beside the provenance. Without it, and without `inputCheck`, nothing written moves. */
   recordInputCheck?: boolean;
+}
+
+/** The Parts revision and one edit from a finalized act. */
+export interface ApplyMeshEditActInput extends Pick<RemeshInput, 'rig' | 'config' | 'parts' | 'part' | 'out'> {
+  edit: MeshEditActValue;
+  actId: string;
+  actSourceHash: string;
+  payloadSha256: string;
 }
 
 /**
@@ -184,7 +193,8 @@ export interface RemeshProvenance {
   spec: typeof REMESH_SPEC;
   request:
     | { part: string; mesh: unknown; mesh_sha256: string; idle_keys: IdleKeys; page_edges: PageEdges; pack_shape: PackShape }
-    | { part: string; delta: MeshEditDocument; delta_sha256: string; ops: number; applied: Omit<DeltaApplied, 'ops'>; idle_keys: IdleKeys; page_edges: PageEdges; pack_shape: PackShape };
+    | { part: string; delta: MeshEditDocument; delta_sha256: string; ops: number; applied: Omit<DeltaApplied, 'ops'>; idle_keys: IdleKeys; page_edges: PageEdges; pack_shape: PackShape }
+    | { part: string; edit: MeshEditActValue; act_id: string; act_source_hash: string; payload_sha256: string; ops: number; applied: Omit<DeltaApplied, 'ops'>; idle_keys: IdleKeys; page_edges: PageEdges; pack_shape: PackShape };
   versions: RemeshVersions;
   input: { rig: HashRow[]; config_sha256: string; parts_json_sha256: string; provenance?: ParentProvenance[] };
   baseline: { reproduced: string[]; not_compared: string };
@@ -229,13 +239,16 @@ export function hashRows(tree: FileTree): HashRow[] {
 /** A previous root record, recoverable byte for byte at its content-addressed path (issue #531). */
 export interface ParentProvenance extends HashRow { source: 'remesh.json' | 'retune.json' }
 
+const provenancePath = (source: ParentProvenance['source'], digest: string): string =>
+  `provenance/${source.slice(0, -5)}-${digest}.json`;
+
 /** Keep prior records before replacing the current root record; no rig, motion or hold input is changed. */
 export function carryProvenance(input: FileTree, revision: FileTree, replacing: 'remesh.json' | 'retune.json'): { revision: FileTree; parents: ParentProvenance[] } {
   const next = new Map(revision), parents: ParentProvenance[] = [];
   for (const source of ['remesh.json', 'retune.json'] as const) {
     const bytes = input.get(source);
     if (bytes === undefined) continue;
-    const digest = sha256(bytes), path = `provenance/${source.slice(0, -5)}-${digest}.json`;
+    const digest = sha256(bytes), path = provenancePath(source, digest);
     const existing = next.get(path);
     if (existing !== undefined && !bytesEqual(existing, bytes)) {
       throw new PartsError([{ code: replacing === 'remesh.json' ? 'REMESH_PRESERVED' : 'RETUNE_PRESERVED', object: path,
@@ -250,6 +263,16 @@ export function carryProvenance(input: FileTree, revision: FileTree, replacing: 
 
 const text = (b: Uint8Array): string => new TextDecoder().decode(b);
 const bytesOf = (s: string): Uint8Array => new TextEncoder().encode(s);
+
+/** Canonical act payload bytes as text. The caller supplies a value in the signed JSON domain. */
+export function encodeMeshEditPayload(value: unknown): string {
+  return JSON.stringify(value, (_key, entry: unknown) =>
+    isRecord(entry) ? Object.fromEntries(Object.keys(entry).sort().map(key => [key, entry[key]])) : entry);
+}
+
+export function meshEditPayloadSha256(value: unknown): string {
+  return sha256(bytesOf(encodeMeshEditPayload(value)));
+}
 
 /** The first leaf at which `a` and `b` differ, as `path: a vs b`, or null when they are equal as JSON. */
 export function firstDifference(a: unknown, b: unknown, at = ''): string | null {
@@ -904,11 +927,130 @@ export function deltaRow(row: Json, att: MeshAttachment): Json {
   return out;
 }
 
+type ActBinding = Pick<ApplyMeshEditActInput, 'edit' | 'actId' | 'actSourceHash' | 'payloadSha256'>;
+
+interface PreparedMeshEditAct {
+  input: Pick<RemeshInput, 'rig' | 'config' | 'parts' | 'part' | 'out'>;
+  tree: FileTree;
+  act: ActBinding;
+}
+
+const PROVENANCE_SPECS = { [PROVENANCE_FILE]: REMESH_SPEC, 'retune.json': 'rig-parts-retune/1' } as const;
+
+function provenanceRecord(bytes: Uint8Array | undefined, source: ParentProvenance['source']): Json | null {
+  if (bytes === undefined) return null;
+  let value: unknown;
+  try { value = JSON.parse(text(bytes)); } catch { return null; }
+  return isRecord(value) && value.spec === PROVENANCE_SPECS[source] ? value : null;
+}
+
+function revisionBinds(record: Json, rows: HashRow[], source: ParentProvenance['source']): boolean {
+  return firstDifference(record.revision, rows.filter(row => row.path !== source)) === null;
+}
+
+function storedAct(record: Json | null, actId: string, part: string): Json | null {
+  const req = record?.request;
+  // Parts writes one editable identity per part: default skin, and slot and attachment both named after the part.
+  return record?.spec === REMESH_SPEC && isRecord(req) && req.act_id === actId && req.part === part ? req : null;
+}
+
+function refuseAct(object: string, detail: string): never {
+  throw new PartsError([{ code: 'REMESH_DELTA_ACT', object, detail }]);
+}
+
+function assertActDigest(supplied: string, computed: string): void {
+  if (supplied !== computed) throw new PartsError([{ code: 'REMESH_DELTA_DIGEST', object: 'payloadSha256', detail: `is ${supplied}; the canonical edit hashes to ${computed}` }]);
+}
+
+function assertStoredAct(req: Json, act: ActBinding, object: string): void {
+  if (req.act_source_hash !== act.actSourceHash || req.payload_sha256 !== act.payloadSha256) {
+    refuseAct(object, `act "${act.actId}" for "${String(req.part)}" records source hash ${JSON.stringify(req.act_source_hash)} and payload digest ${JSON.stringify(req.payload_sha256)}; received ${act.actSourceHash} and ${act.payloadSha256}; the same act key requires the same binding`);
+  }
+  if (meshEditActProblems(req.edit, object).length > 0 || meshEditPayloadSha256(req.edit) !== act.payloadSha256) {
+    refuseAct(object, `act "${act.actId}" for "${String(req.part)}" does not hold a valid edit matching payload digest ${act.payloadSha256}`);
+  }
+}
+
+/**
+ * A receipt can authorize a replay only over its exact output tree. Follow archived receipts through the
+ * hash-bound predecessor trees so a key known to an earlier revision cannot be applied again.
+ */
+function actReplay(tree: FileTree, rig: string, part: string, act: ActBinding, digest: string): RemeshResult | null {
+  const sources = [PROVENANCE_FILE, 'retune.json'] as const;
+  const roots = sources.flatMap(source => {
+    const record = provenanceRecord(tree.get(source), source);
+    return record === null ? [] : [{ path: source, source, record }];
+  });
+  if (roots.length === 0) return null;
+  const rows = hashRows(tree);
+  const current = roots.find(root => revisionBinds(root.record, rows, root.source));
+  if (current === undefined) {
+    const unbound = roots.find(root => storedAct(root.record, act.actId, part) !== null);
+    if (unbound !== undefined) refuseAct(join(rig, unbound.path), `records act "${act.actId}" for "${part}", but its revision hashes do not bind the current rig files`);
+    return null;
+  }
+  const byPath = new Map(rows.map(row => [row.path, row]));
+  const pending: Array<{ path: string; record: Json }> = [current];
+  const visited = new Set<string>();
+  while (pending.length > 0) {
+    const { path, record } = pending.pop()!;
+    if (visited.has(path)) continue;
+    visited.add(path);
+    const req = storedAct(record, act.actId, part);
+    if (req !== null) {
+      const object = join(rig, path);
+      assertStoredAct(req, act, object);
+      assertActDigest(act.payloadSha256, digest);
+      if (path !== current.path) {
+        throw new PartsError([{ code: 'REMESH_DELTA_ACT_SUPERSEDED', object: join(rig, current.path),
+          detail: `binds the current revision; act "${act.actId}" for "${part}" was applied on an earlier revision recorded at ${path}; replay requires that revision as the input` }]);
+      }
+      return { provenance: record as unknown as RemeshProvenance, written: [] };
+    }
+    const input = record.input;
+    if (!isRecord(input) || !Array.isArray(input.rig) || !Array.isArray(input.provenance)) continue;
+    for (const ref of input.provenance as unknown[]) {
+      if (!isRecord(ref) || (ref.source !== PROVENANCE_FILE && ref.source !== 'retune.json') || !isSha256(ref.sha256)) continue;
+      const path = provenancePath(ref.source, ref.sha256);
+      const archive = byPath.get(path);
+      if (ref.path !== path || archive?.sha256 !== ref.sha256 || archive.bytes !== ref.bytes) continue;
+      const previousRows = input.rig as HashRow[];
+      if (!previousRows.some(row => row?.path === ref.source && row.sha256 === ref.sha256 && row.bytes === ref.bytes)) continue;
+      const parent = provenanceRecord(tree.get(path), ref.source);
+      if (parent !== null && revisionBinds(parent, previousRows, ref.source)) pending.push({ path, record: parent });
+    }
+  }
+  return null;
+}
+
+/** Validate the in-memory request and inspect the input before a build, scratch directory or output is needed. */
+export function prepareMeshEditAct(input: ApplyMeshEditActInput): PreparedMeshEditAct | RemeshResult {
+  const { rig, config, parts, part, out, actId, actSourceHash, payloadSha256 } = input;
+  const show = (value: unknown): string => inspect(value, { depth: 0, customInspect: false, breakLength: Infinity });
+  if (typeof actId !== 'string' || actId.trim() === '') refuseAct('actId', `is ${show(actId)}; a non-empty finalized act ID is required`);
+  if (!isSha256(actSourceHash)) refuseAct('actSourceHash', `is ${show(actSourceHash)}; the finalized act source hash must be 64 lowercase hex digits`);
+  refuseIfAny(meshEditActProblems(input.edit, 'edit'));
+  if (!isSha256(payloadSha256)) throw new PartsError([{ code: 'REMESH_DELTA_DIGEST', object: 'payloadSha256', detail: `is ${show(payloadSha256)}; the canonical edit digest must be 64 lowercase hex digits` }]);
+  const payload = encodeMeshEditPayload(input.edit);
+  const edit = JSON.parse(payload) as MeshEditActValue;
+  const act = { edit, actId, actSourceHash, payloadSha256 };
+  const digest = sha256(bytesOf(payload));
+  const rigAt = resolve(rig);
+  if (!existsSync(rigAt) || !statSync(rigAt).isDirectory()) throw new PartsError([{ code: 'REMESH_INPUT_PRESENT', object: rig, detail: 'is not a directory; the input revision is the directory rig writes' }]);
+  const tree = readTree(rigAt);
+  if (deltaTargetProblems(edit, part, 'edit').length === 0) {
+    const replay = actReplay(tree, rig, part, act, digest);
+    if (replay !== null) return replay;
+  }
+  assertActDigest(payloadSha256, digest);
+  return { input: { rig, config, parts, part, out }, tree, act };
+}
+
 /**
  * The stage: steps 1–8 of the module header. Writes `input.out` only when every step is green; refuses with every
  * problem of the first step that found one.
  */
-export function remeshStage(input: RemeshInput, rigc: RigcRunner, checkBin: string, versions: RemeshVersions, scratch: string, log: Log, plant: RemeshPlant = {}): RemeshResult {
+export function remeshStage(input: RemeshInput, rigc: RigcRunner, checkBin: string, versions: RemeshVersions, scratch: string, log: Log, plant: RemeshPlant = {}, preparedAct?: PreparedMeshEditAct): RemeshResult {
   const part = input.part;
   const idleKeys = input.idleKeys ?? DEFAULT_IDLE_KEYS;
   const pageEdges = input.pageEdges ?? DEFAULT_PAGE_EDGES;
@@ -921,9 +1063,9 @@ export function remeshStage(input: RemeshInput, rigc: RigcRunner, checkBin: stri
   if (existsSync(outAt)) throw new PartsError([{ code: 'REMESH_OUT_FRESH', object: input.out, detail: 'exists; a revision is written into a new directory, never over the input or an earlier revision' }]);
   if (!existsSync(rigAt) || !statSync(rigAt).isDirectory()) throw new PartsError([{ code: 'REMESH_INPUT_PRESENT', object: input.rig, detail: 'is not a directory; the input revision is the directory rig writes' }]);
   if (outAt.startsWith(`${rigAt}${sep}`)) throw new PartsError([{ code: 'REMESH_OUT_FRESH', object: input.out, detail: `is inside the input ${input.rig}; a revision is written beside the input, never into it` }]);
-  const tree = readTree(rigAt);
+  const tree = preparedAct?.tree ?? readTree(rigAt);
   refuseIfAny(inputTreeProblems(tree, input.rig));
-  if ((input.mesh === undefined) === (input.delta === undefined)) throw new Error('remeshStage: exactly one of mesh, delta is required');
+  if (preparedAct === undefined && (input.mesh === undefined) === (input.delta === undefined)) throw new Error('remeshStage: exactly one of mesh, delta is required');
   const recorded = inputCheckOf(input, rigAt, tree, pageEdges, packShape, versions.parts, rigc, 'remesh', pageSize);
   const meshReq = input.mesh === undefined ? null : readMeshRequest(input.mesh);
   const deltaReq = input.delta === undefined ? null : readDeltaRequest(input.delta);
@@ -978,26 +1120,56 @@ export function remeshStage(input: RemeshInput, rigc: RigcRunner, checkBin: stri
   } else {
     // 3–4 on the delta path (issue #526): no config entry to build, so the baseline is the input itself, held to the
     // delta by its source counts and its source.hash, and the candidate is the delta replayed over the input's mesh.
-    const deltaPath = input.delta as string;
-    const { doc, bytes } = deltaReq as { doc: MeshEditDocument; bytes: Uint8Array };
+    const act = preparedAct?.act;
+    const deltaPath = act === undefined ? input.delta as string : 'edit';
+    const doc = act?.edit ?? deltaReq!.doc;
     const inAtt = targetAttachment(inRig, part) as MeshAttachment;
-    refuseIfAny(deltaSourceProblems(doc, part, inAtt, deltaPath));
+    const sourceProblems = deltaSourceProblems(doc, part, inAtt, deltaPath);
+    if (act === undefined) refuseIfAny(sourceProblems);
     log(`rig-parts remesh: ${part} of ${input.rig}, ${tree.size} file(s); the request is a mesh edit of ${doc.ops.length} op(s), the baseline is the input itself`);
     let model = null as string | null;
     const inGate = gateThroughRigc(pngsOf(tree), textsOf(tree, plant.unfilteredGateTexts === true), rigc, join(scratch, 'gate-input'), mode, (dir) => {
       const p = join(dir, RIGC_MODEL_DOCUMENT);
       model = existsSync(p) ? readFileSync(p, 'utf8') : null;
     });
-    refuseIfAny(inGate.filter((g) => g.status !== 0).map((g) => ({ code: 'REMESH_RIGC_GREEN', object: `rigc ${g.label} over the input`, detail: `exited ${g.status}${g.lines.length > 0 ? `: ${g.lines.map((l) => l.trim()).join(' | ')}` : ''}${rigcRanClause(g)}; the delta's source.hash is read off the input's own build, and nothing was written` })));
-    if (model === null) throw new PartsError([{ code: 'REMESH_DELTA_SOURCE', object: `rigc's build over the input`, detail: `wrote no ${RIGC_MODEL_DOCUMENT}, so the delta's source.hash cannot be verified; nothing was written` }]);
-    const hash = modelAttachmentHash(model, part);
-    if (hash !== doc.source.hash) {
-      throw new PartsError([{ code: 'REMESH_DELTA_SOURCE', object: `${deltaPath} source.hash`, detail: `is ${doc.source.hash.slice(0, 16)}…; the input's ${part} in its ${RIGC_MODEL_DOCUMENT} hashes to ${hash === null ? 'nothing (no such entry)' : `${hash.slice(0, 16)}…`} — the delta was drawn over another mesh` }]);
+    const gateProblems = inGate.filter((g) => g.status !== 0).map((g) => ({ code: 'REMESH_RIGC_GREEN', object: `rigc ${g.label} over the input`, detail: `exited ${g.status}${g.lines.length > 0 ? `: ${g.lines.map((l) => l.trim()).join(' | ')}` : ''}${rigcRanClause(g)}; the delta's source.hash is read off the input's own build, and nothing was written` }));
+    if (gateProblems.length > 0) sourceProblems.push(...gateProblems);
+    else if (model === null) sourceProblems.push({ code: 'REMESH_DELTA_SOURCE', object: `rigc's build over the input`, detail: `wrote no ${RIGC_MODEL_DOCUMENT}, so the delta's source.hash cannot be verified; nothing was written` });
+    else {
+      const hash = modelAttachmentHash(model, part);
+      const displayHash = (digest: string): string => act === undefined ? `${digest.slice(0, 16)}…` : digest;
+      if (hash !== doc.source.hash) {
+        sourceProblems.push({ code: 'REMESH_DELTA_SOURCE', object: `${deltaPath} source.hash`, detail: `is ${displayHash(doc.source.hash)}; the input's ${part} in its ${RIGC_MODEL_DOCUMENT} hashes to ${hash === null ? 'nothing (no such entry)' : displayHash(hash)} — the delta was drawn over another mesh` });
+      } else if (sourceProblems.length === 0) {
+        log(`  source: ${part}'s entry in the input's ${RIGC_MODEL_DOCUMENT} hashes to ${hash.slice(0, 16)}…, the delta's source.hash; counts v=${before.vertices} t=${before.triangles} hull=${before.hull} as it states`);
+      }
     }
-    log(`  source: ${part}'s entry in the input's ${RIGC_MODEL_DOCUMENT} hashes to ${hash.slice(0, 16)}…, the delta's source.hash; counts v=${before.vertices} t=${before.triangles} hull=${before.hull} as it states`);
-    const partsFile = JSON.parse(readFileSync(join(input.parts, 'parts.json'), 'utf8')) as PartsFile;
-    const rec = partsFile.parts.find((p) => p.name === part);
-    if (rec === undefined) throw new PartsError([{ code: 'REMESH_DELTA_SOURCE', object: `${input.parts}/parts.json`, detail: `names no part "${part}"; its box is where rig placed the image, which the delta's crop px are read against` }]);
+    if (act === undefined) refuseIfAny(sourceProblems);
+    const partsPath = join(input.parts, 'parts.json');
+    let partsFile: PartsFile | undefined;
+    try {
+      const value = JSON.parse(readFileSync(partsPath, 'utf8')) as PartsFile;
+      if (act !== undefined && (!Array.isArray(value?.parts) || !Array.isArray(value.rig_size))) throw new Error('requires a parts array and a rig_size pair');
+      partsFile = value;
+    } catch (err) {
+      if (act === undefined || !(err instanceof Error)) throw err;
+      sourceProblems.push({ code: 'REMESH_DELTA_SOURCE', object: partsPath, detail: `cannot read the Parts placement: ${err.message}` });
+    }
+    const rec = partsFile?.parts.find((p) => p?.name === part);
+    if (partsFile !== undefined && rec === undefined) sourceProblems.push({ code: 'REMESH_DELTA_SOURCE', object: `${input.parts}/parts.json`, detail: `names no part "${part}"; its box is where rig placed the image, which the delta's crop px are read against` });
+    if (act !== undefined) {
+      const { width, height } = act.edit.source.frame;
+      const rigFrame = (inRig as unknown as RigSpec).skeleton;
+      const partFrame = partsFile?.rig_size;
+      if (width !== rigFrame?.width || height !== rigFrame?.height || (partFrame !== undefined && (partFrame.length !== 2 || width !== partFrame[0] || height !== partFrame[1]))) {
+        sourceProblems.push({ code: 'REMESH_DELTA_SOURCE', object: 'edit source.frame', detail: `is ${width}×${height} px; requires the input rig size (${rigFrame?.width}×${rigFrame?.height} px)${partFrame === undefined ? '' : ` and Parts placement frame (${partFrame.join('×')} px)`}` });
+      }
+      if (rec !== undefined) {
+        if (Number.isFinite(rec.x) && Number.isFinite(rec.y)) sourceProblems.push(...meshEditPositionProblems({ attachment: inAtt, box: [rec.x, rec.y] }, act.edit.source.positions, deltaPath));
+        else sourceProblems.push({ code: 'REMESH_DELTA_SOURCE', object: `${partsPath} part "${part}"`, detail: `has box origin (${rec.x}, ${rec.y}); finite x and y are required` });
+      }
+    }
+    if (partsFile === undefined || rec === undefined || sourceProblems.length > 0) throw new PartsError(sourceProblems);
     const world = deltaFrames(inRig, `${input.rig}/rig.json`, plant.unexpandedStops === true);
     if (Array.isArray(world)) throw new PartsError(world);
     const r = applyMeshEdit({ part, attachment: inAtt, box: [rec.x, rec.y], rigSize: [partsFile.rig_size[0], partsFile.rig_size[1]], world }, doc, deltaPath, plant.delta);
@@ -1009,7 +1181,13 @@ export function remeshStage(input: RemeshInput, rigc: RigcRunner, checkBin: stri
     const { ops, ...applied } = r.applied;
     log(`  delta: ${ops} op(s) — moved ${applied.moved}, added ${applied.added}, removed ${applied.removed}, constrained ${applied.constrained}; ${r.untouched.length} source vertex(es) untouched; interior edges not locally Delaunay ${r.delaunay.before} -> ${r.delaunay.after}`);
     reproduced = ['none built: the delta path builds no config entry, so the baseline is the input itself, held to the delta by source.vertexCount, source.triangleCount, source.hullLength and source.hash'];
-    deltaRequest = { part, delta: doc, delta_sha256: sha256(bytes), ops, applied, idle_keys: idleKeys, page_edges: pageEdges, pack_shape: packShape };
+    const measured = { ops, applied, idle_keys: idleKeys, page_edges: pageEdges, pack_shape: packShape };
+    if (act === undefined) {
+      const { doc, bytes } = deltaReq!;
+      deltaRequest = { part, delta: doc, delta_sha256: sha256(bytes), ...measured };
+    } else {
+      deltaRequest = { part, edit: act.edit, act_id: act.actId, act_source_hash: act.actSourceHash, payload_sha256: act.payloadSha256, ...measured };
+    }
   }
   const after = meshCounts(candAtt);
   // 5–6. The splice and the preserve assertion.

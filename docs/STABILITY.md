@@ -150,6 +150,150 @@ compare this list with the command's allowlist, and plant an undeclared code.
 - `USAGE`
 <!-- /parts-check:codes -->
 
+## Programmatic mesh edit acts
+
+`@rig-c/parts/src/remesh-api.ts` is a public Bun/TypeScript import path for
+`applyMeshEditAct(input: ApplyMeshEditActInput): RemeshResult` (issue #1159).
+`applyMeshEditAct` is the sole runtime export from this entry. The two
+type-only exports are `ApplyMeshEditActInput` and `RemeshResult`. Other
+`src/` paths and names outside the interfaces documented on this page are
+unpromised.
+
+### ApplyMeshEditActInput
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `rig` | `string` | Path to the current rig revision directory, with `rig.json`, `motion.json`, `mesh_report.json` and `images/`. |
+| `config` | `string` | Path to the config used to build the input rig. |
+| `parts` | `string` | Path to the assembled directory containing `parts.json` and `parts/` used for the input rig. |
+| `part` | `string` | Target part name. The slot and attachment both use this name in the default skin. |
+| `out` | `string` | Destination for a new revision. When applying a new edit, the directory must not exist and must be outside `rig`. |
+| `edit` | Object with the fields below | One in-memory value from the finalized act's `value.meshEdits[].edit`. |
+| `actId` | `string` | Finalized act's identity. It must contain a non-whitespace character. |
+| `actSourceHash` | `string` | Finalized act's `source.sourceHash`, as 64 lowercase hex digits. |
+| `payloadSha256` | `string` | The selected mesh edit's `sha256`, as 64 lowercase hex digits. It must match the digest of the canonical `edit` payload. |
+
+Use `ApplyMeshEditActInput['edit']` to annotate an edit value.
+
+| Edit field | Type | Meaning |
+| --- | --- | --- |
+| `slot`, `skin`, `attachment` | `string` each | Non-empty names identifying the edited attachment in the model. |
+| `basis` | `"setup"` | The undeformed setup pose. |
+| `source.vertexCount`, `source.triangleCount`, `source.hullLength` | `number` each | Non-negative safe-integer counts from the source attachment. |
+| `source.hash` | `string` | Lowercase SHA-256 of the UTF-8 `JSON.stringify` of the parsed attachment entry in the input's gated `skeleton.model.json`, with stored key order. |
+| `source.frame` | `{ width: number; height: number }` | Positive finite dimensions of the rig canvas in crop pixels. |
+| `source.positions` | `[number, number][]` | Dense array of unrounded setup positions in vertex order, one per source vertex, in crop pixels (x right, y down). |
+| `ops` | `MeshEditOp[]` | Ordered list of 1 to 300 operations. |
+
+Each operation is one of the following shapes. Vertex indices are non-negative
+safe integers and coordinate pairs are finite. `from` is unrounded, while
+`to` and `at` are recorded to 0.01 px.
+
+```ts
+type MeshEditOp =
+  | { op: 'move'; v: number; from: [number, number]; to: [number, number] }
+  | { op: 'add'; at: [number, number]; onEdge?: [number, number] }
+  | { op: 'remove'; v: number }
+  | { op: 'edge'; a: number; b: number }
+  | { op: 'unedge'; a: number; b: number };
+```
+
+The payload digest is SHA-256 over the UTF-8 bytes of compact JSON. Sort
+object keys at every level by UTF-16 code units and preserve array order.
+Serialize strings with JSON escaping and numbers with ECMAScript number
+formatting. The signed edit domain excludes integer-like keys, negative zero
+and non-finite numbers. [Signed mesh-edit contract](https://github.com/rig-c/review/issues/952#issuecomment-7001413869)
+
+### RemeshResult
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `provenance` | `RemeshProvenance` | The `rig-parts-remesh/1` record of the revision, as stored in `remesh.json`. |
+| `written` | `string[]` | Paths written by the call, relative to the new revision directory, including `remesh.json`. An exact replay returns `[]`. |
+
+The API uses the [remesh revision record](#files-this-package-writes)
+with the following `request` variant.
+
+| Request field | Type | Meaning |
+| --- | --- | --- |
+| `part` | `string` | Target part. |
+| `edit` | `ApplyMeshEditActInput['edit']` | Mesh edit value supplied by the caller. |
+| `act_id`, `act_source_hash`, `payload_sha256` | `string` each | Act identity, act source hash and canonical payload digest. |
+| `ops` | `number` | Number of operations replayed. |
+| `applied` | `{ moved: number; added: number; removed: number; constrained: number }` | Counts of moves, additions, removals and edit constraints still present after replay. |
+| `idle_keys` | `"ctl" \| "direct"` | Idle key routing used for the build. |
+| `page_edges` | `"pot" \| "free"` | Page edge mode used by the gate. |
+| `pack_shape` | `"rect" \| "polygon"` | Packing shape used by the gate. |
+
+### Refusals
+
+Named refusals throw a `PartsError`. Its read-only `problems` array contains
+`{ code: string; object: string; detail: string }` entries. The entries name
+the rule, affected object and details of the refusal. The error message joins
+the rendered entries with newlines. Each entry renders as
+`<code>: <object> — <detail>`. Consumers branch on `code` and `object` and
+display `detail`, which carries the found and required values.
+
+The remesh stage's existing refusal catalog covers
+[`REMESH_OUT_FRESH`](AUTHORING.md#REMESH_OUT_FRESH),
+[`REMESH_INPUT_PRESENT`](AUTHORING.md#REMESH_INPUT_PRESENT),
+[`REMESH_INPUT_WRITTEN`](AUTHORING.md#REMESH_INPUT_WRITTEN),
+[`REMESH_TARGET_MESH`](AUTHORING.md#REMESH_TARGET_MESH),
+[`REMESH_TARGET_CLOSED`](AUTHORING.md#REMESH_TARGET_CLOSED),
+[`REMESH_RIGC_GREEN`](AUTHORING.md#REMESH_RIGC_GREEN),
+[`REMESH_PRESERVED`](AUTHORING.md#REMESH_PRESERVED) and
+[`REMESH_CHECK_HELD`](AUTHORING.md#REMESH_CHECK_HELD).
+Setup frame evaluation uses [`REMESH_BONE_ORDER`](AUTHORING.md#REMESH_BONE_ORDER)
+and [`REMESH_BONES_POSED`](AUTHORING.md#REMESH_BONES_POSED).
+
+| Code | Object | Found and required values |
+| --- | --- | --- |
+| [`REMESH_DELTA_ACT`](AUTHORING.md#REMESH_DELTA_ACT) | `actId` or `actSourceHash` | The requirement is a non-empty finalized act ID or a finalized act source hash of 64 lowercase hex digits, respectively. |
+| [`REMESH_DELTA_ACT`](AUTHORING.md#REMESH_DELTA_ACT) | Path to the matching provenance record | A binding conflict reports the recorded and received act source hashes and payload digests. A recorded edit that fails validation or hashes differently names the act, part and required digest. |
+| [`REMESH_DELTA_ACT`](AUTHORING.md#REMESH_DELTA_ACT) | Path to the unbound provenance record | Identifies the recorded act and part and reports that its revision hashes do not bind the current rig files. |
+| [`REMESH_DELTA_ACT_SUPERSEDED`](AUTHORING.md#REMESH_DELTA_ACT_SUPERSEDED) | Path to the provenance record that binds the current revision | Names the act, part and earlier provenance path. Replaying that edit requires the earlier revision as input. |
+| [`REMESH_DELTA_DIGEST`](AUTHORING.md#REMESH_DELTA_DIGEST) | `payloadSha256` | The required format is 64 lowercase hex digits. A digest mismatch reports the supplied and recomputed digests. |
+| [`REMESH_DELTA_JSON`](AUTHORING.md#REMESH_DELTA_JSON) | Edit, attachment identity, `source`, `source.frame`, or `source.positions` and its first malformed position | The edit must have the declared object and field shapes. Field mismatches identify the offending keys or values and the required shape. An invalid edit container or position array reports the required container. |
+| [`REMESH_DELTA_BASIS`](AUTHORING.md#REMESH_DELTA_BASIS) | `edit basis` | The supplied basis and required `"setup"`. |
+| [`REMESH_DELTA_OPS`](AUTHORING.md#REMESH_DELTA_OPS) | `edit ops` | The supplied value or length and the required dense array of 1 to 300 operations. A sparse array reports the density requirement. |
+| [`REMESH_DELTA_OP`](AUTHORING.md#REMESH_DELTA_OP) | `edit ops[i]` | The offending operation and the required shape or replay condition. Replay stops at the first operation that cannot apply. A move names its recorded `from` and live position when the two differ by more than the 0.001 px tolerance. |
+| [`REMESH_DELTA_SOURCE`](AUTHORING.md#REMESH_DELTA_SOURCE) | `edit slot`, `edit attachment`, `edit skin` or one of the `edit source` count fields | The recorded identity or count and the required part, default skin or input attachment count. |
+| [`REMESH_DELTA_SOURCE`](AUTHORING.md#REMESH_DELTA_SOURCE) | `edit source.hash` or `edit source.frame` | For a hash mismatch, the recorded and input model attachment hash prefixes, or a notice that the attachment entry is absent. For a frame mismatch, the recorded dimensions and both required frames from the rig and the parts manifest. |
+| [`REMESH_DELTA_SOURCE`](AUTHORING.md#REMESH_DELTA_SOURCE) | `edit source.positions` or `edit source.positions[i]` | The recorded position count and declared vertex count, or the first mismatching vertex with its recorded and required coordinates. The tolerance is 0.001 px on each coordinate. |
+| [`REMESH_DELTA_TOPOLOGY`](AUTHORING.md#REMESH_DELTA_TOPOLOGY) | Input triangle or replayed attachment | The observed topology and the required winding, outline or Delaunay condition. |
+| [`CHECK_RIGC_PRESENT`](AUTHORING.md#CHECK_RIGC_PRESENT) | `` the rig-c CLI `rigc` `` | No `rigc` was found in the ancestor `node_modules/.bin` directories or on `PATH`. Applying a new edit requires the rig-c CLI. |
+
+### Replay
+
+Parts identifies an edit by `(actId, part)`. The default skin and the part's
+slot and attachment names fix the target identity. The act source hash and
+payload digest bind that key.
+
+- **Exact replay.** When the current provenance matches the key, binds the
+  current rig files by hash, and holds the same source hash and payload digest,
+  the API returns its stored provenance and `written: []`. The recorded and
+  submitted edits must validate and hash to that digest. The call leaves the
+  current revision byte for byte as it was and creates no output directory.
+- **Binding conflict.** A known key with a changed `actSourceHash` or
+  `payloadSha256` refuses `REMESH_DELTA_ACT` even if the key was recorded on
+  an earlier revision. A record whose stored edit is invalid or fails its
+  digest also refuses `REMESH_DELTA_ACT`. If the supplied digest agrees with
+  the record but the submitted edit hashes differently, the refusal is
+  `REMESH_DELTA_DIGEST`.
+- **Superseded revision.** The same key, act source hash and validated edit
+  digest in a hash-bound ancestor refuse `REMESH_DELTA_ACT_SUPERSEDED`. The
+  refusal's `object` is the path to the record that binds the current revision.
+- **Unbound record.** A matching root record whose hashes fail to bind the
+  current tree refuses `REMESH_DELTA_ACT` when no root record binds it.
+- **New key.** The API validates the canonical payload digest and the source
+  attachment, counts, frame and positions against the input. It refuses stale
+  source evidence before any edit operation or output write. After a valid
+  edit passes the remesh gate, it writes a fresh revision with the act binding
+  in `remesh.json`.
+
+The CLI's `--delta` flag remains supported as the legacy file-based path.
+[Apply a mesh edit act in Bun](AUTHORING.md#apply-a-mesh-edit-act-in-bun)
+
 ## Programmatic config file references
 
 `@rig-c/parts/src/config.ts` exports `configFileReferences(raw: unknown):
