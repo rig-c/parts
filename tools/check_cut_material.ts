@@ -11,7 +11,7 @@ export function cutMaterialReaderRed(dir: string): void {
 }
 if (process.argv.includes('--reader-red')) cutMaterialReaderRed(process.argv[process.argv.length - 1]);
 
-import { mkdirSync, readFileSync, existsSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { hybridConfig, writeHybridFixture } from '../fixtures/hybrid_limb.ts';
 import { assembleStage, rigStage, checkStage } from '../src/build.ts';
 import { readMaterialSources, writeMaterialSources } from '../src/cutmaterialio.ts';
@@ -212,6 +212,18 @@ export function runCutMaterialChecks(dir:string,say:(name:string,pass:boolean,de
     const undeclaredLines:string[]=[];
     const unchecked=checkStage({rig,parts:actual.out,out:join(dir,'undeclared-check'),noExtremes:true},rigc,'fixture rigc',l=>undeclaredLines.push(l));
     say('JC52_UNDECLARED_CHECK_STDOUT_AND_JSON_REMAIN_UNEXTENDED',unchecked.figures.CUT_JOINT_MATERIAL===undefined&&!undeclaredLines.some(l=>l.includes('CUT_JOINT_MATERIAL')),'existing source sidecar does not opt check into a declaration; no printed or counted material bar');
+
+    // The material check reads the original cut evidence before rendering.
+    // Use the same drawings without an idle to isolate it from TIP_OVER_ROOT.
+    const staticRig = join(dir, 'static-material-rig');
+    cpSync(rig, staticRig, { recursive: true });
+    const motionPath = join(staticRig, 'motion.json');
+    const motion = JSON.parse(readFileSync(motionPath, 'utf8')) as Record<string, unknown>;
+    writeFileSync(motionPath, JSON.stringify({ ...motion, animations: {} }));
+    const common = { rig: staticRig, parts: actual.out, noExtremes: true };
+    checkStage({ ...common, out: join(dir, 'static-material-red'), requirements: actual.requirements }, rigc, 'fixture rigc', () => {});
+    checkStage({ ...common, out: join(dir, 'static-material-control') }, rigc, 'fixture rigc', () => {});
+
   }
   for(const hybrid of [false,true]){
     const p=prepareHybrid(join(dir,hybrid?'hybrid':'cap'),hybrid);
