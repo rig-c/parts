@@ -151,7 +151,7 @@ import type { JointState, RigJoint, RigJoints } from './keypoints.ts';
 import { IDLE_FPS } from './motion.ts';
 import { draftMotionSeams, type MotionSeamDeclaration } from './motionseams.ts';
 export { draftMotionSeams } from './motionseams.ts';
-import { FORK_SMOOTH_MAX_INFLUENCES, influenceFarthest } from './rig.ts';
+import { draftClothHoldRow, FORK_SMOOTH_MAX_INFLUENCES, influenceFarthest } from './rig.ts';
 import { type Segment as WeightSegment } from './weights.ts';
 import { pyRound as roundTo } from './round.ts';
 import { KEYPOINT_NAMES, type KeypointName } from './skeleton.ts';
@@ -1642,6 +1642,7 @@ export function proposeWithBasis(
   const clothUsed = new Set<ClothTarget>();
   /** Issue #518: each part a recipe meshes, by the target whose recipe drafted its mesh. */
   const clothMeshed = new Map<string, ClothTarget>();
+  const clothHeld = new Map<string, { tag: ClothTarget; trunks: TreeChain[] }>();
   const multiPartClaimed = new Set<string>();
   const recipeOf = (tag: ClothTarget): ClothRecipe | null => cloth?.[tag] ?? null;
   const declaredPartsOf = (tag: ClothTarget): { field: 'parts' | 'part'; list: PartRecord[] } | null => {
@@ -1670,6 +1671,9 @@ export function proposeWithBasis(
     const trees = draftTrees(input, r);
     if (r.extent !== undefined) {
       const object = `config.cloth.${JSON.stringify(tag)}.extent`;
+      if (trees.length === 0) {
+        throw new PartsError([{ code: 'PROPOSE_CLOTH_EXTENT', object, detail: `is ${r.extent}; "${partNames.join(', ')}" has no resolved root-to-tip span` }]);
+      }
       for (const tree of trees) {
         const path = [...tree.points, tree.tip];
         for (let i = 1; i < path.length; i++) {
@@ -3314,9 +3318,11 @@ export function proposeWithBasis(
           p === namedSkirt ? p.from : undefined,
         ),
       );
+      const trunks = trees.filter((tree) => tree.parent === 'hip');
+      if (skirtRecipe.extent !== undefined && trunks.length > 0) clothHeld.set(p.name, { tag: 'bottomwear', trunks });
       const fixedAbove = skirtRecipe.extent === undefined || trees.length === 0 ? {} : {
         fixed_above: {
-          row: Math.min(...trees.filter((tree) => tree.parent === 'hip').map((tree) => tree.points[0][1])),
+          row: Math.min(...trunks.map((tree) => tree.points[0][1])),
           bones: fixed.map((segment) => typeof segment === 'string' ? segment : segment[0]),
         },
       };
@@ -3686,6 +3692,29 @@ export function proposeWithBasis(
     const max = held ? Math.max(decl.max, FORK_SMOOTH_MAX_INFLUENCES) : decl.max;
     meshes[name] = { influence: { cell, radius, across: decl.across, max, shape: decl.shape, ...(held ? { hold_tip: true as const } : {}) }, segments, ...(m.fixed_above === undefined ? {} : { fixed_above: m.fixed_above }) };
   }
+  const holdProblems: Problem[] = [];
+  for (const [name, { tag, trunks }] of clothHeld) {
+    const mesh = meshes[name];
+    const fixed = mesh.fixed_above;
+    if (fixed === undefined) continue;
+    const part = P.recs.find((record) => record.name === name) as PartRecord;
+    const held = draftClothHoldRow(part, P.images.get(name) as Raster, mesh, fixed.row);
+    const field = `config.cloth.${JSON.stringify(tag)}.extent`;
+    if (held === null) {
+      holdProblems.push({ code: 'PROPOSE_CLOTH_EXTENT', object: field, detail: `cannot measure the transition of "${name}" on its drafted mesh; choose a smaller mesh cell or a larger extent` });
+      continue;
+    }
+    for (const trunk of trunks) {
+      const root = trunk.points[0][1];
+      const end = (trunk.points[1] ?? trunk.tip)[1];
+      const strip = Math.max(0, held - root);
+      notes.push(`${name}: ${trunk.chain} holds ${roundTo(strip, 6)} px below row ${root}; first link spans rows ${root}..${end} (${end - root} px)`);
+      if (held >= end) {
+        holdProblems.push({ code: 'PROPOSE_CLOTH_EXTENT', object: field, detail: `part "${name}" holds ${roundTo(strip, 6)} px below ${trunk.chain}'s root at row ${root} through row ${roundTo(held, 6)}; first link spans ${end - root} px and ends at row ${end}. Choose a smaller mesh cell or a larger extent` });
+      }
+    }
+  }
+  refuseIfAny(holdProblems);
   const constrained = clothConstraints.length === 0 ? {} : { constraints: clothConstraints };
   const motionSeams = draftMotionSeams({ bones, meshes, regions, ...drafted }, P.recs);
   const observed = motionSeams.length === 0 ? {} : { motion_seams: motionSeams };

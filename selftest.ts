@@ -50008,6 +50008,17 @@ function runInfluenceSuite(): number {
       bottomwear: { ...extentRecipe, extent, ...(influence ? { influence: { across: true, max: 6, shape: 'smooth' as const } } : {}) },
     }, true, { noBust: 'synthetic cloth fixture' });
     const collapse = refusals(() => extentDraft(0.001, false));
+    const coarsePartsDir = join(root, 'cloth-coarse-grid');
+    writeProposeFixture(coarsePartsDir, [...CLOTH_PARTS, { name: 'shoe', from: 'full:footwear', x: 110, y: 824, w: 20, h: 10, colour: [32, 64, 96] }], { w: 240, h: 840 });
+    const coarseJoints = dressHipJoints();
+    coarseJoints.joints.r_hip = { ...coarseJoints.joints.r_hip, at: [110, 167] };
+    coarseJoints.joints.l_hip = { ...coarseJoints.joints.l_hip, at: [130, 167] };
+    const coarse = refusals(() => propose(readPartSet(coarsePartsDir), coarseJoints, null, DEFAULT_GRID_RULE, { bottomwear: extentRecipe }, true, { noBust: 'synthetic cloth fixture' }));
+    say('IF43_CLOTH_EXTENT_REFUSES_A_CELL_THAT_HOLDS_THE_FIRST_LINK',
+      coarse?.problems[0]?.code === 'PROPOSE_CLOTH_EXTENT' && coarse.problems[0].detail.includes('holds 19 px') &&
+      coarse.problems[0].detail.includes('first link spans 13 px') && extentDraft(0.33, false).notes.some((note) => note.includes('holds 9 px below row 247; first link spans rows 247..260 (13 px)')),
+      `coarse ${coarse?.problems[0]?.detail ?? 'drafted'}; ordinary fixture holds 9 px against a 13 px first link`,
+      'figure height 814 gives a 22 px lattice cell; with origin y156 the straddling cell ends at y266, holding the first link that ends at 260');
     const door = join(root, 'extent-door.json');
     writeFileSync(door, JSON.stringify({ key: 'fixture', cloth: { bottomwear: { ...extentRecipe, extent: 0 } } }));
     const invalid = refusals(() => loadClothConfig(door));
@@ -50036,18 +50047,24 @@ function runInfluenceSuite(): number {
         const cfg = `${dir}.json`;
         writeFileSync(cfg, JSON.stringify({ ...proposalConfig(CLOTH_PARTS, prop), meshes: { ...prop.meshes, skirt: hold ? mesh : withoutHold }, constraints: prop.constraints }));
         const cmd = runCli(['rig', '--parts', fx.parts, '--config', cfg, '--out', dir]);
-        if (cmd.status !== 0) return { exit: cmd.status, rows: [], at246: [] };
+        if (cmd.status !== 0) return { exit: cmd.status, rows: [], at246: [], crossing: [] };
         const rig = JSON.parse(readFileSync(join(dir, 'rig.json'), 'utf8')) as RigSpec;
         const att = rig.skins.default.skirt.skirt as MeshAttachment;
         const row = (i: number) => 156 + att.uvs[i * 2 + 1] * 128;
-        return { exit: cmd.status, rows: att.weights!.filter((_, i) => row(i) < 247), at246: att.weights!.filter((_, i) => Math.abs(row(i) - 246) < 0.001) };
+        const crossing = new Set<number>();
+        for (let i = 0; i < att.triangles.length; i += 3) {
+          const t = att.triangles.slice(i, i + 3);
+          const rows = t.map(row);
+          if (Math.min(...rows) < 247 && Math.max(...rows) > 247) t.forEach((v) => crossing.add(v));
+        }
+        return { exit: cmd.status, crossing: [...crossing].map((v) => att.weights![v]), rows: att.weights!.filter((_, i) => row(i) < 247), at246: att.weights!.filter((_, i) => Math.abs(row(i) - 246) < 0.001) };
       };
       const held = run(true);
       const free = run(false);
       const onlyHip = (row: { bone: string; weight: number }[]) => row.length === 1 && row[0].bone === 'hip' && row[0].weight === 1;
       say(`IF41_CLOTH_EXTENT_FIXES_UPPER_VERTICES[${mode}]`,
         held.exit === 0 && free.exit === 0 && held.rows.length > 0 && held.rows.every(onlyHip) &&
-        held.at246.length > 0 && held.at246.every(onlyHip) && free.at246.some((row) => row.some((w) => w.bone.startsWith('skirt'))),
+        held.at246.length > 0 && held.at246.every(onlyHip) && held.crossing.length > 0 && held.crossing.every(onlyHip) && free.at246.some((row) => row.some((w) => w.bone.startsWith('skirt'))),
         `rig exits ${held.exit}/${free.exit}; upper vertices ${held.rows.length}; y246 vertices ${held.at246.length}; unpinned rows with skirt ${free.at246.filter((row) => row.some((w) => w.bone.startsWith('skirt'))).length}`,
         'vertices at y246 precede the y247 root and have hip weight 1 in both mesh modes; removing the binding lets live links pull them');
     }
