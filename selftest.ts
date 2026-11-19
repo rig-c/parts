@@ -297,7 +297,7 @@ import { CHECK_PARTS, CHECK_RIG, checkPartRaster, IDLE_PEAK, MERGED_STAGE, merge
 import { fakePainting } from './fixtures/fakecomfy.ts';
 import { BLOUSE, CLOTH_PARTS, CLOTH_RIG, clothRecipe, DRESS, DRESS_RIG, dressHipJoints, dressParts, FLOOR_SKIRT_EMPTY_COL_PARTS, FLOOR_SKIRT_PARTS, HEM, HEM_BELOW, SHIFT, SPLIT_TAIL_PARTS, SPLIT_TAIL_UNCROSSED, splitTailRecipe } from './fixtures/cloth.ts';
 import { RIDER_RIG, RIDER_STRIP, riderParts, riderRecipe } from './fixtures/rider.ts';
-import { type ClothRecipes, draftTrees, INFLUENCE_RADIUS_CELLS, linkRows } from './src/cloth.ts';
+import { type ClothRecipe, type ClothRecipes, draftTrees, INFLUENCE_RADIUS_CELLS, linkRows } from './src/cloth.ts';
 import { BARE_CROWN_PARTS, CUT_BASE_PARTS, CUT_PARTS, eyeParts, FACELESS_PARTS, IRIS_NO_EYEWHITE_PARTS, LEVEL_FRINGE_PARTS, LONG_ROBE_PARTS, LONG_ROBE_RIG, MIXED_STRAND_PARTS, NO_BROW_PARTS, NO_EYE_PARTS, ONE_EYEWHITE_PARTS, PROPOSE_PARTS, PROPOSE_RIG, type ProposeFixturePart, STRAND_PARTS, STRAND_RIG, TILTED_FRINGE_PARTS, TWO_LOCK_PARTS, writeProposeFixture as originalWriteProposeFixture } from './fixtures/propose.ts';
 // The runtime's own posing, for the one control that measures where a mesh's pixels go (PR14): a second opinion about a weighted vertex is what a measurement must not carry.
 import { type BoneSnapshot, type Frame, loadPosable, type Mesh, sampleAnimation, sampleSetupPose } from '@rig-c/core/render';
@@ -50002,6 +50002,139 @@ function runInfluenceSuite(): number {
   const rowsOf = (dir: string): Row[] => JSON.parse(readFileSync(join(dir, 'mesh_report.json'), 'utf8')) as Row[];
   try {
     const fx = influenceConfigs(root, INFLUENCE_RADII);
+    const extentParts = readPartSet(fx.parts);
+    const extentRecipe: ClothRecipe = { chains: 3, links: 3, wind: [2, 10], gravity: [5, 30], extent: 0.33 };
+    const extentDraft = (extent: number, influence: boolean) => propose(extentParts, undefined, null, DEFAULT_GRID_RULE, {
+      bottomwear: { ...extentRecipe, extent, ...(influence ? { influence: { across: true, max: 6, shape: 'smooth' as const } } : {}) },
+    }, true, { noBust: 'synthetic cloth fixture' });
+    const collapse = refusals(() => extentDraft(0.001, false));
+    const coarsePartsDir = join(root, 'cloth-coarse-grid');
+    writeProposeFixture(coarsePartsDir, [...CLOTH_PARTS, { name: 'shoe', from: 'full:footwear', x: 110, y: 824, w: 20, h: 10, colour: [32, 64, 96] }], { w: 240, h: 840 });
+    const coarseJoints = dressHipJoints();
+    coarseJoints.joints.r_hip = { ...coarseJoints.joints.r_hip, at: [110, 167] };
+    coarseJoints.joints.l_hip = { ...coarseJoints.joints.l_hip, at: [130, 167] };
+    const coarse = refusals(() => propose(readPartSet(coarsePartsDir), coarseJoints, null, DEFAULT_GRID_RULE, { bottomwear: extentRecipe }, true, { noBust: 'synthetic cloth fixture' }));
+    say('IF43_CLOTH_EXTENT_REFUSES_A_CELL_THAT_HOLDS_THE_FIRST_LINK',
+      coarse?.problems[0]?.code === 'PROPOSE_CLOTH_EXTENT' && coarse.problems[0].detail.includes('holds 19 px') &&
+      coarse.problems[0].detail.includes('first link spans 13 px') && extentDraft(0.33, false).notes.some((note) => note.includes('holds 9 px below row 247; first link spans rows 247..260 (13 px)')),
+      `coarse ${coarse?.problems[0]?.detail ?? 'drafted'}; ordinary fixture holds 9 px against a 13 px first link`,
+      'figure height 814 gives a 22 px lattice cell; with origin y156 the straddling cell ends at y266, holding the first link that ends at 260');
+    const door = join(root, 'extent-door.json');
+    writeFileSync(door, JSON.stringify({ key: 'fixture', cloth: { bottomwear: { ...extentRecipe, extent: 0 } } }));
+    const invalid = refusals(() => loadClothConfig(door));
+    writeFileSync(door, JSON.stringify({ key: 'fixture', cloth: { bottomwear: extentRecipe } }));
+    const valid = loadClothConfig(door).cloth.bottomwear?.extent;
+    writeFileSync(door, JSON.stringify({ key: 'fixture', cloth: { 'front hair': extentRecipe } }));
+    const hairExtent = refusals(() => loadClothConfig(door));
+    writeFileSync(door, JSON.stringify({ key: 'fixture', cloth: { bottomwear: { ...extentRecipe, parts: ['skirt'] } } }));
+    const listExtent = refusals(() => loadClothConfig(door));
+    const extent = extentDraft(0.33, false);
+    const trunks = extent.bones.filter((bone): bone is Extract<BoneEntry, { chain: string }> => 'chain' in bone && /^skirt\d+_$/.test(bone.chain));
+    say('IF40_CLOTH_EXTENT_COUNTS_FROM_TIP_AND_REFUSES_BAD_EXTENT',
+      trunks.length === 3 && trunks.every((bone) => bone.points[0][1] === 247 && bone.tip?.[1] === 276) &&
+      valid === 0.33 && invalid?.problems[0]?.code === 'CONFIG_CLOTH_EXTENT' &&
+      hairExtent?.problems[0]?.object === 'config.cloth."front hair".extent' &&
+      listExtent?.problems[0]?.object === 'config.cloth."bottomwear".extent' &&
+      collapse?.problems[0]?.code === 'PROPOSE_CLOTH_EXTENT',
+      `trunk rows ${trunks.map((bone) => `${bone.points[0][1]}..${bone.tip?.[1]}`).join(', ')}; invalid ${codes(invalid)}; collapse ${codes(collapse)}`,
+      'fixture root 187 and tip 276 give round(276 - 0.33 * 89) = 247; zero is out of range and 0.001 collapses after rounding');
+    for (const mode of ['lattice', 'influence'] as const) {
+      const prop = mode === 'lattice' ? extent : extentDraft(0.33, true);
+      const mesh = prop.meshes.skirt;
+      const { fixed_above: _fixed, ...withoutHold } = mesh;
+      const run = (hold: boolean) => {
+        const dir = join(root, `extent-${mode}-${hold}`);
+        const cfg = `${dir}.json`;
+        writeFileSync(cfg, JSON.stringify({ ...proposalConfig(CLOTH_PARTS, prop), meshes: { ...prop.meshes, skirt: hold ? mesh : withoutHold }, constraints: prop.constraints }));
+        const cmd = runCli(['rig', '--parts', fx.parts, '--config', cfg, '--out', dir]);
+        if (cmd.status !== 0) return { exit: cmd.status, rows: [], at246: [], crossing: [] };
+        const rig = JSON.parse(readFileSync(join(dir, 'rig.json'), 'utf8')) as RigSpec;
+        const att = rig.skins.default.skirt.skirt as MeshAttachment;
+        const row = (i: number) => 156 + att.uvs[i * 2 + 1] * 128;
+        const crossing = new Set<number>();
+        for (let i = 0; i < att.triangles.length; i += 3) {
+          const t = att.triangles.slice(i, i + 3);
+          const rows = t.map(row);
+          if (Math.min(...rows) < 247 && Math.max(...rows) > 247) t.forEach((v) => crossing.add(v));
+        }
+        return { exit: cmd.status, crossing: [...crossing].map((v) => att.weights![v]), rows: att.weights!.filter((_, i) => row(i) < 247), at246: att.weights!.filter((_, i) => Math.abs(row(i) - 246) < 0.001) };
+      };
+      const held = run(true);
+      const free = run(false);
+      const onlyHip = (row: { bone: string; weight: number }[]) => row.length === 1 && row[0].bone === 'hip' && row[0].weight === 1;
+      say(`IF41_CLOTH_EXTENT_FIXES_UPPER_VERTICES[${mode}]`,
+        held.exit === 0 && free.exit === 0 && held.rows.length > 0 && held.rows.every(onlyHip) &&
+        held.at246.length > 0 && held.at246.every(onlyHip) && held.crossing.length > 0 && held.crossing.every(onlyHip) && free.at246.some((row) => row.some((w) => w.bone.startsWith('skirt'))),
+        `rig exits ${held.exit}/${free.exit}; upper vertices ${held.rows.length}; y246 vertices ${held.at246.length}; unpinned rows with skirt ${free.at246.filter((row) => row.some((w) => w.bone.startsWith('skirt'))).length}`,
+        'vertices at y246 precede the y247 root and have hip weight 1 in both mesh modes; removing the binding lets live links pull them');
+    }
+    const legacyParts = join(root, 'legacy-cloth');
+    const legacyPainting = writeProposeFixture(legacyParts, [...CLOTH_PARTS, ...PROPOSE_PARTS.filter((p) => p.name.startsWith('sleeve_'))], CLOTH_RIG);
+    const legacyDoor = join(root, 'legacy-input.json');
+    const legacyWritten = join(root, 'legacy-written.json');
+    const legacyOut = join(root, 'legacy-proposal');
+    writeFileSync(legacyDoor, JSON.stringify({ key: 'probe', cloth: { bottomwear: clothRecipe().bottomwear } }));
+    const legacy = runCli(['propose', '--parts', legacyParts, '--source', legacyPainting, '--out', legacyOut, '--no-bust', 'inventory', '--cloth', legacyDoor, '--write-config', legacyWritten]);
+    const hash = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex');
+    const legacyCompared = legacy.status === 0 ? [join(legacyOut, 'proposal.json'), legacyWritten].map((file) => readFileSync(file)) : [];
+    // Origin main 1a45c3f1716dc5bb4d15a4c053966cb59bac1bce, same fixture and command.
+    const baselineHashes = ['8aff374897500ac39fbdeccc4102285a696ecace551cea07652e314a7bbf4999', 'c75aa951059e3015da87813c2f5066062b63cee293aba4b5b8e866f06811739e'];
+    const same = (files: Buffer[]): boolean => files.length === baselineHashes.length && files.every((bytes, i) => hash(bytes) === baselineHashes[i]);
+    say('IF42_LEGACY_CLOTH_PROPOSAL_AND_WRITTEN_CONFIG_KEEP_THE_BASELINE_BYTES',
+      same(legacyCompared) && !same(legacyCompared.map((bytes) => Buffer.concat([bytes, Buffer.from(' ')]))),
+      `propose exit ${legacy.status}; SHA-256 ${legacyCompared.map(hash).join(', ')}`,
+      'the two raw outputs match the pre-extent control; adding one byte to each is rejected');
+    const sleeveInput = { ...extentRecipe, chains: 1, links: 2, part: 'sleeve_a' };
+    const sleeveRecipes: ClothRecipes = { 'handwear-r': sleeveInput, 'handwear-l': { ...sleeveInput, part: 'sleeve_b' } };
+    const sleeveCfg = join(root, 'sleeve-recipe.json');
+    const sleeveKeys = join(root, 'sleeve-keypoints.json');
+    const sleeveOut = join(root, 'sleeve-proposal');
+    const paintSize = { width: CLOTH_RIG.w, height: CLOTH_RIG.h };
+    writeFileSync(sleeveCfg, JSON.stringify({ key: 'fixture', cloth: sleeveRecipes }));
+    writeFileSync(sleeveKeys, JSON.stringify({
+      spec: 'spine-parts-keypoints/1', space: { units: 'painting-px', origin: 'top-left', y: 'down' },
+      ...paintSize, source: 'synthetic cloth fixture', people: [{
+        id: 'fixture', joints: { r_elbow: { state: 'observed', at: [30, 122] }, l_elbow: { state: 'observed', at: [170, 122] } },
+      }],
+    }));
+    const sleeveDraft = runCli(['propose', '--parts', legacyParts, '--source', legacyPainting, '--out', sleeveOut, '--no-bust', 'synthetic cloth fixture', '--keypoints', sleeveKeys, '--cloth', sleeveCfg]);
+    const draftedSleeves = sleeveDraft.status === 0 ? JSON.parse(readFileSync(join(sleeveOut, 'proposal.json'), 'utf8')) as Proposal : null;
+    const sleeveTrees = draftedSleeves?.bones.filter((bone): bone is Extract<BoneEntry, { chain: string }> => 'chain' in bone && bone.chain.startsWith('sleeve_')) ?? [];
+    const sleeveP = readPartSet(legacyParts);
+    const sleeveRigConfig = join(root, 'sleeve-rig.json');
+    const sleeveRigDir = join(root, 'sleeve-rig');
+    let sleeveRigExit: number | null = null;
+    if (draftedSleeves !== null) {
+      writeFileSync(sleeveRigConfig, JSON.stringify(proposalAsConfig(sleeveP, draftedSleeves)));
+      sleeveRigExit = runCli(['rig', '--parts', legacyParts, '--config', sleeveRigConfig, '--out', sleeveRigDir]).status;
+    }
+    const sleeveJ = dressHipJoints();
+    sleeveJ.joints.r_elbow = { state: 'observed', at: [30, 122], score: null, listed: true };
+    sleeveJ.joints.l_elbow = { state: 'observed', at: [170, 122], score: null, listed: true };
+    const missingElbow = refusals(() => propose(sleeveP, undefined, null, DEFAULT_GRID_RULE, sleeveRecipes, true, { noBust: 'synthetic cloth fixture' }));
+    const wrongSide = refusals(() => propose(sleeveP, sleeveJ, null, DEFAULT_GRID_RULE, { 'handwear-r': { ...sleeveInput, part: 'sleeve_b' } }, true, { noBust: 'synthetic cloth fixture' }));
+    writeFileSync(sleeveCfg, JSON.stringify({ key: 'fixture', cloth: { 'handwear-r': { ...sleeveInput, part: undefined } } }));
+    const missingPart = refusals(() => loadClothConfig(sleeveCfg));
+    const mixedJoints = { ...sleeveJ, joints: { ...sleeveJ.joints, l_elbow: { ...sleeveJ.joints.l_elbow, at: [32, 122] as [number, number] } } };
+    const mixedSleeve = refusals(() => propose(sleeveP, mixedJoints, null, DEFAULT_GRID_RULE, sleeveRecipes, true, { noBust: 'synthetic cloth fixture' }));
+    const cutSleeve = new PartSet({
+      ...readParts(join(legacyParts, 'parts.json')),
+      parts: sleeveP.recs.map((part) => part.name === 'sleeve_a' ? { ...part, limb: { name: 'arm_r', segment: 0, of: 'sleeve_a', bone: 'sleeve_r0' } } : part),
+    }, sleeveP.images);
+    const jointCut = refusals(() => propose(cutSleeve, sleeveJ, null, DEFAULT_GRID_RULE, sleeveRecipes, true, { noBust: 'synthetic cloth fixture' }));
+    const field = 'config.cloth."handwear-r".part';
+    say('IF44_NAMED_SLEEVE_CARRIERS_DRAFT_FROM_THE_ELBOW_AND_REFUSE_MISSING_OR_WRONG_INPUT',
+      sleeveRigExit === 0 && sleeveTrees.map((b) => b.chain).join(',') === 'sleeve_r_0_,sleeve_l_0_' &&
+      sleeveTrees.every((b) => b.parent === 'chest' && b.points[0][1] === 147 && b.tip?.[1] === 159) &&
+      draftedSleeves?.constraints?.filter((c) => c.type === 'physics' && typeof c.bone === 'string' && c.bone.startsWith('sleeve')).length === 4 &&
+      draftedSleeves?.limbs === undefined &&
+      missingElbow?.problems[0]?.object === field && missingElbow.problems[0].detail.includes('r_elbow has no resolved position') &&
+      wrongSide?.problems[0]?.object === field && wrongSide.problems[0].detail.includes('tagged "handwear-r"') &&
+      missingPart?.problems[0]?.code === 'CONFIG_CLOTH_SLEEVE_PART' && missingPart.problems[0].object === field &&
+      mixedSleeve?.problems[0]?.object === field && mixedSleeve.problems[0].detail.includes('opposite arm') &&
+      jointCut?.problems[0]?.object === field && jointCut.problems[0].detail.includes('joint-cut limb'),
+      `propose exit ${sleeveDraft.status}; rig exit ${sleeveRigExit}; ${sleeveTrees.map((b) => `${b.chain} rows ${b.points[0][1]}..${b.tip?.[1]}`).join(', ')}; missing elbow ${codes(missingElbow)}; wrong side ${codes(wrongSide)}; missing part ${codes(missingPart)}; mixed carrier ${codes(mixedSleeve)}; cut carrier ${codes(jointCut)}`,
+      'the 60 px rectangles end on opaque row 159; elbow y122 and extent 0.33 place the new roots at y147, parent chest');
     const lat = runCli(['rig', '--config', fx.lattice, '--parts', fx.parts, '--out', join(root, 'rig-lattice')]);
     const inf = runCli(['rig', '--config', fx.influence, '--parts', fx.parts, '--out', join(root, 'rig-influence')]);
     const latRows = lat.status === 0 ? rowsOf(join(root, 'rig-lattice')) : [];

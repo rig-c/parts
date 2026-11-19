@@ -137,7 +137,7 @@ import { explicitAttachment, type ExplicitMeshReport } from './explicitmesh.ts';
  * touches the disk, and the same inputs give the same bytes (key order is the
  * order the objects are built in, and every number is rounded by `pyRound`).
  */
-import { type AutoSpec, type BoneEntry, type InfluenceMeshSpec, type WeightRule, type CharacterConfig, type ConfigConstraint, type ConfigStop, CONSTRAINT_FOLLOWS, constraintForRig, contourRegionsOf, type ContourSpec, DEFAULT_BUST_BONE_L, DEFAULT_BUST_BONE_R, type Point, type RibsSpec, ROOT_BONE, stopForRig, turnRidersByBone, weightsABone } from './config.ts';
+import { type AutoSpec, type BoneEntry, type InfluenceMeshSpec, type WeightRule, type CharacterConfig, type MeshSpec, type ConfigConstraint, type ConfigStop, CONSTRAINT_FOLLOWS, constraintForRig, contourRegionsOf, type ContourSpec, DEFAULT_BUST_BONE_L, DEFAULT_BUST_BONE_R, type Point, type RibsSpec, ROOT_BONE, stopForRig, turnRidersByBone, weightsABone } from './config.ts';
 import { RUNTIME_PI } from '@rig-c/core/core';
 import { type BoneTransform, computeExactFrameTransforms, computeWorldTransforms, cropToSpineY, normaliseDegrees, paintingToSetupPoint, setupToPaintingPoint, toBoneLocal, toWorld } from './coords.ts';
 import { foldName, type Problem, refuseIfAny, PartsError } from './errors.ts';
@@ -895,6 +895,71 @@ export function influenceReach(points: ReadonlyArray<readonly [number, number]>,
   return best;
 }
 
+/** Hold the complete triangle wherever its interior crosses the cloth root row. */
+function fixedTriangleRow(
+  row: number,
+  oy: number,
+  vertices: ReadonlyArray<readonly [number, number]>,
+  triangles: readonly number[],
+): number {
+  let held = row;
+  for (let i = 0; i < triangles.length; i += 3) {
+    const a = vertices[triangles[i]][1] + oy;
+    const b = vertices[triangles[i + 1]][1] + oy;
+    const c = vertices[triangles[i + 2]][1] + oy;
+    if (Math.min(a, b, c) < row) held = Math.max(held, a, b, c);
+  }
+  return held;
+}
+
+function rasterAlpha(img: Raster): Uint8Array {
+  const alpha = new Uint8Array(img.width * img.height);
+  for (let i = 0; i < alpha.length; i++) alpha[i] = img.data[i * 4 + 3];
+  return alpha;
+}
+
+function influenceLattice(img: Raster, alpha: Uint8Array, cell: number): SegmentsLattice {
+  return buildSegmentsLattice({ mask: { width: img.width, height: img.height, alpha }, threshold: INFLUENCE_THRESHOLD, cell });
+}
+
+function rigContour(p: PartsFile['parts'][number], img: Raster, spec: ContourSpec, ribs: ContourChainRibs[]) {
+  const ox = p.x - PAD;
+  const oy = p.y - PAD;
+  const regions: ContourRegion[] = contourRegionsOf(spec).map((rg) =>
+    rg.shape === 'circle'
+      ? { name: rg.name, shape: 'circle', cx: rg.cx - ox, cy: rg.cy - oy, r: rg.r, spacing: rg.spacing, band: rg.band }
+      : { name: rg.name, shape: 'polygon', points: rg.points.map(([x, y]) => [x - ox, y - oy]), spacing: rg.spacing, band: rg.band },
+  );
+  return contourMesh(p.name, { width: img.width, height: img.height, alpha: rasterAlpha(img) }, {
+    threshold: ART_ALPHA, tolerance: spec.tolerance, margin: spec.margin, spacing: spec.spacing,
+    ...(spec.maxEdge === undefined ? {} : { maxEdge: spec.maxEdge }), budget: spec.budget, stray: spec.stray,
+    ...(spec.bridges === undefined ? {} : { bridges: spec.bridges }), regions, ...(ribs.length === 0 ? {} : { ribs }),
+  });
+}
+
+/** The transition the same topology will need when rig binds the proposed mesh. */
+export function draftClothHoldRow(p: PartsFile['parts'][number], image: Raster, mesh: MeshSpec, row: number): number | null {
+  const img = pad(image, PAD, PAD, PAD, PAD, [0, 0, 0, 0]);
+  const oy = p.y - PAD;
+  if ('influence' in mesh) {
+    try {
+      const m = influenceLattice(img, rasterAlpha(img), mesh.influence.cell);
+      return fixedTriangleRow(row, oy, m.points, m.triangles);
+    } catch {
+      return null;
+    }
+  }
+  if ('contour' in mesh) {
+    const m = rigContour(p, img, mesh.contour, []);
+    return Array.isArray(m) ? null : fixedTriangleRow(row, oy, m.vertices, m.triangles);
+  }
+  if ('grid' in mesh) {
+    const m = latticeMesh(p.name, alphaAbove(img, ART_ALPHA), mesh.grid);
+    return 'code' in m ? null : fixedTriangleRow(row, oy, m.vertices, m.triangles);
+  }
+  return null;
+}
+
 /**
  * Issue #518: the figure {@link influenceReach} holds an influence mesh's radius above, measured as the rig stage
  * measures it — rig-c's segments lattice at `cell` over the part padded by {@link PAD} (alpha above
@@ -904,11 +969,9 @@ export function influenceReach(points: ReadonlyArray<readonly [number, number]>,
  */
 export function influenceFarthest(img: Raster, x: number, y: number, segs: readonly Segment[], cell: number): number | null {
   const padded = pad(img, PAD, PAD, PAD, PAD, [0, 0, 0, 0]);
-  const alpha = new Uint8Array(padded.width * padded.height);
-  for (let i = 0; i < alpha.length; i++) alpha[i] = padded.data[i * 4 + 3];
   let lattice: SegmentsLattice;
   try {
-    lattice = buildSegmentsLattice({ mask: { width: padded.width, height: padded.height, alpha }, threshold: INFLUENCE_THRESHOLD, cell });
+    lattice = influenceLattice(padded, rasterAlpha(padded), cell);
   } catch {
     return null;
   }
@@ -1995,7 +2058,13 @@ export function buildWaistPairSource(
       if (cur === 'hip') hipChainLinks.add(l);
     }
   }
-  const dressSegsAt = (p: PartsFile['parts'][number], segs: Segment[]): ((wy: number) => Segment[]) => {
+  const dressSegsAt = (p: PartsFile['parts'][number], segs: Segment[], heldRow?: number): ((wy: number) => Segment[]) => {
+    const fixed = cfg.meshes[p.name]?.fixed_above;
+    const hold = fixed === undefined ? null : segs.filter((s) => fixed.bones.includes(s.bone));
+    const legacy = legacyDressSegsAt(p, segs);
+    return (wy) => fixed !== undefined && hold !== null && wy <= (heldRow ?? fixed.row) ? hold : legacy(wy);
+  };
+  const legacyDressSegsAt = (p: PartsFile['parts'][number], segs: Segment[]): ((wy: number) => Segment[]) => {
     const hipBone = B.get('hip');
     if (hipBone === undefined) return () => segs;
     const isDress =
@@ -2033,16 +2102,9 @@ export function buildWaistPairSource(
     const oy = p.y - PAD;
     const w = img.width;
     const h = img.height;
-    const alpha = new Uint8Array(w * h);
-    for (let i = 0; i < alpha.length; i++) alpha[i] = img.data[i * 4 + 3];
     const regions = contourRegionsOf(spec);
-    const inPart: ContourRegion[] = regions.map((rg) =>
-      rg.shape === 'circle'
-        ? { name: rg.name, shape: 'circle', cx: rg.cx - ox, cy: rg.cy - oy, r: rg.r, spacing: rg.spacing, band: rg.band }
-        : { name: rg.name, shape: 'polygon', points: rg.points.map(([x, y]) => [x - ox, y - oy] as [number, number]), spacing: rg.spacing, band: rg.band },
-    );
     const ribs = chainRibs(ribSpec.segments, ribSpec.ribs, ox, oy);
-    const cm = contourMesh(p.name, { width: w, height: h, alpha }, { threshold: ART_ALPHA, tolerance: spec.tolerance, margin: spec.margin, spacing: spec.spacing, ...(spec.maxEdge === undefined ? {} : { maxEdge: spec.maxEdge }), budget: spec.budget, stray: spec.stray, ...(spec.bridges === undefined ? {} : { bridges: spec.bridges }), regions: inPart, ...(ribs.length === 0 ? {} : { ribs }) });
+    const cm = rigContour(p, img, spec, ribs);
     if (Array.isArray(cm)) {
       out.push(...cm);
       return null;
@@ -2054,7 +2116,9 @@ export function buildWaistPairSource(
       out.push(...heat);
       return null;
     }
-    const segsAt = dressSegsAt(p, segs);
+    const fixed = cfg.meshes[p.name]?.fixed_above;
+    const heldRow = fixed === undefined ? undefined : fixedTriangleRow(fixed.row, oy, cm.vertices, cm.triangles);
+    const segsAt = dressSegsAt(p, segs, heldRow);
     const weights: WeightEntry[][] = [];
     const reached = regions.map(() => 0);
     const whole = regions.map(() => 0);
@@ -2165,11 +2229,10 @@ export function buildWaistPairSource(
     const w = img.width;
     const h = img.height;
     const at = `config.meshes.${p.name}.influence`;
-    const alpha = new Uint8Array(w * h);
-    for (let i = 0; i < alpha.length; i++) alpha[i] = img.data[i * 4 + 3];
+    const alpha = rasterAlpha(img);
     let lattice: SegmentsLattice;
     try {
-      lattice = buildSegmentsLattice({ mask: { width: w, height: h, alpha }, threshold: INFLUENCE_THRESHOLD, cell: spec.influence.cell });
+      lattice = influenceLattice(img, alpha, spec.influence.cell);
     } catch (err) {
       out.push({ code: 'RIG_INFLUENCE_LATTICE', object: `${at}.cell`, detail: `rig-c's segments lattice refused part "${p.name}" at cell ${spec.influence.cell}: ${(err as Error).message}` });
       return null;
@@ -2201,10 +2264,16 @@ export function buildWaistPairSource(
     // Issue #615: `hold_tip: true`, declared on the mesh (propose writes it from the recipe's `split.hold_tip`), smooths
     // the pulled shares by the lattice's held-fork passes, capped at the declared `max`; absent, the shares are rig-c's.
     const shares = spec.influence.hold_tip === true ? smoothForkShares(pulled, lattice.triangles, spec.influence.max) : pulled;
+    const fixed = cfg.meshes[p.name]?.fixed_above;
+    const heldRow = fixed === undefined ? undefined : fixedTriangleRow(fixed.row, oy, lattice.points, lattice.triangles);
+    const segsAt = dressSegsAt(p, [...segs], heldRow);
     for (const [vi, [x, y]] of lattice.points.entries()) {
       const wx = x + ox;
       const wy = y + oy;
-      const ent: WeightEntry[] = shares[vi].map(({ bone, weight }) => {
+      const row = heldRow !== undefined && wy <= heldRow
+        ? roundShares(influences([wx, wy], segsAt(wy), spec.influence.cell, { maxInfluences: spec.influence.max, minWeight: 0 }))
+        : shares[vi];
+      const ent: WeightEntry[] = row.map(({ bone, weight }) => {
         const [bx, by] = toBoneLocal(world.get(bone) as BoneTransform, spineX(wx), spineY(wy));
         return { bone, x: places(bx), y: places(by), weight };
       });
@@ -2648,7 +2717,9 @@ export function buildWaistPairSource(
     let maxInfl = 0;
     // issue #284: the mesh's declared cap and floor form, or DEFAULT_LIMITS itself when it declares none.
     const limits: InfluenceLimits = meshLimits(mesh.influences);
-    const segsAt = dressSegsAt(p, segs);
+    const fixed = mesh.fixed_above;
+    const heldRow = fixed === undefined ? undefined : fixedTriangleRow(fixed.row, oy, lm.vertices, lm.triangles);
+    const segsAt = dressSegsAt(p, segs, heldRow);
     let emptied: { vertex: number; at: Point; capped: Influence[] } | null = null;
     let emptiedMore = 0;
     const rawShares: Influence[][] = [];
@@ -2685,7 +2756,8 @@ export function buildWaistPairSource(
     for (const [vi, [vx0, vy0]] of lm.vertices.entries()) {
       const wx = vx0 + ox;
       const wy = vy0 + oy;
-      const ent: WeightEntry[] = finalShares[vi].map(({ bone, weight }) => {
+      const row = heldRow !== undefined && wy <= heldRow ? rawShares[vi] : finalShares[vi];
+      const ent: WeightEntry[] = row.map(({ bone, weight }) => {
         const [x, y] = toBoneLocal(world.get(bone) as BoneTransform, spineX(wx), spineY(wy));
         return { bone, x: places(x), y: places(y), weight };
       });
@@ -2943,7 +3015,9 @@ export function buildWaistPairSource(
         const w = img.width;
         const h = img.height;
         const limits: InfluenceLimits = meshLimits('influences' in mesh ? mesh.influences : undefined);
-        const segsAt = dressSegsAt(p, segs);
+        const fixed = mesh.fixed_above;
+        const heldRow = fixed === undefined ? undefined : fixedTriangleRow(fixed.row, oy, lm.vertices, lm.triangles);
+        const segsAt = dressSegsAt(p, segs, heldRow);
         const exponent = ('exponent' in mesh ? mesh.exponent : undefined) ?? DISTANCE_EXPONENT;
         let touchesArt: boolean[] | null = null;
         if (band === null && drawn !== undefined && limits.maxInfluences === 1) {

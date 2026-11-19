@@ -151,7 +151,7 @@ import type { JointState, RigJoint, RigJoints } from './keypoints.ts';
 import { IDLE_FPS } from './motion.ts';
 import { draftMotionSeams, type MotionSeamDeclaration } from './motionseams.ts';
 export { draftMotionSeams } from './motionseams.ts';
-import { FORK_SMOOTH_MAX_INFLUENCES, influenceFarthest } from './rig.ts';
+import { draftClothHoldRow, FORK_SMOOTH_MAX_INFLUENCES, influenceFarthest } from './rig.ts';
 import { type Segment as WeightSegment } from './weights.ts';
 import { pyRound as roundTo } from './round.ts';
 import { KEYPOINT_NAMES, type KeypointName } from './skeleton.ts';
@@ -161,7 +161,7 @@ import { TURN_BONE, TURN_CARRIER_TAG, TURN_PLACES, TURN_RIDER_OFFSET, TURN_RIDER
 import { edgeLength } from './length.ts';
 import { bonePlaces, jointLine, type JointLine, limbCrossing, limbPolyline, limbRun, limbWidth, nearestLimb, nearestOnLine, offLineFigure, segmentOf, type Pt } from './limbs.ts';
 import { type BranchSqueezeFinding, branchSqueezes, chainSqueezes, type SqueezeFinding } from './squeeze.ts';
-import { backHairMasses, type BackHairMass, backHairMassTrees, INFLUENCE_RADIUS_CELLS, RECIPE_BACK_HAIR_CHAINS, RECIPE_LENGTH_RATIO, chainConstraints, clothNote, type ClothRecipe, type ClothRecipes, type ClothTarget, CLOTH_TARGETS, draftTrees, spanCrosses, swingName, type Tail, tailOverlap, type TailOverlap, type TailSpan, treeConstraints, type TreeChain, type TreeInput, type TreeMassInput } from './cloth.ts';
+import { backHairMasses, type BackHairMass, backHairMassTrees, INFLUENCE_RADIUS_CELLS, RECIPE_BACK_HAIR_CHAINS, RECIPE_LENGTH_RATIO, chainConstraints, clothNote, type ClothRecipe, type ClothRecipes, type ClothTarget, CLOTH_TARGETS, draftTrees, isSleeveCloth, type SleeveClothTarget, spanCrosses, swingName, type Tail, tailOverlap, type TailOverlap, type TailSpan, treeConstraints, type TreeChain, type TreeInput, type TreeMassInput } from './cloth.ts';
 import { TEXTURE_STRETCH_CEILING } from './check.ts';
 import { linePixels } from './paintcheck.ts';
 
@@ -1487,6 +1487,15 @@ export function proposeWithBasis(
   // Issue #349, #440: limbs are drafted from the parts before their cut — a complete assemble with config.limbs
   // reconstructs its pre-limb parts here in the same run; a standalone or incomplete limb part handed to propose
   // on its own is refused by name.
+  const sleevePartProblem = (tag: SleeveClothTarget, detail: string): never => {
+    throw new PartsError([{ code: 'PROPOSE_CLOTH_PART', object: `config.cloth.${JSON.stringify(tag)}.part`, detail }]);
+  };
+  for (const tag of CLOTH_TARGETS.filter(isSleeveCloth)) {
+    const part = cloth?.[tag]?.part;
+    if (typeof part !== 'string') continue;
+    const cut = P.recs.find((record) => record.limb !== undefined && (record.name === part || record.limb.of === part));
+    if (cut !== undefined) sleevePartProblem(tag, `names "${part}", whose art belongs to joint-cut limb "${cut.limb?.name}"; a Form 1 sleeve carrier is required`);
+  }
   const limbed = P.standaloneLimbParts();
   refuseIfAny(
     limbed.length === 0
@@ -1642,6 +1651,7 @@ export function proposeWithBasis(
   const clothUsed = new Set<ClothTarget>();
   /** Issue #518: each part a recipe meshes, by the target whose recipe drafted its mesh. */
   const clothMeshed = new Map<string, ClothTarget>();
+  const clothHeld = new Map<string, { tag: ClothTarget; trunks: TreeChain[] }>();
   const multiPartClaimed = new Set<string>();
   const recipeOf = (tag: ClothTarget): ClothRecipe | null => cloth?.[tag] ?? null;
   const declaredPartsOf = (tag: ClothTarget): { field: 'parts' | 'part'; list: PartRecord[] } | null => {
@@ -1665,17 +1675,38 @@ export function proposeWithBasis(
   };
   // Issue #391: the tails the back hair recipe drafts, each with its mesh's spans, which an accessory wrapped round one rides.
   const tails: Tail[] = [];
-  const T = (p: PartRecord | readonly PartRecord[], tag: ClothTarget, r: ClothRecipe, input: TreeInput): TreeChain[] => {
+  const T = (p: PartRecord | readonly PartRecord[], tag: ClothTarget, r: ClothRecipe, input: TreeInput, rootJoint?: KeypointName): TreeChain[] => {
     const partNames = Array.isArray(p) ? p.map((x) => x.name) : [(p as PartRecord).name];
     const trees = draftTrees(input, r);
+    if (r.extent !== undefined) {
+      const object = `config.cloth.${JSON.stringify(tag)}.extent`;
+      if (trees.length === 0) {
+        throw new PartsError([{ code: 'PROPOSE_CLOTH_EXTENT', object, detail: `is ${r.extent}; "${partNames.join(', ')}" has no resolved root-to-tip span` }]);
+      }
+      for (const tree of trees) {
+        const path = [...tree.points, tree.tip];
+        for (let i = 1; i < path.length; i++) {
+          if (path[i][1] <= path[i - 1][1]) {
+            throw new PartsError([{ code: 'PROPOSE_CLOTH_EXTENT', object, detail: `is ${r.extent}; ${tree.chain} link ${i - 1} has no downward span after rounding rows ${path[i - 1][1]} and ${path[i][1]}` }]);
+          }
+        }
+      }
+      const byChain = new Map(trees.map((tree) => [tree.chain, tree]));
+      const fractions = trees.filter((tree) => tree.last.some(Boolean)).map((tree) => {
+        const parent = tree.parent === input.parent ? tree : byChain.get(tree.parent.slice(0, tree.parent.lastIndexOf('_') + 1)) ?? tree;
+        return `${tree.chain} ${roundTo((tree.tip[1] - parent.points[0][1]) / (tree.tip[1] - input.rootY), 6)}`;
+      });
+      notes.push(`${partNames.join(', ')}: ${object} ${r.extent} sets the tree roots from the free end; fractions after row rounding: ${fractions.join(', ')}`);
+    }
     const constants = [konst('cloth_chains', input.masses !== undefined ? input.masses.length : (r.chains ?? RECIPE_BACK_HAIR_CHAINS)), konst('cloth_links', r.links), konst('length_ratio', roundTo(r.length_ratio ?? RECIPE_LENGTH_RATIO, 6))];
+    const refs = { parts: partNames, bones: [input.parent], constants, ...(rootJoint === undefined ? {} : { joints: [jointRef(rootJoint)] }) };
     for (const t of trees) {
       C(
         t.chain,
         t.parent,
         t.points,
         t.tip,
-        t.why.map((w) => placement('mask', w, { parts: partNames, bones: [input.parent], constants })),
+        t.why.map((w) => placement(rootJoint === undefined ? 'mask' : 'joint', w, refs)),
         placement('mask', t.tipWhy, { parts: partNames, bones: [input.parent], constants }),
       );
     }
@@ -2622,6 +2653,21 @@ export function proposeWithBasis(
   // ---- sleeves
   // A cut's piece counts here (issue #230): the sleeve rule names its chains by side, not once per part, so a piece
   // never repeats one, and cutting one sleeve out of a both-arms part is how #199's note says to separate them.
+  const sleeveParts = new Map<PartRecord, SleeveClothTarget>();
+  const sleeveSides = new Set<'r' | 'l'>();
+  for (const tag of CLOTH_TARGETS.filter(isSleeveCloth)) {
+    const recipe = recipeOf(tag);
+    if (recipe === null) continue;
+    const name = recipe.part;
+    const part = typeof name === 'string' ? P.recs.find((record) => record.name === name) : undefined;
+    if (part === undefined || splitFrom(part.from)[1] !== tag || part.cut_from !== undefined) {
+      sleevePartProblem(tag, `names ${JSON.stringify(name) ?? 'no part'}; an uncut part in parts.json tagged "${tag}" is required`);
+    }
+    const carrier = part as PartRecord;
+    const side = tag === 'handwear-r' ? 'r' : 'l';
+    sleeveParts.set(carrier, tag);
+    sleeveSides.add(side);
+  }
   const hw = [...P.byTag('handwear-r', undefined, true), ...P.byTag('handwear-l', undefined, true)].filter((p) => p.opaque_px > 500);
   // Issue #577: a figure of one material (a mannequin, a statue) reaches See-through as one garment, so no handwear or
   // legwear part carries its limbs. With joints, when the tagged route has no part for a complete limb, the one topwear
@@ -2673,6 +2719,65 @@ export function proposeWithBasis(
       : figPart !== null && figure !== null && figure.arms
         ? armsFromJoints(P, [figPart], joints as RigJoints, null, false)
         : null;
+  if (sleeveParts.size > 0 && (clasped !== null || (armPlan?.arms == null && !(hw.length === 2 && sides.size === 2) && hw.some((p) => !sleeveParts.has(p))))) {
+    const [part, tag] = [...sleeveParts][0];
+    sleevePartProblem(tag, `names "${part.name}" in a mixed handwear draft; a separately resolved sleeve carrier is required`);
+  }
+  for (const [part, tag] of sleeveParts) {
+    const side = tag === 'handwear-r' ? 'r' : 'l';
+    const other = side === 'r' ? 'l' : 'r';
+    const elbow = at(`${side}_elbow`);
+    if (elbow === null) sleevePartProblem(tag, `names "${part.name}", but ${side}_elbow has no resolved position; supply it with --keypoints`);
+    const rootY = (elbow as Point)[1];
+    const mask = P.alpha(part);
+    const mixed = [at(`${other}_elbow`), at(`${other}_wrist`)].some((point) => point !== null && isOn(mask, point[0], point[1]));
+    if (mixed || connectedComponents(mask, 8).count !== 2 || !isOn(mask, (elbow as Point)[0], rootY)) {
+      sleevePartProblem(tag, `names "${part.name}", whose alpha does not resolve to one sleeve on ${side}_elbow, or also covers the opposite arm; a separate sleeve carrier is required`);
+    }
+    const recipe = recipeOf(tag) as ClothRecipe;
+    const cellCount = recipe.chains ?? 0;
+    const xAt = (y: number, f: number, lo = part.x, hi = part.x + part.w): number | null => {
+      const row = pyRound(y);
+      const opaque: number[] = [];
+      for (let x = lo; x < hi; x++) if (isOn(mask, x, row)) opaque.push(x);
+      return opaque.length === 0 ? null : opaque[pyRound(f * (opaque.length - 1))];
+    };
+    const trees = T(part, tag, recipe, {
+      prefix: `sleeve_${side}_`,
+      parent: 'chest',
+      rootY,
+      tipY: part.y + part.h - 1,
+      xAt,
+      fallbackX: (f) => part.x + f * (part.w - 1),
+      frame: `the opaque row on "${part.name}" below ${side}_elbow`,
+      edges: 'both',
+      columnTip: (k) => {
+        const lo = Math.floor(part.x + k * part.w / cellCount);
+        const hi = Math.ceil(part.x + (k + 1) * part.w / cellCount);
+        for (let y = part.y + part.h - 1; y > rootY; y--) {
+          if (xAt(y, 0.5, lo, hi) === null) continue;
+          return { tipY: y, xAt: (row, f) => xAt(row, f * cellCount - k, lo, hi) ?? xAt(row, f) };
+        }
+        return null;
+      },
+    }, `${side}_elbow`);
+    const trunks = trees.filter((tree) => tree.parent === 'chest');
+    if (trunks.length !== cellCount || trunks.length === 0 || trees.some((tree) => [...tree.points, tree.tip].some(([x, y]) => !isOn(mask, x, y)))) {
+      sleevePartProblem(tag, `names "${part.name}", which has no opaque root-to-free-end path for every declared tree under ${side}_elbow`);
+    }
+    const [g, r] = gridR(part);
+    const constraints = treeConstraints(trees, recipe, null);
+    clothConstraints.push(...constraints);
+    clothMeshed.set(part.name, tag);
+    clothHeld.set(part.name, { tag, trunks });
+    meshes[part.name] = {
+      grid: g,
+      r: recipe.split?.hold_tip === true ? Math.max(r, g) : r,
+      segments: [['chest', [xAt(rootY, 0) ?? (elbow as Point)[0], rootY], [xAt(rootY, 1) ?? (elbow as Point)[0], rootY]], ...trees.map((tree) => tree.chain)],
+      fixed_above: { row: Math.min(...trunks.map((tree) => tree.points[0][1])), bones: ['chest'] },
+    };
+    notes.push(clothNote(part.name, tag, trees, recipe, constraints.length, ` from ${side}_elbow row ${rootY} to the last opaque row in each sleeve column`, part.from));
+  }
   let sleeveRule = '';
   if (clasped !== null) {
     sleeveRule = 'the clasped-hands rule (the handwear is a region on hip, with no sleeve chain)';
@@ -2690,6 +2795,7 @@ export function proposeWithBasis(
     // as the two-blob rule's does since issue #347 (no chest stub: a stub on
     // chest pinned the puff, and the arm stretched it when it turned).
     for (const a of armPlan.arms) {
+      if (sleeveParts.has(a.part)) continue;
       const sgn = a.side === 'r' ? 1 : -1;
       const used = (n: KeypointName): Placement => placement('joint', `the ${n} joint, ${usedAs((joints as RigJoints).joints[n])}`, { joints: [jointRef(n)] });
       const tipWhy =
@@ -2705,6 +2811,7 @@ export function proposeWithBasis(
     // Issue #349: each arm is a limb — the upper arm on link 0 and the forearm (with the hand) on link 1, each rigid on
     // its link, cut at the elbow — not a mesh blended along the chain. Its handwear part is the layer the limb takes.
     for (const a of armPlan.arms) {
+      if (sleeveParts.has(a.part)) continue;
       limbs[`arm_${a.side}`] = {
         segments: [
           { part: `upperarm_${a.side}`, from: a.part.name, bone: `sleeve_${a.side}0` },
@@ -2726,6 +2833,7 @@ export function proposeWithBasis(
     // puff to the torso, so the sleeve stretched when its chain turned.
     for (const [s, sgn] of SIDES) {
       const p = (sides.get(s) as PartRecord[])[0];
+      if (sleeveParts.has(p)) continue;
       const mask = P.alpha(p);
       const ys = rowsAny(mask);
       const top = ys[0];
@@ -2748,7 +2856,7 @@ export function proposeWithBasis(
       meshes[p.name] = { grid: g, r, segments: [`sleeve_${s}`] };
     }
     notes.push('handwear is two blobs: one sleeve chain per mesh, and nothing on chest');
-  } else if (hw.length > 0) {
+  } else if (hw.length > 0 && sleeveParts.size === 0) {
     sleeveRule = `the one-blob sleeve rule (both chains in one mesh, split at the eye axis x=${pyFixed(axis, 0)})`;
     const segs: Segment[] = [['chest', rnd([chest[0], chest[1] - 40]), rnd([chest[0], hip[1]])]];
     let mask = newMask(P.W, P.H);
@@ -2807,6 +2915,13 @@ export function proposeWithBasis(
     if (hw.length === 1) notes.push(`handwear is one blob (${hw[0].name}): both sleeves in one mesh, split at the eye axis x=${pyFixed(axis, 0)}`);
   }
   for (const [s] of SIDES) {
+    if (sleeveSides.has(s)) {
+      for (const hand of P.byTag(`hand-${s}`)) {
+        regions[hand.name] = 'chest';
+        notes.push(`${hand.name} (${hand.from}): split hand -> region on chest, the sleeve recipe's fixed frame`);
+      }
+      continue;
+    }
     const sc = bones.find((b): b is Extract<BoneEntry, { chain: string }> => 'chain' in b && b.chain === `sleeve_${s}`);
     if (sc === undefined) continue;
     const bone = `sleeve_${s}${sc.points.length - 1}`;
@@ -3273,7 +3388,7 @@ export function proposeWithBasis(
         const cx = or(bandX(mask, y0, { frac: 0.5 }), p.x + 0.5 * p.w);
         const first = trees[0].points.length > 1 ? trees[0].points[1][1] : trees[0].tip[1];
         const at: [number, number] = [cx, y0];
-        const tipAt: [number, number] = [cx, first];
+        const tipAt: [number, number] = [cx, skirtRecipe.extent === undefined ? first : y0 + first - trees[0].points[0][1]];
         B(
           swingName(prefix),
           'hip',
@@ -3297,7 +3412,15 @@ export function proposeWithBasis(
           p === namedSkirt ? p.from : undefined,
         ),
       );
-      meshes[p.name] = { grid: g, r: skirtRecipe.split?.hold_tip === true ? Math.max(r, g) : r, segments: segs };
+      const trunks = trees.filter((tree) => tree.parent === 'hip');
+      if (skirtRecipe.extent !== undefined && trunks.length > 0) clothHeld.set(p.name, { tag: 'bottomwear', trunks });
+      const fixedAbove = skirtRecipe.extent === undefined || trees.length === 0 ? {} : {
+        fixed_above: {
+          row: Math.min(...trunks.map((tree) => tree.points[0][1])),
+          bones: fixed.map((segment) => typeof segment === 'string' ? segment : segment[0]),
+        },
+      };
+      meshes[p.name] = { grid: g, r: skirtRecipe.split?.hold_tip === true ? Math.max(r, g) : r, segments: segs, ...fixedAbove };
       clothMeshed.set(p.name, 'bottomwear');
       continue;
     }
@@ -3571,6 +3694,7 @@ export function proposeWithBasis(
       : []));
     const onChain = segments.some(segment => chains.has(typeof segment === 'string' ? segment : segment[0]));
     meshes[torsoName] = {
+      ...(lattice?.fixed_above === undefined ? {} : { fixed_above: lattice.fixed_above }),
       contour,
       r: lattice !== undefined && 'grid' in lattice ? lattice.r : radius,
       segments,
@@ -3593,6 +3717,7 @@ export function proposeWithBasis(
         chest: chestAlong ? { neck: neckAt, hip } : null,
         sleeveRule,
         armWhy: armPlan === null ? null : armPlan.why,
+        clothSleeves: sleeveSides,
         legs: legPlan === null ? null : legPlan.chains,
         arms: armPlan === null ? null : armPlan.arms,
         figure: figPart,
@@ -3660,8 +3785,31 @@ export function proposeWithBasis(
     // A declared max above the cap is kept.
     const held = recipeOf(tag)?.split?.hold_tip === true;
     const max = held ? Math.max(decl.max, FORK_SMOOTH_MAX_INFLUENCES) : decl.max;
-    meshes[name] = { influence: { cell, radius, across: decl.across, max, shape: decl.shape, ...(held ? { hold_tip: true as const } : {}) }, segments };
+    meshes[name] = { influence: { cell, radius, across: decl.across, max, shape: decl.shape, ...(held ? { hold_tip: true as const } : {}) }, segments, ...(m.fixed_above === undefined ? {} : { fixed_above: m.fixed_above }) };
   }
+  const holdProblems: Problem[] = [];
+  for (const [name, { tag, trunks }] of clothHeld) {
+    const mesh = meshes[name];
+    const fixed = mesh.fixed_above;
+    if (fixed === undefined) continue;
+    const part = P.recs.find((record) => record.name === name) as PartRecord;
+    const held = draftClothHoldRow(part, P.images.get(name) as Raster, mesh, fixed.row);
+    const field = `config.cloth.${JSON.stringify(tag)}.${recipeOf(tag)?.extent === undefined ? "part" : "extent"}`;
+    if (held === null) {
+      holdProblems.push({ code: 'PROPOSE_CLOTH_EXTENT', object: field, detail: `cannot measure the transition of "${name}" on its drafted mesh; choose a smaller mesh cell or a larger extent` });
+      continue;
+    }
+    for (const trunk of trunks) {
+      const root = trunk.points[0][1];
+      const end = (trunk.points[1] ?? trunk.tip)[1];
+      const strip = Math.max(0, held - root);
+      notes.push(`${name}: ${trunk.chain} holds ${roundTo(strip, 6)} px below row ${root}; first link spans rows ${root}..${end} (${end - root} px)`);
+      if (held >= end) {
+        holdProblems.push({ code: 'PROPOSE_CLOTH_EXTENT', object: field, detail: `part "${name}" holds ${roundTo(strip, 6)} px below ${trunk.chain}'s root at row ${root} through row ${roundTo(held, 6)}; first link spans ${end - root} px and ends at row ${end}. Choose a smaller mesh cell or a larger extent` });
+      }
+    }
+  }
+  refuseIfAny(holdProblems);
   const constrained = clothConstraints.length === 0 ? {} : { constraints: clothConstraints };
   const motionSeams = draftMotionSeams({ bones, meshes, regions, ...drafted }, P.recs);
   const observed = motionSeams.length === 0 ? {} : { motion_seams: motionSeams };
@@ -4343,6 +4491,7 @@ interface JointNoteFacts {
   chest: { neck: [number, number]; hip: [number, number] } | null;
   sleeveRule: string;
   armWhy: string | null;
+  clothSleeves: ReadonlySet<'r' | 'l'>;
   arms: JointArm[] | null;
   /** Issue #577: the figure layer the arms and legs were split from, or `null`: then every arm is on a handwear part. */
   figure: PartRecord | null;
@@ -4389,6 +4538,14 @@ function jointNotes(joints: RigJoints, f: JointNoteFacts): string[] {
   if (f.chest !== null) out.push(`chest: its rule, half way from neck to hip, taken along the line from neck ${fmtAt(f.chest.neck)} to hip ${fmtAt(f.chest.hip)} rather than down the screen`);
   const standIn = f.sleeveRule === '' ? 'no handwear part is over 500 px, so no sleeve chain is placed' : `${f.sleeveRule} stands in`;
   for (const s of ['r', 'l'] as const) {
+    if (f.clothSleeves.has(s)) {
+      const elbow = `${s}_elbow` as const;
+      tell(elbow, `${said(elbow, J[elbow])}: ${usedAs(J[elbow])} for the sleeve recipe's original root row`);
+      for (const joint of [`${s}_shoulder`, `${s}_wrist`] as const) {
+        tell(joint, `${said(joint, J[joint])}: the sleeve recipe reads the elbow and the carrier's opaque rows`);
+      }
+      continue;
+    }
     const arm = f.arms?.find((a) => a.side === s) ?? null;
     for (const [joint, role] of [
       [`${s}_shoulder`, 'link 0'],
