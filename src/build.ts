@@ -237,6 +237,7 @@ export interface AssembleOutputs {
 
 /** The error map's file name beside a recomposite: `recomposite_rig.png` -> `recomposite_error_rig.png`. */
 export const ERROR_MAP_FILE = 'recomposite_error_rig.png';
+const ASSEMBLE_YIELD_NOTHING = 'ASSEMBLE_YIELD_NOTHING';
 
 /**
  * One line per part whose fringe `pushBackFringe` cleared (issue #119), in
@@ -607,6 +608,8 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     });
   }
 
+  const scopedYield = typeof fields.yieldRefused === 'object' ? fields.yieldRefused : [];
+  const yieldedParts = new Set(result.yieldReadings?.filter(row => row.yielded > 0).map(row => row.part));
   const altProblems: Problem[] = [];
   const allocationReports: Array<{ file: string; report: { set: string; coverageTransfers: PaintingAllocationReading['coverageTransfers'] } & Record<string, unknown> }> = [];
   const altBuilt: Array<{ record: AlternatePartsRecord; images: Array<{ name: string; image: Raster }>; excluded: ExcludedCount[]; islands: IslandCount[]; splits: SplitCount[]; capSplits: SplitCount[]; depthClamps: AssembleResult['depthClamps'] }> = [];
@@ -935,6 +938,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       }
       throw err;
     }
+    for (const row of altRes.yieldReadings ?? []) if (row.yielded > 0) yieldedParts.add(row.part);
     const altMaskProblems = verifyUnderPlateMasks(altRes, altCuts, altUnderPlates, `${alt.at}.cuts`);
     if (altMaskProblems.length > 0) {
       altProblems.push(...altMaskProblems);
@@ -1224,6 +1228,9 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   if (result.figureMask !== undefined) for (const l of figureMaskLines(result.figureMask, scene)) log(l);
   log(pinholesLine(pinholes, altBuilt.map((b) => b.record.name)));
   for (const d of result.drift) log(driftLine(d));
+  for (const part of scopedYield) {
+    if (!yieldedParts.has(part)) log(`${ASSEMBLE_YIELD_NOTHING}: part ${JSON.stringify(part)} — no eligible projection refusal to yield in the base or alternate sets`);
+  }
   for (const d of result.softOcclusion ?? []) log(softOcclusionLine(d));
   for (const line of result.cropClipped ?? []) log(line);
   // Issue #588: per subset set, one line per limb part cut from a layer of more than one island, then (issue #587) one

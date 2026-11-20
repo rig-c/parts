@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { assemblyConfigChanges, assemblyConfigReading } from './src/assembly-reading.ts';
+import { assemblyConfigChanges, assemblyConfigReading, refuseStaleAssembly } from './src/assembly-reading.ts';
 import { buildDepth25DTurn, type Depth25DTurnOptions } from './src/turn.ts';
 import { turnNeighbourMeshes } from './src/rig.ts';
 import { boundaryDepthSamplers, type BoundaryDepths } from './src/boundarydepth.ts';
@@ -35295,6 +35295,123 @@ export function runAssemblyConfigControls(dir: string, say: FixtureCaseReporter)
     'an explicit current parts.json allows the edit receipt to be written against the refreshed part PNG');
 }
 
+function runScopedYieldCases(dir: string, say: ReturnType<typeof counter>['say']): void {
+  const plan = [['under', 'full', 'neck'], ['middle', 'full', 'topwear'], ['front', 'head', 'face']];
+  const names = plan.map(([name]) => name);
+  const run = (label: string, independent: boolean, yieldRefused?: boolean | string[], underRed = 100) => {
+    const home = join(dir, label);
+    const { key, seethrough, assemble: stage } = assembleConfig({ plan, extend: [], headBox: [0, 0, 64, 64], rigScale: 1 });
+    const config = { key, seethrough, assemble: { ...(stage as object), yield_refused: yieldRefused } };
+    const rect = (lo: number, hi: number, red: number) => ({ x0: lo, y0: lo, x1: hi, y1: hi, colour: [red, 100, 100] as [number, number, number] });
+    writeAssembleFixture(home, config, paint(64, 64, [100, 100, 100], []), {
+      full: [{ name: 'neck', depth: .6, rects: [rect(0, 64, underRed)] }, { name: 'topwear', depth: .4, rects: [rect(8, independent ? 28 : 56, 200)] }],
+      head: [{ name: 'face', depth: .3, rects: [independent ? rect(36, 56, 200) : rect(16, 48, 200)] }],
+    });
+    const configPath = join(home, 'config.json'), out = join(home, 'out');
+    const result = runCli(['assemble', '--source', join(home, 'painting.png'), '--full', join(home, 'full'),
+      '--head', join(home, 'head'), '--config', configPath, '--out', out]);
+    const png = (name: string) => readFileSync(join(out, 'rig', 'parts', name + '.png'));
+    return { result, png, config, configPath, manifest: join(out, 'rig', 'parts.json') };
+  };
+  const off = run('scope-off', true);
+  const all = run('scope-all', true, true);
+  const one = run('scope-middle', true, ['middle']);
+  const equal = (a: typeof off, b: typeof off, name: string) =>
+    a.result.status === 0 && b.result.status === 0 && a.png(name).equals(b.png(name));
+  say('AS1384_INDEPENDENT_OVERLAPS_ONLY_CHANGE_THE_SELECTED_PART_PNG',
+    [off, all, one].every(r => r.result.status === 0) &&
+      names.filter(name => !equal(off, one, name)).join(',') === 'middle' &&
+      equal(one, all, 'middle') && !equal(off, all, 'front'),
+    `exits ${[off, all, one].map(r => r.result.status).join('/')}; scoped changed: ${names.filter(name => !equal(off, one, name)).join(', ')}`,
+    'both separate overlap sites yield globally, so using the global switch for a list would change the unlisted front PNG');
+  const dependentOff = run('scope-dependent-off', false);
+  const dependent = run('scope-dependent-middle', false, ['middle']);
+  const blocked = run('scope-dependent-front', false, ['front']);
+  const nothing = 'ASSEMBLE_YIELD_NOTHING: part "front" — no eligible projection refusal to yield in the base or alternate sets';
+  say('AS1384_DEPENDENT_OVERLAP_KEEPS_UNLISTED_PNGS_AND_REPORTS_BLOCKED_YIELD',
+    [dependentOff, dependent, blocked].every(r => r.result.status === 0) &&
+      names.filter(name => !equal(dependentOff, dependent, name)).join(',') === 'middle' &&
+      names.every(name => equal(dependentOff, blocked, name)) &&
+      blocked.result.out.includes(nothing) && !dependent.result.out.includes('ASSEMBLE_YIELD_NOTHING'),
+    `exits ${[dependentOff, dependent, blocked].map(r => r.result.status).join('/')}; ${blocked.result.out.split('\n').find(line => line.includes('ASSEMBLE_YIELD_NOTHING')) ?? 'no named report'}`,
+    'selecting front alone leaves the mismatching middle holder in place; selecting middle alone leaves front opaque');
+  const seamOff = run('scope-seam-off', false, undefined, 175);
+  const seamOn = run('scope-seam-on', false, ['middle'], 175);
+  let seamProof = false;
+  let seamDetail = `assemble exits ${seamOff.result.status}/${seamOn.result.status}`;
+  if (seamOff.result.status === 0 && seamOn.result.status === 0) {
+    const middleBefore = decodePngBytes(seamOff.png('middle'), 'middle before');
+    const middleAfter = decodePngBytes(seamOn.png('middle'), 'middle after');
+    const underBefore = decodePngBytes(seamOff.png('under'), 'under before');
+    const underAfter = decodePngBytes(seamOn.png('under'), 'under after');
+    const cleared = newMask(64, 64);
+    for (let y = 0; y < middleBefore.height; y++) for (let x = 0; x < middleBefore.width; x++) {
+      const alpha = 4 * (y * middleBefore.width + x) + 3;
+      if (middleBefore.data[alpha] > 0 && middleAfter.data[alpha] === 0) cleared.data[(y + 8) * 64 + x + 8] = 1;
+    }
+    // The square has the two-pixel seam neighbourhood on each side.
+    const band = dilate(cleared, 5);
+    const holderChanges = (after: Raster) => {
+      let rgb = 0, alpha = 0, inside = 0, outside = 0;
+      for (let p = 0; p < band.data.length; p++) {
+        const i = p * 4;
+        if (underBefore.data[i + 3] !== after.data[i + 3]) alpha++;
+        if (![0, 1, 2].some(channel => underBefore.data[i + channel] !== after.data[i + channel])) continue;
+        rgb++;
+        if (band.data[p] === 1) inside++; else outside++;
+      }
+      return { rgb, alpha, inside, outside };
+    };
+    const actual = holderChanges(underAfter);
+    const planted = { ...underAfter, data: underAfter.data.slice() };
+    planted.data[0] ^= 1;
+    const mutant = holderChanges(planted);
+    const withinBand = (r: typeof actual) => r.alpha === 0 && r.outside === 0;
+    // Eroding 48x48 by 5x5 clears 44x44. The unchanged 32x32 front still covers the centre.
+    const exposedPx = 44 * 44 - 32 * 32;
+    const frontIdentical = equal(seamOff, seamOn, 'front');
+    seamProof = frontIdentical && withinBand(actual) && actual.rgb === exposedPx &&
+      !withinBand(mutant) && mutant.outside === 1;
+    seamDetail += `; unlisted front PNG ${frontIdentical ? 'identical (0 px changed)' : 'changed'}; holder RGB ${actual.rgb}, alpha ${actual.alpha}, inside footprint plus band ${actual.inside}, outside ${actual.outside}; planted outside ${mutant.outside}`;
+  }
+  say('AS1384_EXPOSED_HOLDER_RGB_CHANGES_STAY_IN_THE_YIELD_AND_SEAM_FOOTPRINT',
+    seamProof, seamDetail, 'the existing seam pass paints only the newly exposed part of the matching holder on this fixture; a pixel outside the band fails the same predicate');
+
+  const noRefusal = run('scope-no-refusal', true, ['under']);
+  say('AS1384_SELECTED_PART_WITH_NO_PROJECTION_REFUSAL_IS_REPORTED',
+    noRefusal.result.status === 0 && names.every(name => equal(off, noRefusal, name)) &&
+      noRefusal.result.out.includes('ASSEMBLE_YIELD_NOTHING: part "under"') && !off.result.out.includes('ASSEMBLE_YIELD_NOTHING'),
+    `assemble exit ${noRefusal.result.status}; ${noRefusal.result.out.split('\n').find(line => line.includes('ASSEMBLE_YIELD_NOTHING')) ?? 'no named report'}`,
+    'the matching under layer has no projection refusal; the observation is only available once the pixels have been assembled');
+  let same: PartsError | null | undefined, changed: PartsError | null | undefined;
+  if (one.result.status === 0) {
+    const parts = readParts(one.manifest);
+    same = refusals(() => refuseStaleAssembly(one.configPath, parts));
+    writeFileSync(one.configPath, JSON.stringify({ ...one.config, assemble: { ...one.config.assemble, yield_refused: ['front'] } }));
+    changed = refusals(() => refuseStaleAssembly(one.configPath, parts));
+  }
+  say('AS1384_CHANGED_YIELD_LIST_REFUSES_THE_STALE_ASSEMBLY',
+    same === null && changed?.problems.length === 1 && changed.problems[0].code === 'ASSEMBLY_CONFIG_STALE' &&
+      changed.problems[0].detail === 'assembly config changed at config.assemble.yield_refused; re-run assemble from the current config',
+    `assemble exit ${one.result.status}; unchanged: ${same === undefined ? 'not read' : codes(same)}; changed: ${changed?.problems[0]?.detail ?? 'no stale refusal'}`,
+    'an otherwise identical assembled manifest accepts its original list and refuses a different valid list by field');
+
+  const configWithSelection = (value: unknown) => ({ ...one.config, assemble: { ...one.config.assemble, yield_refused: value } });
+  const empty = refusals(() => parseEarlyConfig(configWithSelection([]), 'assemble'));
+  const mixed = refusals(() => parseEarlyConfig(configWithSelection(['missing', 'middle', 'middle', 'topwear', 'full:topwear']), 'assemble'));
+  const failures = mixed?.problems ?? [];
+  say('AS1384_SCOPED_YIELD_REFUSES_EMPTY_UNKNOWN_DUPLICATE_TAG_AND_ALIAS',
+    refusals(() => parseEarlyConfig(configWithSelection(['middle', 'front']), 'assemble')) === null &&
+      empty?.problems.length === 1 && empty.problems[0].object === 'config.assemble.yield_refused' &&
+      empty.problems[0].detail.includes('[]; use false or omit the key') && failures.length === 4 &&
+      ([['CONFIG_NAME_RESOLVES', 0, 'missing'], ['CONFIG_PART_UNIQUE', 2, 'middle'],
+        ['CONFIG_NAME_RESOLVES', 3, 'topwear'], ['CONFIG_NAME_RESOLVES', 4, 'full:topwear']] as const)
+        .every(([code, index, value], i) => failures[i].code === code &&
+          failures[i].object === `config.assemble.yield_refused[${index}]` && failures[i].detail.includes(JSON.stringify(value))),
+    failures.map(problem => `${problem.code} ${problem.object} ${problem.detail}`).join(' | '),
+    'only final output names resolve; malformed entries are collected in declaration order');
+}
+
 function runAssembleSuite(): number {
   section('assemble: the stage, on generated runs');
   const { say, bad } = counter();
@@ -37653,6 +37770,8 @@ function runAssembleSuite(): number {
     } catch (error) {
       say('AS819_ORIGINAL_REFUSAL_FILLED_BY_PROJECTION_CLOSING_STILL_YIELDS_AND_COUNTS_ONLY_WRITTEN_PROJECTED_PIXELS', false, String(error), 'the opt-in must account for a yielded pixel also taken by projection closing');
     }
+
+    runScopedYieldCases(dir, say);
 
     const configYield819 = (value: unknown, door: 'full' | 'assemble' | 'layers') => {
       const c = minimalConfig();

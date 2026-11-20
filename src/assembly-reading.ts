@@ -163,7 +163,7 @@ export function readAssemblyConfig(
     keep_under_occluders: cfg.assemble.keep_under_occluders?.length ? cfg.assemble.keep_under_occluders : undefined,
     require_hidden_extent: cfg.assemble.require_hidden_extent?.length ? cfg.assemble.require_hidden_extent : undefined,
     head_face_underfill: hasHeadRun && cfg.assemble.head_face_underfill === true ? true : undefined,
-    yield_refused: cfg.assemble.yield_refused === true ? true : undefined,
+    yield_refused: cfg.assemble.yield_refused === false ? undefined : cfg.assemble.yield_refused,
     stage_map: undefined,
     editor_receipts: undefined,
     edited_parts: edited?.receipts.length ? {
