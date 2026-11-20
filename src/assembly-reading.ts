@@ -108,6 +108,8 @@ interface ReadingContext extends ReturnType<typeof digestFiles>, Required<Assemb
   limbs: unknown[];
   hybridWidths: ReadonlyMap<string, Array<{ set: string | null; width?: number }>>;
   setup: SetupPainting | undefined;
+  /** The declared tolerance a region take reads, when no setup_painting digest already holds it. */
+  regionTolerance: number | undefined;
   setupImage: (declaration: SetupPainting['figure_mask'] | SetupPainting['backdrop'], field: string) => unknown;
   authoredDepths: () => unknown;
 }
@@ -147,10 +149,14 @@ function nonempty<T>(value: T[] | undefined): T[] | undefined {
   return value?.length ? value : undefined;
 }
 
+/** The region take's colour limit, bound from `config.requirements` (#1393). */
+export const REGION_TOLERANCE_FIELD = 'requirements.setup_painting.rgb_tolerance';
+
 function projectionEntries(cfg: ProjectionSource) {
-  // Follow-up #1393 covers effective requirements/receipt inputs. CLI
-  // requirements values are read outside this config view. Only selected values
-  // can be exemptions in the projection, such as the editor receipt ledger below.
+  // Requirements values reach this config view only through config.requirements.
+  // A requirements file named only by --requirements is read outside it (#1393).
+  // Only selected values can be exemptions in the projection, such as the
+  // editor receipt ledger below.
   const a = cfg.assemble;
   // These fields used to enter the digest through the enumerable assemble spread.
   const authored = <K extends keyof typeof a>(key: K) => {
@@ -256,6 +262,7 @@ function projectionEntries(cfg: ProjectionSource) {
         figure_mask: ctx.setupImage(ctx.setup.figure_mask, 'figure_mask'),
         backdrop: ctx.setupImage(ctx.setup.backdrop, 'backdrop'),
       },
+      [REGION_TOLERANCE_FIELD]: ctx => ctx.regionTolerance,
     }),
     scene: bound(cfg.scene === undefined ? undefined : true),
     // Turn, meshes and regions reach existing carrier helpers as aggregates.
@@ -375,6 +382,12 @@ function readingContext(cfg: AssemblyView, parts: PartsFile, configPath: string,
   const requirementsPath = ground === 'busy' && cfg.requirements !== undefined
     ? resolve(base, cfg.requirements) : undefined;
   const setup = requirementsPath === undefined ? undefined : readRequirements(requirementsPath).setup_painting;
+  // A region take reads setup_painting.rgb_tolerance whatever the ground. The
+  // busy-visible setup_painting digest above already holds it; elsewhere it
+  // gets its own field, so no existing stamp moves where it was covered.
+  const regionTolerance = setup !== undefined || cfg.requirements === undefined ||
+    !(cfg.assemble.take ?? []).some(take => 'seed' in take)
+    ? undefined : readRequirements(resolve(base, cfg.requirements)).setup_painting?.rgb_tolerance;
   const setupImage = (declaration: SetupPainting['figure_mask'] | SetupPainting['backdrop'], field: string) =>
     declaration === undefined ? undefined : {
       ...declaration,
@@ -422,7 +435,7 @@ function readingContext(cfg: AssemblyView, parts: PartsFile, configPath: string,
   // Alternate skeleton and drawn registration also use the hierarchy.
   const bones = posesAlternate ? cfg.bones : geometry.length === 0 ? undefined : geometry;
   return {
-    ...files, seam, project, ground, setup, setupImage, hasHeadRun,
+    ...files, seam, project, ground, setup, regionTolerance, setupImage, hasHeadRun,
     basePairs, physicsPairs, bones, limbs, hybridWidths,
     authoredDepths: () => cfg.depth === undefined ? undefined
       : [...authoredUnitDepths(cfg)].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0),
@@ -457,6 +470,12 @@ export function isSplitTakeMetadataField(name: string): boolean {
   return /^assemble\.take\[(?:0|[1-9][0-9]*)\]\.meta$/.test(name);
 }
 
+/** Fields added to the reading after stamps were first written, in sentence order. */
+const LATER_BINDINGS: ReadonlyArray<{ field: (name: string) => boolean; binding: string }> = [
+  { field: isSplitTakeMetadataField, binding: 'split-take donor metadata' },
+  { field: name => name === REGION_TOLERANCE_FIELD, binding: 'region-take setup_painting.rgb_tolerance' },
+];
+
 export function assemblyConfigReading(configPath: string, parts: PartsFile): AssemblyConfigRecord {
   return readAssemblyConfig(loadEarlyConfig(configPath, 'assemble'), parts, configPath);
 }
@@ -485,9 +504,11 @@ export function refuseStaleAssembly(configPath: string, parts: PartsFile, loaded
   const changes = changedAssemblyFields(previous, current);
   if (changes.length === 0) return;
   const recorded = new Set(previous.fields.map(({ name }) => name));
-  const predatesSplitMetadata = changes.every(name => isSplitTakeMetadataField(name) && !recorded.has(name));
-  const detail = predatesSplitMetadata
-    ? `assembly reading changed at ${changes.map(name => `config.${name}`).join(', ')}; the recorded stamp predates split-take donor metadata binding. Re-run assemble once with the same config`
+  // A field a newer binding adds, absent from the stamp, means the stamp predates that binding.
+  const predated = changes.map(name => recorded.has(name) ? undefined : LATER_BINDINGS.find(later => later.field(name)));
+  const bindings = LATER_BINDINGS.filter(later => predated.includes(later)).map(later => later.binding);
+  const detail = predated.every(later => later !== undefined)
+    ? `assembly reading changed at ${changes.map(name => `config.${name}`).join(', ')}; the recorded stamp predates ${bindings.join(' and ')} binding. Re-run assemble once with the same config`
     : assemblyChangeDetail(changes);
   throw new PartsError([{ code: 'ASSEMBLY_CONFIG_STALE', object: configPath, detail }]);
 }

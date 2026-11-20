@@ -58,6 +58,7 @@ import { runTurnUnitPrecedenceChecks } from './tools/check_turn_unit_precedence.
 import { runAuthoredUnitDepthChecks } from './tools/check_authored_unit_depth.ts';
 import { runDepthMapChecks } from './tools/check_depthmaps.ts';
 import { runSplitTakeMetadataChecks, runTakeLayerChecks } from './tools/check_take_layers.ts';
+import { runRegionToleranceBindingChecks } from './tools/check_take_region.ts';
 import { prepareSeeThroughInput } from './src/seethrough-transform.ts';
 import { runSeeThroughTransformChecks } from './tools/check_seethrough_transform.ts';
 import { runPlateChecks } from './tools/check_plate.ts';
@@ -35603,6 +35604,7 @@ function runAssembleSuite(): number {
   try {
     runAssemblyProjectionControls(say);
     runAssemblyConfigControls(join(dir, 'assembly-config'), say);
+    runRegionToleranceBindingChecks(join(dir, 'region-tolerance'), (name, ok, detail) => say(name, ok, detail, 'issue #1393: generated region take; a changed tolerance and a stamp without the new field'));
     runHiddenExtentChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #1047: production assembly refuses declared enclosed source holes'));
     runOccluderConfigChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #1230: config.assemble.occluders at every config door, each plant refused by its code'));
     runOccluderCopyChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #1230: copied occluder colour is named with its count, silent without it, and moves no byte'));

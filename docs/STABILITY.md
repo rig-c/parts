@@ -375,6 +375,18 @@ these new fields are missing from an older stamp, the stale refusal says
 that the stamp predates the binding and asks for one re-assemble with the
 same config.
 
+A config with a region take (an `assemble.take` entry with `seed`) and a
+`config.requirements` file that declares `setup_painting.rgb_tolerance` binds
+that tolerance at `requirements.setup_painting.rgb_tolerance`. Under
+`ground: "busy"` with `project: "visible"`, the `requirements.setup_painting`
+field already binds the tolerance, so this field is not written there. A
+config with no region take, or no declared tolerance, keeps its reading. A
+stamp that lacks only this field is refused as `ASSEMBLY_CONFIG_STALE`, and
+the refusal says that the stamp predates the binding and asks for one
+re-assemble with the same config. The reading reads only `config.requirements`:
+a requirements file named only by `--requirements` is outside it, as the
+`--seam` and `--project` flags are.
+
 The stable named subpath `@rig-c/parts/assembly-reading` exports
 `assemblyConfigReading(configPath: string, parts: PartsFile): AssemblyConfigRecord`
 and `assemblyConfigChanges(configPath: string, parts: PartsFile): string[]`.

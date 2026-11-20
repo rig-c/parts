@@ -4600,6 +4600,12 @@ than the config specifies, put the values used for assembly in `assemble.seam`
 and `assemble.project` in the config you pass to the standalone command.
 To use other values, re-run assemble with the config you intend to keep.
 
+A region take reads `setup_painting.rgb_tolerance` from the requirements
+file. The digest binds it from `config.requirements`, so declare the file
+there and pass the same file to `assemble --requirements`. A tolerance read
+only from a `--requirements` file the config does not declare is not in
+`assembly_config`, and a later change to it is not reported as stale.
+
 Ordinary keyed-animation edits through `motion.animations_from` leave
 the assembly digest intact. Cloth changes can require reassembly when physics
 bone bindings change which part pairs move relative to each other under turn.
