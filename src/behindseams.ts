@@ -14,9 +14,9 @@ export const BEHIND_SEAM_LINE = 'BEHIND_PART_SEAMS';
 export const UNDECLARED_BEHIND_SEAM_REASON = 'HOLE: no requirements.behind_seams declares an authored threshold T; not measured, never a pass';
 export const BEHIND_SEAM_CODE = 'CHECK_BEHIND_PART_SEAMS';
 export const BEHIND_SEAM_UNMEASURED_CODE = 'CHECK_BEHIND_PART_SEAMS_UNMEASURED';
-export const NO_SOURCE_SETUP_STANDING_REASON = 'no --source painting was supplied; setup standing compares the setup render with the painting';
+export const NO_PARTS_SETUP_STANDING_REASON = "no --parts manifest was supplied; setup standing compares the setup render with the parts' flat recomposite";
 export const IDLE_STANDING_MOTION_READ_REASON = 'not applicable: motion_opened reads the pair';
-export const IDLE_STANDING_NO_ORACLE_REASON = "idle standing is not measured: idle frames have no painting oracle, and the pair's idle reading is motion_opened";
+export const IDLE_STANDING_NO_ORACLE_REASON = "idle standing is not measured: idle frames have no recomposite oracle, and the pair's idle reading is motion_opened";
 
 export interface BehindSeams {
   /** Opt in to the rig's declared ranges; never supplies or guesses a range. */
@@ -41,13 +41,15 @@ export interface BehindSeamsFramesInput {
   pages: Map<string, Plate>;
   stock: readonly BehindSeamsStockPair[] | null;
   fps: number;
-  /** Setup painting frame rendered onto the pair's seam grid; absent or null when --source was not supplied. */
-  painting?: Frame | null;
-  /** Atlas pages for {@link painting}; defaults to {@link pages} when omitted. */
-  paintingPages?: ReadonlyMap<string, Plate>;
+  /** Setup recomposite frame rendered onto the pair's seam grid; absent or null when --parts was not supplied. */
+  recomposite?: Frame | null;
   turn?: BehindSeamsTurnInput;
   /** Issue #1403 plant only: the samples[] cap; production never sets it ({@link BEHIND_SAMPLE_CAP}). */
   sampleCap?: number;
+  /** Issue #1408 plant only: skip the setup recomposite comparison; production never sets it. */
+  plantSkipRecomposite?: true;
+  /** Issue #1408 plant only: measure standing on idle frames without an oracle; production never sets it. */
+  plantMeasureIdleStanding?: true;
 }
 export interface BehindSeamsTurnPose {
   name: string;
@@ -114,7 +116,7 @@ export interface BehindSeamsUnreadCorridor {
   cell_count: number;
 }
 export interface BehindSeamsStanding extends BehindSeamsCount {
-  /** Present when standing is SKIP: at setup without --source, or on every idle frame. */
+  /** Present when standing is SKIP: at setup without --parts, or on every idle frame. */
   reason?: string;
   /** Distinct grid cells across all unread corridors, including cross-axis intersections. */
   unread_cells?: number;
@@ -188,8 +190,8 @@ export interface BehindSeamsInput {
   pairs: readonly MotionSeamPair[];
   stockDir: string | null;
   fps: number;
-  /** Stage-resampled painting from --source, or null/undefined when --source was not supplied. */
-  painting?: { stage: { x: number; y: number; width: number; height: number }; raster: { width: number; height: number; data: ArrayLike<number> } } | null;
+  /** Flat recomposite of parts at their painted positions from --parts, or null/undefined when --parts was not supplied. */
+  recomposite?: { stage: { x: number; y: number; width: number; height: number }; raster: { width: number; height: number; data: ArrayLike<number> } } | null;
   unsupported?: string;
   turnBuild?: { build?: string; reason?: string };
 }
@@ -394,22 +396,22 @@ function readBehindFrame(api: BehindSeamsApi, input: BehindSeamsFramesInput, pai
       rasters = { full: api.renderFrame(frame, input.pages, viewport, [0, 0, 0, 0]), hidden: api.renderFrame({ ...frame, pieces: frame.pieces.filter(p => !behind.has(p.slot)) }, input.pages, viewport, [0, 0, 0, 0]) };
       frameCache.set(cacheKey, rasters);
     }
-    const measureStanding = pose !== undefined || (setup && input.painting !== undefined && input.painting !== null);
-    let paintDiff: ((k: number) => number) | null = null;
+    const plantIdleStanding = isIdle && input.plantMeasureIdleStanding === true;
+    const measureStanding = pose !== undefined || plantIdleStanding || (setup && input.recomposite !== undefined && input.recomposite !== null);
+    let recompositeDiff: ((k: number) => number) | null = null;
     if (setup) {
-      if (input.painting === undefined || input.painting === null) {
-        row.standing = { ...emptyCount('SKIP'), reason: NO_SOURCE_SETUP_STANDING_REASON };
-        unread(label, NO_SOURCE_SETUP_STANDING_REASON);
-      } else {
-        const paintPages = (input.paintingPages ?? input.pages) as Map<string, Plate>;
-        const paintPlate = api.renderFrame(input.painting, paintPages, viewport, [0, 0, 0, 0]);
-        paintDiff = (k: number): number => {
+      if (input.recomposite === undefined || input.recomposite === null) {
+        row.standing = { ...emptyCount('SKIP'), reason: NO_PARTS_SETUP_STANDING_REASON };
+        unread(label, NO_PARTS_SETUP_STANDING_REASON);
+      } else if (input.plantSkipRecomposite !== true) {
+        const recompositePlate = api.renderFrame(input.recomposite, input.pages, viewport, [0, 0, 0, 0]);
+        recompositeDiff = (k: number): number => {
           const q = k * 4;
-          if (paintPlate.data[q + 3] === 0) return Infinity;
+          if (recompositePlate.data[q + 3] === 0) return Infinity;
           return Math.max(
-            Math.abs(overWhite(rasters!.full.data, q, 0) - overWhite(paintPlate.data, q, 0)),
-            Math.abs(overWhite(rasters!.full.data, q, 1) - overWhite(paintPlate.data, q, 1)),
-            Math.abs(overWhite(rasters!.full.data, q, 2) - overWhite(paintPlate.data, q, 2)),
+            Math.abs(overWhite(rasters!.full.data, q, 0) - overWhite(recompositePlate.data, q, 0)),
+            Math.abs(overWhite(rasters!.full.data, q, 1) - overWhite(recompositePlate.data, q, 1)),
+            Math.abs(overWhite(rasters!.full.data, q, 2) - overWhite(recompositePlate.data, q, 2)),
           );
         };
       }
@@ -444,13 +446,10 @@ function readBehindFrame(api: BehindSeamsApi, input: BehindSeamsFramesInput, pai
             const cells: Array<[number, number]> = [];
             for (let t = first; t < j; t++) {
               const at = l * start + t * step;
-              if (paintDiff !== null && paintDiff(at) <= threshold) continue;
+              if (recompositeDiff !== null && recompositeDiff(at) <= threshold) continue;
               unreadCells.add(at); cells.push(centre(grid, at));
             }
-            if (cells.length === 0) {
-              support.add(left); support.add(right);
-              continue;
-            }
+            if (cells.length === 0) continue;
             unreadCorridors.push({ ...checkRow('BEHIND_PART_SEAMS.unread_corridors', 'pair', false, [pair.a, pair.b]),
               axis: step === 1 ? 'horizontal' : 'vertical', endpoints: [endpoint(left, a), endpoint(right, b)], cells, cell_count: cells.length });
             continue;
@@ -529,11 +528,11 @@ function readBehindFrame(api: BehindSeamsApi, input: BehindSeamsFramesInput, pai
         if (!surviving.has(k)) continue;
         if (rear.alpha[k] <= 0 || underflow.has(k)) { unread(label, 'positive symbolic rear contribution underflowed its numeric colour weight'); standingUnderflow = true; continue; }
         row.standing.geometric_px++;
-        const dp = paintDiff === null ? Infinity : paintDiff(k);
+        const dr = recompositeDiff === null ? Infinity : recompositeDiff(k);
         let chosen: [number, number] | null = null, raw = false, qualifies = false;
         for (const [a, b] of corridor.endpoints) {
           const d: [number, number] = [distance(rear, k, colour(A, a)), distance(rear, k, colour(B, b))];
-          const r = d[0] > 0 && d[1] > 0 && dp > 0, q = d[0] > threshold && d[1] > threshold && dp > threshold;
+          const r = d[0] > 0 && d[1] > 0 && dr > 0, q = d[0] > threshold && d[1] > threshold && dr > threshold;
           if (chosen === null || q && !qualifies || r && !raw) chosen = d;
           raw ||= r; qualifies ||= q;
         }
@@ -577,7 +576,7 @@ function readBehindFrame(api: BehindSeamsApi, input: BehindSeamsFramesInput, pai
     row.motion_opened.geometric_px = motionHits.size; row.motion_opened.raw_px = motionHits.size;
     counted(row.motion_opened, motionHits, grid, allowance);
     if (!motionReadable) row.motion_opened.status = 'SKIP';
-    if (isIdle) {
+    if (isIdle && !plantIdleStanding) {
       row.standing = {
         ...emptyCount('SKIP'),
         reason: row.motion_opened.status !== 'SKIP' ? IDLE_STANDING_MOTION_READ_REASON : IDLE_STANDING_NO_ORACLE_REASON,
@@ -626,6 +625,8 @@ export function measureBehindSeamFrames(api: BehindSeamsApi, input: BehindSeamsF
   problems.push(...shape);
   if (shape.length > 0) { line.status = 'FAIL'; return line; }
   for (const p of declared.pairs ?? []) if (!selected.has(keyOf(p.part, p.neighbour))) unread(null, 'declaration', `override pair "${p.part}|${p.neighbour}" is not in motionSeamSelection; an override does not create an adjacent pair`, true);
+  const active = declared.threshold !== undefined || declared.pairs?.some(p => p.threshold !== undefined) === true;
+  if (input.pairs.length === 0 && (input.recomposite === undefined || input.recomposite === null)) unread(null, 'setup', NO_PARTS_SETUP_STANDING_REASON, active);
   if (input.pairs.length === 0) unread(null, 'selection', 'no selected motion seam pair; no boundary population was measured', declared.threshold !== undefined);
   const rows = input.pairs.map(pair => {
     const override = declared.pairs?.find(p => keyOf(p.part, p.neighbour) === keyOf(pair.a, pair.b));
@@ -662,15 +663,20 @@ export function measureBehindSeamFrames(api: BehindSeamsApi, input: BehindSeamsF
     const motion = reading(frames, 'motion_opened', input.fps, allowance, parts);
     if ((setup === null || setup.motion_opened.status === 'SKIP') && motion.status !== 'FAIL') motion.status = 'SKIP';
     const idleStandingReason = motion.status !== 'SKIP' ? IDLE_STANDING_MOTION_READ_REASON : IDLE_STANDING_NO_ORACLE_REASON;
-    for (const f of frames) f.standing.reason = idleStandingReason;
-    const standing: BehindSeamsReading = { ...reading(frames, 'standing', input.fps, allowance, parts), status: 'SKIP', reason: idleStandingReason };
+    const rawStanding = reading(frames, 'standing', input.fps, allowance, parts);
+    const standing: BehindSeamsReading = input.plantMeasureIdleStanding === true
+      ? rawStanding
+      : { ...rawStanding, status: 'SKIP', reason: idleStandingReason };
     if (motion.max_px > allowance) {
       problems.push({ code: BEHIND_SEAM_CODE, object: `pair "${pair.pair}" motion_opened`, detail: `idle frame ${motion.worst?.index} (${motion.max_px} cells) exceeds allowance ${allowance}; authored threshold ${threshold}, native seam cells, no one-cell floor or rest mask` });
     }
     if ((setup?.standing.px ?? 0) > allowance) {
       problems.push({ code: BEHIND_SEAM_CODE, object: `pair "${pair.pair}" setup standing`, detail: `setup (${setup!.standing.px} cells) exceeds allowance ${allowance}; authored threshold ${threshold}, native seam cells, no one-cell floor or rest mask` });
     }
-    const failed = motion.status === 'FAIL' || setup?.standing.status === 'FAIL' || line.unmeasured.some(u => u.pair === pair.pair && threshold !== null);
+    if (input.plantMeasureIdleStanding === true && standing.max_px > allowance) {
+      problems.push({ code: BEHIND_SEAM_CODE, object: `pair "${pair.pair}" standing`, detail: `idle frame ${standing.worst?.index} (${standing.max_px} cells) exceeds allowance ${allowance}; authored threshold ${threshold}, native seam cells, no one-cell floor or rest mask` });
+    }
+    const failed = motion.status === 'FAIL' || setup?.standing.status === 'FAIL' || standing.status === 'FAIL' || line.unmeasured.some(u => u.pair === pair.pair && threshold !== null);
     const readFrames = frames.filter(f => f.motion_opened.status !== 'SKIP' &&
       !line.unmeasured.some(u => u.pair === pair.pair && u.frame === `idle frame ${f.index}`)).length;
     line.pairs.push({ ...checkRow('BEHIND_PART_SEAMS.pairs', 'pair', failed, parts), animation: 'idle', pair: pair.pair, parts, declared: [...pair.declared], threshold, allowance, setup, frames, motion_opened: motion, standing,
@@ -974,20 +980,23 @@ export function measureBehindSeams(api: typeof import('@rig-c/core/render-shared
     if (input.stockDir === null || sampled.setup === null) throw new Error('existing full stock seam render/setup is unavailable');
     stock = stockOf(input.stockDir, input.pairs.filter(p => p.unread === undefined), input.fps, sampled.setup, sampled.idle, sampled.rest);
   } catch (e) { stockError = e instanceof Error ? e.message : String(e); }
-  let painting: Frame | null = null;
-  let paintingPages: ReadonlyMap<string, Plate> | undefined;
-  if (input.painting !== undefined && input.painting !== null) {
-    const { stage, raster } = input.painting;
+  const pages = new Map(candidate.pages);
+  let recomposite: Frame | null = null;
+  if (input.recomposite !== undefined && input.recomposite !== null) {
+    const { stage, raster } = input.recomposite;
+    if (raster.width !== stage.width || raster.height !== stage.height) {
+      return fail(`parts.json rig_size (${raster.width}x${raster.height}) differs from rig stage (${stage.width}x${stage.height}); setup standing does not resample the parts' recomposite`);
+    }
     const page = new Plate(raster.width, raster.height);
     page.data.set(raster.data);
-    const pageName = 'behind-seams:painting';
-    paintingPages = new Map([[pageName, page]]);
+    const pageName = 'behind-seams:recomposite';
+    pages.set(pageName, page);
     const wx0 = stage.x, wx1 = stage.x + stage.width, wy0 = stage.y, wy1 = stage.y + stage.height;
-    painting = { index: 0, time: 0, pieces: [{ kind: 'region', slot: 'painting', page: pageName, tint: [1, 1, 1, 1],
+    recomposite = { index: 0, time: 0, pieces: [{ kind: 'region', slot: 'recomposite', page: pageName, tint: [1, 1, 1, 1],
       world: [wx1, wy1, wx0, wy1, wx0, wy0, wx1, wy0], uvs: [1, 0, 0, 0, 0, 1, 1, 1] }] };
   }
-  const line = measureBehindSeamFrames(api, { ...sampled, pairs: input.pairs, pages: candidate.pages, stock, fps: input.fps,
-    painting, ...(paintingPages === undefined ? {} : { paintingPages }),
+  const line = measureBehindSeamFrames(api, { ...sampled, pairs: input.pairs, pages, stock, fps: input.fps,
+    recomposite,
     ...(declared.turn === true ? { turn: sampleBehindTurn(api, input, candidate, sampled.setup, acceptedPoser) } : {}) }, declared, problems);
   if (stockError !== null) {
     line.status = 'FAIL';
