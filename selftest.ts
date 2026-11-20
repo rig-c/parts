@@ -35187,10 +35187,10 @@ export function runAssemblyConfigControls(dir: string, say: FixtureCaseReporter)
   const fields = reading?.fields.map(row => row.name) ?? [];
   say('AS1385_ASSEMBLE_WRITES_A_ROUND_TRIPPING_CONFIG_READING',
     assembled.status === 0 && before !== null && reading !== undefined && serializeParts(before) === beforeText &&
-      ['assemble.edited_parts', 'assemble.plan', 'assemble.rig_scale', 'seethrough.head_box'].every(name => fields.includes(name)) &&
-      !fields.includes('assemble') && !fields.includes('turn'),
+      ['assemble.plan', 'assemble.rig_scale', 'seethrough.head_box'].every(name => fields.includes(name)) &&
+      !fields.includes('assemble') && !fields.includes('assemble.edited_parts') && !fields.includes('turn'),
     `assemble exit ${assembled.status}; ${fields.join(', ') || refusalLine(assembled)}`,
-    'the normal assemble command writes a readable digest and field digests for its initial config');
+    'the normal assemble command writes a readable digest and field digests and omits the empty edit ledger');
   if (reading === undefined || before === null) return;
 
   const proposed = runCli(['propose', '--parts', partsDir, '--source', source, ...runs, '--no-bust', 'synthetic blocks',
@@ -35289,7 +35289,8 @@ export function runAssemblyConfigControls(dir: string, say: FixtureCaseReporter)
   say('AS1385_EDITED_PART_WITH_FRESH_PARTS_PATH_RECORDS_THE_RECEIPT',
     freshEdit.status === 0 && freshEdit.out.includes('edited-part: part "face"') && receipts.length === 1 &&
       receipts[0].part === 'face' && receipts[0].sha256 === sha(editedPath) && receipts[0].from_sha256 === sha(from) &&
-      receipts[0].sha256 !== receipts[0].from_sha256 && readOr(manifest) === serializeParts(after),
+      receipts[0].sha256 !== receipts[0].from_sha256 && readOr(manifest) === serializeParts(after) &&
+      assemblyConfigChanges(config, after).join(',') === 'assemble.edited_parts',
     `edited-part exit ${freshEdit.status}; ${receipts.length} receipt(s)${freshEdit.status === 0 ? '' : `, ${refusalLine(freshEdit)}`}`,
     'an explicit current parts.json allows the edit receipt to be written against the refreshed part PNG');
 }
