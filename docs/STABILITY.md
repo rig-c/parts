@@ -344,9 +344,9 @@ New assemble and build manifests carry an optional top-level `assembly_config`
 object shaped as `{ sha256, fields: [{ name, sha256 }] }`. Its lowercase
 SHA-256 digests describe the effective assembly config inputs, in deterministic
 field-name order. Entries name the individual inputs, such as
-`assemble.rig_scale`. Field names use dot-separated lowercase keys, with a
-zero-based index on the take key for split donor metadata, as in
-`assemble.take[0].meta`. Earlier assembly-config readers refuse indexed
+`assemble.rig_scale`. Field names use dot-separated lowercase keys, and from
+this version any key may carry a zero-based array index, as in
+`assemble.take[0].meta` (split donor metadata, the first indexed field). Earlier assembly-config readers refuse indexed
 names with `PARTS_FIELD_TYPE`, so release Parts first, then upgrade and
 release Review, then update both pins in Create before those consumers read
 split-take manifests written by this release.
