@@ -39,6 +39,8 @@ export interface BehindSeamsFramesInput {
   stock: readonly BehindSeamsStockPair[] | null;
   fps: number;
   turn?: BehindSeamsTurnInput;
+  /** Issue #1403 plant only: the samples[] cap; production never sets it ({@link BEHIND_SAMPLE_CAP}). */
+  sampleCap?: number;
 }
 export interface BehindSeamsTurnPose {
   name: string;
@@ -93,6 +95,8 @@ export interface BehindSeamsCount {
   box: [number, number, number, number] | null;
   max_spatial_run_cells: number;
   samples: BehindSeamsSample[];
+  /** Issue #1403: present only when the list held more than {@link BEHIND_SAMPLE_CAP} rows; the rows left out. */
+  samples_omitted?: number;
 }
 export type BehindSeamsEndpoint = [grid_x: number, grid_y: number, world_x: number, world_y: number, owner: number];
 export interface BehindSeamsUnreadCorridor {
@@ -213,6 +217,60 @@ export function behindSeamsProblems(value: unknown, at: string): Problem[] {
     }
   }
   return problems;
+}
+
+/**
+ * Issue #1403: the most `samples[]` rows one count writes. Per-cell samples are
+ * a bounded diagnostic sample; the counts are the measurement. Every count,
+ * `px`, `box`, hit, span, run and status is computed from all cells before the
+ * list is cut, and a list at or under the cap is written as it was.
+ */
+export const BEHIND_SAMPLE_CAP = 64;
+
+/** One standing candidate: its measured ordinal, cell, chosen distances, whether it qualified, and the smaller distance. */
+interface StandingCandidate { ord: number; k: number; d: [number, number]; q: boolean; m: number }
+
+/**
+ * Whether standing candidate `a` ranks worse than `b`. The gate counts a cell
+ * when both rear-to-front distances exceed the threshold (`qualifies`), so the
+ * smaller of the two is the margin the threshold is compared against: a counted
+ * cell ranks first, then the larger smaller-distance, then the earlier measured
+ * ordinal. No two candidates tie, so the kept set is one set.
+ */
+export function standingWorse(a: Pick<StandingCandidate, 'ord' | 'q' | 'm'>, b: Pick<StandingCandidate, 'ord' | 'q' | 'm'>): boolean {
+  if (a.q !== b.q) return a.q;
+  if (a.m !== b.m) return a.m > b.m;
+  return a.ord < b.ord;
+}
+
+/**
+ * The {@link BEHIND_SAMPLE_CAP} worst standing candidates seen so far, without
+ * keeping the others: at most `cap` entries live at once.
+ */
+export class WorstStanding {
+  readonly kept: StandingCandidate[] = [];
+  seen = 0;
+  constructor(readonly cap: number = BEHIND_SAMPLE_CAP) {}
+  offer(k: number, d: [number, number], q: boolean): void {
+    const c: StandingCandidate = { ord: this.seen++, k, d, q, m: d[0] < d[1] ? d[0] : d[1] };
+    if (this.kept.length < this.cap) { this.kept.push(c); return; }
+    let weakest = 0;
+    for (let i = 1; i < this.kept.length; i++) if (standingWorse(this.kept[weakest], this.kept[i])) weakest = i;
+    if (standingWorse(c, this.kept[weakest])) this.kept[weakest] = c;
+  }
+  /** The kept candidates in measured order. */
+  inOrder(): StandingCandidate[] { return [...this.kept].sort((x, y) => x.ord - y.ord); }
+}
+
+/**
+ * The positions kept from a list of `n` rows that carry no magnitude: all of
+ * them at or under `cap`, otherwise floor(j · n / cap) for j = 0 … cap − 1 —
+ * `cap` distinct, increasing positions spread across the list, the first row
+ * always among them.
+ */
+export function evenlySpaced(n: number, cap: number = BEHIND_SAMPLE_CAP): number[] {
+  if (n <= cap) return Array.from({ length: n }, (_, i) => i);
+  return Array.from({ length: cap }, (_, j) => Math.floor((j * n) / cap));
 }
 
 const emptyCount = (status: BehindSeamsCount['status'] = 'SKIP'): BehindSeamsCount => ({ status, boundary_cells: 0, geometric_px: 0, raw_px: 0, px: 0, box: null, max_spatial_run_cells: 0, samples: [] });
@@ -397,6 +455,7 @@ function readBehindFrame(api: BehindSeamsApi, input: BehindSeamsFramesInput, pai
     };
     const standingHits = new Set<number>(), motionHits = new Set<number>();
     let standingUnderflow = false;
+    const cap = input.sampleCap ?? BEHIND_SAMPLE_CAP, worstStanding = new WorstStanding(cap);
     for (const [k, corridor] of corridors) {
       if (!surviving.has(k)) continue;
       if (rear.alpha[k] <= 0 || underflow.has(k)) { unread(label, 'positive symbolic rear contribution underflowed its numeric colour weight'); standingUnderflow = true; continue; }
@@ -410,8 +469,10 @@ function readBehindFrame(api: BehindSeamsApi, input: BehindSeamsFramesInput, pai
       }
       if (raw) row.standing.raw_px++;
       if (qualifies) standingHits.add(k);
-      row.standing.samples.push(sample(k, chosen, qualifies));
+      worstStanding.offer(k, chosen as [number, number], qualifies);
     }
+    row.standing.samples = worstStanding.inOrder().map(c => sample(c.k, c.d, c.q));
+    if (worstStanding.seen > cap) row.standing.samples_omitted = worstStanding.seen - cap;
     counted(row.standing, standingHits, grid, allowance);
     // Incomplete coverage cannot certify PASS, but cannot hide a measured failure.
     if (support.size === 0 || unreadCorridors.length > 0 || standingUnderflow) {
@@ -435,8 +496,12 @@ function readBehindFrame(api: BehindSeamsApi, input: BehindSeamsFramesInput, pai
         motionReadable = false; unread(label, 'stock transported setup-overlap support cannot be bound to the actually drawn setup pair strictly in front of the complete rear set'); continue;
       }
       if (rear.alpha[k] <= 0 || underflow.has(k)) { motionReadable = false; unread(label, 'positive symbolic rear contribution underflowed its numeric colour weight'); continue; }
-      motionHits.add(k); row.motion_opened.samples.push(sample(k, null, true));
+      motionHits.add(k);
     }
+    // Motion-opened rows carry no distance; keep evenly spaced rows, built only for what is kept.
+    const hitCells = [...motionHits];
+    row.motion_opened.samples = evenlySpaced(hitCells.length, cap).map(i => sample(hitCells[i], null, true));
+    if (hitCells.length > cap) row.motion_opened.samples_omitted = hitCells.length - cap;
     row.motion_opened.boundary_cells = motionCells.size;
     row.motion_opened.geometric_px = motionHits.size; row.motion_opened.raw_px = motionHits.size;
     counted(row.motion_opened, motionHits, grid, allowance);

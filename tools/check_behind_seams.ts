@@ -5,7 +5,7 @@ import { Plate, type RGBA } from '@rig-c/core/plate';
 import { pageFor, projector, rasterisePiece, renderFrame, type AttachmentRest, type Frame, type Piece } from '@rig-c/core/render-shared';
 import { seamGridOf, seamsOf, setupCellReader, type SeamFrame, type SeamGrid, type SeamPair } from '@rig-c/core/seam';
 import { BEHIND_SEAM_LINE, BEHIND_SEAM_CODE, BEHIND_SEAM_UNMEASURED_CODE, behindSeamsProblems,
-  measureBehindSeamFrames, behindSeamLines, behindTurnPlan, behindTurnAnimations, behindTurnAnimationName, type BehindSeams, type BehindSeamsFramesInput,
+  measureBehindSeamFrames, behindSeamLines, BEHIND_SAMPLE_CAP, evenlySpaced, standingWorse, behindTurnPlan, behindTurnAnimations, behindTurnAnimationName, type BehindSeams, type BehindSeamsFramesInput,
   type BehindSeamsStockPair, type BehindSeamsCount, type BehindSeamsMeasured, type BehindSeamsFrame } from '../src/behindseams.ts';
 import { type RigcRunner } from '../src/check.ts';
 import { PartsError, type Problem } from '../src/errors.ts';
@@ -13,7 +13,7 @@ import { readRequirements } from '../src/requirements.ts';
 import { checkStage } from '../src/build.ts';
 import { CHECK_PARTS, writeCheckRig } from '../fixtures/checkrig.ts';
 import { cropToSpineY } from '../src/coords.ts';
-import { CHECK_ROW_FAMILY } from '../src/checkrow.ts';
+import { CHECK_ROW_FAMILY, serializeCheckRows } from '../src/checkrow.ts';
 import { readParts, serializeParts } from '../src/parts.ts';
 import { writePng } from '../src/raster/png.ts';
 import { newRaster } from '../src/raster/types.ts';
@@ -963,9 +963,81 @@ function runBehindSeamIntegrationChecks(dir: string, say: Say, rigc: RigcRunner)
     JSON.stringify({ turn: turnBrief(refusedBlock.turn), problems: refused.report.problems.map(p => p.code), cleaned: refused.turnScratchRemoved }));
 }
 
+/** #1403: two blocks `gap` cells apart over a rear whose red rises 7 per texel column; four rows. */
+export function behindWideStandingFixture(gap: number): BehindSeamFixture {
+  const a = rectangle('a', 0, 0, 4, 4), b = rectangle('b', 4 + gap, 0, 4, 4);
+  const width = 10 + gap, rear = rectangle('rear', -1, -1, width, 6);
+  const page = new Plate(width, 6);
+  for (let x = 0; x < width; x++) page.rect(x, 0, 1, 6, [7 * x, 48, 72, 255]);
+  const setup = [rear, a, b];
+  return fixture(new Map([['rear', page], ['a', plate(4, 4, FRONT)], ['b', plate(4, 4, FRONT)]]), setup, [setup]);
+}
+
+/** #1403: behindMotionFixture `width` cells wide; the peak lifts a by three, opening two rows of `width` cells. */
+export function behindWideMotionFixture(width: number): BehindSeamFixture {
+  const rear = rectangle('rear', -8, -8, width + 16, 24);
+  const a = rectangle('a', 0, 3, width, 4), b = rectangle('b', 0, 0, width, 4);
+  const pages = new Map([['rear', plate(width + 16, 24, REAR)], ['a', plate(width, 4, FRONT)], ['b', plate(width, 4, FRONT)]]);
+  return fixture(pages, [rear, a, b], [[rear, a, b], [rear, shifted(a, 0, 3), b], [rear, a, b]]);
+}
+
+/** Every samples[] list a reading writes: setup, idle frames and turn poses, both halves. */
+function sampleLists(reading: BehindSeamsMeasured): BehindSeamsCount[] {
+  const frames = [...reading.pairs.flatMap(p => [...(p.setup === null ? [] : [p.setup]), ...p.frames]), ...(reading.turn?.pairs.flatMap(p => p.frames) ?? [])];
+  return frames.flatMap(f => [f.standing, f.motion_opened]);
+}
+/** The #1403 row ceiling: no samples[] list over the cap. A ceiling on rows, not a memory test. */
+const underCeiling = (reading: BehindSeamsMeasured): boolean => sampleLists(reading).every(c => c.samples.length <= BEHIND_SAMPLE_CAP);
+/** Everything but the samples list and its omitted count, which the cap may change. */
+const withoutSamples = (reading: BehindSeamsMeasured): string => JSON.stringify(reading, (key, value) => key === 'samples' || key === 'samples_omitted' ? undefined : value);
+
+function runBehindSampleCapChecks(say: Say): void {
+  // Standing: 30 gap columns x 4 rows = 120 cells. Rear red 7c at texel column c = world column + 1, so the
+  // distance to FRONT (24, 48, 72) is 7c - 24 on both sides; c = 5 .. 34. Threshold 100 counts c >= 18
+  // (17 columns, 68 cells); the 64 worst are c = 19 .. 34, whose centres are world x 18.5 .. 33.5.
+  const wide = behindWideStandingFixture(30);
+  const capped = measured(wide, { threshold: 100 }), open = measured(wide, { threshold: 100 }, { sampleCap: Infinity });
+  const cs = capped.pair.setup!.standing, os = open.pair.setup!.standing;
+  const rank = os.samples.map((sample, ord) => ({ sample, ord, q: sample.counted, m: Math.min(...(sample.distances as [number, number])) }));
+  const worst = [...rank].sort((x, y) => standingWorse(x, y) ? -1 : standingWorse(y, x) ? 1 : 0).slice(0, BEHIND_SAMPLE_CAP).sort((x, y) => x.ord - y.ord).map(r => r.sample);
+  const xs = [...new Set(cs.samples.map(sample => sample.x))].sort((x, y) => x - y);
+  say('BHS1403_STANDING_LIST_OVER_THE_CAP_KEEPS_THE_64_WORST_AND_NAMES_THE_REST',
+    os.samples.length === 120 && os.samples.filter(sample => sample.counted).length === 68 && os.samples_omitted === undefined &&
+      cs.samples.length === BEHIND_SAMPLE_CAP && cs.samples_omitted === 120 - BEHIND_SAMPLE_CAP && equal(cs.samples, worst) &&
+      equal(xs, Array.from({ length: 16 }, (_, i) => 18.5 + i)) && cs.px === 68 && withoutSamples(capped.reading) === withoutSamples(open.reading),
+    JSON.stringify({ uncapped: os.samples.length, counted: os.samples.filter(sample => sample.counted).length, kept: cs.samples.length,
+      omitted: cs.samples_omitted, kept_x: [xs[0], xs[xs.length - 1], xs.length], px: cs.px, counts_equal: withoutSamples(capped.reading) === withoutSamples(open.reading) }));
+  // Motion-opened: 40 wide, two open rows at the peak = 80 hits; positions floor(j * 80 / 64), j = 0 .. 63.
+  const motion = behindWideMotionFixture(40);
+  const mc = measured(motion), mo = measured(motion, { threshold: 0 }, { sampleCap: Infinity });
+  const peak = mc.pair.frames[1].motion_opened, peakOpen = mo.pair.frames[1].motion_opened;
+  const spaced = Array.from({ length: 64 }, (_, j) => Math.floor((j * 80) / 64));
+  say('BHS1403_MOTION_LIST_OVER_THE_CAP_KEEPS_64_EVENLY_SPACED_IN_MEASURED_ORDER',
+    peakOpen.samples.length === 80 && peakOpen.px === 80 && peak.samples.length === BEHIND_SAMPLE_CAP && peak.samples_omitted === 16 &&
+      equal(evenlySpaced(80), spaced) && equal(peak.samples, spaced.map(i => peakOpen.samples[i])) && peak.px === 80 &&
+      withoutSamples(mc.reading) === withoutSamples(mo.reading),
+    JSON.stringify({ uncapped: peakOpen.samples.length, kept: peak.samples.length, omitted: peak.samples_omitted, px: peak.px,
+      standing_kept: mc.pair.frames[1].standing.samples.length, counts_equal: withoutSamples(mc.reading) === withoutSamples(mo.reading) }));
+  // At or under the cap the written bytes are today's: the uncapped path is the definition.
+  const small = [measured(behindStandingFixture()), measured(behindMotionFixture())];
+  const smallOpen = [measured(behindStandingFixture(), { threshold: 0 }, { sampleCap: Infinity }), measured(behindMotionFixture(), { threshold: 0 }, { sampleCap: Infinity })];
+  const bytes = small.map(r => serializeCheckRows({ [BEHIND_SEAM_LINE]: r.reading })), openBytes = smallOpen.map(r => serializeCheckRows({ [BEHIND_SEAM_LINE]: r.reading }));
+  say('BHS1403_LISTS_AT_OR_UNDER_THE_CAP_SERIALIZE_BYTE_IDENTICALLY',
+    bytes.every((b, i) => b === openBytes[i] && !b.includes('samples_omitted')) &&
+      small[0].pair.setup!.standing.samples.length === 4 && small[1].pair.frames[1].motion_opened.samples.length === 12,
+    JSON.stringify({ bytes: bytes.map(b => b.length), identical: bytes.map((b, i) => b === openBytes[i]),
+      standing: small[0].pair.setup!.standing.samples.length, motion: small[1].pair.frames[1].motion_opened.samples.length }));
+  // Plant: the cap removed, the row ceiling fires; the capped readings stay under it.
+  say('BHS1403_ROW_CEILING_FIRES_WITH_THE_CAP_REMOVED',
+    underCeiling(capped.reading) && underCeiling(mc.reading) && !underCeiling(open.reading) && !underCeiling(mo.reading),
+    JSON.stringify({ ceiling: BEHIND_SAMPLE_CAP, capped_max: Math.max(...sampleLists(capped.reading).map(c => c.samples.length), ...sampleLists(mc.reading).map(c => c.samples.length)),
+      planted_max: Math.max(...sampleLists(open.reading).map(c => c.samples.length), ...sampleLists(mo.reading).map(c => c.samples.length)) }));
+}
+
 export function runBehindSeamChecks(dir: string, say: Say, rigc: RigcRunner): void {
   mkdirSync(dir, { recursive: true });
   runBehindSeamFixtureChecks(say);
+  runBehindSampleCapChecks(say);
   runBehindSeamPrimitiveChecks(say);
   runBehindTurnPrimitiveChecks(say);
   runBehindSeamRequirementChecks(dir, say);
