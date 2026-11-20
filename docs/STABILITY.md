@@ -571,7 +571,7 @@ part name, `[i]` an entry of a list):
 - **generation.control.skeleton**, the pose file it names when it is no built-in — required: `width`, `height`, `points`
 - **seethrough** — required: `resolution`, `steps`, `seed`, `offload`; optional: `head_box`, `arm_split`
 - **seethrough.arm_split** — required: `order`, and one of `x` or `line` (issue #439)
-- **assemble** — required: `rig_scale`, `plan` (from plain `assemble` on); optional: `seam`, `project`, `ground`, `extend_below_crop`, `patches`, `cuts`, `alternates`, `head_face_underfill`, `yield_refused`, `stage_map`, `keep_under_occluders`, `require_hidden_extent`, `extend_painting`, `edge_splits`, `take`, `editor_receipts`, `edited_parts`, `occluders`
+- **assemble** — required: `rig_scale`, `plan` (from plain `assemble` on); optional: `seam`, `project`, `ground`, `extend_below_crop`, `patches`, `cuts`, `alternates`, `head_face_underfill`, `yield_refused`, `stage_map`, `keep_under_occluders`, `require_hidden_extent`, `extend_painting`, `edge_splits`, `take`, `editor_receipts`, `edited_parts`, `occluders`. The yield setting accepts a boolean or a nonempty list of final yielding output part names. The list is bound to the assembly config reading.
 - **assemble.edge_splits[i]** — required: `over`, `under`, `band`
 - **assemble.require_hidden_extent[i]** — required: `part`, `occluder`
 - **assemble.occluders[i]** — required: `image`, `sha256`, `under`, `rgb_within`; optional: `over`, `plate`, `part`, `grow`, `guard` (issues #1230, #1237, #1241, #1246, #1251, #1259)

@@ -349,7 +349,7 @@ export interface Assemble {
   /** Issue #492: composite full:face under head:face on the head canvas to fill transparent holes inside the face silhouette. */
   head_face_underfill?: boolean;
   /** Opt-in: yield original drift-refused front cores and connected non-core rims to an opaque behind holder matching the painting. */
-  yield_refused?: boolean;
+  yield_refused?: boolean | string[];
   /** Emit the report-only last-writer sidecar; absent or false is off. */
   stage_map?: boolean;
   /** Named plan parts retain their own pixels beneath a drawn-in-front soft occluder. */
@@ -1794,7 +1794,7 @@ export interface EarlyConfig {
   depth?: DepthConfig;
   key: string;
   seethrough: SeeThrough;
-  assemble: { rig_scale: number; seam?: SeamRule; project?: ProjectRule; ground?: Ground; take?: TakeDeclaration[]; editor_receipts?: EditorReceipts; edited_parts?: EditedParts; head_face_underfill?: boolean; yield_refused?: boolean; stage_map?: boolean; keep_under_occluders?: string[]; require_hidden_extent?: HiddenExtentDeclaration[]; extend_painting?: PaintingExtension[]; occluders?: OccluderDeclaration[]; edge_splits?: EdgeSplit[] };
+  assemble: { rig_scale: number; seam?: SeamRule; project?: ProjectRule; ground?: Ground; take?: TakeDeclaration[]; editor_receipts?: EditorReceipts; edited_parts?: EditedParts; head_face_underfill?: boolean; yield_refused?: boolean | string[]; stage_map?: boolean; keep_under_occluders?: string[]; require_hidden_extent?: HiddenExtentDeclaration[]; extend_painting?: PaintingExtension[]; occluders?: OccluderDeclaration[]; edge_splits?: EdgeSplit[] };
 }
 
 /** What plain `assemble` reads: the early config plus the plan `--propose-plan` printed. */
@@ -1890,9 +1890,7 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null, p
         if ('take' in a) checkTakeLayers(c, a.take, null, a);
         if ('editor_receipts' in a) checkEditorReceipts(c, a.editor_receipts);
         if ('edited_parts' in a) checkEditedParts(c, a.edited_parts, a.plan);
-        if ('yield_refused' in a && typeof a.yield_refused !== 'boolean') {
-          c.fail('CONFIG_FIELD_TYPE', 'config.assemble.yield_refused', `is ${show(a.yield_refused)}; true or false is required`);
-        }
+        checkYieldRefused(c, a);
       }
     }
   }
@@ -1920,6 +1918,7 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null, p
       checkAlternates(c, t.assemble.alternates, made, limbs, names?.bones ?? null, names?.chains ?? null, t.regions, t.meshes);
     }
     const output = new Set([...made.parts.filter(n => !limbs?.consumed.has(n)), ...made.patches, ...made.cuts, ...(limbs?.parts.keys() ?? [])]);
+    if (isPlainObject(t.assemble)) checkYieldRefused(c, t.assemble, new Set([...finalLayerPartNames(made.parts, made.cuts, limbs), ...made.patches]), limbs);
     if (isPlainObject(t.assemble) && 'extend_painting' in t.assemble) checkPaintingExtensions(c, t.assemble.extend_painting, new Set([...output].filter(n => !made.patches.includes(n) && !limbs?.consumed.has(n))));
     if ('motion_seams' in t) {
       c.problems.push(...motionSeamProblems(t.motion_seams, output, 'config.motion_seams', 'CONFIG_MOTION_SEAM'));
@@ -2141,9 +2140,10 @@ function parseConfigFrom(raw: Json, base: string | null): { config: CharacterCon
   if (isPlainObject(t.assemble) && 'alternates' in t.assemble) {
     checkAlternates(c, t.assemble.alternates, { parts, patches, cuts }, limbs, names.bones, names.chains, t.regions, t.meshes);
   }
-  if (isPlainObject(t.assemble) && 'extend_painting' in t.assemble) {
-    const output = new Set([...parts.filter(n => !limbs?.consumed.has(n)), ...cuts.filter(n => !limbs?.consumed.has(n)), ...(limbs?.parts.keys() ?? [])]);
-    checkPaintingExtensions(c, t.assemble.extend_painting, output);
+  if (isPlainObject(t.assemble)) {
+    const output = finalLayerPartNames(parts, cuts, limbs);
+    checkYieldRefused(c, t.assemble, new Set([...output, ...patches]), limbs);
+    if ('extend_painting' in t.assemble) checkPaintingExtensions(c, t.assemble.extend_painting, output);
   }
   if ('meshes' in t) checkMeshes(c, t.meshes, names.bones, names.chains, t.stops);
   if ('regions' in t) checkRegions(c, t.regions, names.bones);
@@ -2722,6 +2722,43 @@ function checkOccluderFiles(c: Check, assemble: Json, base: string | null): void
   c.problems.push(...occluderFileProblems(declarations, base));
 }
 
+function finalLayerPartNames(parts: readonly string[], cuts: readonly string[], limbs: LimbNames | null): Set<string> {
+  return new Set([...parts, ...cuts].filter(name => !limbs?.consumed.has(name)).concat([...(limbs?.parts.keys() ?? [])]));
+}
+
+function checkYieldRefused(c: Check, assemble: Record<string, Json>, outputs?: Set<string>, limbs?: LimbNames | null): void {
+  const value = assemble.yield_refused;
+  if (!('yield_refused' in assemble) || typeof value === 'boolean') return;
+  const at = 'config.assemble.yield_refused';
+  if (!Array.isArray(value)) {
+    c.fail('CONFIG_FIELD_TYPE', at, `is ${show(value)}; true, false or a list of final yielding part names is required`);
+    return;
+  }
+  if (value.length === 0) c.fail('CONFIG_FIELD_TYPE', at, 'is []; use false or omit the key to disable yield');
+  const names = outputs === undefined ? undefined : new Set(outputs);
+  if (names !== undefined && Array.isArray(assemble.alternates)) {
+    for (const alternate of assemble.alternates.filter(isPlainObject)) {
+      if (!Array.isArray(alternate.cuts)) continue;
+      for (const cut of alternate.cuts.filter(isPlainObject)) if (typeof cut.into === 'string') names.add(cut.into);
+    }
+  }
+  const seen = new Set<string>();
+  for (const [i, name] of value.entries()) {
+    const entry = `${at}[${i}]`;
+    if (!c.string(entry, name)) continue;
+    if (seen.has(name)) c.fail('CONFIG_PART_UNIQUE', entry, `names ${show(name)} again; each yielding part is named once`);
+    seen.add(name);
+    if (names !== undefined && !names.has(name)) {
+      const limb = limbs?.consumed.get(name);
+      const segments = limb === undefined ? [] : limbs?.chains.get(limb)?.parts ?? [];
+      const detail = limb === undefined
+        ? 'a final output part name is required (source tags and aliases are not accepted)'
+        : `config.limbs.${limb} consumes it; list its final segment parts instead (${segments.map(part => show(part)).join(', ')})`;
+      c.fail('CONFIG_NAME_RESOLVES', entry, `names ${show(name)}; ${detail}`);
+    }
+  }
+}
+
 function checkKeepUnderOccluders(c: Check, a: Record<string, Json>, plan: readonly string[] | null): void {
   if (!('keep_under_occluders' in a)) return;
   const at = 'config.assemble.keep_under_occluders';
@@ -2923,9 +2960,6 @@ function checkAssemble(c: Check, v: Json, door: 'assemble' | 'full'): { parts: s
   if ('rig_scale' in a) c.number(`${p}.rig_scale`, a.rig_scale, 'positive');
   if ('head_face_underfill' in a && typeof a.head_face_underfill !== 'boolean') {
     c.fail('CONFIG_FIELD_TYPE', `${p}.head_face_underfill`, `is ${show(a.head_face_underfill)}; true or false is required`);
-  }
-  if ('yield_refused' in a && typeof a.yield_refused !== 'boolean') {
-    c.fail('CONFIG_FIELD_TYPE', `${p}.yield_refused`, `is ${show(a.yield_refused)}; true or false is required`);
   }
   if ('stage_map' in a && typeof a.stage_map !== 'boolean') {
     c.fail('CONFIG_FIELD_TYPE', `${p}.stage_map`, `is ${show(a.stage_map)}; true or false is required`);
