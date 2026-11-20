@@ -121,12 +121,14 @@ export function deriveTakenRegion(base: Layer, donor: Layer, painting: Raster, s
 export function applyTakenRegions(runs: Runs, painting: Raster, cfg: Pick<AssembleConfig, 'depth'> & {
   seethrough: Pick<AssembleConfig['seethrough'], 'head_box'> | undefined;
   assemble: Pick<AssembleConfig['assemble'], 'take' | 'plan'>;
-}, configPath: string, setup: SetupPainting | undefined, receipts: ReceiptLedger, sourcePath?: string): Runs {
+}, configPath: string, setup: SetupPainting | undefined, receipts: ReceiptLedger, sourcePath?: string, requirementsPath?: string): Runs {
   const declarations = (cfg.assemble.take ?? []).filter((item): item is TakeRegion => 'seed' in item);
   if (declarations.length === 0) return runs;
   const tolerance = setup?.rgb_tolerance;
   if (typeof tolerance !== 'number' || !Number.isSafeInteger(tolerance) || tolerance < 0 || tolerance > 255) {
-    return refuse('ASSEMBLE_REGION_TAKE_TOLERANCE', 'config.assemble.take', 'a region take requires --requirements declaring setup_painting.rgb_tolerance, the same authored integer check reads; no default is supplied');
+    return refuse('ASSEMBLE_REGION_TAKE_TOLERANCE', 'config.assemble.take', requirementsPath === undefined
+      ? 'no requirements file is given: config.requirements is absent and --requirements was not passed; a region take requires setup_painting.rgb_tolerance, an authored integer 0-255 that check reads too, with no default — name a requirements file in config.requirements and declare setup_painting.rgb_tolerance there'
+      : `${requirementsPath} declares no setup_painting.rgb_tolerance; a region take requires that authored integer 0-255, the one check reads too, with no default — declare it under setup_painting in that file, the one config.requirements names`);
   }
   if (cfg.depth !== undefined || [...runs.full.layers, ...runs.head.layers].some(layer => layer.depthSheet !== undefined)) {
     return refuse('ASSEMBLE_REGION_TAKE_BINDING', 'config.assemble.take', 'active scalar depth sheets have no region donor binding; a run without active scalar depth is required');

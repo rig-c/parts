@@ -1,4 +1,5 @@
 /** Region-take controls through the stage, strict loader and public check metric. */
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -18,7 +19,7 @@ import { applyTakenLayers } from '../src/takelayers.ts';
 import { makeInputs } from '../src/inputs.ts';
 import { setupPaintingLine } from '../src/setuppainting.ts';
 import { applyTakenRegions, deriveTakenRegion, regionPaintingDelta } from '../src/takeregion.ts';
-import { assemblyConfigChanges, assemblyConfigReading, assemblyFieldDigest, REGION_TOLERANCE_FIELD, refuseStaleAssembly } from '../src/assembly-reading.ts';
+import { assemblyConfigChanges, assemblyConfigReading, assemblyFieldDigest, REGION_TOLERANCE_FIELD, refuseStaleAssembly, staleAssemblyDetail } from '../src/assembly-reading.ts';
 import { readParts, serializeParts } from '../src/parts.ts';
 
 type Say = (name: string, pass: boolean, detail: string) => void;
@@ -105,10 +106,14 @@ export function runTakeRegionChecks(dir: string, say: Say): void {
   const noRequirement = fresh('no-requirement');
   const noLimit = fresh('no-limit');
   writeFileSync(join(noLimit.home, 'requirements.json'), JSON.stringify({ spec: 'spine-parts-requirements/1', fps: 1, targets: [], requirements: [] }));
-  for (const item of [noRequirement, noLimit]) {
-    const text = message(() => stage(item.home, item === noLimit));
-    say('REGION_TOLERANCE_REQUIRED_BEFORE_EMISSION', text.includes('ASSEMBLE_REGION_TAKE_TOLERANCE') && !existsSync(join(item.home, 'out')), text);
-  }
+  // Issue #1418: the config's own requirements file declares the tolerance, so no flag is needed.
+  const configOnly = stage(noRequirement.home, false);
+  const configRow = configOnly.result.parts.assembly_config?.fields.find(row => row.name === REGION_TOLERANCE_FIELD)?.sha256;
+  say('REGION_TOLERANCE_REQUIRED_BEFORE_EMISSION',
+    configOnly.notes.some(line => line.includes('RGB tolerance 0;')) && configRow === createHash('sha256').update('0').digest('hex'),
+    `config.requirements only, no flag: ${configOnly.notes.filter(line => line.includes('region take')).join(' | ')}; stamp row ${configRow?.slice(0, 12)}`);
+  const noLimitText = message(() => stage(noLimit.home, true));
+  say('REGION_TOLERANCE_REQUIRED_BEFORE_EMISSION', noLimitText === `ASSEMBLE_REGION_TAKE_TOLERANCE: config.assemble.take — ${join(noLimit.home, 'requirements.json')} declares no setup_painting.rgb_tolerance; a region take requires that authored integer 0-255, the one check reads too, with no default — declare it under setup_painting in that file, the one config.requirements names` && !existsSync(join(noLimit.home, 'out')), noLimitText);
   for (const [name, mutate, code] of [
     ['crop', (home: string) => { const p = join(home, 'donor', 'layers.json'); const value = JSON.parse(readFileSync(p, 'utf8')); value.width = 65; writeFileSync(p, JSON.stringify(value)); }, 'ASSEMBLE_REGION_TAKE_GEOMETRY'],
     ['input-crop', (home: string) => { const p = readPng(join(home, 'painting.png')); p.data[0] ^= 1; writeFileSync(join(home, 'different.png'), encodePngBytes(p)); const c = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')); c.assemble.take[0].st_input = 'different.png'; save(home, c); }, 'ASSEMBLE_REGION_TAKE_GEOMETRY'],
@@ -624,6 +629,16 @@ export function runRegionToleranceBindingChecks(dir: string, say: Say): void {
       upgrade === `assembly reading changed at config.${field}; the recorded stamp predates region-take setup_painting.rgb_tolerance binding. Re-run assemble once with the same config` &&
       editedDetail === `assembly config changed at config.assemble.rig_scale, config.${field}; re-run assemble from the current config`,
     `fields ${JSON.stringify(oldChanges)}; old stamp ${upgrade}; edited config ${editedDetail}`);
+
+  // Issue #1418: a stamp that predates both later bindings names both. No generated config holds an occluder-split
+  // take and a region take at once, so the refusal's detail is read for the two field names a stamp would lack.
+  const split = 'assemble.take[1].meta';
+  const both = staleAssemblyDetail([split, field], new Set(['assemble.take']));
+  const recordedSplit = staleAssemblyDetail([split, field], new Set([split]));
+  say('AS1418_A_STAMP_PREDATING_BOTH_LATER_BINDINGS_NAMES_BOTH',
+    both === `assembly reading changed at config.${split}, config.${field}; the recorded stamp predates split-take donor metadata and region-take setup_painting.rgb_tolerance bindings. Re-run assemble once with the same config` &&
+      recordedSplit === `assembly config changed at config.${split}, config.${field}; re-run assemble from the current config`,
+    `both absent: ${both}; split recorded: ${recordedSplit}`);
 
   // Where no region take reads a declared tolerance, the reading is the one without config.requirements,
   // which no field hashed before this binding outside busy-visible.

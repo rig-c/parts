@@ -518,14 +518,18 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   const supportDeclarations = JSON.stringify(cfg.assemble.cuts ?? []);
   const { seam, project } = effectiveAssemblyRules(cfg.assemble, input);
   const busyVisible = cfg.assemble.ground === 'busy' && project === 'visible';
+  const regionTake = (cfg.assemble.take ?? []).some(take => 'seed' in take);
   // Issue #1418: a requirements file whose content reaches assembly must be the one config.requirements names,
   // because assembly_config reads only config.requirements.
   refuseUnnamedAssemblyRequirements(input.requirements, cfg.requirements, input.config, [
-    ...((cfg.assemble.take ?? []).some(take => 'seed' in take) ? ['setup_painting.rgb_tolerance (a region take)'] : []),
+    ...(regionTake ? ['setup_painting.rgb_tolerance (a region take)'] : []),
     ...(busyVisible && requirementsFile?.setup_painting?.figure_mask !== undefined ? ['setup_painting.figure_mask (busy-visible)'] : []),
   ]);
-  const requirements = busyVisible
+  // Where requirements reach assembly, assemble reads them as build does: config.requirements, or the flag when the
+  // config declares none, the two being one file when both are given (buildRequirements). Elsewhere nothing here reads them.
+  const requirements = busyVisible || regionTake
     ? buildRequirements(input.requirements, cfg.requirements, input.config) : null;
+  const effectiveSetup = requirements === null ? undefined : readRequirements(requirements.read).setup_painting;
   const src = readSource(input.source);
   const read = readRuns(input.full, input.head);
   // Issue #946: every declared receipt is held to its file, and under `required` every edited image needs one, before anything is assembled.
@@ -534,11 +538,11 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   // Issue #947: under `trace_parts`, a shape drawn in the config through a part's pixels is refused with them.
   refuseIfAny([...receipts.problems, ...missingReceipts(receipts, [...editedRunImages(read), ...editedConfigImages(input.config, cfg.assemble.cuts ?? [], cfg.limbs)]), ...untracedPartSources(cfg)]);
   const takenRuns = applyTakenLayers(read, src, cfg, input.config);
-  const runs = applyTakenRegions(takenRuns, src, cfg, input.config, requirementsFile?.setup_painting, receipts, input.source);
+  const runs = applyTakenRegions(takenRuns, src, cfg, input.config, effectiveSetup, receipts, input.source, requirements?.read);
   for (const note of runs.notes) log(note.startsWith('WARN  ') ? note : `note: ${note}`);
   const fields = projectedStageFields(cfg, runs.single ? { w: src.width, h: src.height } : null);
   const setupPainting = requirements === null || fields.ground !== 'busy' || project !== 'visible' ? undefined
-    : readRequirements(requirements.read).setup_painting;
+    : effectiveSetup;
   const figureSupport = setupPainting === undefined ? undefined
     : readSetupFigureMask(setupPainting, requirements!.read, src, Math.trunc(src.width * fields.rigScale), Math.trunc(src.height * fields.rigScale));
   const rigSize: [number, number] = [Math.trunc(src.width * fields.rigScale), Math.trunc(src.height * fields.rigScale)];
@@ -2806,7 +2810,7 @@ export function buildRequirements(flag: string | undefined, declared: string | u
     {
       code: 'BUILD_REQUIREMENTS_CONFLICT',
       object: `--requirements ${flag} and config.requirements "${declared}"`,
-      detail: `the flag names ${resolve(flag)} (${shown(flagDigest)}) and the config declares ${fromConfig} (${shown(configDigest)}); a build reads one requirements file and records it, so the two must name the same file or the same bytes — drop the flag to build from the config's file, or point config.requirements at the flag's`,
+      detail: `the flag names ${resolve(flag)} (${shown(flagDigest)}) and the config declares ${fromConfig} (${shown(configDigest)}). assemble and build read one requirements file, the one config.requirements names, so the flag must name the same file (the same resolved file, or a file of the same bytes) — drop the flag to read the config's file, or point config.requirements at the flag's`,
     },
   ]);
 }
@@ -2832,7 +2836,7 @@ export function refuseUnnamedAssemblyRequirements(flag: string | undefined, decl
     throw new PartsError([{
       code: 'ASSEMBLE_REQUIREMENTS_UNDECLARED',
       object: `--requirements ${flag}`,
-      detail: `${path} (${digest}) gives assembly ${fields}, and config.requirements is absent; assembly_config reads only config.requirements, so a file that reaches assembly must be named there — add "requirements": "<this file, relative to the config's directory>" to the config`,
+      detail: `${path} (${digest}) gives assembly ${fields}, and config.requirements is absent; assembly_config reads only config.requirements, so a file that reaches assembly must be named there — add "requirements": ${JSON.stringify(relative(dirname(resolve(configPath)), path).split(sep).join('/'))} to ${configPath}`,
     }]);
   }
   try { buildRequirements(flag, declared, configPath); } catch (error) {

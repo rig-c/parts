@@ -190,13 +190,13 @@ export function runPaintingEdgeChecks(say: Say): void {
       full: join(directory, 'full'), head: join(directory, 'head') };
     const configMask = join(directory, 'config-mask.json');
     writeFileSync(configMask, JSON.stringify({ ...config, requirements: 'requirements.json' }));
-    const readings = ['omitted', 'declared', 'config-mask'].map(name => {
+    const readings = ['omitted', 'flag-and-config-mask', 'config-mask'].map(name => {
       const declared = name !== 'omitted';
       const out = join(directory, name);
       const logs: string[] = [];
       // Issue #1418: a flag whose figure mask reaches assembly names the file config.requirements declares.
       const result = assembleStage({ ...input, config: name === 'omitted' ? input.config : configMask,
-        ...(name === 'declared' ? { requirements } : {}),
+        ...(name === 'flag-and-config-mask' ? { requirements } : {}),
         alts: [{ name: 'same', source: input.source, full: input.full, head: input.head }] },
       { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'),
         recomposite: join(out, 'recomposite.png'), errorMap: join(out, 'error.png') }, line => logs.push(line));

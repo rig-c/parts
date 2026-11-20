@@ -395,8 +395,26 @@ then names the field that reaches assembly. "Names" is the rule
 `BUILD_REQUIREMENTS_CONFLICT` already holds: the same file once resolved (the
 flag against the working directory, the declaration against the config's
 directory), or a file of the same bytes. A `--requirements` file whose content
-reaches no assembly input is accepted as before and moves no byte. So every
-requirements value assembly reads is in the reading.
+reaches no assembly input is accepted as before and moves no byte. Where a
+region take or a busy-visible figure mask reads requirements, `assemble` reads
+them as `build` does: from `config.requirements`, with `--requirements`
+optional and, when given, naming the same file. "The same file" here and in
+both refusals means the same resolved file, or a file with the same bytes. So
+every requirements value that changes what assemble takes or masks is in the
+reading. A flag-only `cut_material` still decides whether
+`cut_material_sources.json` is written, and a flag-only `pinholes.required`
+still decides a refusal; neither changes the parts or the stamp.
+
+Release order for the tolerance binding: a reader on Parts 2.48.0 or earlier
+refuses a stamp this release writes for a config with a region take and a
+declared tolerance outside busy-visible, with a false `ASSEMBLY_CONFIG_STALE`
+at `config.requirements.setup_painting.rgb_tolerance`. So release Parts, then
+Review, then Create, before those consumers read such stamps.
+
+A stamp that predates both later bindings is refused with one sentence naming
+both: `the recorded stamp predates split-take donor metadata and region-take
+setup_painting.rgb_tolerance bindings. Re-run assemble once with the same
+config`.
 
 The stable named subpath `@rig-c/parts/assembly-reading` exports
 `assemblyConfigReading(configPath: string, parts: PartsFile): AssemblyConfigRecord`

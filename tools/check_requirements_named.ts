@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { writeTakeRegionFixture } from '../fixtures/take_region.ts';
+import { writeTakeFixture } from '../fixtures/take_layers.ts';
 import { assembleStage } from '../src/build.ts';
 import { PartsError } from '../src/errors.ts';
 import { REGION_TOLERANCE_FIELD } from '../src/assembly-reading.ts';
@@ -54,7 +55,7 @@ export function runRequirementsNamedChecks(dir: string, say: Say): void {
   const flagDigest = sha(readFileSync(tolerated)).slice(0, 16);
   say('URQ01_FLAG_ONLY_REQUIREMENTS_UNDER_A_REGION_TAKE_IS_REFUSED',
     !flagOnly.ok && flagOnly.code === 'ASSEMBLE_REQUIREMENTS_UNDECLARED' &&
-      flagOnly.text === `ASSEMBLE_REQUIREMENTS_UNDECLARED: --requirements ${tolerated} — ${tolerated} (sha256 ${flagDigest}) gives assembly setup_painting.rgb_tolerance (a region take), and config.requirements is absent; assembly_config reads only config.requirements, so a file that reaches assembly must be named there — add "requirements": "<this file, relative to the config's directory>" to the config` &&
+      flagOnly.text === `ASSEMBLE_REQUIREMENTS_UNDECLARED: --requirements ${tolerated} — ${tolerated} (sha256 ${flagDigest}) gives assembly setup_painting.rgb_tolerance (a region take), and config.requirements is absent; assembly_config reads only config.requirements, so a file that reaches assembly must be named there — add "requirements": "requirements.json" to ${join(home, 'flag-only.json')}` &&
       !existsSync(flagOnly.out),
     flagOnly.text || 'accepted');
 
@@ -116,4 +117,21 @@ export function runRequirementsNamedChecks(dir: string, say: Say): void {
   say('URQ08_A_FLAG_ONLY_SETUP_PAINTING_WITHOUT_A_FIGURE_MASK_UNDER_BUSY_VISIBLE_IS_ACCEPTED_BYTE_IDENTICAL',
     busyWithout.ok && busyUnmasked.ok && tree(busyWithout.out) === tree(busyUnmasked.out),
     `without flag ${busyWithout.ok ? 'accepted' : busyWithout.text}; flag-only, no figure_mask ${busyUnmasked.ok ? 'accepted' : busyUnmasked.text}; outputs identical: ${tree(busyWithout.out) === tree(busyUnmasked.out)}`);
+
+  // A whole-layer take (no seed) reads no tolerance: a flag-only file beside it reaches nothing.
+  const whole = join(dir, 'whole-layer');
+  writeTakeFixture(whole);
+  const wholeFlag = join(whole, 'requirements.json');
+  writeFileSync(wholeFlag, JSON.stringify({ ...requirements, setup_painting: { ...requirements.setup_painting, rgb_tolerance: 7 } }));
+  const wholeRun = (out: string, flag: string | undefined): string => {
+    try {
+      assembleStage({ source: join(whole, 'painting.png'), full: join(whole, 'full'), head: null, config: join(whole, 'config.json'), seam: 'near-white', project: 'core', ...(flag === undefined ? {} : { requirements: flag }) },
+        { partsJson: join(whole, out, 'parts.json'), partsDir: join(whole, out, 'parts'), recomposite: join(whole, out, 'recomposite.png'), errorMap: join(whole, out, 'error.png') }, () => {});
+      return 'accepted';
+    } catch (error) { if (error instanceof PartsError) return error.message; throw error; }
+  };
+  const wholeWithout = wholeRun('without', undefined), wholeWith = wholeRun('flag', wholeFlag);
+  say('URQ09_A_FLAG_ONLY_FILE_BESIDE_A_WHOLE_LAYER_TAKE_IS_ACCEPTED_BYTE_IDENTICAL',
+    wholeWithout === 'accepted' && wholeWith === 'accepted' && tree(join(whole, 'without')) === tree(join(whole, 'flag')),
+    `without flag ${wholeWithout}; flag-only ${wholeWith}; outputs identical: ${tree(join(whole, 'without')) === tree(join(whole, 'flag'))}`);
 }
