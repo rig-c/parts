@@ -154,7 +154,8 @@ export const REGION_TOLERANCE_FIELD = 'requirements.setup_painting.rgb_tolerance
 
 function projectionEntries(cfg: ProjectionSource) {
   // Requirements values reach this config view only through config.requirements.
-  // A requirements file named only by --requirements is read outside it (#1393).
+  // assemble and build refuse a --requirements file the config does not name
+  // when its content reaches assembly (#1418), so nothing assembly reads is outside it.
   // Only selected values can be exemptions in the projection, such as the
   // editor receipt ledger below.
   const a = cfg.assemble;
@@ -503,12 +504,16 @@ export function refuseStaleAssembly(configPath: string, parts: PartsFile, loaded
   const current = readAssemblyConfig(cfg, parts, configPath, overrides);
   const changes = changedAssemblyFields(previous, current);
   if (changes.length === 0) return;
-  const recorded = new Set(previous.fields.map(({ name }) => name));
+  const detail = staleAssemblyDetail(changes, new Set(previous.fields.map(({ name }) => name)));
+  throw new PartsError([{ code: 'ASSEMBLY_CONFIG_STALE', object: configPath, detail }]);
+}
+
+/** The stale refusal's detail for `changes` against a stamp recording `recorded`; a stamp that lacks only later bindings is told so. */
+export function staleAssemblyDetail(changes: readonly string[], recorded: ReadonlySet<string>): string {
   // A field a newer binding adds, absent from the stamp, means the stamp predates that binding.
   const predated = changes.map(name => recorded.has(name) ? undefined : LATER_BINDINGS.find(later => later.field(name)));
   const bindings = LATER_BINDINGS.filter(later => predated.includes(later)).map(later => later.binding);
-  const detail = predated.every(later => later !== undefined)
-    ? `assembly reading changed at ${changes.map(name => `config.${name}`).join(', ')}; the recorded stamp predates ${bindings.join(' and ')} binding. Re-run assemble once with the same config`
+  return predated.every(later => later !== undefined)
+    ? `assembly reading changed at ${changes.map(name => `config.${name}`).join(', ')}; the recorded stamp predates ${bindings.join(' and ')} binding${bindings.length > 1 ? 's' : ''}. Re-run assemble once with the same config`
     : assemblyChangeDetail(changes);
-  throw new PartsError([{ code: 'ASSEMBLY_CONFIG_STALE', object: configPath, detail }]);
 }

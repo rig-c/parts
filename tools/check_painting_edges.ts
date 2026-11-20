@@ -190,12 +190,13 @@ export function runPaintingEdgeChecks(say: Say): void {
       full: join(directory, 'full'), head: join(directory, 'head') };
     const configMask = join(directory, 'config-mask.json');
     writeFileSync(configMask, JSON.stringify({ ...config, requirements: 'requirements.json' }));
-    const readings = ['omitted', 'declared', 'config-mask'].map(name => {
+    const readings = ['omitted', 'flag-and-config-mask', 'config-mask'].map(name => {
       const declared = name !== 'omitted';
       const out = join(directory, name);
       const logs: string[] = [];
-      const result = assembleStage({ ...input, config: name === 'config-mask' ? configMask : input.config,
-        ...(name === 'declared' ? { requirements } : {}),
+      // Issue #1418: a flag whose figure mask reaches assembly names the file config.requirements declares.
+      const result = assembleStage({ ...input, config: name === 'omitted' ? input.config : configMask,
+        ...(name === 'flag-and-config-mask' ? { requirements } : {}),
         alts: [{ name: 'same', source: input.source, full: input.full, head: input.head }] },
       { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'),
         recomposite: join(out, 'recomposite.png'), errorMap: join(out, 'error.png') }, line => logs.push(line));
@@ -242,7 +243,7 @@ export function runPaintingEdgeChecks(say: Say): void {
     writePng(differentSource, differentPainting);
     const alternateReadings = ['omitted', 'different', 'same-bytes'].map(name => {
       const out = join(directory, 'alternate-' + name), logs: string[] = [];
-      const result = assembleStage({ ...input, ...(name === 'omitted' ? {} : { requirements }),
+      const result = assembleStage({ ...input, ...(name === 'omitted' ? {} : { config: configMask, requirements }),
         alts: [{ name: 'variant', source: name === 'same-bytes' ? paintingCopy : differentSource,
           full: input.full, head: input.head }] },
       { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'),

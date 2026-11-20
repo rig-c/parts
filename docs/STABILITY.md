@@ -383,9 +383,38 @@ field already binds the tolerance, so this field is not written there. A
 config with no region take, or no declared tolerance, keeps its reading. A
 stamp that lacks only this field is refused as `ASSEMBLY_CONFIG_STALE`, and
 the refusal says that the stamp predates the binding and asks for one
-re-assemble with the same config. The reading reads only `config.requirements`:
-a requirements file named only by `--requirements` is outside it, as the
-`--seam` and `--project` flags are.
+re-assemble with the same config. The reading reads only `config.requirements`.
+
+`assemble` and `build` refuse a `--requirements` file that `config.requirements`
+does not name whenever its content reaches assembly: the config has a region
+take (`setup_painting.rgb_tolerance`), or under `ground: "busy"` with
+`project: "visible"` the file declares `setup_painting.figure_mask`. With no
+`config.requirements` the refusal is `ASSEMBLE_REQUIREMENTS_UNDECLARED`; a
+declaration naming another file is `BUILD_REQUIREMENTS_CONFLICT`, whose detail
+then names the field that reaches assembly. "Names" is the rule
+`BUILD_REQUIREMENTS_CONFLICT` already holds: the same file once resolved (the
+flag against the working directory, the declaration against the config's
+directory), or a file of the same bytes. A `--requirements` file whose content
+reaches no assembly input is accepted as before and moves no byte. Where a
+region take or a busy-visible figure mask reads requirements, `assemble` reads
+them as `build` does: from `config.requirements`, with `--requirements`
+optional and, when given, naming the same file. "The same file" here and in
+both refusals means the same resolved file, or a file with the same bytes. So
+every requirements value that changes what assemble takes or masks is in the
+reading. A flag-only `cut_material` still decides whether
+`cut_material_sources.json` is written, and a flag-only `pinholes.required`
+still decides a refusal; neither changes the parts or the stamp.
+
+Release order for the tolerance binding: a reader on Parts 2.48.0 or earlier
+refuses a stamp this release writes for a config with a region take and a
+declared tolerance outside busy-visible, with a false `ASSEMBLY_CONFIG_STALE`
+at `config.requirements.setup_painting.rgb_tolerance`. So release Parts, then
+Review, then Create, before those consumers read such stamps.
+
+A stamp that predates both later bindings is refused with one sentence naming
+both: `the recorded stamp predates split-take donor metadata and region-take
+setup_painting.rgb_tolerance bindings. Re-run assemble once with the same
+config`.
 
 The stable named subpath `@rig-c/parts/assembly-reading` exports
 `assemblyConfigReading(configPath: string, parts: PartsFile): AssemblyConfigRecord`
