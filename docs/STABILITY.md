@@ -1588,6 +1588,17 @@ motion support, boundary population or verified render evidence is a HOLE,
 not a zero PASS. Existing render/sidecar refusals remain refusals. The standing
 bracketed-run definition does not certify curved or diagonal openings.
 
+Per-cell samples are a bounded diagnostic sample; the counts are the
+measurement (issue #1403). Each `samples[]` list (standing and motion-opened,
+at setup, on every idle frame and on every turn pose) holds at most 64 rows.
+A list that measured more holds 64 and gains `samples_omitted`, the number of
+rows left out; a list of 64 or fewer has no such field and is written as before.
+Standing keeps its 64 worst rows: counted first, then the larger of the two
+distances' minimum, then the earlier measured row. Motion-opened rows carry no
+distance and keep rows floor(j · n / 64), j = 0 … 63, of the n measured. Kept
+rows stay in measured order. Every count, `px`, `box`, hit, span, run and status
+is computed from all cells.
+
 Issue #1323 adds `behind_seams.turn: true` as an explicit opt-in. It references
 existing emitted turn slider ranges, never a second range declaration. Without
 this key no turn rows are written and existing `check.json` bytes are unchanged.
