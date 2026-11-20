@@ -1184,7 +1184,12 @@ A changed crop, scale, name or order needs a plan or cut change instead.
 Record a receipt with the shipped writer (issue #1328) after declaring
 `assemble.edited_parts` with its directory and an empty `receipts` array in
 each named config. `--config` accepts the assembly config, including the full
-config after `propose --write-config`. Use the [parts assembled from that config](#keeping-assembled-parts-current).
+config after `propose --write-config`. Finalize the effective assembly inputs,
+including `turn` and `constraints.physics`, then assemble again. Start the edit
+from the PNG written by that assembly and use that same PNG as `--from`.
+Pass its manifest with `edited-part --parts` so `ASSEMBLY_CONFIG_STALE` can
+name any assembly fields that changed since it was written. See
+[Keeping assembled parts current](#keeping-assembled-parts-current).
 
 ```sh
 rig-parts edited-part --config draft/config.json --parts assembled/parts.json --part sleeve_r --file retouched/sleeve_r.png --from assembled/parts/sleeve_r.png --producer '{"tool":"image-editor","script_sha256":"<lowercase 64-hex digest>"}'
@@ -4567,8 +4572,11 @@ and a usage error with `--head-box`, `--cloth` or `--from-config`.
 
 Use one config through `assemble` → `propose --write-config` → `assemble` →
 `edited-part`. The first assemble supplies the parts for drafting `turn`.
-An already authored turn can be present for the first assemble. Use the second
-assemble's `parts.json` and PNGs to prepare and record an edit. Declare
+An already authored turn can be present for the first assemble. Finalize all
+effective assembly inputs, including `turn` and `constraints.physics`, before
+assembling again. Use that assembly's PNGs as the edit baselines and pass its
+manifest to `edited-part --parts`. If effective inputs changed after assembly,
+`ASSEMBLY_CONFIG_STALE` names the changed fields. Declare
 `assemble.edited_parts` with its directory and empty receipts before that
 assemble, then assemble again to apply the recorded edit.
 
@@ -5915,7 +5923,7 @@ recorded transform. The record fields and sampling formula are specified in
 | <a id="ASSEMBLE_EDITED_PART_UNKNOWN"></a>`ASSEMBLE_EDITED_PART_UNKNOWN` | A receipt names a part outside the base plan. | Use the existing base-plan part name; a new name needs a plan change. |
 | <a id="ASSEMBLE_EDITED_PART_FILE"></a>`ASSEMBLE_EDITED_PART_FILE` | The receipt file does not exist at dir/file. | Correct the config-relative dir or the directory-relative file, or supply that file. |
 | <a id="ASSEMBLE_EDITED_PART_SHA256"></a>`ASSEMBLE_EDITED_PART_SHA256` | The edited file bytes do not match sha256. | Use the intended edited file and record its exact file hash. |
-| <a id="ASSEMBLE_EDITED_PART_BASELINE"></a>`ASSEMBLE_EDITED_PART_BASELINE` | The current normal assembled part PNG does not match from_sha256. | Rebase the edit on this config's current assembled part and record that original file hash. |
+| <a id="ASSEMBLE_EDITED_PART_BASELINE"></a>`ASSEMBLE_EDITED_PART_BASELINE` | The current normal assembled part PNG does not match from_sha256. | Finalize the effective assembly inputs, including `turn` and `constraints.physics`, and assemble again. Rebase and record the edit using the new baseline. Run `edited-part --parts` with the prior manifest and current config to identify stale fields via `ASSEMBLY_CONFIG_STALE`. |
 | <a id="ASSEMBLE_EDITED_PART_SIZE"></a>`ASSEMBLE_EDITED_PART_SIZE` | The edited PNG width or height differs from the assembled box. | Edit at the original crop and rig-pixel size; use a plan change for a new box. |
 | <a id="ASSEMBLE_EDITED_PART_DUPLICATE"></a>`ASSEMBLE_EDITED_PART_DUPLICATE` | More than one receipt names the same part. | Keep exactly one receipt for that part. |
 | <a id="ASSEMBLE_EDITED_PART_DECODES"></a>`ASSEMBLE_EDITED_PART_DECODES` | The verified file cannot be decoded as a PNG. | Supply a valid PNG and update its receipt hash. |

@@ -210,4 +210,9 @@ export function runEditedPartWriterChecks(dir: string, say: Say): void {
   writeFileSync(config, structuredConfig);
   say('NO_STAGED_FILES_LEFT', [dir, rigDir].every(at => readdirSync(at).every(name => !name.includes('.edited-part-') && !name.includes('.rig-parts-'))),
     'successful writes and validation refusals leave no staging files');
+  const baselineHint = 'The assembled PNG changed since the baseline, typically because an assembly input changed. ' +
+    'Use edited-part --parts with the prior manifest and current config to check for ASSEMBLY_CONFIG_STALE and see which assembly fields changed';
+  say('STALE_BASELINE_NAMES_MANIFEST_CHECK', wrongBuild.lines.some(line =>
+    line.includes('ASSEMBLE_EDITED_PART_BASELINE:') && line.includes(baselineHint)),
+    'wrong baseline names the manifest check that identifies changed assembly fields');
 }

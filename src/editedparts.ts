@@ -128,7 +128,12 @@ export function replaceEditedParts(
       continue;
     }
     const found = sha(encodePngBytes(part.image));
-    if (found !== receipt.from_sha256) problems.push({ code: 'ASSEMBLE_EDITED_PART_BASELINE', object, detail: `the current assembled PNG sha256 is ${found}; receipt from_sha256 ${receipt.from_sha256} is required` });
+    if (found !== receipt.from_sha256) problems.push({
+      code: 'ASSEMBLE_EDITED_PART_BASELINE', object,
+      detail: `the current assembled PNG sha256 is ${found}; receipt from_sha256 ${receipt.from_sha256} is required. ` +
+        'The assembled PNG changed since the baseline, typically because an assembly input changed. ' +
+        'Use edited-part --parts with the prior manifest and current config to check for ASSEMBLY_CONFIG_STALE and see which assembly fields changed',
+    });
     if (image.width !== part.record.w || image.height !== part.record.h) problems.push({ code: 'ASSEMBLE_EDITED_PART_SIZE', object, detail: `edited PNG is ${image.width}x${image.height}; assembled box ${part.record.w}x${part.record.h} is required` });
     const actual = sha(edit.bytes);
     if (actual !== receipt.sha256) problems.push({ code: 'ASSEMBLE_EDITED_PART_SHA256', object, detail: `edited bytes sha256 is ${actual}; receipt sha256 ${receipt.sha256} is required` });
