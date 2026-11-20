@@ -65,11 +65,11 @@ export function runEditedPartWriterChecks(dir: string, say: Say): void {
   const replace = (flag: string, value: string): string[] => args.map((arg, i) => args[i - 1] === flag ? value : arg);
   const appended = cli(args), afterInsert = text(config), rows = block(config).receipts;
   const expected: EditedPartReceipt = { part: 'body', file: 'edited.png', sha256: sha(readFileSync(file)), from_sha256: sha(readFileSync(from)), editor };
-  say('APPEND_HASHES_AND_ONE_ESCAPED_LOG_LINE', appended.status === 0 && rows.length === 2 &&
+  say('APPEND_HASHES_AND_REPORT_UNCHECKED_ASSEMBLY', appended.status === 0 && rows.length === 2 &&
     JSON.stringify(rows[1]) === JSON.stringify(expected) && appended.stdout.trimEnd() ===
-    `edited-part: part "body" sha256=${expected.sha256} from_sha256=${expected.from_sha256} editor=${JSON.stringify(editor)}` &&
+    `note: no assembly config check ran; pass --parts <parts.json> to check the assembled inputs\nedited-part: part "body" sha256=${expected.sha256} from_sha256=${expected.from_sha256} editor=${JSON.stringify(editor)}` &&
     appended.stderr === `config ${resolve(config)}: added assemble.edited_parts.receipts[1]\n`,
-    `exit ${appended.status}; encoded byte hashes, fixed key order, editor escaped on one stdout line; shared change line on stderr`);
+    `exit ${appended.status}; encoded byte hashes, fixed key order, unchecked assembly notice and escaped editor on its own stdout line; shared change line on stderr`);
   const insertPoint = jsonValueSpan(seed, [...receiptPath, 0]).end;
   const insertedEnd = jsonValueSpan(afterInsert, [...receiptPath, 1]).end;
   say('APPEND_PRESERVES_EVERY_PREEXISTING_BYTE', afterInsert.slice(0, insertPoint) + afterInsert.slice(insertedEnd) === seed &&

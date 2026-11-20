@@ -4,11 +4,12 @@ import { join } from 'node:path';
 import { hybridConfig, writeHybridFixture } from '../fixtures/hybrid_limb.ts';
 import { readPng, writePng } from '../src/raster/png.ts';
 import { assemble, stageFields } from '../src/assemble.ts';
+import { assemblyConfigChanges } from '../src/assembly-reading.ts';
 import { assembleStage, readRigInputs, readRuns } from '../src/build.ts';
 import { limbLine, sweepJoints, sweepUnderlay } from '../src/check.ts';
 import { loadConfig, parseConfig } from '../src/config.ts';
 import { PartsError } from '../src/errors.ts';
-import { readParts, serializeParts } from '../src/parts.ts';
+import { readParts, readPartsManifest, serializeParts } from '../src/parts.ts';
 import { hashRows, readTree } from '../src/remesh.ts';
 import { buildRig, rigJsonText } from '../src/rig.ts';
 
@@ -22,9 +23,9 @@ export function prepareHybrid(dir: string, mode: boolean, width?: number, turns 
   const r = buildRig(cfg, parsed, images, undefined, 'direct');
   return { a, cfg, parsed, images, r, out };
 }
-export function prepareHybridAlternate(dir: string, name: string, explicit: boolean, full = false) {
+export function prepareHybridAlternate(dir: string, name: string, explicit: boolean, full = false, width?: number) {
     const at = join(dir, name);
-    return prepareHybrid(at, true, undefined, 0, (raw) => {
+    return prepareHybrid(at, true, width, 0, (raw) => {
       const art = join(at, 'alternate'); writeHybridFixture(art);
       for (const file of ['painting.png', 'full/parts/handwear-r.png']) {
         const image = readPng(join(art, file));
@@ -42,7 +43,8 @@ export function runHybridLimbChecks(dir: string, say: Say): void {
   const a = prepareHybrid(join(dir, 'auto'), true);
   const band = a.parsed.parts.find((p) => p.limb?.band !== undefined);
   const h = band?.limb?.band;
-  say('SOURCE_WIDTH', h?.width === 12 && h.upper === 'upper' && h.at.join(',') === '30,30' && h.axis.join(',') === '0,1', JSON.stringify(h));
+  const joint = a.parsed.parts.find((p) => p.limb?.hybrid !== undefined)?.limb?.hybrid;
+  say('SOURCE_WIDTH', h?.width === 12 && h.measured_width === 12 && joint?.measured_width === 12 && h.upper === 'upper' && h.at.join(',') === '30,30' && h.axis.join(',') === '0,1', JSON.stringify(h));
   const b = prepareHybrid(join(dir, 'explicit'), true, 12);
   say('EXPLICIT_WIDTH_EQUALS_DERIVED', serializeParts(a.parsed) === serializeParts(b.parsed) && rigJsonText(a.r.rig) === rigJsonText(b.r.rig), 'declared 12 equals source run half-width 6 twice');
   say('RIGID_OUTSIDE_BAND', ['proximal', 'distal'].every((n) => !('type' in a.r.rig.skins.default[n][n])) && 'type' in a.r.rig.skins.default.joint_band.joint_band, 'two regions and one generated band mesh');
@@ -119,8 +121,10 @@ export function runHybridLimbChecks(dir: string, say: Say): void {
   const subset = prepareHybridAlternate(dir, 'subset', false), explicitSet = prepareHybridAlternate(dir, 'explicit-set', true), fullSet = prepareHybridAlternate(dir, 'full-set', false, true);
   for (const [label, value] of [['AUTO',subset],['EXPLICIT',explicitSet],['FULL',fullSet]] as const) {
     const record = value.parsed.alternates?.[0], bandRecord = record?.records.find(p=>p.name==='joint_band');
+    const geometry = bandRecord?.limb?.band;
+    const joint = record?.records.find((p) => p.name === 'distal')?.limb?.hybrid;
     const att = value.r.rig.skins.default.joint_band.other_joint_band;
-    say(`SET_${label}_SWITCHES_BAND_WITH_ITS_LIMB`, record?.slots.joint_band==='other_joint_band' && bandRecord?.limb?.band !== undefined && (fullSet===value || record.parts?.includes('joint_band')===true) && att !== undefined && 'weights' in att && new Set(att.weights.flatMap(v=>v.map(w=>w.bone))).size===2, 'generated slot, paired record, selected image and two-carrier mesh follow the set');
+    say(`SET_${label}_SWITCHES_BAND_WITH_ITS_LIMB`, record?.slots.joint_band==='other_joint_band' && geometry !== undefined && geometry.measured_width === geometry.width && joint?.measured_width === geometry.width && (fullSet===value || record.parts?.includes('joint_band')===true) && att !== undefined && 'weights' in att && new Set(att.weights.flatMap(v=>v.map(w=>w.bone))).size===2, 'generated slot, paired width, selected image and two-carrier mesh follow the set');
     const bandImage = value.images.get('other_joint_band');
     let blue = 0, other = 0;
     if (bandImage !== undefined) for (let i = 0; i < bandImage.data.length; i += 4) if (bandImage.data[i+3] > 8) {
@@ -203,6 +207,73 @@ export function runHybridLimbChecks(dir: string, say: Say): void {
   damagedBand.width = 0;
   writeFileSync(join(dir, 'bad-parts.json'), JSON.stringify(damaged));
   say('PARTS_WIDTH_REFUSED', refusal(() => readParts(join(dir, 'bad-parts.json'))).includes('PARTS_FIELD_TYPE'), 'invalid recorded width cannot reach rig');
+
+  const legacy = structuredClone(a.parsed);
+  const legacyBand = legacy.parts.find((p) => p.name === 'joint_band')?.limb?.band;
+  const legacyJoint = legacy.parts.find((p) => p.name === 'distal')?.limb?.hybrid;
+  if (legacyBand === undefined || legacyJoint === undefined) throw new Error('band pair absent');
+  const legacyPath = join(dir, 'legacy-width.json');
+  delete legacyBand.measured_width;
+  writeFileSync(legacyPath, serializeParts(legacy));
+  say('UNPAIRED_MEASURED_WIDTH_REFUSED', refusal(() => readPartsManifest(legacyPath)).includes('PARTS_HYBRID_PAIR'), 'measured width must agree across the pair');
+  delete legacyJoint.measured_width;
+  writeFileSync(legacyPath, serializeParts(legacy));
+  const legacyFault = refusal(() => readPartsManifest(legacyPath));
+  say('LEGACY_WIDTH_ACCEPTED', legacyFault === '', legacyFault || 'historical pairs omit the measurement on both records');
+  legacyBand.measured_width = legacyJoint.measured_width = -1;
+  writeFileSync(legacyPath, serializeParts(legacy));
+  const negativeWidth = readPartsManifest(legacyPath).parts.find((p) => p.name === 'joint_band')?.limb?.band?.measured_width;
+  say('NEGATIVE_MEASURED_WIDTH_ACCEPTED', negativeWidth === -1, 'the chosen width remains positive while the measured default can be negative');
+  legacyBand.measured_width = legacyJoint.measured_width = Infinity;
+  writeFileSync(legacyPath, serializeParts(legacy));
+  const measuredFault = refusal(() => readPartsManifest(legacyPath));
+  say('INVALID_MEASURED_WIDTH_REFUSED', measuredFault.includes('PARTS_FIELD_TYPE') && measuredFault.includes('band.measured_width'), measuredFault.split('\n')[0]);
+
+  const atEdge = prepareHybrid(join(dir, 'edge-width'), true, 12, 0, (raw) => {
+    // The right sleeve edge is x = 36. The nearest opaque center is at x = 35.5.
+    for (const bone of raw.bones as Array<{ at: number[]; tip: number[] }>) bone.at[0] = bone.tip[0] = 36;
+  });
+  const edgeBand = atEdge.parsed.parts.find((p) => p.name === 'joint_band')?.limb?.band;
+  say('ZERO_MEASURED_WIDTH_RETAINED', edgeBand?.width === 12 && edgeBand.measured_width === 0, JSON.stringify(edgeBand));
+
+  const withoutWidth = (at: string): string => {
+    const raw = JSON.parse(readFileSync(join(at, 'config.json'), 'utf8')) as {
+      limbs: { arm: { segments: Array<{ hybrid?: { width?: number } }> } };
+    };
+    delete raw.limbs.arm.segments[1].hybrid?.width;
+    const path = join(at, 'without-width.json');
+    writeFileSync(path, JSON.stringify(raw));
+    return path;
+  };
+  const equalPath = withoutWidth(join(dir, 'explicit'));
+  const equalChanges = assemblyConfigChanges(equalPath, b.parsed);
+  say('EQUAL_DEFAULT_WIDTH_DELETION_ACCEPTED', equalChanges.length === 0 && refusal(() => readRigInputs(equalPath, b.out)) === '', JSON.stringify(equalChanges));
+
+  const wider = prepareHybrid(join(dir, 'asymmetric-width'), true, 16);
+  const widerBand = wider.parsed.parts.find((p) => p.name === 'joint_band')?.limb?.band;
+  const widerJoint = wider.parsed.parts.find((p) => p.name === 'distal')?.limb?.hybrid;
+  const widerPath = withoutWidth(join(dir, 'asymmetric-width'));
+  const widerChanges = assemblyConfigChanges(widerPath, wider.parsed);
+  const widerFault = refusal(() => readRigInputs(widerPath, wider.out));
+  say('ASYMMETRIC_DEFAULT_WIDTH_DELETION_REFUSED',
+    widerBand?.width === 16 && widerBand.measured_width === 12 && widerJoint?.measured_width === 12 &&
+    widerChanges.join(',') === 'limbs.hybrid_width' && widerFault.includes('ASSEMBLY_CONFIG_STALE') && widerFault.includes('config.limbs.hybrid_width'),
+    `authored ${widerBand?.width}, measured ${widerBand?.measured_width}: ${widerFault.split('\n')[0]}`);
+
+  const altWidth = prepareHybridAlternate(dir, 'alternate-width', false, false, 12);
+  const altBase = altWidth.parsed.parts.find((p) => p.name === 'joint_band')?.limb?.band;
+  const altRecords = altWidth.parsed.alternates?.[0].records;
+  const altBand = altRecords?.find((p) => p.name === 'joint_band')?.limb?.band;
+  const altJoint = altRecords?.find((p) => p.name === 'distal')?.limb?.hybrid;
+  const altDefault = subset.parsed.alternates?.[0].records.find((p) => p.name === 'joint_band')?.limb?.band?.width;
+  const altPath = withoutWidth(join(dir, 'alternate-width'));
+  const altChanges = assemblyConfigChanges(altPath, altWidth.parsed);
+  const altWidthFault = refusal(() => readRigInputs(altPath, altWidth.out));
+  say('ALTERNATE_DEFAULT_WIDTH_DELETION_REFUSED',
+    altBase?.measured_width === 12 && altBand?.width === 12 && altDefault !== undefined && altDefault !== 12 &&
+    altBand.measured_width === altDefault && altJoint?.measured_width === altDefault &&
+    altChanges.join(',') === 'limbs.hybrid_width' && altWidthFault.includes('ASSEMBLY_CONFIG_STALE') && altWidthFault.includes('config.limbs.hybrid_width'),
+    `base default ${altBase?.measured_width}, alternate default ${altBand?.measured_width}: ${altWidthFault.split('\n')[0]}`);
 }
 if (import.meta.main) {
   const dir = process.argv[2]; if (!dir) throw new Error('output path required');

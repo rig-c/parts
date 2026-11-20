@@ -1,3 +1,4 @@
+import { changedAssemblyFields, effectiveAssemblyRules, readAssemblyConfig, refuseStaleAssembly, type AssemblyRules } from './assembly-reading.ts';
 import { editedPartFrontColourLines, readEditedParts } from './editedparts.ts';
 import { SOURCE_COVER_FILE, sourceCoverReport, type SourceCoverSet } from './sourcecover.ts';
 import { STAGE_MAP_FILE } from './provenance.ts';
@@ -6,7 +7,6 @@ import { readSetupFigureMask } from './setupfiguremask.ts';
 import { EDGE_RESIDUAL_FILE, edgeResidualLines } from './edgeresidual.ts';
 import { SUPPORT_DOMAINS_FILE, writeSupportDomains } from './supportdomains.ts';
 import { COINCIDE_LINE, supportLines } from './coincide.ts';
-import { DEFAULT_SEAM_RULE } from './seamrule.ts';
 import { DEFAULT_PROJECT_RULE } from './projectrule.ts';
 import { type PaintingAllocationReading, type PaintingAllocationEvent, EDGE_CONTRAST, PAINTING_ALLOCATION_FILE, PAINTING_EDGE_COVERAGE_TRANSFER } from './paintingedges.ts';
 import { SETUP_PAINTING_LINE, setupPaintingLines } from './setuppainting.ts';
@@ -108,7 +108,7 @@ import { CONTROL_SUFFIX, withAnimations } from './motion.ts';
 import type { PaletteError } from './palette.ts';
 import { type LayerSet, readLayers } from './layers.ts';
 import { placeBoneEntriesForSkeleton, poseBoneEntriesForDrawn, REGISTER_OFFSET_BAR, REGISTER_SCALE_BAR, registeredWithinBar, registerSkeleton, SKELETON_LIMB_BONES, skeletonDrawnLength, skeletonLimbJoints } from './limbs.ts';
-import { type AlternatePartsRecord, PAINTING_IN_RIG_FILE, FRONT_SUFFIX, type OccluderPlateRecord, type PartRecord, partImageReference, depthImageReference, readParts, type RecompositeRecord, type SingleRunPad, tagOf, writeParts } from './parts.ts';
+import { type AlternatePartsRecord, PAINTING_IN_RIG_FILE, FRONT_SUFFIX, type OccluderPlateRecord, type PartRecord, partImageReference, depthImageReference, readParts, readPartsManifest, type RecompositeRecord, type SingleRunPad, tagOf, writeParts } from './parts.ts';
 import { encodePngBytes, readPng, writePng } from './raster/png.ts';
 import type { Raster } from './raster/types.ts';
 import { type Mask, newMask } from './raster/types.ts';
@@ -392,8 +392,7 @@ export interface EmitFillMasksInput {
 
 export function emitFillMasksStage(input: EmitFillMasksInput, log: Log): Array<{ into: string; path: string; sha256: string; opaquePx: number }> {
   const cfg = loadEarlyConfig(input.config, 'assemble', input.project);
-  const seam = input.seam ?? cfg.assemble.seam ?? DEFAULT_SEAM_RULE;
-  const project = input.project ?? cfg.assemble.project ?? DEFAULT_PROJECT_RULE;
+  const { seam, project } = effectiveAssemblyRules(cfg.assemble, input);
   const src = readSource(input.source);
   const read = readRuns(input.full, input.head);
   const takenRuns = applyTakenLayers(read, src, cfg, input.config);
@@ -512,8 +511,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   // regions and motion, so it requires only what it reads (issue #20).
   const cfg = loadEarlyConfig(input.config, 'assemble', input.project);
   const supportDeclarations = JSON.stringify(cfg.assemble.cuts ?? []);
-  const seam = input.seam ?? cfg.assemble.seam ?? DEFAULT_SEAM_RULE;
-  const project = input.project ?? cfg.assemble.project ?? DEFAULT_PROJECT_RULE;
+  const { seam, project } = effectiveAssemblyRules(cfg.assemble, input);
   const requirements = cfg.assemble.ground === 'busy' && project === 'visible'
     ? buildRequirements(input.requirements, cfg.requirements, input.config) : null;
   const src = readSource(input.source);
@@ -1071,6 +1069,14 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     result.parts.alternates = altBuilt.map((b) => b.record);
   }
 
+  const reading = readAssemblyConfig(cfg, result.parts, input.config, { seam, project });
+  let previousAssembly = undefined;
+  if (existsSync(outs.partsJson)) {
+    try { previousAssembly = readPartsManifest(outs.partsJson).assembly_config; }
+    catch (error) { if (!(error instanceof PartsError)) throw error; }
+  }
+  result.parts.assembly_config = reading;
+
   const allocationPath = join(dirname(outs.partsJson), PAINTING_ALLOCATION_FILE);
   let previousAllocationFiles: string[] = [];
   if (existsSync(allocationPath)) {
@@ -1099,6 +1105,10 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     sha256: createHash('sha256').update(paintingBytes).digest('hex'), resample: 'lanczos3-rgb-opaque' };
   writeFileSync(join(dirname(outs.partsJson), PAINTING_IN_RIG_FILE), paintingBytes);
   writeParts(outs.partsJson, result.parts);
+  if (previousAssembly !== undefined) {
+    const changes = changedAssemblyFields(previousAssembly, reading);
+    if (changes.length > 0) log(`note: reassembled parts after changes to ${changes.map(name => `config.${name}`).join(', ')}`);
+  }
   writeFileSync(join(dirname(outs.partsJson), SOURCE_COVER_FILE), JSON.stringify(sourceCoverReport(sourceCoverSets), null, 2) + '\n');
   const stageMapPath = join(dirname(outs.partsJson), STAGE_MAP_FILE);
   if (result.stageMap === undefined) rmSync(stageMapPath, { force: true });
@@ -1466,6 +1476,7 @@ export function contourBodyTurnRemedies(lines: readonly string[], cfg: Character
 }
 
 export interface RigStageInput {
+  assemblyRules?: AssemblyRules;
   config: string;
   /** The directory holding parts.json and parts/<name>.png. */
   parts: string;
@@ -1855,9 +1866,10 @@ export interface RigInputs {
  * `src/meshstats.ts`) both start here, so the two read the same config, the same parts and the same images, and a
  * PNG that is missing is left out of the map for `buildRig` to refuse by name (`RIG_PNG_PRESENT`).
  */
-export function readRigInputs(config: string, partsDir: string): RigInputs {
+export function readRigInputs(config: string, partsDir: string, assemblyRules?: AssemblyRules): RigInputs {
   const { config: cfg, animations: from } = loadConfigAndAnimations(config);
   const parts = readParts(join(partsDir, 'parts.json'));
+  refuseStaleAssembly(config, parts, cfg, assemblyRules);
   const images = new Map<string, Raster>();
   const depthProblems: Problem[] = [];
   for (const p of parts.parts) {
@@ -1892,7 +1904,7 @@ export function rigOutputTexts(r: RigOutput, animations: Parameters<typeof withA
 
 export function rigStage(input: RigStageInput, rigc: RigcRunner, scratch: string, log: Log): RigOutput {
   const pageSize = parsePageSize(input.pageSize);
-  const { cfg, from, parts, images } = readRigInputs(input.config, input.parts);
+  const { cfg, from, parts, images } = readRigInputs(input.config, input.parts, input.assemblyRules);
   const first = buildRig(cfg, parts, images, undefined, input.idleKeys ?? DEFAULT_IDLE_KEYS, input.reduce);
   const textsOf = (r: RigOutput): Array<[string, string]> => rigOutputTexts(r, from === null ? null : from.table);
   const firstTexts = textsOf(first);
@@ -2062,6 +2074,7 @@ export function rigStage(input: RigStageInput, rigc: RigcRunner, scratch: string
 // ---------------------------------------------------------------------------
 
 export interface CheckStageInput {
+  assemblyRules?: AssemblyRules;
   /** The directory holding rig.json and motion.json. */
   rig: string;
   /**
@@ -2346,7 +2359,7 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
   const entryLine = versionLines.find((l) => l.startsWith('entry:'));
   log(`  ${rigcIdentity(bin, v)}${entryLine === undefined ? '' : `; ${entryLine}`}`);
   const mode: PackMode = { pageEdges: input.pageEdges ?? DEFAULT_PAGE_EDGES, packShape: input.packShape ?? DEFAULT_PACK_SHAPE, ...(pageSize === undefined ? {} : { pageSize }) };
-  const r = runCheck(input.rig, input.out, rigc, input.parts, mode, input.source, input.requirements, input.seamPairs === true, input.keepStills === true, input.set, input.allSets === true, input.environment, input.requirementsAs, input.config, input.windBand, input.noExtremes === true, input.supportSource, input.supportFigure);
+  const r = runCheck(input.rig, input.out, rigc, input.parts, mode, input.source, input.requirements, input.seamPairs === true, input.keepStills === true, input.set, input.allSets === true, input.environment, input.requirementsAs, input.config, input.windBand, input.noExtremes === true, input.supportSource, input.supportFigure, input.assemblyRules);
   if (r.figures.environment !== undefined) log(`  ${environmentLine(r.figures.environment)}`);
   log(`  gate rig-play (rigc ${packedBuildLabel(mode)}), verbatim:`);
   for (const l of r.gateHtml) log(l);
@@ -2899,6 +2912,7 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
   // cannot be measured without it; a build without that declaration hands it nothing, as before, and writes the same bytes.
   let paintingForCheck: string | null = null;
   let supportFigure: Mask | undefined;
+  let assemblyRules: Required<AssemblyRules>;
   try {
     pageSize = parsePageSize(input.pageSize);
     // build runs rig next, which needs the whole config, so the full loader is
@@ -2908,8 +2922,8 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
     // Issue #556: the flag, or the config's declaration when there is none; both naming other bytes is refused here.
     // Issue #607: the bytes this read parsed are the ones check.json's config record hashes, under the path as typed.
     const loaded = loadConfigWithBytes(input.config);
-    const seam = input.seam ?? loaded.config.assemble.seam ?? DEFAULT_SEAM_RULE;
-    const project = input.project ?? loaded.config.assemble.project ?? DEFAULT_PROJECT_RULE;
+    assemblyRules = effectiveAssemblyRules(loaded.config.assemble, input);
+    const { seam, project } = assemblyRules;
     log(`rig-parts build: ${input.config} -> ${out}, seam rule ${seam}, projection rule ${project}, page edges ${input.pageEdges}, pack shape ${input.packShape ?? DEFAULT_PACK_SHAPE}${idleKeys === DEFAULT_IDLE_KEYS ? '' : `, idle keys ${idleKeys}`}${input.loop ? `, with the idle loop${input.leadIn === undefined ? '' : ` after a lead-in of ${input.leadIn} period(s)`}` : ''}`);
     configRecord = inputFileRecord(loaded.bytes, input.config);
     req = buildRequirements(input.requirements, loaded.config.requirements, input.config);
@@ -2930,14 +2944,14 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
   }
 
   try {
-    stages.rig({ config: input.config, parts: out, out: join(out, 'rig'), idleKeys, pageEdges: input.pageEdges, packShape: input.packShape, ...(pageSize === undefined ? {} : { pageSize }), command: 'build' }, run.rig, run.scratch, prefixed('rig'));
+    stages.rig({ config: input.config, assemblyRules, parts: out, out: join(out, 'rig'), idleKeys, pageEdges: input.pageEdges, packShape: input.packShape, ...(pageSize === undefined ? {} : { pageSize }), command: 'build' }, run.rig, run.scratch, prefixed('rig'));
   } catch (err) {
     return refused('rig', err);
   }
 
   let report: CheckReport;
   try {
-    report = stages.check({ rig: join(out, 'rig'), parts: out, supportSource: input.source, ...(supportFigure === undefined ? {} : { supportFigure }), out: join(out, 'check'), pageEdges: input.pageEdges, packShape: input.packShape, ...(pageSize === undefined ? {} : { pageSize }), ...(req === null ? {} : { requirements: req.read, requirementsAs: req.recorded }), ...(paintingForCheck === null ? {} : { source: paintingForCheck }), seamPairs: input.seamPairs === true, keepStills: input.keepStills === true, noExtremes: input.noExtremes === true, ...(input.set === undefined ? {} : { set: input.set }), allSets: input.allSets === true, ...(input.environment === undefined ? {} : { environment: input.environment }), ...(input.windBand === undefined ? {} : { windBand: input.windBand }), ...(configRecord === null ? {} : { config: configRecord }) }, run.check, run.checkBin, prefixed('check'));
+    report = stages.check({ rig: join(out, 'rig'), assemblyRules, parts: out, supportSource: input.source, ...(supportFigure === undefined ? {} : { supportFigure }), out: join(out, 'check'), pageEdges: input.pageEdges, packShape: input.packShape, ...(pageSize === undefined ? {} : { pageSize }), ...(req === null ? {} : { requirements: req.read, requirementsAs: req.recorded }), ...(paintingForCheck === null ? {} : { source: paintingForCheck }), seamPairs: input.seamPairs === true, keepStills: input.keepStills === true, noExtremes: input.noExtremes === true, ...(input.set === undefined ? {} : { set: input.set }), allSets: input.allSets === true, ...(input.environment === undefined ? {} : { environment: input.environment }), ...(input.windBand === undefined ? {} : { windBand: input.windBand }), ...(configRecord === null ? {} : { config: configRecord }) }, run.check, run.checkBin, prefixed('check'));
   } catch (err) {
     return refused('check', err);
   }

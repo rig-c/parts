@@ -4882,7 +4882,8 @@ function cutLimbs(
       const art = (x: number, y: number): boolean => x >= 0 && y >= 0 && x < W && y < H && own[y * W + x] === li && source.r.data[(y * W + x) * 4 + 3] > OPAQUE_ALPHA_ABOVE;
       const run = limbRun(line, art, [0, 0, W - 1, H - 1]);
       if (run === null && emptyTargets?.has(sg.hybrid.part)) return;
-      const width = sg.hybrid.width ?? (run === null ? 0 : 2 * halfWidthAbout(run));
+      const measuredWidth = run === null ? 0 : 2 * halfWidthAbout(run);
+      const width = sg.hybrid.width ?? measuredWidth;
       const upper = places.get(segs[k - 1].bone) as BonePlace;
       const lower = places.get(sg.bone) as BonePlace;
       const reach = (p: readonly number[]): number => Math.abs((p[0] - line.at[0]) * line.axis[0] + (p[1] - line.at[1]) * line.axis[1]);
@@ -4923,7 +4924,11 @@ function cutLimbs(
         if (along < width / 2) { rasters[loAt].data.fill(0, p * 4, p * 4 + 4); regions[loAt].data[p] = 0; }
       }
       const base = parts[loAt].record;
-      const geometry = { upper: segs[k - 1].bone, width, radius: (base.cap as CapRecord).radius, at: [...line.at] as [number, number], axis: [...line.axis] as [number, number] };
+      const geometry = {
+        upper: segs[k - 1].bone, width, measured_width: measuredWidth,
+        radius: (base.cap as CapRecord).radius,
+        at: [...line.at] as [number, number], axis: [...line.axis] as [number, number],
+      };
       delete base.cap;
       base.hybrid = { part: sg.hybrid.part, ...geometry };
       capFrom[loAt] = null;
