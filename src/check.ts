@@ -2052,6 +2052,16 @@ export function officialRenderer(): OfficialRenderer {
   return require('@rig-c/core/render-shared') as OfficialRenderer;
 }
 
+/** Flatten source-over the declared plate or white at original resolution before stage resampling. */
+export function paintingInRig(source: Raster, W: number, H: number, backdrop?: Raster): Raster {
+  const whiteSource = newRaster(source.width, source.height);
+  for (let p = 0; p < source.width * source.height; p++) {
+    for (let c = 0; c < 3; c++) whiteSource.data[p * 4 + c] = Math.round(source.data[p * 4 + c] * source.data[p * 4 + 3] / 255 + (backdrop?.data[p * 4 + c] ?? 255) * (1 - source.data[p * 4 + 3] / 255));
+    whiteSource.data[p * 4 + 3] = 255;
+  }
+  return sourceInRig(whiteSource, W, H);
+}
+
 /** Observe the actual setup on the declared stage grid. No frame-zero motion,
  * fitted alignment, flat recomposite or duplicate core validation. */
 export function measureSetupPainting(build: string, stage: StageBox, source: Raster, declared: SetupPainting, problems: Problem[], backdrop?: Raster, figureMask?: Uint8Array, slotParts?: ReadonlyMap<string, string>): SetupPaintingLine {
@@ -2067,16 +2077,7 @@ export function measureSetupPainting(build: string, stage: StageBox, source: Ras
   const vp = { minX: stage.x, minY: stage.y, maxX: stage.x + W, maxY: stage.y + H, scale: 1, width: W, height: H };
   const project = api.projector(vp), owners = new Int32Array(W * H).fill(-1);
   pose.pieces.forEach((piece, i) => api.rasterisePiece(api.pageFor(candidate.pages, piece), piece, project, vp, (x, y, _r, _g, _b, a) => { if (a > 0) owners[y * W + x] = i; }));
-  // sourceInRig intentionally reads opaque RGB, discarding source alpha before
-  // resizing. This optional comparison declares source-over the plate or white:
-  // flatten at ORIGINAL source resolution first, so hidden RGB cannot reach
-  // Lanczos taps or the figure silhouette. Do not change the legacy helper.
-  const whiteSource = newRaster(source.width, source.height);
-  for (let p = 0; p < source.width * source.height; p++) {
-    for (let c = 0; c < 3; c++) whiteSource.data[p * 4 + c] = Math.round(source.data[p * 4 + c] * source.data[p * 4 + 3] / 255 + (backdrop?.data[p * 4 + c] ?? 255) * (1 - source.data[p * 4 + 3] / 255));
-    whiteSource.data[p * 4 + 3] = 255;
-  }
-  const painting = sourceInRig(whiteSource, W, H);
+  const painting = paintingInRig(source, W, H, backdrop);
   const setup = api.renderFrame(pose, candidate.pages, vp, [0, 0, 0, 0]);
   return setupPaintingLine(declared, painting, { width: W, height: H, data: new Uint8ClampedArray(setup.data) }, figureSilhouette(painting).data, owners, pose.pieces.map(p => p.slot), problems, backdrop === undefined ? undefined : sourceInRig(backdrop, W, H), figureMask, slotParts);
 }
@@ -7678,6 +7679,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
       }
       behindSeams = measureBehindSeams(officialRenderer(), {
         build: buildDir, rig: inp.rig, pairs: behindPairs, stockDir: behindStockDir, fps: IDLE_FPS,
+        painting: inp.source === null ? null : { stage: inp.stage, raster: paintingInRig(inp.source.painting, inp.stage.width, inp.stage.height) },
         ...(turnBuild === undefined ? {} : { turnBuild }),
         ...(behindUnsupported.length === 0 ? {} : { unsupported: behindUnsupported.join('; ') }),
       }, behindDeclared, problems);
