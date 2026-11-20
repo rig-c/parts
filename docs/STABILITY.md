@@ -344,7 +344,13 @@ New assemble and build manifests carry an optional top-level `assembly_config`
 object shaped as `{ sha256, fields: [{ name, sha256 }] }`. Its lowercase
 SHA-256 digests describe the effective assembly config inputs, in deterministic
 field-name order. Entries name the individual inputs, such as
-`assemble.rig_scale`. The aggregate binds the ordered field names and digests.
+`assemble.rig_scale`. Field names use dot-separated lowercase keys, with a
+zero-based index on the take key for split donor metadata, as in
+`assemble.take[0].meta`. Earlier assembly-config readers refuse indexed
+names with `PARTS_FIELD_TYPE`, so release Parts first, then upgrade and
+release Review, then update both pins in Create before those consumers read
+split-take manifests written by this release.
+The aggregate binds the ordered field names and digests.
 Declared assembly files are resolved relative to their declaring config or
 requirements file and hashed by content. Equivalent path spellings give the
 same reading. A built-in control skeleton is identified by its name and latent
