@@ -17,6 +17,8 @@ export const BEHIND_SEAM_UNMEASURED_CODE = 'CHECK_BEHIND_PART_SEAMS_UNMEASURED';
 export const NO_PARTS_SETUP_STANDING_REASON = "no --parts manifest was supplied; setup standing compares the setup render with the parts' flat recomposite";
 export const IDLE_STANDING_MOTION_READ_REASON = 'not applicable: motion_opened reads the pair';
 export const IDLE_STANDING_NO_ORACLE_REASON = "idle standing is not measured: idle frames have no recomposite oracle, and the pair's idle reading is motion_opened";
+export const TURN_STANDING_MOTION_READ_REASON = IDLE_STANDING_MOTION_READ_REASON;
+export const TURN_STANDING_NO_ORACLE_REASON = "turn standing is not measured: turn poses have no recomposite oracle, and the pair's turn reading is motion_opened";
 
 export interface BehindSeams {
   /** Opt in to the rig's declared ranges; never supplies or guesses a range. */
@@ -50,6 +52,8 @@ export interface BehindSeamsFramesInput {
   plantSkipRecomposite?: true;
   /** Issue #1408 plant only: measure standing on idle frames without an oracle; production never sets it. */
   plantMeasureIdleStanding?: true;
+  /** Issue #1412 plant only: measure standing on turn poses without an oracle; production never sets it. */
+  plantMeasureTurnStanding?: true;
 }
 export interface BehindSeamsTurnPose {
   name: string;
@@ -77,7 +81,7 @@ export interface BehindSeamsTurnPair {
   read_poses: number;
   unmeasured_poses: number;
   motion_opened: { status: BehindSeamsCount['status']; max_px: number };
-  standing: { status: BehindSeamsCount['status']; max_px: number };
+  standing: { status: BehindSeamsCount['status']; reason?: string; max_px: number };
 }
 export interface BehindSeamsTurnMeasured {
   status: BehindSeamsCount['status'];
@@ -116,7 +120,7 @@ export interface BehindSeamsUnreadCorridor {
   cell_count: number;
 }
 export interface BehindSeamsStanding extends BehindSeamsCount {
-  /** Present when standing is SKIP: at setup without --parts, or on every idle frame. */
+  /** Present when standing is SKIP: at setup without --parts, or on every idle frame and turn pose. */
   reason?: string;
   /** Distinct grid cells across all unread corridors, including cross-axis intersections. */
   unread_cells?: number;
@@ -362,10 +366,13 @@ function readBehindFrame(api: BehindSeamsApi, input: BehindSeamsFramesInput, pai
   stock: BehindSeamsStockPair | undefined, threshold: number, allowance: number, unread: (frame: string, reason: string) => void,
   cache: Map<Frame, Map<string, RasterCache>>, pose?: BehindSeamsTurnPose): BehindSeamsFrame {
   const isIdle = !setup && pose === undefined;
+  const isTurn = pose !== undefined;
+  const plantIdleStanding = isIdle && input.plantMeasureIdleStanding === true;
+  const plantTurnStanding = isTurn && input.plantMeasureTurnStanding === true;
   const label = pose !== undefined ? `turn ${pose.name}` : setup ? 'setup' : `idle frame ${frame.index}`;
   const family = pose !== undefined ? 'BEHIND_PART_SEAMS.turn.pairs[].frames' : setup ? 'BEHIND_PART_SEAMS.pairs[].setup' : 'BEHIND_PART_SEAMS.pairs[].frames';
   const row: BehindSeamsFrame = { ...checkRow(family, 'pair', false, [pair.a, pair.b]), animation: pose !== undefined ? 'turn' : setup ? null : 'idle', index: frame.index, time: frame.time, ...(pose === undefined ? {} : { pose: pose.name, values: { ...pose.values }, ...(pose.observed_values === undefined ? {} : { observed_values: pose.observed_values, slider_times: pose.slider_times }) }), behind_slots: [], grid: null, motion_opened: emptyCount(),
-    standing: isIdle ? { ...emptyCount('SKIP'), reason: IDLE_STANDING_NO_ORACLE_REASON } : emptyCount() };
+    standing: isIdle && !plantIdleStanding ? { ...emptyCount('SKIP'), reason: IDLE_STANDING_NO_ORACLE_REASON } : isTurn && !plantTurnStanding ? { ...emptyCount('SKIP'), reason: TURN_STANDING_NO_ORACLE_REASON } : emptyCount() };
   const fail = (reason: string): BehindSeamsFrame => { unread(label, reason); return row; };
   if (pair.unread !== undefined) return fail(pair.unread);
   if (frame.attachments === undefined) return fail('draw order/whole attachment geometry is unavailable');
@@ -396,8 +403,7 @@ function readBehindFrame(api: BehindSeamsApi, input: BehindSeamsFramesInput, pai
       rasters = { full: api.renderFrame(frame, input.pages, viewport, [0, 0, 0, 0]), hidden: api.renderFrame({ ...frame, pieces: frame.pieces.filter(p => !behind.has(p.slot)) }, input.pages, viewport, [0, 0, 0, 0]) };
       frameCache.set(cacheKey, rasters);
     }
-    const plantIdleStanding = isIdle && input.plantMeasureIdleStanding === true;
-    const measureStanding = pose !== undefined || plantIdleStanding || (setup && input.recomposite !== undefined && input.recomposite !== null);
+    const measureStanding = plantTurnStanding || plantIdleStanding || (setup && input.recomposite !== undefined && input.recomposite !== null);
     let recompositeDiff: ((k: number) => number) | null = null;
     if (setup) {
       if (input.recomposite === undefined || input.recomposite === null) {
@@ -581,6 +587,11 @@ function readBehindFrame(api: BehindSeamsApi, input: BehindSeamsFramesInput, pai
         ...emptyCount('SKIP'),
         reason: row.motion_opened.status !== 'SKIP' ? IDLE_STANDING_MOTION_READ_REASON : IDLE_STANDING_NO_ORACLE_REASON,
       };
+    } else if (isTurn && !plantTurnStanding) {
+      row.standing = {
+        ...emptyCount('SKIP'),
+        reason: row.motion_opened.status !== 'SKIP' ? TURN_STANDING_MOTION_READ_REASON : TURN_STANDING_NO_ORACLE_REASON,
+      };
     }
     return { ...row, ...checkRow(family, 'pair', row.standing.status === 'FAIL' || row.motion_opened.status === 'FAIL', [pair.a, pair.b]) };
   } catch (e) { return fail(`official raster/source reading unavailable: ${e instanceof Error ? e.message : String(e)}`); }
@@ -695,7 +706,7 @@ export function measureBehindSeamFrames(api: BehindSeamsApi, input: BehindSeamsF
 function measureBehindTurnFrames(api: BehindSeamsApi, input: BehindSeamsFramesInput, declared: BehindSeams, problems: Problem[]): BehindSeamsTurnMeasured {
   const turn = input.turn;
   const result: BehindSeamsTurnMeasured = { status: 'SKIP', poses: turn?.poses.map(p => p.name) ?? [], pairs: [], unmeasured: [],
-    limitations: 'independent setup-reset turn endpoints and full range corners only; no sweep, idle motion, temporal spans or alternate skins; standing and transported setup-overlap are separate' };
+    limitations: 'independent setup-reset turn endpoints and full range corners only; no sweep, idle motion, temporal spans or alternate skins; standing is not measured on turn poses, and motion_opened is the turn reading' };
   if (turn?.poser !== undefined) result.limitations += `; poser ${turn.poser}`;
   if (turn?.sourceSkeletonSha256 !== undefined) result.limitations += `; original skeleton sha256 ${turn.sourceSkeletonSha256}`;
   const required = declared.threshold !== undefined || declared.pairs?.some(p => p.threshold !== undefined) === true;
@@ -712,7 +723,7 @@ function measureBehindTurnFrames(api: BehindSeamsApi, input: BehindSeamsFramesIn
       return { ...checkRow('BEHIND_PART_SEAMS.turn.pairs', 'pair', required, [pair.a, pair.b]), pair: pair.pair, parts: [pair.a, pair.b],
         threshold: override?.threshold ?? declared.threshold ?? null, allowance: override?.allowance ?? declared.allowance ?? 0,
         frames: [], sampled_poses: 0, read_poses: 0, unmeasured_poses: 0,
-        motion_opened: { status: 'SKIP', max_px: 0 }, standing: { status: 'SKIP', max_px: 0 } };
+        motion_opened: { status: 'SKIP', max_px: 0 }, standing: { status: 'SKIP', reason: TURN_STANDING_NO_ORACLE_REASON, max_px: 0 } };
     });
     return result;
   }
@@ -740,24 +751,32 @@ function measureBehindTurnFrames(api: BehindSeamsApi, input: BehindSeamsFramesIn
         const row = readBehindFrame(api, posedInput, pair, frame, false, stockRows.length === 1 ? stockRows[0] : undefined,
           threshold, allowance, (where, why) => unread(pair, where, why, true), cache, pose);
         rows.push(row); cache.clear();
-        for (const kind of ['motion_opened', 'standing'] as const) if (row[kind].status === 'FAIL') problems.push({ code: BEHIND_SEAM_CODE,
-          object: `pair "${pair.pair}" turn ${pose.name} ${kind}`, detail: `${row[kind].px} native seam cells exceeds allowance ${allowance}; authored threshold ${threshold}; independent declared turn pose` });
+        if (row.motion_opened.status === 'FAIL') problems.push({ code: BEHIND_SEAM_CODE,
+          object: `pair "${pair.pair}" turn ${pose.name} motion_opened`, detail: `${row.motion_opened.px} native seam cells exceeds allowance ${allowance}; authored threshold ${threshold}; independent declared turn pose` });
+        if (input.plantMeasureTurnStanding === true && row.standing.status === 'FAIL') problems.push({ code: BEHIND_SEAM_CODE,
+          object: `pair "${pair.pair}" turn ${pose.name} standing`, detail: `${row.standing.px} native seam cells exceeds allowance ${allowance}; authored threshold ${threshold}; independent declared turn pose` });
       }
     }
-    const read = rows.filter(row => row.motion_opened.status !== 'SKIP' && row.standing.status !== 'SKIP' &&
+    // Both clauses overlap on purpose, as in idle readFrames: every path leaving motion_opened SKIP also records turn.unmeasured[].
+    const read = rows.filter(row => row.motion_opened.status !== 'SKIP' &&
       !result.unmeasured.some(u => u.pair === pair.pair && u.frame === `turn ${row.pose}`)).length;
-    const aggregate = (kind: 'motion_opened' | 'standing'): BehindSeamsTurnPair['standing'] => ({
+    const aggregate = (kind: 'motion_opened' | 'standing'): { status: BehindSeamsCount['status']; max_px: number } => ({
       status: rows.some(r => r[kind].status === 'FAIL') ? 'FAIL' : complete && rows.length === turn.poses.length && rows.every(r => r[kind].status === 'PASS') ? 'PASS' : 'SKIP',
       max_px: Math.max(0, ...rows.map(r => r[kind].px)),
     });
-    const motion = aggregate('motion_opened'), standing = aggregate('standing');
+    const motion = aggregate('motion_opened');
+    const turnStandingReason = motion.status !== 'SKIP' ? TURN_STANDING_MOTION_READ_REASON : TURN_STANDING_NO_ORACLE_REASON;
+    const rawStanding = aggregate('standing');
+    const standing: BehindSeamsTurnPair['standing'] = input.plantMeasureTurnStanding === true
+      ? rawStanding
+      : { status: 'SKIP', reason: turnStandingReason, max_px: 0 };
     result.pairs.push({ ...checkRow('BEHIND_PART_SEAMS.turn.pairs', 'pair', motion.status === 'FAIL' || standing.status === 'FAIL' || threshold !== null && read !== turn.poses.length, parts),
       pair: pair.pair, parts, threshold, allowance, frames: rows, sampled_poses: turn.poses.length, read_poses: read, unmeasured_poses: turn.poses.length - read,
       motion_opened: motion, standing });
   }
   if (input.pairs.length === 0) unread(null, 'turn selection', 'no selected seam pair; turn boundary population is unavailable', required);
   result.status = result.pairs.some(p => p.motion_opened.status === 'FAIL' || p.standing.status === 'FAIL') || mandatoryUnread ? 'FAIL'
-    : result.pairs.length === 0 || result.pairs.some(p => p.motion_opened.status === 'SKIP' || p.standing.status === 'SKIP') ? 'SKIP' : 'PASS';
+    : result.pairs.length === 0 || result.pairs.some(p => p.motion_opened.status === 'SKIP') ? 'SKIP' : 'PASS';
   return result;
 }
 
@@ -1025,7 +1044,7 @@ export function behindSeamLines(line: BehindSeamsMeasured | null): string[] {
     }),
     ...(line.turn === undefined ? [] : [
       `${BEHIND_SEAM_LINE}: turn ${line.turn.status} — ${line.turn.poses.length} preselected endpoint/corner pose(s); ${line.turn.limitations}`,
-      ...line.turn.pairs.flatMap(p => p.frames.map(f => `${BEHIND_SEAM_LINE}: pair "${p.pair}" turn ${f.pose} — motion_opened ${f.motion_opened.status}, ${f.motion_opened.px} cells; standing ${f.standing.status}, ${f.standing.px} cells; threshold ${p.threshold}, allowance ${p.allowance}`)),
+      ...line.turn.pairs.flatMap(p => p.frames.map(f => `${BEHIND_SEAM_LINE}: pair "${p.pair}" turn ${f.pose} — motion_opened ${f.motion_opened.status}, ${f.motion_opened.px} cells; standing ${f.standing.reason !== undefined ? `${f.standing.status} (${f.standing.reason})` : f.standing.status}, ${f.standing.px} cells; threshold ${p.threshold}, allowance ${p.allowance}`)),
       ...line.turn.unmeasured.map(u => `${BEHIND_SEAM_LINE}: ${u.pair === null ? 'rig' : `pair "${u.pair}"`} ${u.frame} SKIP — ${u.reason}`),
     ]),
     ...line.unmeasured.map(u => {

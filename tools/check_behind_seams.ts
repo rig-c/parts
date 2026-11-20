@@ -5,7 +5,8 @@ import { Plate, type RGBA } from '@rig-c/core/plate';
 import { pageFor, projector, rasterisePiece, renderFrame, type AttachmentRest, type Frame, type Piece } from '@rig-c/core/render-shared';
 import { seamGridOf, seamsOf, setupCellReader, type SeamFrame, type SeamGrid, type SeamPair } from '@rig-c/core/seam';
 import { BEHIND_SEAM_LINE, BEHIND_SEAM_CODE, BEHIND_SEAM_UNMEASURED_CODE,
-  NO_PARTS_SETUP_STANDING_REASON, IDLE_STANDING_MOTION_READ_REASON, IDLE_STANDING_NO_ORACLE_REASON, behindSeamsProblems,
+  NO_PARTS_SETUP_STANDING_REASON, IDLE_STANDING_MOTION_READ_REASON, IDLE_STANDING_NO_ORACLE_REASON,
+  TURN_STANDING_MOTION_READ_REASON, TURN_STANDING_NO_ORACLE_REASON, behindSeamsProblems,
   measureBehindSeamFrames, measureBehindSeams, behindSeamLines, BEHIND_SAMPLE_CAP, evenlySpaced, standingWorse, behindTurnPlan, behindTurnAnimations, behindTurnAnimationName, type BehindSeams, type BehindSeamsFramesInput,
   type BehindSeamsStockPair, type BehindSeamsCount, type BehindSeamsMeasured, type BehindSeamsFrame } from '../src/behindseams.ts';
 import { officialRenderer, type RigcRunner } from '../src/check.ts';
@@ -863,9 +864,18 @@ export function runBehindTurnPrimitiveChecks(say: Say): void {
   const base = measured(idle), red = measured(idle, { threshold: 0, turn: true }, { turn });
   say('BHS53_TURN_ONLY_SEAM_FAIL_LEAVES_IDLE_AND_SETUP_UNCHANGED',
     base.reading.status === 'PASS' && red.reading.status === 'FAIL' && equal(red.reading.pairs, base.reading.pairs) &&
-      red.reading.turn?.pairs[0].motion_opened.max_px === 12 && red.reading.turn.pairs[0].standing.max_px === 12 &&
+      red.reading.turn?.pairs[0].motion_opened.status === 'FAIL' && red.reading.turn.pairs[0].motion_opened.max_px === 12 &&
+      red.reading.turn.pairs[0].standing.status === 'SKIP' && red.reading.turn.pairs[0].standing.reason === TURN_STANDING_MOTION_READ_REASON &&
+      red.reading.turn.pairs[0].standing.max_px === 0 &&
+      red.reading.turn.pairs[0].frames.every(f => f.standing.status === 'SKIP' && f.standing.reason === TURN_STANDING_MOTION_READ_REASON &&
+        f.standing.px === 0 && f.standing.box === null && f.standing.samples.length === 0 &&
+        !Object.hasOwn(f.standing, 'unread_cells') && !Object.hasOwn(f.standing, 'unread_corridors')) &&
       red.reading.turn.pairs[0].sampled_poses === 2 && red.reading.turn.pairs[0].read_poses === 2 &&
-      red.reading.turn.pairs[0].frames[1].pose === 'yaw_dial=15' && red.problems.some(p => p.code === BEHIND_SEAM_CODE && p.object.includes('turn yaw_dial=15')),
+      red.reading.turn.pairs[0].frames[1].pose === 'yaw_dial=15' && red.reading.turn.pairs[0].frames[1].motion_opened.px === 12 &&
+      red.problems.some(p => p.code === BEHIND_SEAM_CODE && p.object === 'pair "a|b" turn yaw_dial=15 motion_opened') &&
+      !red.problems.some(p => p.object.includes('turn') && p.object.endsWith('standing')) &&
+      red.reading.turn.limitations === 'independent setup-reset turn endpoints and full range corners only; no sweep, idle motion, temporal spans or alternate skins; standing is not measured on turn poses, and motion_opened is the turn reading' &&
+      red.lines.some(l => l.includes('turn yaw_dial=15') && l.includes(`standing SKIP (${TURN_STANDING_MOTION_READ_REASON}), 0 cells`)),
     JSON.stringify({ idle: base.reading.status, turn: turnBrief(red.reading.turn), codes: red.problems.map(p => p.code) }));
   const fixed = { ...turn, frames: frames.map((_, index) => ({ ...asFrame(moving.setup), index, time: 0 })),
     stock: turn.stock!.map(s => ({ ...s, gapCovered: [] })) };
@@ -1006,14 +1016,21 @@ function runBehindSeamIntegrationChecks(dir: string, say: Say, rigc: RigcRunner)
   say('BHS59_ACTUAL_TURN_POSER_READS_ALL_ENDPOINTS_AND_CORNERS_WITH_IDLE_UNCHANGED',
     noOptBlock.status === 'PASS' && turnedBlock.status === 'FAIL' && equal(noOptBlock.pairs, turnedBlock.pairs) &&
       turnedBlock.turn?.poses.length === 14 && turnedBlock.turn.pairs[0].frames.length === 14 &&
-      turnedBlock.turn.pairs[0].read_poses === 14 && turnedBlock.turn.pairs[0].motion_opened.max_px === 22 &&
-      turnedBlock.turn.pairs[0].standing.max_px === 24 && turned.report.problems.some(p => p.code === BEHIND_SEAM_CODE && p.object.includes('yaw_dial=15')),
+      turnedBlock.turn.pairs[0].read_poses === 14 &&
+      turnedBlock.turn.pairs[0].motion_opened.status === 'FAIL' && turnedBlock.turn.pairs[0].motion_opened.max_px === 22 &&
+      turnedBlock.turn.pairs[0].standing.status === 'SKIP' && turnedBlock.turn.pairs[0].standing.reason === TURN_STANDING_MOTION_READ_REASON &&
+      turnedBlock.turn.pairs[0].standing.max_px === 0 &&
+      turnedBlock.turn.pairs[0].frames.every(f => f.standing.status === 'SKIP' && f.standing.reason === TURN_STANDING_MOTION_READ_REASON &&
+        f.standing.px === 0 && f.standing.box === null && f.standing.samples.length === 0) &&
+      turned.report.problems.some(p => p.code === BEHIND_SEAM_CODE && p.object.includes('yaw_dial=15') && p.object.endsWith('motion_opened')) &&
+      !turned.report.problems.some(p => p.object.includes('turn') && p.object.endsWith('standing')),
     JSON.stringify({ idle: noOptBlock.status, turn: turnBrief(turnedBlock.turn), problems: turned.report.problems }));
   writeBehindSeamTurnCheckRig(input, true);
   const repaired = run('turn-repaired', requirement('turn-fixed', { threshold: 0, turn: true }));
   const repairedBlock = repaired.figures[BEHIND_SEAM_LINE] as BehindSeamsMeasured;
   say('BHS60_ACTUAL_TURN_POSER_REPAIRED_POSITIVE_CONTROL', repairedBlock.status === 'PASS' && repairedBlock.turn?.status === 'PASS' &&
     repairedBlock.turn.pairs[0].read_poses === 14 && repairedBlock.turn.pairs[0].motion_opened.max_px === 0 &&
+    repairedBlock.turn.pairs[0].standing.status === 'SKIP' && repairedBlock.turn.pairs[0].standing.reason === TURN_STANDING_MOTION_READ_REASON &&
     repairedBlock.turn.pairs[0].standing.max_px === 0 && !repaired.report.problems.some(p => p.code === BEHIND_SEAM_CODE || p.code === BEHIND_SEAM_UNMEASURED_CODE),
     JSON.stringify({ turn: turnBrief(repairedBlock.turn), problems: repaired.report.problems }));
   const originalRig = JSON.parse(readFileSync(join(input, 'rig.json'), 'utf8')) as Record<string, unknown>;
@@ -1517,6 +1534,171 @@ function runBehindRecompositeChecks(dir: string, say: Say, rigc: RigcRunner): vo
       pf[1]?.motion_opened.status === 'FAIL' && pf[1].standing.reason === IDLE_STANDING_MOTION_READ_REASON &&
       pf[2]?.motion_opened.status === 'SKIP' && pf[2].standing.reason === IDLE_STANDING_NO_ORACLE_REASON,
     JSON.stringify({ motion_opened: mo, frame_reasons: pf.map(f => [f.index, f.motion_opened.status, f.standing.reason]) }));
+
+  // Issue #1412 (BHT01–BHT03): turn standing is never measured; motion_opened is the turn reading.
+  const TTurn: BehindSeams = { threshold: 12, turn: true };
+  const turnInputOf = (fx: BehindSeamFixture, poseNames: readonly string[] = ['yaw_dial=-15', 'yaw_dial=15']): NonNullable<BehindSeamsFramesInput['turn']> => {
+    const poses = poseNames.map((name, i) => ({ name, values: { yaw_dial: i === 0 ? -15 : 15 * i } }));
+    const seamFrames = poseNames.map((_, index) => ({ ...(fx.frames[index] ?? fx.setup), index, time: 0 }));
+    const turnFrames = seamFrames.map(asFrame);
+    const read = seamsOf([fx.pair], fx.rest, seamFrames, fx.pages, {},
+      { cells: setupCellReader(() => fx.setup.pieces, fx.pages) })[0];
+    const stock: BehindSeamsStockPair[] = [{
+      pair: 'a|b',
+      frames: seamFrames.length,
+      drawn: read.drawn,
+      banded: read.banded,
+      gapCovered: read.gapCovered.frames.map(hit => ({ index: hit.index, time: 0, cell: hit.cell, cells: hit.cells ?? [] })),
+    }];
+    return { poses, frames: turnFrames, setup: asFrame(fx.setup), rest: fx.rest, stock };
+  };
+
+  // BHT01: a turn fixture matching its own art, whose pair members do not touch and have a third part c painted between them
+  // (7a: 4 rows x 10 gap columns = 40 cells with c behind, 4 rows x 4 uncovered columns = 16 cells with c between; and
+  // 7b-overlapped: 3 top overlap rows so motion_opened reads PASS, plus 7 bottom rows x 5 gap columns = 35 cells), reads no
+  // turn standing cells. The tool-only plant (plantMeasureTurnStanding) restores turn standing measurement and fails with the
+  // hand-computed 40, 16 and 35 cells on every turn pose.
+  const turn7aBehind = measured(fx7aShift, TTurn, { turn: turnInputOf(fx7aShift) });
+  const turn7aBetween = measured(shiftAllPieces(behind7aFixture('between'), 1), TTurn, { turn: turnInputOf(shiftAllPieces(behind7aFixture('between'), 1)) });
+  const turn7bOverlapped = measured(fx7bShift, TTurn, { turn: turnInputOf(fx7bShift) });
+  const plantTurn7aBehind = measured(fx7aShift, TTurn, { turn: turnInputOf(fx7aShift), plantMeasureTurnStanding: true });
+  const plantTurn7aBetween = measured(shiftAllPieces(behind7aFixture('between'), 1), TTurn, { turn: turnInputOf(shiftAllPieces(behind7aFixture('between'), 1)), plantMeasureTurnStanding: true });
+  const plantTurn7bOverlapped = measured(fx7bShift, TTurn, { turn: turnInputOf(fx7bShift), plantMeasureTurnStanding: true });
+  say('BHT01_TURN_PAINTED_INTERVENING_PART_READS_NO_TURN_STANDING_CELLS_AND_PLANT_FAILS_40',
+    turn7aBehind.reading.turn?.pairs[0].standing.status === 'SKIP' &&
+      turn7aBehind.reading.turn.pairs[0].standing.reason === TURN_STANDING_NO_ORACLE_REASON &&
+      turn7aBehind.reading.turn.pairs[0].standing.max_px === 0 &&
+      turn7aBehind.reading.turn.pairs[0].frames.every(f => f.standing.status === 'SKIP' && f.standing.reason === TURN_STANDING_NO_ORACLE_REASON &&
+        f.standing.px === 0 && f.standing.raw_px === 0 && f.standing.geometric_px === 0 && f.standing.boundary_cells === 0 &&
+        f.standing.box === null && f.standing.samples.length === 0) &&
+      !turn7aBehind.problems.some(p => p.code === BEHIND_SEAM_CODE) &&
+      turn7aBetween.reading.turn?.pairs[0].standing.status === 'SKIP' &&
+      turn7aBetween.reading.turn.pairs[0].standing.max_px === 0 &&
+      turn7aBetween.reading.turn.pairs[0].frames.every(f => f.standing.px === 0 && f.standing.reason === TURN_STANDING_NO_ORACLE_REASON) &&
+      turn7bOverlapped.reading.status === 'PASS' && turn7bOverlapped.reading.turn?.status === 'PASS' &&
+      turn7bOverlapped.problems.length === 0 &&
+      turn7bOverlapped.reading.turn.pairs[0].motion_opened.status === 'PASS' &&
+      turn7bOverlapped.reading.turn.pairs[0].motion_opened.max_px === 0 &&
+      turn7bOverlapped.reading.turn.pairs[0].standing.status === 'SKIP' &&
+      turn7bOverlapped.reading.turn.pairs[0].standing.reason === TURN_STANDING_MOTION_READ_REASON &&
+      turn7bOverlapped.reading.turn.pairs[0].standing.max_px === 0 &&
+      turn7bOverlapped.reading.turn.pairs[0].frames.every(f => f.standing.status === 'SKIP' && f.standing.reason === TURN_STANDING_MOTION_READ_REASON && f.standing.px === 0) &&
+      plantTurn7aBehind.reading.turn?.pairs[0].standing.status === 'FAIL' &&
+      plantTurn7aBehind.reading.turn.pairs[0].standing.max_px === 40 &&
+      equal(plantTurn7aBehind.reading.turn.pairs[0].frames.map(f => f.standing.px), [40, 40]) &&
+      plantTurn7aBehind.problems.some(p => p.code === BEHIND_SEAM_CODE && p.object === 'pair "a|b" turn yaw_dial=-15 standing') &&
+      plantTurn7aBetween.reading.turn?.pairs[0].standing.status === 'FAIL' &&
+      plantTurn7aBetween.reading.turn.pairs[0].standing.max_px === 16 &&
+      equal(plantTurn7aBetween.reading.turn.pairs[0].frames.map(f => f.standing.px), [16, 16]) &&
+      plantTurn7bOverlapped.reading.turn?.pairs[0].standing.status === 'FAIL' &&
+      plantTurn7bOverlapped.reading.turn.pairs[0].standing.max_px === 35 &&
+      equal(plantTurn7bOverlapped.reading.turn.pairs[0].frames.map(f => f.standing.px), [35, 35]),
+    JSON.stringify({ turn7a: turnBrief(turn7aBehind.reading.turn), turn7b: turnBrief(turn7bOverlapped.reading.turn),
+      plant7a: turnBrief(plantTurn7aBehind.reading.turn), plant7aBetween: turnBrief(plantTurn7aBetween.reading.turn),
+      plant7b: turnBrief(plantTurn7bOverlapped.reading.turn) }));
+
+  // BHT02: a turn pose where motion_opened cannot read the pair (7c-widen: contact-only at setup so banded === 0, and b moves
+  // one cell right on turn pose 1 opening 4 cells) reads the named HOLE: not PASS, and no standing FAIL. With
+  // plantMeasureTurnStanding, pose 1 fails BEHIND_SEAM_CODE with 4 standing cells.
+  const fx7cTurnWiden = behind7cFixture(true);
+  const turn7cWiden = measured(fx7cTurnWiden, TTurn, { turn: turnInputOf(fx7cTurnWiden) });
+  const plantTurn7cWiden = measured(fx7cTurnWiden, TTurn, { turn: turnInputOf(fx7cTurnWiden), plantMeasureTurnStanding: true });
+  say('BHT02_TURN_UNMEASURED_MOTION_OPENED_READS_NAMED_HOLE_NOT_PASS_AND_NO_STANDING_FAIL',
+    turn7cWiden.reading.status === 'FAIL' && turn7cWiden.reading.turn?.status === 'FAIL' &&
+      turn7cWiden.reading.turn.pairs[0].motion_opened.status === 'SKIP' &&
+      turn7cWiden.reading.turn.pairs[0].standing.status === 'SKIP' &&
+      turn7cWiden.reading.turn.pairs[0].standing.reason === TURN_STANDING_NO_ORACLE_REASON &&
+      turn7cWiden.reading.turn.pairs[0].standing.max_px === 0 &&
+      turn7cWiden.reading.turn.pairs[0].sampled_poses === 2 &&
+      turn7cWiden.reading.turn.pairs[0].read_poses === 0 &&
+      turn7cWiden.reading.turn.pairs[0].unmeasured_poses === 2 &&
+      turn7cWiden.reading.turn.unmeasured.length === 2 &&
+      turn7cWiden.reading.turn.unmeasured.every(u => u.reason.includes('stock transported setup-overlap support is unavailable on every named turn pose')) &&
+      turn7cWiden.problems.every(p => p.code === BEHIND_SEAM_UNMEASURED_CODE) &&
+      !turn7cWiden.problems.some(p => p.code === BEHIND_SEAM_CODE) &&
+      turn7cWiden.lines.some(l => l.includes('turn yaw_dial=15') && l.includes(`standing SKIP (${TURN_STANDING_NO_ORACLE_REASON}), 0 cells`)) &&
+      plantTurn7cWiden.reading.turn?.pairs[0].standing.status === 'FAIL' &&
+      plantTurn7cWiden.reading.turn.pairs[0].standing.max_px === 4 &&
+      equal(plantTurn7cWiden.reading.turn.pairs[0].frames.map(f => f.standing.px), [0, 4]) &&
+      plantTurn7cWiden.problems.some(p => p.code === BEHIND_SEAM_CODE && p.object === 'pair "a|b" turn yaw_dial=15 standing'),
+    JSON.stringify({ turn: turnBrief(turn7cWiden.reading.turn), problems: turn7cWiden.problems, plant: turnBrief(plantTurn7cWiden.reading.turn) }));
+
+  // BHT03: each turn pose keeps its own standing reason (one pose with motion_opened read and one with it SKIP in the same
+  // reading, under both pair-level FAIL and pair-level SKIP), and ambiguous endpoint owners on turn poses produce no unread
+  // corridors or unmeasured[] rows unless plantMeasureTurnStanding is set.
+  const turnStock3: BehindSeamsStockPair[] = [{
+    pair: 'a|b',
+    frames: 3,
+    drawn: 3,
+    banded: 3,
+    gapCovered: baseStock[0].gapCovered.map(hit => ({ ...hit, time: 0 })),
+  }];
+  const baseMotionMatching: BehindSeamFixture = { ...baseMotion, recomposite: baseMotion.setup };
+  const mixedTurnFail = measured(baseMotionMatching, TTurn, {
+    turn: {
+      poses: [
+        { name: 'yaw_dial=-15', values: { yaw_dial: -15 } },
+        { name: 'yaw_dial=15', values: { yaw_dial: 15 } },
+        { name: 'pitch_dial=-12', values: { pitch_dial: -12 } },
+      ],
+      frames: [
+        { ...asFrame(baseMotion.frames[0]), index: 0, time: 0 },
+        { ...asFrame(baseMotion.frames[1]), index: 1, time: 0 },
+        { ...asFrame(frame([mRear, mA], 2)), index: 2, time: 0 },
+      ],
+      setup: asFrame(baseMotion.setup),
+      rest: baseMotion.rest,
+      stock: turnStock3,
+    },
+  });
+  const mixedTurnSkip = measured(baseMotionMatching, TTurn, {
+    turn: {
+      poses: [
+        { name: 'yaw_dial=-15', values: { yaw_dial: -15 } },
+        { name: 'yaw_dial=15', values: { yaw_dial: 15 } },
+      ],
+      frames: [
+        { ...asFrame(baseMotion.frames[0]), index: 0, time: 0 },
+        { ...asFrame(frame([mRear, mA], 1)), index: 1, time: 0 },
+      ],
+      setup: asFrame(baseMotion.setup),
+      rest: baseMotion.rest,
+      stock: [{ pair: 'a|b', frames: 2, drawn: 2, banded: 2, gapCovered: [] }],
+    },
+  });
+  const bothTurnFx: BehindSeamFixture = { ...bothBase, recomposite: bothBase.setup };
+  const turnAmbiguousClean = measured(bothTurnFx, TTurn, { turn: turnInputOf(bothTurnFx) });
+  const turnAmbiguousPlanted = measured(bothTurnFx, TTurn, { turn: turnInputOf(bothTurnFx), plantMeasureTurnStanding: true });
+  const tfFail = mixedTurnFail.reading.turn?.pairs[0].frames ?? [];
+  const tfSkip = mixedTurnSkip.reading.turn?.pairs[0].frames ?? [];
+  say('BHT03_TURN_EACH_POSE_KEEPS_ITS_OWN_REASON_AND_AMBIGUOUS_CORRIDORS_DISAPPEAR',
+    mixedTurnFail.reading.turn?.pairs[0].motion_opened.status === 'FAIL' &&
+      mixedTurnFail.reading.turn.pairs[0].standing.reason === TURN_STANDING_MOTION_READ_REASON &&
+      mixedTurnFail.reading.turn.pairs[0].sampled_poses === 3 &&
+      mixedTurnFail.reading.turn.pairs[0].read_poses === 2 &&
+      mixedTurnFail.reading.turn.pairs[0].unmeasured_poses === 1 &&
+      tfFail[0]?.motion_opened.status === 'PASS' && tfFail[0].standing.reason === TURN_STANDING_MOTION_READ_REASON &&
+      tfFail[1]?.motion_opened.status === 'FAIL' && tfFail[1].standing.reason === TURN_STANDING_MOTION_READ_REASON &&
+      tfFail[2]?.motion_opened.status === 'SKIP' && tfFail[2].standing.reason === TURN_STANDING_NO_ORACLE_REASON &&
+      mixedTurnSkip.reading.turn?.pairs[0].motion_opened.status === 'SKIP' &&
+      mixedTurnSkip.reading.turn.pairs[0].standing.reason === TURN_STANDING_NO_ORACLE_REASON &&
+      mixedTurnSkip.reading.turn.pairs[0].read_poses === 1 &&
+      mixedTurnSkip.reading.turn.pairs[0].unmeasured_poses === 1 &&
+      tfSkip[0]?.motion_opened.status === 'PASS' && tfSkip[0].standing.reason === TURN_STANDING_MOTION_READ_REASON &&
+      tfSkip[1]?.motion_opened.status === 'SKIP' && tfSkip[1].standing.reason === TURN_STANDING_NO_ORACLE_REASON &&
+      turnAmbiguousClean.reading.status === 'PASS' && turnAmbiguousClean.reading.turn?.status === 'PASS' &&
+      turnAmbiguousClean.reading.turn.unmeasured.length === 0 &&
+      turnAmbiguousClean.reading.turn.pairs[0].read_poses === 2 &&
+      turnAmbiguousClean.reading.turn.pairs[0].frames.every(f => f.standing.unread_corridors === undefined && f.standing.unread_cells === undefined) &&
+      turnAmbiguousPlanted.reading.turn?.status === 'FAIL' &&
+      turnAmbiguousPlanted.reading.turn.unmeasured.some(u => u.reason.includes('ambiguous half-alpha owners')) &&
+      turnAmbiguousPlanted.reading.turn.pairs[0].frames.every(f => f.standing.unread_corridors?.length === 4 && f.standing.unread_cells === 8),
+    JSON.stringify({
+      fail_poses: tfFail.map(f => [f.pose, f.motion_opened.status, f.standing.reason]),
+      skip_poses: tfSkip.map(f => [f.pose, f.motion_opened.status, f.standing.reason]),
+      ambiguous_clean: turnBrief(turnAmbiguousClean.reading.turn),
+      ambiguous_planted: turnBrief(turnAmbiguousPlanted.reading.turn),
+    }));
 }
 
 export function runBehindSeamChecks(dir: string, say: Say, rigc: RigcRunner): void {
