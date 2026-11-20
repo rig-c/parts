@@ -608,7 +608,9 @@ usage:
       ${PARTS_HOME_SENTENCE}; ${NO_PARTS_SENTENCE}.
       Both are only read. Into --out:
       build/ (rigc build --profile rig-play --pack --page-edges <value>
-      --pack-shape <value>: the packed atlas is the artifact), gate_spine-html.txt (the gate lines
+      --pack-shape <value>: the packed atlas is the artifact), build-report.json
+      (rigc's own build-report/1 for that compile, written verbatim beside
+      build/ on a failing compile as on a green one), gate_spine-html.txt (the gate lines
       verbatim), idle_frames/ (rigc render --animation idle --fps 12 --max 640
       --geometry: the frames and geometry.json, the skinned vertices and
       every bone's world transform per frame),

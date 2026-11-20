@@ -6672,7 +6672,14 @@ assemble*, at the end of this section):
 
 - `gate_spine-html.txt`: every summary line `(N passed, 0 failed)` — the packed build
   under the `rig-play` profile, gated once over the compile and once over the packed
-  pages on disk. There is no `spine` gate of its own: `rig-play` holds every rule
+  pages on disk. Beside `build/`, `build-report.json` (`<out>/check/build-report.json`
+  under `build` and `compose`; `<out>/build-report.json` under standalone `check`) holds
+  rigc's own `build-report/1` (`--report`) for that primary packed compile, written
+  verbatim by `rigc` (and listed in `build/run.json`'s `outputs[]` as
+  `../build-report.json`) on a failing compile as on a green one (issue #1394); `rig`
+  keeps no compile report because its compiles (the gate scratch and the `--lead-in`
+  scratch) are throwaway runs whose outputs are deleted. There is no `spine` gate of
+  its own: `rig-play` holds every rule
   `spine` measures (on reference-demo, rigc 1.5.1 and 2.0.3: `validate --profile spine`'s 14
   measured rules are all among the build's 23, the 15 others not in `spine`; rigc
   2.1.3 and 2.10.1: the same 14 among the build's 24, which adds

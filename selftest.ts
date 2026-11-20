@@ -378,6 +378,7 @@ import {
   type BreathPair,
   breathPairProblem,
   breathTracks,
+  BUILD_REPORT_FILE,
   buildGateLines,
   causeLines,
   chainDirection,
@@ -17774,6 +17775,46 @@ function checkBuildMatchesModel(reportPath: string, modelPath: string): boolean 
   return fig.build.model_sha256 === createHash('sha256').update(readFileSync(modelPath)).digest('hex');
 }
 
+function buildReportForwardProblem(checkOut: string, rigDir: string): string | null {
+  const reportPath = join(checkOut, BUILD_REPORT_FILE);
+  if (!existsSync(reportPath)) return `BUILD_REPORT_FORWARD: ${reportPath} — file does not exist; rigc build --report ${BUILD_REPORT_FILE} is required`;
+  const report = readJsonFile(reportPath);
+  if (report?.spec !== 'build-report/1' || report.command !== 'build') {
+    return `BUILD_REPORT_FORWARD: ${reportPath} — spec=${JSON.stringify(report?.spec)} command=${JSON.stringify(report?.command)}; spec "build-report/1" and command "build" are required`;
+  }
+  const gates = Array.isArray(report.gates) ? report.gates.filter(isDriveRecord) : [];
+  if (gates.length !== 2 || !gates.every((g) => Array.isArray(g.passed) && g.passed.length > 0 && Array.isArray(g.failures) && g.failures.length === 0)) {
+    return `BUILD_REPORT_FORWARD: ${reportPath} gates[] — ${gates.length} gate(s) (${gates.map((g) => `passed=${Array.isArray(g.passed) ? g.passed.length : 'invalid'},failures=${Array.isArray(g.failures) ? g.failures.length : 'invalid'}`).join('; ')}); 2 passing gates (compile and packed) are required`;
+  }
+  if (!Array.isArray(report.pack) || report.pack.length === 0) {
+    return `BUILD_REPORT_FORWARD: ${reportPath} pack[] — non-empty packed page list is required`;
+  }
+  const reportSha = createHash('sha256').update(readFileSync(reportPath)).digest('hex');
+  const runPath = join(checkOut, 'build', 'run.json');
+  if (!existsSync(runPath)) return `BUILD_REPORT_FORWARD: ${runPath} — file does not exist`;
+  const run = readJsonFile(runPath);
+  if (run?.spec !== 'rigc-run/1' || run.command !== 'build') {
+    return `BUILD_REPORT_FORWARD: ${runPath} — spec=${JSON.stringify(run?.spec)} command=${JSON.stringify(run?.command)}; spec "rigc-run/1" and command "build" are required`;
+  }
+  const inputs = Array.isArray(run.inputs) ? run.inputs.filter(isDriveRecord) : [];
+  const rigSha = createHash('sha256').update(readFileSync(join(rigDir, 'rig.json'))).digest('hex');
+  const motionSha = createHash('sha256').update(readFileSync(join(rigDir, 'motion.json'))).digest('hex');
+  const rigEntry = inputs.find((entry) => entry.role === 'rig');
+  const motionEntry = inputs.find((entry) => entry.role === 'motion');
+  if (rigEntry?.sha256 !== rigSha || motionEntry?.sha256 !== motionSha) {
+    return `BUILD_REPORT_FORWARD: ${runPath} inputs[] — rig=${String(rigEntry?.sha256)} motion=${String(motionEntry?.sha256)}; expected rig=${rigSha} motion=${motionSha}`;
+  }
+  const outputs = Array.isArray(run.outputs) ? run.outputs.filter(isDriveRecord) : [];
+  const reportOut = outputs.find((entry) => entry.path === `../${BUILD_REPORT_FILE}`);
+  if (reportOut === undefined) {
+    return `BUILD_REPORT_FORWARD: ${runPath} outputs[] — lacks ../${BUILD_REPORT_FILE}; --report was not forwarded to rigc build`;
+  }
+  if (reportOut.sha256 !== reportSha) {
+    return `BUILD_REPORT_FORWARD: ${runPath} outputs[../${BUILD_REPORT_FILE}].sha256 — ${String(reportOut.sha256)} found; ${reportSha} on disk is required`;
+  }
+  return null;
+}
+
 function checkOutcomeFaults(fig: Record<string, unknown> | null): string[] {
   if (fig === null) return ['missing completed report'];
   const faults: string[] = [];
@@ -24549,6 +24590,43 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
       "an opaque part is refused by rigc's own A19 under rig-play; the refusal an agent reads has to be rigc's line, not a paraphrase of it, and a red build leaves no check.json that could be mistaken for a verdict",
     );
 
+    const greenForwardProblem = buildReportForwardProblem(out, rig);
+    const sameReportBytes = existsSync(join(out, BUILD_REPORT_FILE)) && existsSync(join(dir, 'out2', BUILD_REPORT_FILE)) && readFileSync(join(out, BUILD_REPORT_FILE)).equals(readFileSync(join(dir, 'out2', BUILD_REPORT_FILE)));
+    const droppedForwardOut = join(dir, 'dropped-report-forward-out');
+    runCheck(rig, droppedForwardOut, (args) => {
+      if (args[0] === 'build' && args.includes('--report')) {
+        const idx = args.indexOf('--report');
+        return stock([...args.slice(0, idx), ...args.slice(idx + 2)]);
+      }
+      return stock(args);
+    }, undefined, DEFAULT_PACK_MODE, undefined, undefined, false, false, undefined, false, undefined, undefined, undefined, undefined, true);
+    const droppedForwardMissingProblem = buildReportForwardProblem(droppedForwardOut, rig);
+    if (existsSync(join(out, BUILD_REPORT_FILE))) cpSync(join(out, BUILD_REPORT_FILE), join(droppedForwardOut, BUILD_REPORT_FILE));
+    const droppedForwardUnboundProblem = buildReportForwardProblem(droppedForwardOut, rig);
+    const tamperedForwardOut = join(dir, 'tampered-report-forward-out');
+    cpSync(out, tamperedForwardOut, { recursive: true });
+    writeFileSync(join(tamperedForwardOut, BUILD_REPORT_FILE), `${readFileSync(join(tamperedForwardOut, BUILD_REPORT_FILE), 'utf8').trimEnd()}\n\n`);
+    const tamperedForwardProblem = buildReportForwardProblem(tamperedForwardOut, rig);
+    const redReport = readJsonFile(join(dir, 'red-out', BUILD_REPORT_FILE));
+    const redReportGates = Array.isArray(redReport?.gates) ? redReport.gates.filter(isDriveRecord) : [];
+    const redReportHasA19 =
+      redReport?.spec === 'build-report/1' &&
+      redReport.command === 'build' &&
+      redReportGates.length > 0 &&
+      redReportGates.some((g) => Array.isArray(g.failures) && g.failures.some((f) => isDriveRecord(f) && f.code === 'A19_OVERLAY_PNGS_HAVE_ALPHA'));
+    say(
+      'CK1394_PRIMARY_COMPILE_FORWARDS_BUILD_REPORT_BOUND_TO_RUN_JSON_AND_DROPPING_THE_FORWARD_OR_FAILING_COMPILE_IS_CAUGHT',
+      greenForwardProblem === null &&
+        sameReportBytes &&
+        (droppedForwardMissingProblem?.startsWith('BUILD_REPORT_FORWARD:') && droppedForwardMissingProblem.includes('file does not exist')) === true &&
+        (droppedForwardUnboundProblem?.startsWith('BUILD_REPORT_FORWARD:') && droppedForwardUnboundProblem.includes(`outputs[] — lacks ../${BUILD_REPORT_FILE}`)) === true &&
+        (tamperedForwardProblem?.startsWith('BUILD_REPORT_FORWARD:') && tamperedForwardProblem.includes(`outputs[../${BUILD_REPORT_FILE}].sha256`)) === true &&
+        red.status === 1 &&
+        redReportHasA19,
+      `green -> ${greenForwardProblem ?? 'ok'}, deterministic bytes=${sameReportBytes}; planted dropped --report -> ${droppedForwardMissingProblem ?? 'MISSED'}; planted stale report without --report -> ${droppedForwardUnboundProblem ?? 'MISSED'}; planted tampered report -> ${tamperedForwardProblem ?? 'MISSED'}; failing compile (exit ${red.status}) report -> spec=${JSON.stringify(redReport?.spec)} A19=${redReportHasA19}`,
+      'issue #1394: runCheck passes --report <out>/build-report.json on the primary packed compile that writes build/run.json, binding the report sha256 in run.json outputs[] alongside rig/motion inputs[], leaving the failing report on a red compile, and failing by name if --report is dropped',
+    );
+
     const holeRig = join(dir, 'hole');
     writeCheckRig(holeRig);
     rmSync(join(holeRig, 'motion.json'));
@@ -24783,7 +24861,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
     const withSize1024 = recordPacked(1024);
     const tailWithout = ['--profile', GATE_PROFILE, '--pack', '--page-edges', 'free', '--pack-shape', 'polygon'];
     const tailWith = [...tailWithout, '--page-size', '1024'];
-    const stripOut = (a: readonly string[]): string[] => a.map((x, i) => (a[i - 1] === '--out' || a[i - 1] === '--rig' || a[i - 1] === '--motion' ? '<path>' : x));
+    const stripOut = (a: readonly string[]): string[] => a.map((x, i) => (a[i - 1] === '--out' || a[i - 1] === '--rig' || a[i - 1] === '--motion' || a[i - 1] === '--report' ? '<path>' : x));
     const sizeCliOut = join(dir, 'out-page-size-1024');
     const sizeCliRun = runCli(['check', '--rig', rig, '--out', sizeCliOut, '--page-size', '1024']);
     const sizeCliFig = readJsonFile(join(sizeCliOut, 'check.json'));
@@ -24794,9 +24872,11 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
       'CK1273_PAGE_SIZE_PASSES_THROUGH_TO_EVERY_PACKED_RIGC_BUILD_ARGV_AND_OMITS_WHEN_ABSENT_LEAVING_OUTPUTS_BYTE_IDENTICAL',
       withoutSize.rigArgv.length === 1 &&
         withoutSize.checkArgv.length === 2 &&
+        withoutSize.checkArgv[0].includes('--report') &&
         [...withoutSize.rigArgv, ...withoutSize.checkArgv].every((a) => !a.includes('--page-size') && JSON.stringify(a.slice(-tailWithout.length)) === JSON.stringify(tailWithout)) &&
         withSize1024.rigArgv.length === 1 &&
         withSize1024.checkArgv.length === 2 &&
+        withSize1024.checkArgv[0].includes('--report') &&
         [...withSize1024.rigArgv, ...withSize1024.checkArgv].every((a) => JSON.stringify(a.slice(-tailWith.length)) === JSON.stringify(tailWith)) &&
         withoutSize.checkArgv.every((a, i) => JSON.stringify([...stripOut(a), '--page-size', '1024']) === JSON.stringify(stripOut(withSize1024.checkArgv[i]))) &&
         JSON.stringify(withoutSize.report.figures.pack_mode) === '{"page_edges":"free","pack_shape":"polygon"}' &&
@@ -28575,6 +28655,19 @@ function runBuildSuite(): number {
         partsSame,
       `exit ${green.status}; --out holds [${tree.join(', ')}]; last lines: ${tail.map((l) => l.trim()).join(' | ')}; stage prefixes at ${stageOrder.join(', ')}; parts.json equals the fixture's hand-derived one: ${partsSame}`,
       "issue #2: the packed page is the artifact and the loose parts an intermediate, so the lines a reader stops at are the pack line and the three files; the parts.json equality is what shows build called the assemble stage rather than something like it",
+    );
+
+    const buildForwardProblem = buildReportForwardProblem(join(out, 'check'), join(out, 'rig'));
+    const buildDroppedCheck = join(dir, 'build-dropped-report-check');
+    cpSync(join(out, 'check'), buildDroppedCheck, { recursive: true });
+    rmSync(join(buildDroppedCheck, BUILD_REPORT_FILE), { force: true });
+    const buildDroppedProblem = buildReportForwardProblem(buildDroppedCheck, join(out, 'rig'));
+    say(
+      'BU1394_BUILD_FORWARDS_COMPILE_REPORT_BOUND_TO_RUN_JSON_AND_DROPPING_IT_FAILS_BY_NAME',
+      buildForwardProblem === null &&
+        (buildDroppedProblem?.startsWith('BUILD_REPORT_FORWARD:') && buildDroppedProblem.includes('file does not exist')) === true,
+      `green build check/build-report.json -> ${buildForwardProblem ?? 'bound to check/build/run.json inputs[] and outputs[]'}; planted missing report -> ${buildDroppedProblem ?? 'MISSED'}`,
+      'issue #1394: rig-parts build writes check/build-report.json (build-report/1) beside check/build/run.json from the compile it already runs, and dropping it fails by name',
     );
 
     // Reuse the green generated build above: this is the real check function's report, not a hand-shaped stand-in.
@@ -49705,16 +49798,18 @@ function runSceneSuite(): number {
       const withPs4096 = runRecordedCompose(4096);
       const tailWithout = ['--profile', GATE_PROFILE, '--pack', '--page-edges', 'free', '--pack-shape', 'polygon'];
       const tailWith = [...tailWithout, '--page-size', '4096'];
-      const stripPaths = (a: readonly string[]): string[] => a.map((x, i) => (a[i - 1] === '--out' || a[i - 1] === '--rig' || a[i - 1] === '--motion' ? '<path>' : x));
+      const stripPaths = (a: readonly string[]): string[] => a.map((x, i) => (a[i - 1] === '--out' || a[i - 1] === '--rig' || a[i - 1] === '--motion' || a[i - 1] === '--report' ? '<path>' : x));
       say(
         'SC98_COMPOSE_STAGE_THREADS_PAGE_SIZE_TO_RIGC_ARGV_AND_OMITS_IT_WHEN_ABSENT',
         withoutPs.result.stoppedAt === null &&
           withPs4096.result.stoppedAt === null &&
           withoutPs.rigArgv.length === 1 &&
           withoutPs.checkArgv.length === 1 &&
+          withoutPs.checkArgv[0].includes('--report') &&
           [...withoutPs.rigArgv, ...withoutPs.checkArgv].every((a) => !a.includes('--page-size') && JSON.stringify(a.slice(-tailWithout.length)) === JSON.stringify(tailWithout)) &&
           withPs4096.rigArgv.length === 1 &&
           withPs4096.checkArgv.length === 1 &&
+          withPs4096.checkArgv[0].includes('--report') &&
           [...withPs4096.rigArgv, ...withPs4096.checkArgv].every((a) => JSON.stringify(a.slice(-tailWith.length)) === JSON.stringify(tailWith)) &&
           withoutPs.rigArgv.every((a, i) => JSON.stringify([...stripPaths(a), '--page-size', '4096']) === JSON.stringify(stripPaths(withPs4096.rigArgv[i]))) &&
           withoutPs.checkArgv.every((a, i) => JSON.stringify([...stripPaths(a), '--page-size', '4096']) === JSON.stringify(stripPaths(withPs4096.checkArgv[i]))) &&
