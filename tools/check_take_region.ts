@@ -18,6 +18,8 @@ import { applyTakenLayers } from '../src/takelayers.ts';
 import { makeInputs } from '../src/inputs.ts';
 import { setupPaintingLine } from '../src/setuppainting.ts';
 import { applyTakenRegions, deriveTakenRegion, regionPaintingDelta } from '../src/takeregion.ts';
+import { assemblyConfigChanges, assemblyConfigReading, assemblyFieldDigest, REGION_TOLERANCE_FIELD, refuseStaleAssembly } from '../src/assembly-reading.ts';
+import { readParts, serializeParts } from '../src/parts.ts';
 
 type Say = (name: string, pass: boolean, detail: string) => void;
 export function runTakeRegionChecks(dir: string, say: Say): void {
@@ -566,4 +568,86 @@ export function runTakeSourceOpacityChecks(dir: string, say: Say): void {
   }
   const expected = 'INPUTS_PAINTING_OPAQUE: region take painting (--source must be opaque because geometry follows the run input and inputs refuses see-through paintings, flatten the plate first) — has 2 pixel(s) below alpha 255 (first at 0,0); an opaque painting is required, because neither dropping the alpha nor compositing it is stated by the input';
   say('REGION_TRANSPARENT_SOURCE_EXPLICIT_REFERENCE_REFUSED', message === expected && !existsSync(join(dir, 'out')), message);
+}
+
+/** Issue #1393: a region take's declared rgb_tolerance is bound in the assembly reading. */
+export function runRegionToleranceBindingChecks(dir: string, say: Say): void {
+  const field = REGION_TOLERANCE_FIELD;
+  const home = join(dir, 'tolerance');
+  const cfg = writeTakeRegionFixture(home);
+  cfg.requirements = 'requirements.json';
+  const config = join(home, 'config.json');
+  writeFileSync(config, JSON.stringify(cfg));
+  const requirementsPath = join(home, 'requirements.json');
+  const requirements = readFileSync(requirementsPath);
+  const withTolerance = (tolerance: number): void => {
+    const file = JSON.parse(requirements.toString('utf8')) as { setup_painting: { rgb_tolerance: number } };
+    file.setup_painting.rgb_tolerance = tolerance;
+    writeFileSync(requirementsPath, JSON.stringify(file));
+  };
+  const partsJson = join(home, 'out', 'parts.json');
+  assembleStage({ source: join(home, 'painting.png'), full: join(home, 'full'), head: null, config, requirements: requirementsPath },
+    { partsJson, partsDir: join(home, 'out', 'parts'), recomposite: join(home, 'out', 'recomposite.png'), errorMap: join(home, 'out', 'error.png') }, () => {});
+  const parts = readParts(partsJson);
+  const check = (candidate: typeof parts): string => {
+    try { refuseStaleAssembly(config, candidate); } catch (error) {
+      if (!(error instanceof PartsError) || error.problems.length !== 1 || error.problems[0].code !== 'ASSEMBLY_CONFIG_STALE') throw error;
+      return error.problems[0].detail;
+    }
+    return 'accepted';
+  };
+  const stamped = parts.assembly_config!.fields.filter(row => row.name === field).length;
+  const unchanged = check(parts);
+  withTolerance(255);
+  const changed = check(parts);
+  const changedFields = assemblyConfigChanges(config, parts);
+  writeFileSync(requirementsPath, requirements);
+  say('AS1393_TOLERANCE_CHANGE_UNDER_A_REGION_TAKE_IS_STALE',
+    stamped === 1 && unchanged === 'accepted' &&
+      changed === `assembly config changed at config.${field}; re-run assemble from the current config` &&
+      JSON.stringify(changedFields) === JSON.stringify([field]),
+    `stamp rows ${stamped}; unchanged ${unchanged}; tolerance 0 -> 255 ${changed}; fields ${JSON.stringify(changedFields)}`);
+
+  // An older producer's stamp: the row removed and the aggregate recomputed, read back through the strict reader.
+  const fields = parts.assembly_config!.fields.filter(row => row.name !== field);
+  // Beside the written manifest, so the reader finds its painting_in_rig file.
+  const oldPath = join(home, 'out', 'old-parts.json');
+  writeFileSync(oldPath, serializeParts({ ...parts, assembly_config: { sha256: assemblyFieldDigest(fields), fields } }));
+  const oldParts = readParts(oldPath);
+  const oldChanges = assemblyConfigChanges(config, oldParts);
+  const upgrade = check(oldParts);
+  writeFileSync(config, JSON.stringify({ ...cfg, assemble: { ...(cfg.assemble as object), rig_scale: 0.5 } }));
+  const editedDetail = check(oldParts);
+  writeFileSync(config, JSON.stringify(cfg));
+  say('AS1393_OLD_STAMP_NAMES_THE_UPGRADE',
+    JSON.stringify(oldChanges) === JSON.stringify([field]) &&
+      upgrade === `assembly reading changed at config.${field}; the recorded stamp predates region-take setup_painting.rgb_tolerance binding. Re-run assemble once with the same config` &&
+      editedDetail === `assembly config changed at config.assemble.rig_scale, config.${field}; re-run assemble from the current config`,
+    `fields ${JSON.stringify(oldChanges)}; old stamp ${upgrade}; edited config ${editedDetail}`);
+
+  // Where no region take reads a declared tolerance, the reading is the one without config.requirements,
+  // which no field hashed before this binding outside busy-visible.
+  const reading = (variant: Record<string, unknown>, file = requirements.toString('utf8')) => {
+    const path = join(home, 'variant.json');
+    writeFileSync(path, JSON.stringify(variant));
+    writeFileSync(requirementsPath, file);
+    try { return assemblyConfigReading(path, parts); } finally { writeFileSync(requirementsPath, requirements); }
+  };
+  const assembleOf = cfg.assemble as Record<string, unknown>;
+  const untaken = { ...assembleOf };
+  delete untaken.take;
+  const undeclared = { ...cfg };
+  delete undeclared.requirements;
+  const noTake = { ...cfg, assemble: untaken };
+  const noTakeBaseline = reading({ ...undeclared, assemble: untaken });
+  const noTakeReading = reading(noTake);
+  const noSetup = JSON.stringify({ ...JSON.parse(requirements.toString('utf8')) as object, setup_painting: undefined });
+  const noToleranceReading = reading(cfg, noSetup);
+  const undeclaredReading = reading(undeclared);
+  const busy = reading({ ...cfg, assemble: { ...assembleOf, ground: 'busy', project: 'visible' } });
+  const names = (record: { fields: Array<{ name: string }> }): string[] => record.fields.map(row => row.name);
+  say('AS1393_NO_REGION_TAKE_OR_NO_TOLERANCE_KEEPS_THE_DIGEST',
+    noTakeReading.sha256 === noTakeBaseline.sha256 && noToleranceReading.sha256 === undeclaredReading.sha256 &&
+      !names(undeclaredReading).includes(field) && !names(busy).includes(field) && names(busy).includes('requirements.setup_painting'),
+    `no take ${noTakeReading.sha256.slice(0, 12)} = ${noTakeBaseline.sha256.slice(0, 12)}; no setup_painting ${noToleranceReading.sha256.slice(0, 12)} = undeclared ${undeclaredReading.sha256.slice(0, 12)}; busy-visible rows ${names(busy).filter(name => name.startsWith('requirements')).join(', ')}`);
 }
