@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.47.1 (2026-11-21)
+
+`check` no longer fails with `RangeError: Out of memory` when `behind_seams` is declared on a large rig. The check now finishes and writes `check.json`.
+
+**Read before upgrading:**
+
+* **This release fixes the crash, not the verdict.** What `BEHIND_PART_SEAMS` standing counts is unchanged. A rig that could not finish the check before may now finish it and FAIL. The standing reading is being revised in `#1408`: today it counts painted areas between pair members that do not touch.
+* **`samples[]` is bounded.** Each `BEHIND_PART_SEAMS` `samples[]` list holds at most 64 rows. A list that measured more gains `samples_omitted`, the number of rows left out. The counts are the measurement; the rows are a diagnostic sample. A list of 64 or fewer rows, and every check without `behind_seams`, writes the same bytes as 2.47.0.
+
+### Bug Fixes
+
+* **check:** bound each `BEHIND_PART_SEAMS` `samples[]` list at 64 rows, with `samples_omitted` on a list that measured more. Standing keeps its worst rows: counted first, then the larger of the two distances' minimum. Motion-opened keeps rows spaced evenly across the list. Kept rows stay in measured order, and every count, box, hit, span, run and status is still computed from all cells. Before, one row per gap cell took `check.json` past the engine's string-length limit on a large rig (`#1403`, `#1404`, `61cb758`).
+
 ## 2.47.0 (2026-11-20)
 
 `build`, `check` and `compose` now keep the compiler's own build report for the compile they checked, so a registered build carries the report of the run that made it. The assembly reading covers two more inputs: each occluder-split take's donor `meta.json`, and a named list for `assemble.yield_refused`. Assemble and the reading now share one projection of the config, so an input that assemble reads without hashing it fails a control. A config that declares none of the new fields assembles and builds the same bytes as 2.46.0.
