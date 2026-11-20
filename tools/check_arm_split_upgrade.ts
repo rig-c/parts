@@ -167,6 +167,7 @@ export function runArmSplitUpgradeChecks(dir: string, say: Say, runner: RigcRunn
   // ---- AU02/AU03/AU10: --only-missing on the pre-1.37 config, then the build ---------------------------------------
   const oldConfig = join(old.at, 'config.json');
   const oldParts0 = readFileSync(join(oldOut, 'parts.json'), 'utf8');
+  const withoutReading = (text: string): string => text.replace(/^  "assembly_config": \{\n[\s\S]*?^  \},\n/m, '');
   const oldRun = onlyMissing(old.at, oldOut);
   const oldAfter = readFileSync(oldConfig, 'utf8');
   const oldFig = spliceFigures(old.text, oldAfter);
@@ -186,9 +187,9 @@ export function runArmSplitUpgradeChecks(dir: string, say: Say, runner: RigcRunn
   );
   const oldParts1 = oldRebuilt === null ? null : readFileSync(join(oldRebuilt, 'parts.json'), 'utf8');
   record(
-    'AU10_ASSEMBLE_MAKES_THE_SAME_PARTS_JSON_BEFORE_AND_AFTER_THE_PLAN_ROWS_ARE_WRITTEN',
-    oldParts1 !== null && oldParts1 === oldParts0,
-    oldParts1 === null ? 'not assembled: AU02 wrote no migrated config' : `parts.json ${oldParts0.length} B before (the rewrite's plan) and ${oldParts1.length} B after (the written plan): ${oldParts1 === oldParts0 ? 'byte-identical' : 'DIFFERENT'} — mergedArmSplitPlan leaves a plan that already names drape-r and hand-r as written`,
+    'AU10_ASSEMBLE_MAKES_THE_SAME_PART_RECORDS_BEFORE_AND_AFTER_THE_PLAN_ROWS_ARE_WRITTEN',
+    oldParts1 !== null && withoutReading(oldParts1) === withoutReading(oldParts0),
+    oldParts1 === null ? 'not assembled: AU02 wrote no migrated config' : `parts.json ${oldParts0.length} B before (the rewrite's plan) and ${oldParts1.length} B after (the written plan): ${withoutReading(oldParts1) === withoutReading(oldParts0) ? 'byte-identical excluding assembly_config' : 'DIFFERENT'} — mergedArmSplitPlan leaves a plan that already names drape-r and hand-r as written`,
   );
 
   // ---- AU04: nothing missing -> no byte, no mtime ----------------------------------------------------------------------
@@ -260,7 +261,6 @@ export function runArmSplitUpgradeChecks(dir: string, say: Say, runner: RigcRunn
   const twin = fixture('split-plan', { splitPlan: true });
   const twinOut = assembleInto(twin.at);
   const twinParts = readFileSync(join(twinOut, 'parts.json'), 'utf8');
-  const withoutReading = (text: string): string => text.replace(/^  "assembly_config": \{\n[\s\S]*?^  \},\n/m, '');
   const legacyBytesSame = withoutReading(twinParts) === withoutReading(oldParts0);
   const twinRun = onlyMissing(twin.at, twinOut);
   const twinAfter = readFileSync(join(twin.at, 'config.json'), 'utf8');

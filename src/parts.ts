@@ -1,4 +1,5 @@
 import { assemblyFieldDigest } from './assembly-reading.ts';
+import { PROJECT_RULES, type ProjectRule } from './projectrule.ts';
 import { orderedEditedPartReceipt, type EditedPartReceipt } from './editedparts.ts';
 import { parseReceiptProducer, receiptText } from './receiptproducer.ts';
 import { takenSourceProblems, type TakenLayerSource } from './takesource.ts';
@@ -424,6 +425,7 @@ export interface OccluderGuardRecord {
 export interface AssemblyConfigRecord {
   sha256: string;
   fields: Array<{ name: string; sha256: string }>;
+  project_override?: ProjectRule;
 }
 
 export interface PartsFile {
@@ -661,7 +663,7 @@ export function serializeParts(file: PartsFile): string {
       path: file.painting_in_rig.path, sha256: file.painting_in_rig.sha256, resample: file.painting_in_rig.resample,
     } }),
     parts: serializePartList(file.parts),
-    ...(file.assembly_config === undefined ? {} : { assembly_config: { sha256: file.assembly_config.sha256, fields: file.assembly_config.fields.map(({ name, sha256 }) => ({ name, sha256 })) } }),
+    ...(file.assembly_config === undefined ? {} : { assembly_config: { sha256: file.assembly_config.sha256, fields: file.assembly_config.fields.map(({ name, sha256 }) => ({ name, sha256 })), ...(file.assembly_config.project_override === undefined ? {} : { project_override: file.assembly_config.project_override }) } }),
     ...(file.cut_ownership === undefined ? {} : { cut_ownership: orderedOwnership(file.cut_ownership) }),
     ...(file.motion_seams === undefined ? {} : { motion_seams: file.motion_seams.map(({ part, neighbour }) => ({ part, neighbour })) }),
     ghost_px: Object.fromEntries(Object.keys(file.ghost_px).sort().map((k) => [k, file.ghost_px[k]])),
@@ -881,7 +883,8 @@ function checkParts(raw: unknown, path: string): PartsFile {
   if ('assembly_config' in o) {
     const value = o.assembly_config as Partial<AssemblyConfigRecord> | null;
     const digest = (input: unknown): input is string => typeof input === 'string' && /^[a-f0-9]{64}$/.test(input);
-    if (value === null || typeof value !== 'object' || Object.keys(value).length !== 2 ||
+    if (value === null || typeof value !== 'object' || Object.keys(value).some(key => key !== 'sha256' && key !== 'fields' && key !== 'project_override') ||
+        ('project_override' in value && !PROJECT_RULES.includes(value.project_override as ProjectRule)) ||
         !digest(value.sha256) || !Array.isArray(value.fields) || value.fields.length === 0 ||
         !value.fields.every((row, i) => row !== null && typeof row === 'object' && Object.keys(row).length === 2 &&
           typeof row.name === 'string' && /^[a-z_]+(?:\.[a-z_]+)*$/.test(row.name) &&

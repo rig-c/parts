@@ -1072,7 +1072,8 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     result.parts.alternates = altBuilt.map((b) => b.record);
   }
 
-  const reading = readAssemblyConfig(cfg, result.parts);
+  const projectOverride = project === (cfg.assemble.project ?? DEFAULT_PROJECT_RULE) ? undefined : project;
+  const reading = readAssemblyConfig(cfg, result.parts, input.config, projectOverride);
   let previousAssembly = undefined;
   if (existsSync(outs.partsJson)) {
     try { previousAssembly = readPartsManifest(outs.partsJson).assembly_config; }

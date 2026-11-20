@@ -220,8 +220,17 @@ export function runOccluderCopyChecks(dir: string, say: Say): void {
   say('OC06_WITHOUT_THE_PLANT_THE_FINDING_IS_SILENT', silent.error === null && copied(silent.lines).length === 0, `${silent.error?.message ?? 'assembled'}; ${copied(silent.lines).join(' | ') || 'no WARN'}`);
   const plain = stage(clean, join(clean, 'orig'), chainConfig({}), 'plain');
   const files = ['parts.json', 'recomposite.png', 'error.png', 'parts/behind.png', 'parts/front.png'];
-  const same = files.filter((f) => existsSync(join(clean, 'plain', f)) && readFileSync(join(clean, 'plain', f)).equals(readFileSync(join(clean, 'declared', f))));
-  say('OC07_THE_DECLARATION_MOVES_NO_OUTPUT_BYTE', plain.error === null && same.length === files.length, `${same.length}/${files.length} files byte-identical with and without config.assemble.occluders`);
+  const unboundManifest = (file: string): string => readFileSync(file, 'utf8').replace(/^  "assembly_config": \{\n[\s\S]*?^  \},\n/m, '');
+  const same = files.filter((f) => {
+    const bare = join(clean, 'plain', f), declared = join(clean, 'declared', f);
+    return existsSync(bare) && existsSync(declared) && (f === 'parts.json'
+      ? unboundManifest(bare) === unboundManifest(declared)
+      : readFileSync(bare).equals(readFileSync(declared)));
+  });
+  const readingsDiffer = plain.error === null && silent.error === null &&
+    readParts(join(clean, 'plain', 'parts.json')).assembly_config?.sha256 !== readParts(join(clean, 'declared', 'parts.json')).assembly_config?.sha256;
+  say('OC07_THE_DECLARATION_MOVES_ONLY_THE_ASSEMBLY_CONFIG_READING', plain.error === null && same.length === files.length && readingsDiffer,
+    `${same.length}/${files.length} files byte-identical after removing the assembly config reading; digest changed ${readingsDiffer}`);
 
   // Issue #1237: plate binding controls on `config.assemble.occluders[i].plate` and `parts.json.occluder_plates`.
   const plateHome = join(dir, 'occluder-plate-binding');

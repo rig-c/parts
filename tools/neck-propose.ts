@@ -24,7 +24,7 @@ export function proposeNeck(target: ConfigWriteTarget, args: { source: string; f
   try {
     const out = join(args.out, 'rig');
     mkdirSync(join(out, 'parts'), { recursive: true });
-    draft.assembled.parts.assembly_config = readAssemblyConfig(draft.config, draft.assembled.parts);
+    draft.assembled.parts.assembly_config = readAssemblyConfig(draft.config, draft.assembled.parts, target.path);
     writeParts(join(out, 'parts.json'), draft.assembled.parts);
     for (const p of draft.assembled.images) {
       writePng(join(out, 'parts', `${p.record.name}.png`), p.image);

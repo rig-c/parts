@@ -344,7 +344,7 @@ New assemble and build manifests carry an optional top-level `assembly_config`
 object shaped as `{ sha256, fields: [{ name, sha256 }] }`. Its lowercase
 SHA-256 digests describe the effective assembly config inputs, in deterministic
 field-name order. Entries name the individual inputs, such as
-`assemble.rig_scale`. The aggregate binds the ordered field names and digests.
+`assemble.rig_scale`. The aggregate binds the ordered field names and digests. When a CLI projection override differs from the configured rule, the object also records the effective `project_override` used to read projection inputs.
 Legacy manifests without `assembly_config` remain accepted. A consumer that
 checks a recorded digest against a config refuses a mismatch as
 `ASSEMBLY_CONFIG_STALE`, names the changed fields and directs the author to

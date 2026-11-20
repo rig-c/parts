@@ -713,6 +713,7 @@ function checkFrontColourUnderFrontPart(dir: string, say: Say): void {
   checkReplacement(coreInput, coreBase, coreEdited, faceEditedBytes, { changed_px: 0, changed_counted_px: 0, changed_excluded_px: 0, removed_opaque_px: 0 }, faceReceipt, name => `${name}_CORE_OCCLUDER` === 'NEVER' ? undefined : undefined as never);
   const stripEditedPart = (partsFile: string): string => {
     const parsed = json(partsFile);
+    delete parsed.assembly_config;
     for (const p of parsed.parts as Array<Record<string, unknown>>) {
       const prov = p.provenance as Record<string, unknown> | undefined;
       if (prov !== undefined) delete prov.edited_part;
