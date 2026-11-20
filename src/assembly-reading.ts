@@ -154,7 +154,8 @@ export const REGION_TOLERANCE_FIELD = 'requirements.setup_painting.rgb_tolerance
 
 function projectionEntries(cfg: ProjectionSource) {
   // Requirements values reach this config view only through config.requirements.
-  // A requirements file named only by --requirements is read outside it (#1393).
+  // assemble and build refuse a --requirements file the config does not name
+  // when its content reaches assembly (#1418), so nothing assembly reads is outside it.
   // Only selected values can be exemptions in the projection, such as the
   // editor receipt ledger below.
   const a = cfg.assemble;

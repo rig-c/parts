@@ -194,7 +194,8 @@ export function runPaintingEdgeChecks(say: Say): void {
       const declared = name !== 'omitted';
       const out = join(directory, name);
       const logs: string[] = [];
-      const result = assembleStage({ ...input, config: name === 'config-mask' ? configMask : input.config,
+      // Issue #1418: a flag whose figure mask reaches assembly names the file config.requirements declares.
+      const result = assembleStage({ ...input, config: name === 'omitted' ? input.config : configMask,
         ...(name === 'declared' ? { requirements } : {}),
         alts: [{ name: 'same', source: input.source, full: input.full, head: input.head }] },
       { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'),
@@ -242,7 +243,7 @@ export function runPaintingEdgeChecks(say: Say): void {
     writePng(differentSource, differentPainting);
     const alternateReadings = ['omitted', 'different', 'same-bytes'].map(name => {
       const out = join(directory, 'alternate-' + name), logs: string[] = [];
-      const result = assembleStage({ ...input, ...(name === 'omitted' ? {} : { requirements }),
+      const result = assembleStage({ ...input, ...(name === 'omitted' ? {} : { config: configMask, requirements }),
         alts: [{ name: 'variant', source: name === 'same-bytes' ? paintingCopy : differentSource,
           full: input.full, head: input.head }] },
       { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'),

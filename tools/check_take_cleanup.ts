@@ -33,6 +33,7 @@ export function runTakeCleanupChecks(dir: string, say: (name: string, pass: bool
       writeFileSync(join(home, 'painting.png'), encodePngBytes(paint(128, 128, WHITE, [...old, added])));
       raw = assembleConfig({ plan: [['body', 'full', 'topwear']], extend: [], resolution: 128, rigScale: 1 });
       delete (raw.seethrough as Record<string, unknown>).head_box;
+      raw.requirements = 'requirements.json';
       (raw.assemble as Record<string, unknown>).take = [{ run: 'full', run_dir: 'donor', st_input: 'painting.png', part: 'body', seed, reference: { painting: 'painting.png', sha256: fileSha256(join(home, 'painting.png')) } }];
       writeFileSync(join(home, 'requirements.json'), JSON.stringify({ spec: 'spine-parts-requirements/1', fps: 1, targets: [], requirements: [], setup_painting: { rgb_tolerance: 0, regions: [{ name: 'stage', box: [0, 0, 128, 128], max_pixels: 0 }] } }));
     }

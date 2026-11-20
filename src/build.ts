@@ -504,8 +504,8 @@ function sourceCoverSet(result: AssembleResult, set: string | null, painting: st
 
 /** Read, assemble, and write only after every refusal has had its chance. Throws a PartsError on a refusal, having written nothing. */
 export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, log: Log): AssembleResult {
-  // Flag-only figure masks and the region-take tolerance are effective
-  // inputs outside the legacy config reading.
+  // A --requirements file that reaches assembly must be the one config.requirements
+  // names (#1418), so the assembly reading sees what assemble read.
   const requirementsFile = input.requirements === undefined ? null : readRequirements(input.requirements);
   const materialAsked = requirementsFile?.cut_material !== undefined;
   // Issue #944: the pinhole bar is measured only when the requirements file declares it required.
@@ -517,7 +517,14 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   const cfg = { ...projection.config, seethrough: projection.config.seethrough! };
   const supportDeclarations = JSON.stringify(cfg.assemble.cuts ?? []);
   const { seam, project } = effectiveAssemblyRules(cfg.assemble, input);
-  const requirements = cfg.assemble.ground === 'busy' && project === 'visible'
+  const busyVisible = cfg.assemble.ground === 'busy' && project === 'visible';
+  // Issue #1418: a requirements file whose content reaches assembly must be the one config.requirements names,
+  // because assembly_config reads only config.requirements.
+  refuseUnnamedAssemblyRequirements(input.requirements, cfg.requirements, input.config, [
+    ...((cfg.assemble.take ?? []).some(take => 'seed' in take) ? ['setup_painting.rgb_tolerance (a region take)'] : []),
+    ...(busyVisible && requirementsFile?.setup_painting?.figure_mask !== undefined ? ['setup_painting.figure_mask (busy-visible)'] : []),
+  ]);
+  const requirements = busyVisible
     ? buildRequirements(input.requirements, cfg.requirements, input.config) : null;
   const src = readSource(input.source);
   const read = readRuns(input.full, input.head);
@@ -2802,6 +2809,36 @@ export function buildRequirements(flag: string | undefined, declared: string | u
       detail: `the flag names ${resolve(flag)} (${shown(flagDigest)}) and the config declares ${fromConfig} (${shown(configDigest)}); a build reads one requirements file and records it, so the two must name the same file or the same bytes — drop the flag to build from the config's file, or point config.requirements at the flag's`,
     },
   ]);
+}
+
+/**
+ * Issue #1418: `assemble` and `build` read a region take's tolerance and the
+ * busy-visible figure mask from the `--requirements` file, while
+ * `assembly_config` reads `config.requirements` only. So when `reaching` names
+ * a field of that file that assembly uses, the flag must name the file the
+ * config declares: the same file once resolved (the flag against the current
+ * directory, the declaration against the config's directory), or a file of the
+ * same bytes, the rule {@link buildRequirements} holds. With no declaration it
+ * is `ASSEMBLE_REQUIREMENTS_UNDECLARED`; two different files are
+ * `BUILD_REQUIREMENTS_CONFLICT`, naming the fields. A flag none of whose
+ * content reaches assembly is not judged here.
+ */
+export function refuseUnnamedAssemblyRequirements(flag: string | undefined, declared: string | undefined, configPath: string, reaching: readonly string[]): void {
+  if (flag === undefined || reaching.length === 0) return;
+  const fields = reaching.join(' and ');
+  if (declared === undefined) {
+    const path = resolve(flag);
+    const digest = existsSync(path) && statSync(path).isFile() ? `sha256 ${createHash('sha256').update(readFileSync(path)).digest('hex').slice(0, 16)}` : 'no such file';
+    throw new PartsError([{
+      code: 'ASSEMBLE_REQUIREMENTS_UNDECLARED',
+      object: `--requirements ${flag}`,
+      detail: `${path} (${digest}) gives assembly ${fields}, and config.requirements is absent; assembly_config reads only config.requirements, so a file that reaches assembly must be named there — add "requirements": "<this file, relative to the config's directory>" to the config`,
+    }]);
+  }
+  try { buildRequirements(flag, declared, configPath); } catch (error) {
+    if (!(error instanceof PartsError)) throw error;
+    throw new PartsError(error.problems.map(problem => ({ ...problem, detail: `${problem.detail}; the flag's file gives assembly ${fields}` })));
+  }
 }
 
 /** The `build` refusal of a `check` flag whose value or report build supplies itself ({@link CHECK_FLAGS_IN_BUILD}), or null for any other flag. */

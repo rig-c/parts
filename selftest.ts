@@ -59,6 +59,7 @@ import { runAuthoredUnitDepthChecks } from './tools/check_authored_unit_depth.ts
 import { runDepthMapChecks } from './tools/check_depthmaps.ts';
 import { runSplitTakeMetadataChecks, runTakeLayerChecks } from './tools/check_take_layers.ts';
 import { runRegionToleranceBindingChecks } from './tools/check_take_region.ts';
+import { runRequirementsNamedChecks } from './tools/check_requirements_named.ts';
 import { prepareSeeThroughInput } from './src/seethrough-transform.ts';
 import { runSeeThroughTransformChecks } from './tools/check_seethrough_transform.ts';
 import { runPlateChecks } from './tools/check_plate.ts';
@@ -35605,6 +35606,7 @@ function runAssembleSuite(): number {
     runAssemblyProjectionControls(say);
     runAssemblyConfigControls(join(dir, 'assembly-config'), say);
     runRegionToleranceBindingChecks(join(dir, 'region-tolerance'), (name, ok, detail) => say(name, ok, detail, 'issue #1393: generated region take; a changed tolerance and a stamp without the new field'));
+    runRequirementsNamedChecks(join(dir, 'requirements-named'), (name, ok, detail) => say(name, ok, detail, 'issue #1418: generated region take and busy-visible figure mask; the flag must name the file config.requirements declares'));
     runHiddenExtentChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #1047: production assembly refuses declared enclosed source holes'));
     runOccluderConfigChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #1230: config.assemble.occluders at every config door, each plant refused by its code'));
     runOccluderCopyChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #1230: copied occluder colour is named with its count, silent without it, and moves no byte'));

@@ -383,9 +383,20 @@ field already binds the tolerance, so this field is not written there. A
 config with no region take, or no declared tolerance, keeps its reading. A
 stamp that lacks only this field is refused as `ASSEMBLY_CONFIG_STALE`, and
 the refusal says that the stamp predates the binding and asks for one
-re-assemble with the same config. The reading reads only `config.requirements`:
-a requirements file named only by `--requirements` is outside it, as the
-`--seam` and `--project` flags are.
+re-assemble with the same config. The reading reads only `config.requirements`.
+
+`assemble` and `build` refuse a `--requirements` file that `config.requirements`
+does not name whenever its content reaches assembly: the config has a region
+take (`setup_painting.rgb_tolerance`), or under `ground: "busy"` with
+`project: "visible"` the file declares `setup_painting.figure_mask`. With no
+`config.requirements` the refusal is `ASSEMBLE_REQUIREMENTS_UNDECLARED`; a
+declaration naming another file is `BUILD_REQUIREMENTS_CONFLICT`, whose detail
+then names the field that reaches assembly. "Names" is the rule
+`BUILD_REQUIREMENTS_CONFLICT` already holds: the same file once resolved (the
+flag against the working directory, the declaration against the config's
+directory), or a file of the same bytes. A `--requirements` file whose content
+reaches no assembly input is accepted as before and moves no byte. So every
+requirements value assembly reads is in the reading.
 
 The stable named subpath `@rig-c/parts/assembly-reading` exports
 `assemblyConfigReading(configPath: string, parts: PartsFile): AssemblyConfigRecord`
