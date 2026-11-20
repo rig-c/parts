@@ -81,7 +81,6 @@ const OTHER_STRING_FIELDS = [
   'assembly_config.fields[].name',
   'assembly_config.fields[].sha256',
   'assembly_config.sha256',
-  'assembly_config.project_override',
   'cut_ownership[].edit',
   'cut_ownership[].from',
   'cut_ownership[].into',

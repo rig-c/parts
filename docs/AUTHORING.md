@@ -1751,13 +1751,13 @@ for the generated band. Its `part` must be unique among all produced names.
 
 The full axial width is twice `halfWidthAbout(limbRun(...))`: the source's
 alpha-above-8 run across the joint line, measured from the joint to the nearer
-run edge on each side. This chooses a scale from the pixels, not a material
-property. `"hybrid": {"part": "joint_band", "width": 12}` explicitly overrides
-it with a finite positive full width in rig pixels. No art crossing, a
-nonpositive derived width, a band reaching either bone span's end, or bands
-overlapping on source art are named refusals (`ASSEMBLE_LIMB_JOINT_ON_ART`,
-`ASSEMBLE_HYBRID_WIDTH`, `ASSEMBLE_HYBRID_OVERLAP`). Move the joint onto the
-art or supply a width that fits; the tool does not clamp it.
+run edge on each side. `"hybrid": {"part": "joint_band", "width": 12}`
+explicitly selects a finite positive full width in rig pixels. Assembly
+refuses a missing art crossing, a nonpositive effective width, a band
+reaching either bone span's end, or bands overlapping on source art
+(`ASSEMBLE_LIMB_JOINT_ON_ART`, `ASSEMBLE_HYBRID_WIDTH`,
+`ASSEMBLE_HYBRID_OVERLAP`). Move the joint onto the art or supply a width that
+fits the bone spans.
 
 The band copies the source pixels within half that width on either side of
 the joint line. A one-pixel sampling overlap at each boundary remains bound
@@ -1766,11 +1766,18 @@ upper and lower bones, linearly along the axis, clamped at the band boundaries.
 No hidden-art cap or generated colour fills the band. `parts.json` records
 `limb.hybrid` on the lower rigid piece, including the generated part name, and
 `limb.band` on the mesh. Both carry the source-measured joint centre, unit axis,
-full width, existing range-disc radius and upper carrier. The band repeats the
-lower carrier through `limb.bone`; only the rigid lower piece carries `range`.
-The strict reader requires the pair to agree. Re-run assemble after changing
-the declaration (`RIG_HYBRID_SOURCE`); non-region neighbours are
-`RIG_HYBRID_RIGID`.
+effective full `width`, existing range-disc radius and upper carrier. An optional
+`measured_width` records the finite full width measured across the joint from
+the source art. A valid explicit `width` can produce a band even when the
+measured width is zero or negative. Both records retain that measurement.
+The band repeats the lower carrier through `limb.bone`. The rigid lower piece
+alone carries `range`. The strict reader requires the pair to agree. With
+`measured_width` recorded, adding or removing an explicit width preserves the
+assembly reading when the effective width stays the same in the base and
+every alternate that carries the band. Re-run assemble after changing the band
+name or effective width.
+Rig reports `RIG_HYBRID_SOURCE` for a mismatch with the assembled joint and
+`RIG_HYBRID_RIGID` for neighbours that are not regions.
 
 A subset alternate covering the limb automatically covers its generated bands
 as well. A band may also be listed explicitly in `parts`; it cannot be hidden
@@ -4573,7 +4580,19 @@ and, when needed, `motion.blink.still`. `motion_seams` supplies the seam
 declarations carried in `parts.json` for check.
 
 `parts.json` records the effective assembly digest and per-field hashes in
-`assembly_config`. Ordinary keyed-animation edits through `motion.animations_from` leave
+`assembly_config`. Both `assemble` and `build` choose `--seam` and `--project`
+over `assemble.seam` and `assemble.project` in the config. The corresponding
+hashes reflect the values used, including the defaults when neither the flag
+nor the config supplies a value.
+
+`build` uses those effective values for its own rig and check stages in the
+same invocation. When a standalone command validates the manifest, it reads
+the caller's config. To reuse parts made with a different `--seam` or `--project`
+than the config specifies, put the values used for assembly in `assemble.seam`
+and `assemble.project` in the config you pass to the standalone command.
+To use other values, re-run assemble with the config you intend to keep.
+
+Ordinary keyed-animation edits through `motion.animations_from` leave
 the assembly digest intact. Cloth changes can require reassembly when physics
 bone bindings change which part pairs move relative to each other under turn.
 When `propose --write-config` changes the recorded reading, it saves the

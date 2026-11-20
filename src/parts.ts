@@ -1,5 +1,4 @@
 import { assemblyFieldDigest } from './assembly-reading.ts';
-import { PROJECT_RULES, type ProjectRule } from './projectrule.ts';
 import { orderedEditedPartReceipt, type EditedPartReceipt } from './editedparts.ts';
 import { parseReceiptProducer, receiptText } from './receiptproducer.ts';
 import { takenSourceProblems, type TakenLayerSource } from './takesource.ts';
@@ -168,6 +167,8 @@ export interface LimbRecord {
 export interface HybridBandRecord {
   upper: string;
   width: number;
+  /** The centered source-run width before applying an override, including a nonpositive reading the default would refuse. */
+  measured_width?: number;
   radius: number;
   at: [number, number];
   axis: [number, number];
@@ -292,7 +293,7 @@ const CUT_KEYS = ['cut_offset', 'cut_at', 'cut_crossed', 'joint_crossed', 'band_
 function orderedLimb(l: LimbRecord): Record<string, unknown> {
   const cap = l.cap === undefined ? undefined : Object.fromEntries(CAP_KEYS.filter((k) => (l.cap as CapRecord)[k] !== undefined).map((k) => [k, (l.cap as CapRecord)[k]]));
   const band = (value: HybridBandRecord & { part?: string }): Record<string, unknown> => Object.fromEntries(
-    (['part', 'upper', 'width', 'radius', 'at', 'axis'] as const).filter((k) => value[k] !== undefined).map((k) => [k, value[k]]));
+    (['part', 'upper', 'width', 'measured_width', 'radius', 'at', 'axis'] as const).filter((k) => value[k] !== undefined).map((k) => [k, value[k]]));
   const values = { ...l, cap, ...(l.hybrid === undefined ? {} : { hybrid: band(l.hybrid) }), ...(l.band === undefined ? {} : { band: band(l.band) }) };
   return Object.fromEntries(LIMB_KEYS.filter((k) => values[k] !== undefined).map((k) => [k, values[k]]));
 }
@@ -425,7 +426,6 @@ export interface OccluderGuardRecord {
 export interface AssemblyConfigRecord {
   sha256: string;
   fields: Array<{ name: string; sha256: string }>;
-  project_override?: ProjectRule;
 }
 
 export interface PartsFile {
@@ -663,7 +663,7 @@ export function serializeParts(file: PartsFile): string {
       path: file.painting_in_rig.path, sha256: file.painting_in_rig.sha256, resample: file.painting_in_rig.resample,
     } }),
     parts: serializePartList(file.parts),
-    ...(file.assembly_config === undefined ? {} : { assembly_config: { sha256: file.assembly_config.sha256, fields: file.assembly_config.fields.map(({ name, sha256 }) => ({ name, sha256 })), ...(file.assembly_config.project_override === undefined ? {} : { project_override: file.assembly_config.project_override }) } }),
+    ...(file.assembly_config === undefined ? {} : { assembly_config: { sha256: file.assembly_config.sha256, fields: file.assembly_config.fields.map(({ name, sha256 }) => ({ name, sha256 })) } }),
     ...(file.cut_ownership === undefined ? {} : { cut_ownership: orderedOwnership(file.cut_ownership) }),
     ...(file.motion_seams === undefined ? {} : { motion_seams: file.motion_seams.map(({ part, neighbour }) => ({ part, neighbour })) }),
     ghost_px: Object.fromEntries(Object.keys(file.ghost_px).sort().map((k) => [k, file.ghost_px[k]])),
@@ -883,8 +883,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
   if ('assembly_config' in o) {
     const value = o.assembly_config as Partial<AssemblyConfigRecord> | null;
     const digest = (input: unknown): input is string => typeof input === 'string' && /^[a-f0-9]{64}$/.test(input);
-    if (value === null || typeof value !== 'object' || Object.keys(value).some(key => key !== 'sha256' && key !== 'fields' && key !== 'project_override') ||
-        ('project_override' in value && !PROJECT_RULES.includes(value.project_override as ProjectRule)) ||
+    if (value === null || typeof value !== 'object' || Object.keys(value).some(key => key !== 'sha256' && key !== 'fields') ||
         !digest(value.sha256) || !Array.isArray(value.fields) || value.fields.length === 0 ||
         !value.fields.every((row, i) => row !== null && typeof row === 'object' && Object.keys(row).length === 2 &&
           typeof row.name === 'string' && /^[a-z_]+(?:\.[a-z_]+)*$/.test(row.name) &&
@@ -1237,7 +1236,11 @@ function checkLimbRecords(recordsRaw: unknown[], prefix: string, fail: (code: st
         else {
           const b = h as Record<string, unknown>;
           const pair = (v: unknown): v is number[] => Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === 'number' && Number.isFinite(n));
-          if (Object.keys(b).sort().join(',') !== (field === 'hybrid' ? 'at,axis,part,radius,upper,width' : 'at,axis,radius,upper,width') || (field === 'hybrid' && (typeof b.part !== 'string' || b.part === '')) || !(typeof b.radius === 'number' && Number.isFinite(b.radius) && b.radius > 0) || typeof b.upper !== 'string' || b.upper === '' || b.upper === q.bone || !(typeof b.width === 'number' && Number.isFinite(b.width) && b.width > 0) || !pair(b.at) || !pair(b.axis) || Math.abs(edgeLength(b.axis[0], b.axis[1]) - 1) > 1e-6 || (field === 'band' && 'range' in q)) fail('PARTS_FIELD_TYPE', `${object} ${field}`, `is ${show(h)}; distinct upper carrier, positive width, finite at, unit axis and no duplicate range are required`);
+          const keys = Object.keys(b).filter((k) => k !== 'measured_width').sort().join(',');
+          if (keys !== (field === 'hybrid' ? 'at,axis,part,radius,upper,width' : 'at,axis,radius,upper,width') || (field === 'hybrid' && (typeof b.part !== 'string' || b.part === '')) || !(typeof b.radius === 'number' && Number.isFinite(b.radius) && b.radius > 0) || typeof b.upper !== 'string' || b.upper === '' || b.upper === q.bone || !(typeof b.width === 'number' && Number.isFinite(b.width) && b.width > 0) || !pair(b.at) || !pair(b.axis) || Math.abs(edgeLength(b.axis[0], b.axis[1]) - 1) > 1e-6 || (field === 'band' && 'range' in q)) fail('PARTS_FIELD_TYPE', `${object} ${field}`, `is ${show(h)}; distinct upper carrier, positive width, finite at, unit axis and no duplicate range are required`);
+          if (Object.hasOwn(b, 'measured_width') && !(typeof b.measured_width === 'number' && Number.isFinite(b.measured_width))) {
+            fail('PARTS_FIELD_TYPE', `${object} ${field}.measured_width`, `is ${show(b.measured_width)}; a finite centered source-run width is required`);
+          }
         }
       }
       if (caps && 'cap' in q) checkCap(q.cap, `${object} "cap"`, fail);
@@ -1264,7 +1267,7 @@ function checkLimbRecords(recordsRaw: unknown[], prefix: string, fail: (code: st
       const record = (v: unknown): Record<string, unknown> | undefined => typeof v === 'object' && v !== null && !Array.isArray(v) ? v as Record<string, unknown> : undefined;
       const bl = record(target?.limb);
       const b = record(bl?.band);
-      const same = b !== undefined && ['upper', 'width', 'radius', 'at', 'axis'].every((k) => JSON.stringify(b[k]) === JSON.stringify(joint[k]));
+      const same = b !== undefined && b.measured_width === joint.measured_width && ['upper', 'width', 'radius', 'at', 'axis'].every((k) => JSON.stringify(b[k]) === JSON.stringify(joint[k]));
       if (bl === undefined || bl.name !== l.name || bl.segment !== l.segment || bl.bone !== l.bone || bl.of !== l.of || bl.joint !== l.joint || !same) fail('PARTS_HYBRID_PAIR', `${prefix}part "${String(r.name)}" hybrid "${String(joint.part)}"`, 'requires its matching band on the same source, joint, carriers and measured geometry');
     }
   }

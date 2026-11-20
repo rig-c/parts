@@ -1,4 +1,4 @@
-import { refuseStaleAssembly } from './assembly-reading.ts';
+import { refuseStaleAssembly, type AssemblyRules } from './assembly-reading.ts';
 import { checkRow, checkSlotRow, checkSlotParts, serializeCheckRows } from './checkrow.ts';
 import { readSetupFigureMask } from './setupfiguremask.ts';
 import { readSetupBackdrop } from './setupbackdrop.ts';
@@ -6792,7 +6792,7 @@ function renderExtremes(build: string, out: string, animations: readonly string[
  * MEASURABLE is a problem. Without it nothing here reads, writes or prints
  * anything it did not before.
  */
-export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, partsHome?: string, mode: PackMode = DEFAULT_PACK_MODE, source?: string, requirements?: string, seamPairsAsked = false, keepStills = false, set?: string, allSets = false, environment?: string, requirementsAs: string | undefined = requirements, config?: InputFileRecord, windBand?: string, noExtremes = false, supportSource?: string, supportFigure?: Mask): CheckReport {
+export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, partsHome?: string, mode: PackMode = DEFAULT_PACK_MODE, source?: string, requirements?: string, seamPairsAsked = false, keepStills = false, set?: string, allSets = false, environment?: string, requirementsAs: string | undefined = requirements, config?: InputFileRecord, windBand?: string, noExtremes = false, supportSource?: string, supportFigure?: Mask, assemblyRules?: AssemblyRules): CheckReport {
   const pageSize = parsePageSize(mode.pageSize);
   let inp: CheckInputs;
   let reqFile: RequirementsFile | null = null;
@@ -6811,7 +6811,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   };
   const readInputs = (): CheckInputs => {
     const inputs = readCheckInputs(rigDir, partsHome, source, set, allSets);
-    if (config !== undefined && inputs.parts !== null) refuseStaleAssembly(config.path, inputs.parts);
+    if (config !== undefined && inputs.parts !== null) refuseStaleAssembly(config.path, inputs.parts, undefined, assemblyRules);
     return inputs;
   };
   let setupBackdrop: Raster | undefined;

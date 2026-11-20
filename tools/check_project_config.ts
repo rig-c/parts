@@ -6,6 +6,8 @@ import { join, resolve } from 'node:path';
 import { assembleConfig, writeAssembleFixture } from '../fixtures/assemble_fixture.ts';
 import { parseConfig, parseEarlyConfig } from '../src/config.ts';
 import { PartsError } from '../src/errors.ts';
+import { assemblyConfigChanges, refuseStaleAssembly } from '../src/assembly-reading.ts';
+import { readParts } from '../src/parts.ts';
 
 type Say = (name: string, pass: boolean, detail: string) => void;
 const ROOT = resolve(import.meta.dir, '..');
@@ -49,6 +51,16 @@ export function runProjectConfigChecks(dir: string, say: Say): void {
   const override = join(dir, 'assemble-override', 'rig');
   const files = existsSync(join(absent, 'parts')) ? ['parts.json', 'painting_in_rig.png', ...readdirSync(join(absent, 'parts')).map(f => `parts/${f}`)] : [];
   say('CF9535_EXPLICIT_OVERRIDE_PRESERVES_DEFAULT_PART_BYTES', files.length > 0 && files.every(f => existsSync(join(override, f)) && readFileSync(join(absent, f)).equals(readFileSync(join(override, f)))), `${files.length} part records/PNGs compare byte-identically`);
+  const overrideConfig = join(dir, 'override-config.json');
+  writeFileSync(overrideConfig, JSON.stringify(cfg('visible')));
+  const stamped = readParts(join(override, 'parts.json'));
+  const changes = assemblyConfigChanges(overrideConfig, stamped);
+  let reused = true;
+  try { refuseStaleAssembly(overrideConfig, stamped, undefined, { project: 'core' }); }
+  catch (error) { if (!(error instanceof PartsError)) throw error; reused = false; }
+  say('CF9537_OVERRIDE_REQUIRES_MATCHING_CONFIG_OR_IN_PROCESS_OPTIONS',
+    changes.join(',') === 'assemble.project' && reused,
+    `config alone names ${changes.join(', ')}; original effective rule accepted ${reused}`);
   const bad = run('assemble', 'invalid', cfg('bad'), 'visible');
   say('CF9536_INVALID_CONFIG_IS_NOT_HIDDEN_BY_A_CLI_OVERRIDE', bad.status === 1 && bad.text.includes('CONFIG_FIELD_TYPE: config.assemble.project'), bad.text);
 }

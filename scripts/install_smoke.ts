@@ -1244,7 +1244,9 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, fetchedTgz?: strin
     output += probe.out;
     const resolved = probe.out.split(/\r?\n/).find(line => line.startsWith('RESOLVED '))?.slice('RESOLVED '.length);
     const resolvedPath = resolved?.startsWith('file://') ? fileURLToPath(resolved) : resolved;
-    if (assemblyReadingTarget !== `./${ASSEMBLY_READING_PATH}` || probe.status !== 0 || resolvedPath !== assemblyReadingPath || !isSmokePathInside(pkgRoot, resolvedPath)) {
+    const matchesInstalledEntry = resolvedPath !== undefined && isSmokePathInside(pkgRoot, resolvedPath) &&
+      existsSync(assemblyReadingPath) && relative(realpathSync.native(assemblyReadingPath), realpathSync.native(resolvedPath)) === '';
+    if (assemblyReadingTarget !== `./${ASSEMBLY_READING_PATH}` || probe.status !== 0 || !matchesInstalledEntry) {
       fault('assembly-reading', `SMOKE_ASSEMBLY_READING_FROM_THE_INSTALL: ${PACKAGE}/assembly-reading must resolve to ${assemblyReadingPath} and pass the digest probe; export ${JSON.stringify(assemblyReadingTarget)}, exit ${probe.status}. ${probe.out.trim().slice(0, 1500)}`);
     } else {
       notes.push(`${PACKAGE}/assembly-reading matched its recorded digest, named the changed assemble.rig_scale field, and accepted a legacy manifest`);

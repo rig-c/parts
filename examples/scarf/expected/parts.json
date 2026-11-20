@@ -902,6 +902,51 @@
       }
     }
   ],
+  "assembly_config": {
+    "sha256": "41f435119ae2d1bc99650304c00f42b1ec8f4ba6ffd8af1c68c33fa16e1367cb",
+    "fields": [
+      {
+        "name": "assemble.extend_below_crop",
+        "sha256": "cfcedb86ec71332df0e02991c0e90867e142f67605add36889d01d8cda372653"
+      },
+      {
+        "name": "assemble.ground",
+        "sha256": "945603a8f587786b463c3f94fce115c0fae88fac2728cc96ddf5981cf7f61741"
+      },
+      {
+        "name": "assemble.patches",
+        "sha256": "a4b59adabfb315a8b32beae0904aed798b22a6b90f6322014d23d277049f472b"
+      },
+      {
+        "name": "assemble.plan",
+        "sha256": "ece333e58486d0729d6d7d0f1c715e2a945f982f03f9978f79c1bba05b82b28e"
+      },
+      {
+        "name": "assemble.project",
+        "sha256": "ae6e9157995bdbcae79f0221fc05ca3df41dadbabd1d489c5aaee1a944a9c16d"
+      },
+      {
+        "name": "assemble.rig_scale",
+        "sha256": "d2cbad71ff333de67d07ec676e352ab7f38248eb69c942950157220607c55e84"
+      },
+      {
+        "name": "assemble.seam",
+        "sha256": "a0d5be81c805462411ef0c9cf0201bf836a8a799ef3dc9ab5a78efd309b64e88"
+      },
+      {
+        "name": "generation.control.skeleton",
+        "sha256": "989a495579f940483d2e03ae1491bc376dac75993a382650a23931f9239712d1"
+      },
+      {
+        "name": "seethrough.head_box",
+        "sha256": "92c5af77dfdd2bcf6399e1f1490ef193349fd085056d6f25a4e7e237e1205f4f"
+      },
+      {
+        "name": "seethrough.resolution",
+        "sha256": "e39eef82f61b21e2e7f762fcc4307358f165757f2e77ec855d6992f7e0191932"
+      }
+    ]
+  },
   "ghost_px": {
     "full:back hair": 7,
     "full:bottomwear": 42,

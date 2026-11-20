@@ -410,6 +410,55 @@
       "seam_override_px": 0
     }
   ],
+  "assembly_config": {
+    "sha256": "cbf63e4d17c2ae9f842d6f7870a69b655d22bdb5b27c11d1c7ef8de6f009c32e",
+    "fields": [
+      {
+        "name": "assemble.alternates",
+        "sha256": "d2815582dc313d6dada93628ee818236060983f144e480c822b28b8f42715e90"
+      },
+      {
+        "name": "assemble.ground",
+        "sha256": "945603a8f587786b463c3f94fce115c0fae88fac2728cc96ddf5981cf7f61741"
+      },
+      {
+        "name": "assemble.plan",
+        "sha256": "cffe03d4591fb80e5c6d8fd966f1de6b381f141e656f4cbac2ee05ce49609723"
+      },
+      {
+        "name": "assemble.project",
+        "sha256": "ae6e9157995bdbcae79f0221fc05ca3df41dadbabd1d489c5aaee1a944a9c16d"
+      },
+      {
+        "name": "assemble.rig_scale",
+        "sha256": "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b"
+      },
+      {
+        "name": "assemble.seam",
+        "sha256": "a0d5be81c805462411ef0c9cf0201bf836a8a799ef3dc9ab5a78efd309b64e88"
+      },
+      {
+        "name": "bones",
+        "sha256": "42709b1811853b701a693fea5421c53ee4a2e9a890e1c8b4c0d3176b119fdb22"
+      },
+      {
+        "name": "generation.control.skeleton",
+        "sha256": "4ce1598e5ac89793bc0dde47d25c2d2997991a7cdec991a606db45de03c2fa2c"
+      },
+      {
+        "name": "limbs",
+        "sha256": "267ce68b9e5b4319294636f73975f00837c49f94102c6449c2a431f34f8dc1cd"
+      },
+      {
+        "name": "seethrough.head_box",
+        "sha256": "b12212beb8bfa1ea8757b6b7ed8eb2f5c99137e40d333e15a14742e1a4e231c3"
+      },
+      {
+        "name": "seethrough.resolution",
+        "sha256": "2747b7c718564ba5f066f0523b03e17f6a496b06851333d2d59ab6d863225848"
+      }
+    ]
+  },
   "ghost_px": {
     "full:back hair": 0,
     "full:bottomwear": 0,

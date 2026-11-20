@@ -344,7 +344,13 @@ New assemble and build manifests carry an optional top-level `assembly_config`
 object shaped as `{ sha256, fields: [{ name, sha256 }] }`. Its lowercase
 SHA-256 digests describe the effective assembly config inputs, in deterministic
 field-name order. Entries name the individual inputs, such as
-`assemble.rig_scale`. The aggregate binds the ordered field names and digests. When a CLI projection override differs from the configured rule, the object also records the effective `project_override` used to read projection inputs.
+`assemble.rig_scale`. The aggregate binds the ordered field names and digests.
+The `assemble.seam` and `assemble.project` entries hash the effective rules,
+resolved in order from the CLI override, the config value and the default.
+`build` carries its effective rules to the in-process rig and check stages.
+Standalone validation derives its reading from the caller's config. That
+config must resolve to the rules used at assembly time, including any values
+originally selected by `--seam` or `--project`.
 Legacy manifests without `assembly_config` remain accepted. A consumer that
 checks a recorded digest against a config refuses a mismatch as
 `ASSEMBLY_CONFIG_STALE`, names the changed fields and directs the author to
@@ -1350,12 +1356,18 @@ field by field, with the tolerances `CH07` plants against.
 
 A lower rigid limb piece may carry `limb.hybrid` instead of `limb.cap`:
 `{part, upper, width, radius, at, axis}`. Its generated mesh carries
-`limb.band`: `{upper, width, radius, at, axis}`. Their source, joint, lower
-carrier and measured geometry must agree; the lower rigid piece alone carries
-`range`. The default limb records and byte contracts are unchanged. The
-existing `LIMB_ONE_BONE` line checks ordinary segments as before; the band
-requires exactly its two adjacent carriers. `SEAM_OVER_RANGE` uses the stored
-radius and existing rest-art comparison, without changing its bar.
+`limb.band`: `{upper, width, radius, at, axis}`. `width` is the finite positive
+effective full band width in rig pixels. Both records carry the finite
+source-derived `measured_width` in rig pixels, including zero or negative
+measurements when an explicit width lets assembly succeed. Readers accept
+pairs without this optional field and require both records to agree on it
+when present. For the base and each alternate carrying the band, the assembly
+reading uses the config's explicit width when supplied and the recorded
+`measured_width` otherwise. The pair also
+agrees on source, joint, lower carrier and geometry. The lower rigid piece
+alone carries `range`. The existing `LIMB_ONE_BONE` line checks ordinary
+segments as before. The band requires exactly its two adjacent carriers.
+`SEAM_OVER_RANGE` uses the stored radius and existing rest-art comparison.
 
 ## Explicit motion seam observations (issue #750)
 

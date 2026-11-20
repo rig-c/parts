@@ -44233,6 +44233,55 @@ function remeshApiExportFaults(path: string, source: string | undefined): string
   ];
 }
 
+// SHA-256 of the exact tracked manifests before assembly_config was inserted.
+const EXPECTED_PARTS_LEGACY_HASHES = new Map([
+  ['examples/demo/expected/parts.json', '504d4eafa353012ece2523d70d1e5df32f60b20523fc0a511c5aa853a8af96a3'],
+  ['examples/reference-demo/expected/parts.json', 'f3b674037cb2733218b6dae03a54c3bacf182c87738b60783f57417be6deafa3'],
+  ['examples/reference-sample/expected/parts.json', '437824193a2a97b98a9f9e139583218985f3df4076bd0beaad6623a4c5330ed0'],
+  ['examples/scarf/expected/parts.json', 'cc22d251c6c1d88a5f6848345e24802d5a52e38806d5be926b3493afee9b56e5'],
+  ['examples/wind/expected-wave/parts.json', '3ac17b60a2098e8439d9b114ff5c7a7b635cedb4aca7a4e7b0aefbab3b41943e'],
+  ['examples/wind/expected/parts.json', '7d90a5f48a8dc5981c08e3008903e2ab0d5a92960b2f71641cf4db9d04af62a3'],
+  ['fixtures/validation-inputs/expected/cloth/parts.json', '937707df7c5a1158aeaf3c631b39e5d2cbc6dbcf3acc0a75e15001d48508d727'],
+  ['fixtures/validation-inputs/expected/gesture/parts.json', 'a314ce7d8e0cfbd4a6b8a862f9de59a9684a02ca7626400d715a18257215ca7d'],
+  ['fixtures/validation-inputs/expected/no-neck/parts.json', '156073edc68e28a673afb477230053b489de717cf4e834b16639f1c535b7e311'],
+  ['fixtures/validation-inputs/expected/physics-driven/parts.json', '937707df7c5a1158aeaf3c631b39e5d2cbc6dbcf3acc0a75e15001d48508d727'],
+  ['fixtures/validation-inputs/expected/physics-mixed/parts.json', '937707df7c5a1158aeaf3c631b39e5d2cbc6dbcf3acc0a75e15001d48508d727'],
+  ['fixtures/validation-inputs/expected/physics/parts.json', '937707df7c5a1158aeaf3c631b39e5d2cbc6dbcf3acc0a75e15001d48508d727'],
+  ['fixtures/validation-inputs/expected/standard/parts.json', '937707df7c5a1158aeaf3c631b39e5d2cbc6dbcf3acc0a75e15001d48508d727'],
+  ['fixtures/validation-inputs/expected/structure/parts.json', '937707df7c5a1158aeaf3c631b39e5d2cbc6dbcf3acc0a75e15001d48508d727'],
+  ['fixtures/validation-inputs/expected/travel/parts.json', '7239884f86d5cc539fff0aa111fd18ce591ceb1220271dd676c9721c04c971b6'],
+]);
+
+function expectedPartsLegacyCase(text: ReadonlyArray<readonly [string, string]>, say: FixtureCaseReporter): void {
+  const files = text.filter(([file]) =>
+    /^examples\/[^/]+\/expected(?:-wave)?\/parts\.json$/.test(file) ||
+    /^fixtures\/validation-inputs\/expected\/[^/]+\/parts\.json$/.test(file));
+  const missing = [...EXPECTED_PARTS_LEGACY_HASHES.keys()].filter(file => !files.some(([path]) => file === path));
+  const keepsLegacyBytes = (body: string, sha256: string): boolean => {
+    const stripped = withoutAssemblyConfig(body);
+    return stripped !== body && createHash('sha256').update(stripped).digest('hex') === sha256;
+  };
+  const faults = [...missing.map(file => `${file}: missing snapshot`)];
+  for (const [file, body] of files) {
+    const expected = EXPECTED_PARTS_LEGACY_HASHES.get(file);
+    if (expected === undefined) faults.push(`${file}: missing pre-migration hash`);
+    else if (!keepsLegacyBytes(body, expected)) faults.push(`${file}: pre-migration bytes differ after stripping assembly_config`);
+    else {
+      const parsed = refusals(() => readParts(join(ROOT, file)));
+      if (parsed !== null) faults.push(`${file}: ${parsed.message}`);
+    }
+  }
+  const plantPath = 'examples/demo/expected/parts.json';
+  const plant = files.find(([file]) => file === plantPath)?.[1];
+  const expected = EXPECTED_PARTS_LEGACY_HASHES.get(plantPath);
+  const plantsRefused = plant !== undefined && expected !== undefined &&
+    !keepsLegacyBytes(plant + '\n', expected) && !keepsLegacyBytes(withoutAssemblyConfig(plant), expected);
+  say('TY1385_EXPECTED_PARTS_KEEP_PRE_MIGRATION_BYTES',
+    faults.length === 0 && plantsRefused,
+    `${files.length} expected manifests; ${faults.join(' | ') || 'all legacy hashes match'}; whitespace and missing field refused: ${plantsRefused}`,
+    'Removing the assembly config record recovers the original file bytes. A whitespace change or removal of the record fails the same check.');
+}
+
 function runTreeSuite(_corpus: string | null = null, pre = false): number {
   section('tree: the rules CLAUDE.md states, held to the files');
   const { say, bad } = counter();
@@ -44250,6 +44299,7 @@ function runTreeSuite(_corpus: string | null = null, pre = false): number {
   const readerFaults = ignoreReaderFaults(patterns);
   const files = treeFiles();
   const text: Array<readonly [string, string]> = files.filter((f) => TEXT_FILE.test(f)).map((f) => [f, readFileSync(join(ROOT, f), 'utf8')] as const);
+  expectedPartsLegacyCase(text, say);
   const unclassified = files.filter((f) => !TEXT_FILE.test(f) && !IMAGE_FILE.test(f));
   say(
     'TY00_THE_TREE_WALK_READS_EVERY_FILE_A_COMMIT_WOULD_CARRY',
