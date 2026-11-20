@@ -344,7 +344,13 @@ New assemble and build manifests carry an optional top-level `assembly_config`
 object shaped as `{ sha256, fields: [{ name, sha256 }] }`. Its lowercase
 SHA-256 digests describe the effective assembly config inputs, in deterministic
 field-name order. Entries name the individual inputs, such as
-`assemble.rig_scale`. The aggregate binds the ordered field names and digests.
+`assemble.rig_scale`. Field names use dot-separated lowercase keys, and from
+this version any key may carry a zero-based array index, as in
+`assemble.take[0].meta` (split donor metadata, the first indexed field). Earlier assembly-config readers refuse indexed
+names with `PARTS_FIELD_TYPE`, so release Parts first, then upgrade and
+release Review, then update both pins in Create before those consumers read
+split-take manifests written by this release.
+The aggregate binds the ordered field names and digests.
 Declared assembly files are resolved relative to their declaring config or
 requirements file and hashed by content. Equivalent path spellings give the
 same reading. A built-in control skeleton is identified by its name and latent
@@ -359,6 +365,12 @@ Legacy manifests without `assembly_config` remain accepted. A consumer that
 checks a recorded digest against a config refuses a mismatch as
 `ASSEMBLY_CONFIG_STALE`, names the changed fields and directs the author to
 re-run assemble.
+
+An occluder-split take binds the donor's `meta.json` bytes at
+`assemble.take[i].meta`, where `i` is the zero-based take index. When only
+these new fields are missing from an older stamp, the stale refusal says
+that the stamp predates the binding and asks for one re-assemble with the
+same config.
 
 The stable named subpath `@rig-c/parts/assembly-reading` exports
 `assemblyConfigReading(configPath: string, parts: PartsFile): AssemblyConfigRecord`

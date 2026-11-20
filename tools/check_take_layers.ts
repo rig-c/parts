@@ -23,6 +23,61 @@ import { runTakeRegionChecks, runTakeRegionReceiptChecks, runTakeContainmentChec
 import { runTakePlanOrderChecks } from './check_take_plan_order.ts';
 import { runTakeCleanupChecks } from './check_take_cleanup.ts';
 import { runTakeFootprintChecks } from './check_take_footprint.ts';
+import { assemblyConfigChanges, assemblyFieldDigest, refuseStaleAssembly } from '../src/assembly-reading.ts';
+
+export function runSplitTakeMetadataChecks(dir: string, say: Say): void {
+  const { painting, occluderSha } = writeChainInputs(dir);
+  const full = writePlateRun(dir, encodePngBytes(chainPlate()));
+  cpSync(join(dir, 'orig'), join(dir, 'split-donor'), { recursive: true });
+  const cfg = chainConfig({
+    project: 'visible',
+    seam: 'near-white',
+    occluders: [{ image: 'occluder.png', sha256: occluderSha, under: ['behind'], over: ['front'], rgb_within: 20 }],
+    take: [
+      { run: 'full', run_dir: 'orig', st_input: 'painting.png', tags: ['objects'] },
+      { run: 'full', run_dir: 'split-donor', st_input: 'painting.png', part: 'behind', tag: 'legwear', occluder: 0 },
+    ],
+  });
+  const config = join(dir, 'config.json');
+  writeFileSync(config, JSON.stringify(cfg));
+  const partsJson = join(dir, 'out', 'parts.json');
+  assembleStage({ source: painting, full, head: null, config },
+    { partsJson, partsDir: join(dir, 'out', 'parts'), recomposite: join(dir, 'out', 'recomposite.png'), errorMap: join(dir, 'out', 'error.png') }, () => {});
+  const parts = readParts(partsJson);
+  const field = 'assemble.take[1].meta';
+  const stamp = parts.assembly_config!;
+  const check = (candidate: typeof parts): string => {
+    try { refuseStaleAssembly(config, candidate); } catch (error) {
+      if (!(error instanceof PartsError) || error.problems.length !== 1 || error.problems[0].code !== 'ASSEMBLY_CONFIG_STALE') throw error;
+      return error.problems[0].detail;
+    }
+    return 'accepted';
+  };
+  const unchanged = check(parts);
+  const metaPath = join(dir, 'split-donor', 'meta.json');
+  const original = readFileSync(metaPath);
+  writeFileSync(metaPath, '{"prompt_id":"generated-original","seed":43}');
+  const changed = check(parts);
+  const changedFields = assemblyConfigChanges(config, parts);
+  writeFileSync(metaPath, original);
+  say('SPLIT_DONOR_META_STALE',
+    unchanged === 'accepted' && changed === `assembly config changed at config.${field}; re-run assemble from the current config` &&
+      JSON.stringify(changedFields) === JSON.stringify([field]),
+    `unchanged ${unchanged}; changed ${changed}; fields ${JSON.stringify(changedFields)}`);
+
+  const fields = stamp.fields.filter(row => row.name !== field);
+  const oldParts = { ...parts, assembly_config: { fields, sha256: assemblyFieldDigest(fields) } };
+  const oldChanges = assemblyConfigChanges(config, oldParts);
+  const upgrade = check(oldParts);
+  const edited = { ...cfg, assemble: { ...(cfg.assemble as object), rig_scale: 0.5 } };
+  writeFileSync(config, JSON.stringify(edited));
+  const editedDetail = check(oldParts);
+  say('SPLIT_DONOR_META_OLD_STAMP_UPGRADE',
+    JSON.stringify(oldChanges) === JSON.stringify([field]) &&
+      upgrade === `assembly reading changed at config.${field}; the recorded stamp predates split-take donor metadata binding. Re-run assemble once with the same config` &&
+      editedDetail === `assembly config changed at config.assemble.rig_scale, config.${field}; re-run assemble from the current config`,
+    `old stamp ${upgrade}; edited config ${editedDetail}`);
+}
 
 type Say = (name: string, pass: boolean, detail: string) => void;
 export function runTakeLayerChecks(dir: string, say: Say): void {

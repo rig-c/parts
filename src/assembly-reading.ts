@@ -148,10 +148,9 @@ function nonempty<T>(value: T[] | undefined): T[] | undefined {
 }
 
 function projectionEntries(cfg: ProjectionSource) {
-  // Follow-ups #1392 and #1393 cover split donor metadata and effective
-  // requirements/receipt inputs. Donor meta.json and CLI requirements values
-  // are read outside this config view. Only selected values can be exemptions
-  // in the projection, such as the editor receipt ledger below.
+  // Follow-up #1393 covers effective requirements/receipt inputs. CLI
+  // requirements values are read outside this config view. Only selected values
+  // can be exemptions in the projection, such as the editor receipt ledger below.
   const a = cfg.assemble;
   // These fields used to enter the digest through the enumerable assemble spread.
   const authored = <K extends keyof typeof a>(key: K) => {
@@ -173,7 +172,7 @@ function projectionEntries(cfg: ProjectionSource) {
     require_hidden_extent: bound(a.require_hidden_extent, nonempty),
     head_face_underfill: bound(a.head_face_underfill, (value, ctx) => ctx.hasHeadRun && value === true ? true : undefined),
     yield_refused: bound(a.yield_refused, value => value === false ? undefined : value),
-    stage_map: exempt(a.stage_map, 1390, 'Selects a report sidecar without changing the assembly manifest.'),
+    stage_map: exempt(a.stage_map, 1393, 'Selects a report sidecar without changing the assembly manifest.'),
     editor_receipts: exempt(a.editor_receipts, 946, 'The legacy config digest omits the validation ledger and its receipt policy.'),
     edited_parts: bound(a.edited_parts, (edited, { base, file }) => edited?.receipts.length ? {
       receipts: edited.receipts.map((receipt, i) => ({
@@ -188,19 +187,27 @@ function projectionEntries(cfg: ProjectionSource) {
       grow: item.grow === 0 ? undefined : item.grow,
       guard: item.guard === 0 ? undefined : item.guard,
     })) : undefined),
-    take: bound(a.take, (items, { base, file, run }) => items?.length ? items.map((take, i) => {
-      const field = `assemble.take[${i}]`;
-      const reference = 'reference' in take ? take.reference : undefined;
-      return {
-        ...take,
-        run_dir: run(take.run_dir, `${field}.run_dir`),
-        st_input: file(take.st_input, `${field}.st_input`),
-        // The legacy reading binds whole-layer metadata only.
-        meta: 'tags' in take ? file(resolve(base, take.run_dir, 'meta.json'), `${field}.run_dir`) : undefined,
-        reference: reference !== undefined && 'painting' in reference
-          ? { ...reference, painting: file(reference.painting, `${field}.reference.painting`) } : reference,
-      };
-    }) : undefined),
+    take: named(a.take, {
+      '': ({ base, file, run }) => a.take?.length ? a.take.map((take, i) => {
+        const field = `assemble.take[${i}]`;
+        const reference = 'reference' in take ? take.reference : undefined;
+        return {
+          ...take,
+          run_dir: run(take.run_dir, `${field}.run_dir`),
+          st_input: file(take.st_input, `${field}.st_input`),
+          // Keep whole-layer metadata in the original take digest.
+          meta: 'tags' in take ? file(resolve(base, take.run_dir, 'meta.json'), `${field}.run_dir`) : undefined,
+          reference: reference !== undefined && 'painting' in reference
+            ? { ...reference, painting: file(reference.painting, `${field}.reference.painting`) } : reference,
+        };
+      }) : undefined,
+      ...Object.fromEntries((a.take ?? []).flatMap((take, i) => {
+        if (!('occluder' in take)) return [];
+        const field = `assemble.take[${i}].meta`;
+        const digest: ReadDigest = ({ base, file }) => file(resolve(base, take.run_dir, 'meta.json'), field);
+        return [[field, digest]];
+      })),
+    }),
     alternates: bound(a.alternates, (items, { file, run, cuts }) => items?.length ? items.map((set, i) => ({
       ...set,
       source: file(set.source, `assemble.alternates[${i}].source`),
@@ -446,6 +453,10 @@ export function assemblyFieldDigest(fields: AssemblyConfigRecord['fields']): str
   return sha256(JSON.stringify(fields.map(({ name, sha256 }) => [name, sha256])));
 }
 
+export function isSplitTakeMetadataField(name: string): boolean {
+  return /^assemble\.take\[(?:0|[1-9][0-9]*)\]\.meta$/.test(name);
+}
+
 export function assemblyConfigReading(configPath: string, parts: PartsFile): AssemblyConfigRecord {
   return readAssemblyConfig(loadEarlyConfig(configPath, 'assemble'), parts, configPath);
 }
@@ -467,9 +478,16 @@ export function assemblyChangeDetail(changes: readonly string[]): string {
 }
 
 export function refuseStaleAssembly(configPath: string, parts: PartsFile, loaded?: AssemblySource, overrides?: AssemblyRules): void {
-  if (parts.assembly_config === undefined) return;
+  const previous = parts.assembly_config;
+  if (previous === undefined) return;
   const cfg = loaded ?? loadEarlyConfig(configPath, 'assemble', overrides?.project);
   const current = readAssemblyConfig(cfg, parts, configPath, overrides);
-  const changes = changedAssemblyFields(parts.assembly_config, current);
-  if (changes.length > 0) throw new PartsError([{ code: 'ASSEMBLY_CONFIG_STALE', object: configPath, detail: assemblyChangeDetail(changes) }]);
+  const changes = changedAssemblyFields(previous, current);
+  if (changes.length === 0) return;
+  const recorded = new Set(previous.fields.map(({ name }) => name));
+  const predatesSplitMetadata = changes.every(name => isSplitTakeMetadataField(name) && !recorded.has(name));
+  const detail = predatesSplitMetadata
+    ? `assembly reading changed at ${changes.map(name => `config.${name}`).join(', ')}; the recorded stamp predates split-take donor metadata binding. Re-run assemble once with the same config`
+    : assemblyChangeDetail(changes);
+  throw new PartsError([{ code: 'ASSEMBLY_CONFIG_STALE', object: configPath, detail }]);
 }

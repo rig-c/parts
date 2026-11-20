@@ -57,7 +57,7 @@ import { runArtJointChecks } from './tools/check_art_joints.ts';
 import { runTurnUnitPrecedenceChecks } from './tools/check_turn_unit_precedence.ts';
 import { runAuthoredUnitDepthChecks } from './tools/check_authored_unit_depth.ts';
 import { runDepthMapChecks } from './tools/check_depthmaps.ts';
-import { runTakeLayerChecks } from './tools/check_take_layers.ts';
+import { runSplitTakeMetadataChecks, runTakeLayerChecks } from './tools/check_take_layers.ts';
 import { prepareSeeThroughInput } from './src/seethrough-transform.ts';
 import { runSeeThroughTransformChecks } from './tools/check_seethrough_transform.ts';
 import { runPlateChecks } from './tools/check_plate.ts';
@@ -59451,7 +59451,10 @@ function runTakeLayersSuite(): number {
   const { say, bad } = counter();
   const dir = temp('take-layers');
   let index = 0;
-  try { runTakeLayerChecks(dir, (name, pass, detail) => say(`TK${String(++index).padStart(2, '0')}_${name}`, pass, detail, 'issues #866, #869: generated rectangles, exact input identity and preserved See-through roles')); }
+  try {
+    runTakeLayerChecks(dir, (name, pass, detail) => say(`TK${String(++index).padStart(2, '0')}_${name}`, pass, detail, 'issues #866, #869: generated rectangles, exact input identity and preserved See-through roles'));
+    runSplitTakeMetadataChecks(join(dir, 'split-meta'), (name, pass, detail) => say(`TK1392_${name}`, pass, detail, 'issue #1392: generated split donor and a stamp without the new field'));
+  }
   finally { rmSync(dir, { recursive: true, force: true }); }
   return bad();
 }

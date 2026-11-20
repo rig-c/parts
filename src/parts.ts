@@ -1,4 +1,4 @@
-import { assemblyFieldDigest } from './assembly-reading.ts';
+import { assemblyFieldDigest, isSplitTakeMetadataField } from './assembly-reading.ts';
 import { orderedEditedPartReceipt, type EditedPartReceipt } from './editedparts.ts';
 import { parseReceiptProducer, receiptText } from './receiptproducer.ts';
 import { takenSourceProblems, type TakenLayerSource } from './takesource.ts';
@@ -886,7 +886,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
     if (value === null || typeof value !== 'object' || Object.keys(value).some(key => key !== 'sha256' && key !== 'fields') ||
         !digest(value.sha256) || !Array.isArray(value.fields) || value.fields.length === 0 ||
         !value.fields.every((row, i) => row !== null && typeof row === 'object' && Object.keys(row).length === 2 &&
-          typeof row.name === 'string' && /^[a-z_]+(?:\.[a-z_]+)*$/.test(row.name) &&
+          typeof row.name === 'string' && (/^[a-z_]+(?:\.[a-z_]+)*$/.test(row.name) || isSplitTakeMetadataField(row.name)) &&
           digest(row.sha256) && (i === 0 || value.fields![i - 1].name < row.name)) ||
         assemblyFieldDigest(value.fields) !== value.sha256) {
       fail('PARTS_FIELD_TYPE', `${path} field "assembly_config"`, 'requires sorted distinct field names with lowercase SHA-256 digests and their matching aggregate digest');
