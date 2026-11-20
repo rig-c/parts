@@ -1575,22 +1575,59 @@ default, and a pair without either a rig or pair T reports SKIP and a HOLE,
 never PASS. Allowance is a nonnegative safe integer, defaulting to 0 by the
 explicit design ruling, with optional per-pair override for both halves.
 
-Declared readings independently measure motion-opened rear visibility and
-standing contrasting rear visibility on core's official seam grid, at setup
-and every idle frame. There is no WARN mode, one-cell floor, rest mask or
-subtraction of setup-visible cells. `BEHIND_PART_SEAMS` keeps `setup`,
-`motion_opened` and `standing` separate, names the selected pair and provenance,
-per-frame `behind_slots`, grid and sampled/read/unmeasured counts, and reports
-per-frame hits, worst counts, temporal spans and spatial runs. Exceeding the
-allowance uses `CHECK_BEHIND_PART_SEAMS`; a mandatory unread population uses
-`CHECK_BEHIND_PART_SEAMS_UNMEASURED`. Missing behind slots, idle, setup,
-motion support, boundary population or verified render evidence is a HOLE,
-not a zero PASS. Existing render/sidecar refusals remain refusals. The standing
+Declared readings independently measure motion-opened rear visibility on every
+idle frame and standing contrasting rear visibility at setup (against the
+parts' flat recomposite at their painted positions, issue #1408) on core's
+official seam grid. There is no WARN mode, one-cell floor, rest mask or
+subtraction of setup-visible cells. At setup, `standing` compares the full setup
+render (`rasters.full`) with the parts' flat recomposite (`flatComposite` of
+`parts.json` and `parts/*.png` over white in `rig.json` slot order, rendered
+onto the pair's native seam grid), both flattened source-over white
+(`[255, 255, 255]`), by max-channel distance: a bracketed rear-visible cell is
+raw (`raw_px`) when `d[0] > 0`, `d[1] > 0` and `dRecomposite > 0`, and counts
+(`px`) when `d[0] > T`, `d[1] > T` and `dRecomposite > T` (a cell outside the
+recomposite's canvas has `dRecomposite = Infinity`). Setup standing catches a
+part that the rig places away from where it was painted; it does not measure
+fidelity to the `--source` painting (which is `SETUP_MATCHES_PAINTING`'s and the
+`RECOMPOSITE_HOLES` / `parts.json` `recomposite` record's job), and `--source`
+is not required for `behind_seams`. A recomposite whose size differs from the
+stage is refused by name and never resampled; and through `check` the loader
+refuses the same mismatch earlier, as `CHECK_RIG_STAGE_IS_THE_CANVAS`. On a
+corridor whose endpoint owner is ambiguous (`0` or `3`) at setup, cells within T
+of the recomposite (`dRecomposite <= T`) are left out of the unread population,
+without adding their endpoints to `boundary_cells` (`support`); elsewhere they
+stay geometric (`geometric_px` and `samples`) but cannot count. An ambiguous
+endpoint makes a corridor unread only when at least one of its cells differs
+from the recomposite by more than T (`dRecomposite > T`), and `allowance` never
+clears an unread cell. Without `--parts` (`parts.json` and `parts/*.png`), setup
+standing is `SKIP` with
+`reason: "no --parts manifest was supplied; setup standing compares the setup render with the parts' flat recomposite"`,
+adds a `setup` `unmeasured[]` row, and with an authored T emits
+`CHECK_BEHIND_PART_SEAMS_UNMEASURED`. On idle frames, `standing` is never
+measured: `frames[].standing` and `pairs[].standing` carry `status: "SKIP"` with
+`reason: "not applicable: motion_opened reads the pair"` when `motion_opened`
+reads that frame (or pair), or
+`reason: "idle standing is not measured: idle frames have no recomposite oracle, and the pair's idle reading is motion_opened"`
+when `motion_opened` cannot read that frame (or pair). `pairs[].standing` is
+the idle summary only; setup status is at `pairs[].setup.standing` (never folded
+into `pairs[].standing`), and `BehindSeamsStanding` and `BehindSeamsReading`
+carry an optional `reason` string when `status` is `"SKIP"`. `BEHIND_PART_SEAMS`
+keeps `setup`, `motion_opened` and `standing` separate, names the selected pair
+and provenance, per-frame `behind_slots`, grid and sampled/read/unmeasured
+counts, and reports per-frame hits, worst counts, temporal spans and spatial
+runs. Exceeding the allowance uses `CHECK_BEHIND_PART_SEAMS`
+(`object: "pair \"<A>|<B>\" setup standing"` at setup); a mandatory unread
+population uses `CHECK_BEHIND_PART_SEAMS_UNMEASURED`. Missing behind slots,
+`--parts` manifest for setup standing's recomposite, idle, setup, motion
+support, boundary population or verified render evidence is a HOLE, not a zero
+PASS. Existing render/sidecar refusals remain refusals. The standing
 bracketed-run definition does not certify curved or diagonal openings.
 
 Per-cell samples are a bounded diagnostic sample; the counts are the
-measurement (issue #1403). Each `samples[]` list (standing and motion-opened,
-at setup, on every idle frame and on every turn pose) holds at most 64 rows.
+measurement (issue #1403). Each measured `samples[]` list (setup standing, idle
+`motion_opened` on every idle frame, and turn `standing` and `motion_opened` on
+every turn pose; idle `standing` is never measured and its `samples[]` is always
+`[]`) holds at most 64 rows.
 A list that measured more holds 64 and gains `samples_omitted`, the number of
 rows left out; a list of 64 or fewer has no such field and is written as before.
 Standing keeps its 64 worst rows: counted first, then the larger of the two
@@ -1610,7 +1647,10 @@ min/max corner, deduplicated in that order. It records planned and observed dial
 spans: pose indices are sample identities, and time is 0 for every reset.
 Turn uses its own setup, rest geometry and transported stock seam evidence;
 idle stock and idle counts are unchanged. The same thresholds, allowances,
-rear-set and unread rules apply. Optional unread-corridor evidence also applies
+rear-set and endpoint-ownership unread rules apply, without a recomposite
+comparison (turn poses have no per-pose recomposite oracle, so turn standing is
+judged by endpoint contrast alone and reports all interior cells of an unread
+corridor). Optional unread-corridor evidence also applies
 to turn standing rows. No declared dial persists turn SKIP and a named HOLE;
 an effective authored T makes that missing required reading a
 `CHECK_BEHIND_PART_SEAMS_UNMEASURED` failure. Legacy `turn.x` has no declared
@@ -1630,18 +1670,18 @@ An unavailable poser or source is a HOLE. Other animations, between-sample turns
 skins remain unmeasured.
 
 Issue #1325 adds the following optional evidence fields to
-`BEHIND_PART_SEAMS.pairs[].setup.standing` and
-`BEHIND_PART_SEAMS.pairs[].frames[].standing` only. Paths in the table are
-relative to that standing record.
+`BEHIND_PART_SEAMS.pairs[].setup.standing` (and turn standing records when
+`behind_seams.turn: true`; idle `frames[].standing` is never measured). Paths in
+the table are relative to that standing record.
 
 | Field | Stable meaning |
 | --- | --- |
-| `unread_cells` | Distinct native cells in this frame's unread corridors; cross-axis intersections count once. This is an unread population, not a contrast count. |
-| `unread_corridors` | Nonempty array of ambiguous-endpoint runs, horizontal rows before vertical columns, each in native scan order. |
+| `unread_cells` | Distinct native cells in this frame's unread corridors (at setup, leaving out cells within T of the parts' recomposite); cross-axis intersections count once. This is an unread population, not a contrast count. |
+| `unread_corridors` | Nonempty array of ambiguous-endpoint runs (at setup, those with at least one cell where `dRecomposite > T`), horizontal rows before vertical columns, each in native scan order. |
 | `unread_corridors[].axis` | `horizontal` or `vertical`. |
 | `unread_corridors[].endpoints` | Two `[grid_x, grid_y, world_x, world_y, owner]` tuples in left/right or top/bottom order. Grid indices are zero-based, x right and y down; world coordinates are cell centres, y up. Owner codes are 0 for neither A/B reaching half alpha, 1 for A only, 2 for B only and 3 for both; no owner is inferred. |
-| `unread_corridors[].cells` | Interior world-centre `[x, y]` tuples in run order, excluding endpoints. All corridor cells are reported, without a rear-colour or contrast filter; intersections may repeat across corridors. |
-| `unread_corridors[].cell_count` | Exactly `cells.length` for that corridor. |
+| `unread_corridors[].cells` | Interior world-centre `[x, y]` tuples in run order, excluding endpoints. On a corridor whose endpoint owner is ambiguous (`0` or `3`) at setup, cells within T of the parts' recomposite (`dRecomposite <= T`) are left out of the unread population; the remaining interior cells (and on turn poses, all interior cells of the run) are reported without a rear-colour or endpoint-contrast filter; intersections may repeat across corridors. |
+| `unread_corridors[].cell_count` | The number of reported interior cells in that corridor (at setup, leaving out cells within T of the recomposite), exactly `cells.length`. |
 | `unread_corridors[].row_scope` | `pair`. |
 | `unread_corridors[].row_kind` | `evidence`. |
 | `unread_corridors[].row_subjects` | The two selected part names in producer A/B order. |
@@ -1650,13 +1690,16 @@ Both fields are omitted when no ambiguous corridor is found, preserving the
 bytes of fully read frames; no zero or empty-array placeholders are added.
 `motion_opened` gains no field. Missing optional unread-corridor evidence does
 not certify other unavailable readings or numeric colour underflow as read.
-A corridor with an ambiguous endpoint owner remains unread without choosing
-an A/B owner. Readable corridors retain their measured cells: a standing count
-above allowance remains FAIL even with unread corridors, while unread
-corridors without a measured excess leave standing SKIP. Required unread
-evidence still makes the combined line FAIL. Idle `read_frames` excludes
-partially unread frames, including those whose measured count already fails;
-they remain in `unmeasured_frames`. Setup is counted separately.
+A corridor with an ambiguous endpoint owner (and, at setup, at least one cell
+with `dRecomposite > T`) remains unread without choosing an A/B owner. Readable
+corridors retain their measured cells: a standing count above allowance remains
+FAIL even with unread corridors, while unread corridors without a measured
+excess leave standing SKIP. Required unread evidence still makes the combined
+line FAIL. Idle `read_frames` counts idle frames where `motion_opened` is read
+(idle `standing` is never measured); on turn poses, `read_poses` excludes
+partially unread poses, including those whose measured count already fails,
+keeping them in `unmeasured_poses`. Setup is reported separately at
+`pairs[].setup`.
 A boundary-colour PASS does not prove seam closure. Without `behind_seams`,
 existing configurations remain optional and their checks retain their behavior;
 no behind-part PASS is claimed. See [Behind-part seams](AUTHORING.md#behind-part-seams-issue-1314).

@@ -1,13 +1,14 @@
 /** #1314: analytic block fixtures; all sampling belongs to core's rasterizer. */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { Plate, type RGBA } from '@rig-c/core/plate';
 import { pageFor, projector, rasterisePiece, renderFrame, type AttachmentRest, type Frame, type Piece } from '@rig-c/core/render-shared';
 import { seamGridOf, seamsOf, setupCellReader, type SeamFrame, type SeamGrid, type SeamPair } from '@rig-c/core/seam';
-import { BEHIND_SEAM_LINE, BEHIND_SEAM_CODE, BEHIND_SEAM_UNMEASURED_CODE, behindSeamsProblems,
-  measureBehindSeamFrames, behindSeamLines, BEHIND_SAMPLE_CAP, evenlySpaced, standingWorse, behindTurnPlan, behindTurnAnimations, behindTurnAnimationName, type BehindSeams, type BehindSeamsFramesInput,
+import { BEHIND_SEAM_LINE, BEHIND_SEAM_CODE, BEHIND_SEAM_UNMEASURED_CODE,
+  NO_PARTS_SETUP_STANDING_REASON, IDLE_STANDING_MOTION_READ_REASON, IDLE_STANDING_NO_ORACLE_REASON, behindSeamsProblems,
+  measureBehindSeamFrames, measureBehindSeams, behindSeamLines, BEHIND_SAMPLE_CAP, evenlySpaced, standingWorse, behindTurnPlan, behindTurnAnimations, behindTurnAnimationName, type BehindSeams, type BehindSeamsFramesInput,
   type BehindSeamsStockPair, type BehindSeamsCount, type BehindSeamsMeasured, type BehindSeamsFrame } from '../src/behindseams.ts';
-import { type RigcRunner } from '../src/check.ts';
+import { officialRenderer, type RigcRunner } from '../src/check.ts';
 import { PartsError, type Problem } from '../src/errors.ts';
 import { readRequirements } from '../src/requirements.ts';
 import { checkStage } from '../src/build.ts';
@@ -30,6 +31,7 @@ export interface BehindSeamFixture {
   rest: AttachmentRest[];
   setup: SeamFrame;
   frames: SeamFrame[];
+  recomposite?: SeamFrame | null;
 }
 
 function rectangle(slot: string, x: number, y: number, width: number, height: number): Piece {
@@ -48,8 +50,8 @@ function shifted(piece: Piece, x: number, y: number): Piece {
   return { ...piece, world: piece.world.map((value, index) => value + (index % 2 === 0 ? x : y)) };
 }
 
-function frame(pieces: Piece[], index: number): SeamFrame {
-  return { index, time: index / 12, pieces, attachments: pieces.map(piece => ({
+function frame(pieces: readonly Piece[], index: number): SeamFrame {
+  return { index, time: index / 12, pieces: [...pieces], attachments: pieces.map(piece => ({
     slot: piece.slot, attachment: piece.slot, vertices: [...piece.world], color: piece.tint,
   })) };
 }
@@ -240,10 +242,16 @@ function stockOf(input: BehindSeamFixture): BehindSeamsStockPair[] {
     gapCovered: read.gapCovered.frames.map(hit => ({ index: hit.index, time: hit.time, cell: hit.cell, cells: hit.cells ?? [] })) }];
 }
 
+/** Closed-gap recomposite over the fixture canvas: any rear colour exposed in a planted setup gap differs from FRONT. */
+const CLOSED_RECOMPOSITE_PAGE = 'fixture:closed-recomposite';
+const CLOSED_RECOMPOSITE_FRAME: Frame = asFrame(frame([{ ...rectangle('recomposite', -8, -8, 64, 32), page: CLOSED_RECOMPOSITE_PAGE }], 0));
+
 function inputOf(input: BehindSeamFixture): BehindSeamsFramesInput {
+  const recomposite = input.recomposite === undefined ? CLOSED_RECOMPOSITE_FRAME : input.recomposite === null ? null : asFrame(input.recomposite);
+  const pages = input.recomposite === undefined ? new Map([...input.pages, [CLOSED_RECOMPOSITE_PAGE, plate(64, 32, FRONT)]]) : input.pages;
   return { pairs: [{ pair: 'a|b', a: 'a', b: 'b', declared: ['synthetic explicit seam'] }],
     setup: asFrame(input.setup), idle: input.frames.map(asFrame), rest: input.rest,
-    pages: input.pages, stock: stockOf(input), fps: 12 };
+    pages, stock: stockOf(input), fps: 12, recomposite };
 }
 
 function measured(input: BehindSeamFixture, declaration: BehindSeams = { threshold: 0 },
@@ -291,46 +299,58 @@ function runBehindSeamPrimitiveChecks(say: Say): void {
     brief(opened));
   say('BHS06_REAL_SETUP_BAND_SHARED_TRANSLATION_IS_A_COMPLETE_PASS',
     closed.reading.status === 'PASS' && closed.reading.unmeasured.length === 0 && closed.problems.length === 0 &&
-      closed.pair.motion_opened.status === 'PASS' && closed.pair.standing.status === 'PASS' &&
-      closed.pair.motion_opened.max_px === 0 && closed.pair.standing.max_px === 0,
+      closed.pair.setup?.standing.status === 'PASS' && closed.pair.setup.standing.px === 0 &&
+      closed.pair.motion_opened.status === 'PASS' && closed.pair.motion_opened.max_px === 0 &&
+      closed.pair.standing.status === 'SKIP' && closed.pair.standing.reason === IDLE_STANDING_MOTION_READ_REASON &&
+      closed.pair.standing.max_px === 0,
     brief(closed));
   for (const gap of [1, 2]) {
     const read = measured(behindStandingFixture({ gap }));
+    const plantedMatching = measured(behindStandingFixture({ gap }), { threshold: 0 },
+      { recomposite: asFrame(behindStandingFixture({ gap }).setup) });
     say(`BHS07_STANDING_LINE_COUNTS_SETUP_IDLE_AND_TROUGH[${gap}]`,
-      counts(read.pair?.setup?.standing, 4 * gap) && equal(read.pair.frames.map(row => row.standing.px), [4 * gap, 4 * gap, 4 * gap]) &&
-        read.pair.standing.status === 'FAIL' && read.pair.standing.hit_frames === 3 &&
-        read.pair.standing.max_px === 4 * gap && read.pair.standing.worst?.index === 0 &&
-        read.pair.standing.max_run.frames === 3 && read.pair.motion_opened.status === 'SKIP' &&
-        read.reading.unmeasured.length > 0 && read.reading.status !== 'PASS', brief(read));
+      counts(read.pair?.setup?.standing, 4 * gap) && read.pair.setup!.standing.status === 'FAIL' &&
+        read.pair.setup!.standing.max_spatial_run_cells === 4 &&
+        read.pair.frames.every(row => row.standing.status === 'SKIP' && row.standing.reason === IDLE_STANDING_NO_ORACLE_REASON && row.standing.px === 0) &&
+        read.pair.standing.status === 'SKIP' && read.pair.standing.reason === IDLE_STANDING_NO_ORACLE_REASON &&
+        read.pair.standing.max_px === 0 && read.pair.motion_opened.status === 'SKIP' &&
+        read.problems.some(p => p.code === BEHIND_SEAM_CODE && p.object === 'pair "a|b" setup standing' && p.detail.includes(`setup (${4 * gap} cells)`)) &&
+        read.reading.unmeasured.length > 0 && read.reading.status !== 'PASS' &&
+        plantedMatching.pair.setup!.standing.px === 0, brief(read));
   }
-  const widening = measured(behindStandingFixture({ widen: true }));
+  const narrowSetup = measured(behindStandingFixture({ gap: 1 }));
+  const wideSetup = measured(behindStandingFixture({ gap: 2 }));
   say('BHS08_WIDENING_RETAINS_REST_VISIBLE_BASELINE_AND_SEPARATE_SPATIAL_RUN',
-    counts(widening.pair?.setup?.standing, 4) && equal(widening.pair.frames.map(row => row.standing.px), [4, 8, 4]) &&
-      widening.pair.standing.worst?.index === 1 && widening.pair.standing.max_run.frames === 3 &&
-      widening.pair.standing.max_run.seconds === 3 / 12 && widening.pair.standing.max_spatial_run_cells === 4 &&
-      widening.pair.standing.max_spatial_run_world === 4 && widening.pair.standing.spans.length === 1 &&
-      widening.pair.standing.spans[0].first === 0 && widening.pair.standing.spans[0].last === 2,
-    brief(widening));
+    counts(narrowSetup.pair?.setup?.standing, 4) && counts(wideSetup.pair?.setup?.standing, 8) &&
+      narrowSetup.pair.setup!.standing.max_spatial_run_cells === 4 &&
+      wideSetup.pair.setup!.standing.max_spatial_run_cells === 4 &&
+      equal(narrowSetup.pair.setup!.standing.box, [4, 0, 5, 4]) &&
+      equal(wideSetup.pair.setup!.standing.box, [4, 0, 6, 4]) &&
+      wideSetup.pair.standing.status === 'SKIP' && wideSetup.pair.standing.reason === IDLE_STANDING_NO_ORACLE_REASON,
+    brief(narrowSetup, wideSetup));
   const touching = measured(behindStandingFixture({ gap: 0 }));
   say('BHS09_ZERO_LENGTH_BRACKET_IS_CLOSED_SUPPORT_NOT_A_HOLE',
     touching.pair?.setup?.standing.status === 'PASS' && touching.pair.setup.standing.boundary_cells > 0 &&
-      touching.pair.setup.standing.px === 0 && touching.pair.standing.status === 'PASS' &&
-      touching.pair.frames.every(row => row.standing.status === 'PASS' && row.standing.boundary_cells > 0 && row.standing.px === 0) &&
+      touching.pair.setup.standing.px === 0 && !touching.reading.unmeasured.some(u => u.frame === 'setup') &&
+      touching.pair.standing.status === 'SKIP' && touching.pair.standing.reason === IDLE_STANDING_NO_ORACLE_REASON &&
+      touching.pair.frames.every(row => row.standing.status === 'SKIP' && row.standing.reason === IDLE_STANDING_NO_ORACLE_REASON && row.standing.px === 0) &&
       touching.pair.motion_opened.status === 'SKIP' && touching.reading.status !== 'PASS', brief(touching));
   const unsupported = measured(behindNoSupportFixture());
   say('BHS10_NO_BRACKET_SUPPORT_IS_UNMEASURED_NOT_CLOSED',
-    unsupported.pair?.standing.status === 'SKIP' && unsupported.reading.status !== 'PASS' &&
-      unsupported.reading.unmeasured.length > 0 && unsupported.problems.some(problem => problem.code === BEHIND_SEAM_UNMEASURED_CODE),
+    unsupported.pair?.setup?.standing.status === 'SKIP' && unsupported.pair.setup.standing.boundary_cells === 0 &&
+      unsupported.reading.status !== 'PASS' &&
+      unsupported.reading.unmeasured.some(u => u.frame === 'setup' && u.reason.includes('no A/B boundary support was measured')) &&
+      unsupported.problems.some(problem => problem.code === BEHIND_SEAM_UNMEASURED_CODE && problem.object === 'a|b (setup)'),
     brief(unsupported));
   for (const alpha of [1, 32, 64, 127]) {
     const read = measured(behindStandingFixture({ gap: 0, rear: FRONT, edgeAlpha: alpha }));
-    const rows = [read.pair?.setup, ...read.pair.frames];
+    const row = read.pair?.setup;
     say(`BHS11_IDENTICAL_STRAIGHT_RGB_REAR_NEVER_FIRES_ACROSS_ALPHA_RAMPS[${alpha}]`,
-      rows.every(row => row !== null && row !== undefined && row.standing.status === 'PASS' &&
+      row !== null && row !== undefined && row.standing.status === 'PASS' &&
         row.standing.geometric_px === 8 && row.standing.raw_px === 0 && row.standing.px === 0 &&
         row.standing.samples.length === 8 && row.standing.samples.every(sample =>
           sample.rear_weight > 0 && sample.rear_weight < 1 && equal(sample.rear_rgb, FRONT) &&
-          equal(sample.distances, [0, 0]) && !sample.counted)), brief(read));
+          equal(sample.distances, [0, 0]) && !sample.counted), brief(read));
   }
   const truth = [
     { label: 'both', a: FRONT, b: FRONT, rear: REAR, px: 4 },
@@ -341,7 +361,8 @@ function runBehindSeamPrimitiveChecks(say: Say): void {
   for (const row of truth) {
     const read = measured(behindStandingFixture(row));
     say(`BHS12_MAX_CHANNEL_COLOUR_MUST_DIFFER_FROM_BOTH_NEIGHBOURS[${row.label}]`,
-      counts(read.pair?.setup?.standing, row.px) && read.pair.frames.every(frame => frame.standing.px === row.px) &&
+      counts(read.pair?.setup?.standing, row.px) &&
+        read.pair.setup!.standing.status === (row.px === 0 ? 'PASS' : 'FAIL') &&
         read.pair.setup!.standing.geometric_px === 4 && read.pair.setup!.standing.raw_px === row.px,
       brief(read));
   }
@@ -361,16 +382,28 @@ function runBehindSeamPrimitiveChecks(say: Say): void {
   }
   const allowed = measured(moving, { threshold: 0, allowance: 12 });
   const tooSmall = measured(moving, { threshold: 0, allowance: 11 });
+  const setupAllowed = measured(behindStandingFixture(), { threshold: 0, allowance: 4 });
+  const setupTooSmall = measured(behindStandingFixture(), { threshold: 0, allowance: 3 });
   say('BHS15_ALLOWANCE_EQUALITY_PASSES_AND_ONE_CELL_LESS_FAILS_BOTH_HALVES',
     allowed.reading.status === 'PASS' && allowed.problems.length === 0 &&
-      allowed.pair.motion_opened.max_px === 12 && allowed.pair.standing.max_px === 12 &&
-      tooSmall.pair.motion_opened.status === 'FAIL' && tooSmall.pair.standing.status === 'FAIL' &&
-      tooSmall.problems.some(problem => problem.code === BEHIND_SEAM_CODE), brief(allowed, tooSmall));
+      allowed.pair.motion_opened.max_px === 12 &&
+      tooSmall.pair.motion_opened.status === 'FAIL' &&
+      tooSmall.problems.some(problem => problem.code === BEHIND_SEAM_CODE && problem.object === 'pair "a|b" motion_opened') &&
+      setupAllowed.pair.setup?.standing.status === 'PASS' && setupAllowed.pair.setup.standing.px === 4 &&
+      !setupAllowed.problems.some(problem => problem.code === BEHIND_SEAM_CODE) &&
+      setupTooSmall.pair.setup?.standing.status === 'FAIL' &&
+      setupTooSmall.problems.some(problem => problem.code === BEHIND_SEAM_CODE && problem.object === 'pair "a|b" setup standing'),
+    brief(allowed, tooSmall, setupAllowed, setupTooSmall));
   const override = measured(moving, { threshold: 255, allowance: 0,
     pairs: [{ part: 'b', neighbour: 'a', threshold: 0, allowance: 12 }] });
+  const setupOverride = measured(behindStandingFixture(), { threshold: 255, allowance: 0,
+    pairs: [{ part: 'b', neighbour: 'a', threshold: 0, allowance: 4 }] });
   say('BHS16_REVERSED_PAIR_OVERRIDE_REPLACES_RIG_THRESHOLD_AND_ALLOWANCE',
     override.reading.status === 'PASS' && override.pair.threshold === 0 && override.pair.allowance === 12 &&
-      override.pair.motion_opened.max_px === 12 && override.pair.standing.max_px === 12, brief(override));
+      override.pair.motion_opened.max_px === 12 &&
+      setupOverride.pair.threshold === 0 && setupOverride.pair.allowance === 4 &&
+      setupOverride.pair.setup?.standing.status === 'PASS' && setupOverride.pair.setup.standing.px === 4,
+    brief(override, setupOverride));
   const pairT = measured(shared, { pairs: [{ part: 'a', neighbour: 'b', threshold: 0 }] });
   say('BHS17_PAIR_AUTHORED_THRESHOLD_NEEDS_NO_GLOBAL_DEFAULT',
     pairT.reading.status === 'PASS' && pairT.pair.threshold === 0 && pairT.pair.allowance === 0, brief(pairT));
@@ -384,12 +417,18 @@ function runBehindSeamPrimitiveChecks(say: Say): void {
       oneHidden.get(x, y)[3] === 255 && allHidden.get(x, y)[3] === 0 &&
       stacked.pair.setup!.standing.samples.every(sample => sample.contributors.some(contributor => contributor.slot === 'rear') &&
         sample.contributors.every(contributor => contributor.slot !== 'deep' || contributor.weight === 0)), brief(stacked));
-  const ordered = measured(behindOrderFixture());
+  const orderBase = behindOrderFixture();
+  const ordered = measured(orderBase);
+  const orderedIntervening = measured({ ...orderBase, setup: orderBase.frames[1] });
+  const orderedFront = measured({ ...orderBase, setup: orderBase.frames[2] });
   say('BHS19_BEHIND_SET_USES_EACH_FRAMES_DRAW_ORDER',
     equal(ordered.pair?.frames.map(frame => frame.behind_slots), [['rear'], [], []]) &&
-      ordered.pair.frames[0].standing.px === 4 && ordered.pair.frames.slice(1).every(frame => frame.standing.geometric_px === 0) &&
+      equal([ordered, orderedIntervening, orderedFront].map(r => r.pair.setup?.behind_slots), [['rear'], [], []]) &&
+      ordered.pair.setup?.standing.px === 4 &&
+      [orderedIntervening, orderedFront].every(r => r.pair.setup?.standing.geometric_px === 0 &&
+        r.reading.unmeasured.some(u => u.frame === 'setup' && u.reason.includes('no eligible slot'))) &&
       ordered.reading.unmeasured.length > 0 &&
-      ordered.reading.status !== 'PASS', brief(ordered));
+      ordered.reading.status !== 'PASS', brief(ordered, orderedIntervening, orderedFront));
   const covered = measured(behindStandingFixture({ occluderAlpha: 255 }));
   const partial = measured(behindStandingFixture({ occluderAlpha: 128 }));
   say('BHS20_OPAQUE_LATER_OCCLUDER_REMOVES_REAR_PARTIAL_ALPHA_DOES_NOT',
@@ -399,7 +438,7 @@ function runBehindSeamPrimitiveChecks(say: Say): void {
   const cross = measured(behindCrossFixture());
   say('BHS21_ROW_AND_COLUMN_CORRIDORS_COUNT_THE_CROSS_CENTRE_ONCE',
     counts(cross.pair?.setup?.standing, 1) && cross.pair.setup!.standing.samples.length === 1 &&
-      cross.pair.frames.every(frame => frame.standing.px === 1), brief(cross));
+      cross.pair.setup!.standing.status === 'FAIL', brief(cross));
   const noRear = behindMotionFixture();
   noRear.setup = frame(noRear.setup.pieces.filter(piece => piece.slot !== 'rear'), 0);
   noRear.frames = noRear.frames.map(pose => frame(pose.pieces.filter(piece => piece.slot !== 'rear'), pose.index));
@@ -498,7 +537,7 @@ function runBehindSeamPrimitiveChecks(say: Say): void {
   const fragmentsRead = measured(fragmented);
   say('BHS34_ALL_FRAGMENTS_OF_ONE_REAR_SLOT_CONTRIBUTE_WITHOUT_DUPLICATE_SLOT_NAMES',
     equal(fragmentsRead.pair?.setup?.behind_slots, ['rear']) && counts(fragmentsRead.pair.setup?.standing, 4) &&
-      fragmentsRead.pair.frames.every(row => row.standing.px === 4), brief(fragmentsRead));
+      fragmentsRead.pair.setup!.standing.status === 'FAIL', brief(fragmentsRead));
 
   const missingAttachments = inputOf(shared);
   missingAttachments.idle = missingAttachments.idle.map(pose => ({ ...pose, attachments: undefined }));
@@ -519,18 +558,28 @@ function runBehindSeamPrimitiveChecks(say: Say): void {
 
   const standingAllowed = measured(behindStandingFixture(), { threshold: 0, allowance: 3,
     pairs: [{ part: 'a', neighbour: 'b', allowance: 4 }] });
+  const standingUnallowed = measured(behindStandingFixture(), { threshold: 0, allowance: 3,
+    pairs: [{ part: 'a', neighbour: 'b', allowance: 3 }] });
   say('BHS37_PAIR_ALLOWANCE_PASSES_STANDING_WITHOUT_CERTIFYING_UNREAD_MOTION',
-    standingAllowed.pair?.standing.status === 'PASS' && standingAllowed.pair.standing.max_px === 4 &&
-      standingAllowed.pair.allowance === 4 && standingAllowed.pair.motion_opened.status === 'SKIP' &&
-      standingAllowed.reading.status === 'FAIL' && standingAllowed.problems.some(problem => problem.code === BEHIND_SEAM_UNMEASURED_CODE), brief(standingAllowed));
+    standingAllowed.pair?.setup?.standing.status === 'PASS' && standingAllowed.pair.setup.standing.px === 4 &&
+      standingAllowed.pair.allowance === 4 && standingAllowed.pair.standing.status === 'SKIP' &&
+      standingAllowed.pair.standing.reason === IDLE_STANDING_NO_ORACLE_REASON &&
+      standingAllowed.pair.motion_opened.status === 'SKIP' &&
+      standingAllowed.reading.status === 'FAIL' &&
+      !standingAllowed.problems.some(problem => problem.code === BEHIND_SEAM_CODE) &&
+      standingAllowed.problems.some(problem => problem.code === BEHIND_SEAM_UNMEASURED_CODE) &&
+      standingUnallowed.pair?.setup?.standing.status === 'FAIL' &&
+      standingUnallowed.problems.some(problem => problem.code === BEHIND_SEAM_CODE), brief(standingAllowed, standingUnallowed));
 
   const distinctSetup = behindStandingFixture();
   // Idle frame zero is widened, but setup keeps the original one-cell line.
   distinctSetup.frames[0] = frame(distinctSetup.frames[0].pieces.map(piece => piece.slot === 'b' ? shifted(piece, 1, 0) : piece), 0);
   const separate = measured(distinctSetup);
+  const plantedFrameZeroSetup = measured({ ...distinctSetup, setup: distinctSetup.frames[0] });
   say('BHS38_AUTHORED_SETUP_IS_NOT_REPLACED_BY_IDLE_FRAME_ZERO',
-    counts(separate.pair?.setup?.standing, 4) && separate.pair.frames[0].standing.px === 8 &&
-      separate.pair.standing.hit_frames === 3 && separate.pair.standing.worst?.index === 0, brief(separate));
+    counts(separate.pair?.setup?.standing, 4) && counts(plantedFrameZeroSetup.pair?.setup?.standing, 8) &&
+      separate.pair.frames[0].standing.status === 'SKIP' &&
+      separate.pair.frames[0].standing.reason === IDLE_STANDING_NO_ORACLE_REASON, brief(separate, plantedFrameZeroSetup));
 
   const incomplete = stockOf(shared);
   incomplete[0] = { ...incomplete[0], drawn: 2, banded: 2 };
@@ -547,18 +596,19 @@ function runBehindSeamPrimitiveChecks(say: Say): void {
 
   const ambiguousMixed = behindAmbiguousFixture(3, 'left', true);
   const localised = measured(ambiguousMixed, { threshold: 40 });
-  const mixedRows = [localised.pair.setup!, ...localised.pair.frames];
+  const mixedSetup = localised.pair.setup!;
   say('BHS44_MIXED_UNREAD_CORRIDOR_RETAINS_MEASURED_FAILURE',
-    mixedRows.every(row => row.standing.status === 'FAIL' && row.standing.px === 3 &&
-      row.standing.geometric_px === 3 && row.standing.raw_px === 3 && row.standing.samples.length === 3 &&
-      row.standing.unread_cells === 1 && row.standing.unread_corridors?.length === 1) &&
-      localised.pair.standing.status === 'FAIL' && localised.pair.standing.max_px === 3 &&
-      localised.pair.frames.every(row => row.motion_opened.status === 'PASS') &&
-      localised.pair.sampled_frames === 3 && localised.pair.read_frames === 0 && localised.pair.unmeasured_frames === 3 &&
+    mixedSetup.standing.status === 'FAIL' && mixedSetup.standing.px === 3 &&
+      mixedSetup.standing.geometric_px === 3 && mixedSetup.standing.raw_px === 3 && mixedSetup.standing.samples.length === 3 &&
+      mixedSetup.standing.unread_cells === 1 && mixedSetup.standing.unread_corridors?.length === 1 &&
+      localised.pair.standing.status === 'SKIP' && localised.pair.standing.reason === IDLE_STANDING_MOTION_READ_REASON &&
+      localised.pair.standing.max_px === 0 &&
+      localised.pair.frames.every(row => row.motion_opened.status === 'PASS' && row.standing.status === 'SKIP' && row.standing.reason === IDLE_STANDING_MOTION_READ_REASON) &&
+      localised.pair.sampled_frames === 3 && localised.pair.read_frames === 3 && localised.pair.unmeasured_frames === 0 &&
       localised.reading.status === 'FAIL' &&
-      localised.problems.some(problem => problem.code === BEHIND_SEAM_CODE && problem.object === 'pair "a|b" standing' && problem.detail.includes('3 cells')) &&
-      localised.problems.some(problem => problem.code === BEHIND_SEAM_UNMEASURED_CODE) &&
-      localised.reading.unmeasured.some(row => row.reason.includes('ambiguous half-alpha owners')),
+      localised.problems.some(problem => problem.code === BEHIND_SEAM_CODE && problem.object === 'pair "a|b" setup standing' && problem.detail.includes('setup (3 cells)')) &&
+      localised.problems.some(problem => problem.code === BEHIND_SEAM_UNMEASURED_CODE && problem.object === 'a|b (setup)') &&
+      localised.reading.unmeasured.some(row => row.frame === 'setup' && row.reason.includes('ambiguous half-alpha owners')),
     JSON.stringify({ measured: summary(localised.reading), problems: localised.problems,
       unread: localised.pair.setup!.standing.unread_corridors,
       read_frames: localised.pair.read_frames, unmeasured_frames: localised.pair.unmeasured_frames }));
@@ -579,38 +629,38 @@ function runBehindSeamPrimitiveChecks(say: Say): void {
   for (const owner of [0, 3] as const) for (const side of ['left', 'right'] as const) {
     const onlyUnread = measured(behindAmbiguousFixture(owner, side), { threshold: 40 });
     const expectedOwners = side === 'left' ? [owner, 2] : [1, owner];
-    const rows = [onlyUnread.pair.setup!, ...onlyUnread.pair.frames];
-    const frameSkipLines = onlyUnread.lines.filter(line => line.includes('idle frame ') && line.includes('unread corridors are not zero'));
+    const row = onlyUnread.pair.setup!;
+    const setupSkipLines = onlyUnread.lines.filter(line => line.includes('pair "a|b" setup SKIP') && line.includes('unread corridors are not zero'));
     say(`BHS46_ONLY_AMBIGUOUS_OWNER_IS_UNREAD_WITHOUT_INFERENCE[${owner},${side}]`,
-      rows.every(row => row.standing.status === 'SKIP' && row.standing.px === 0 && row.standing.samples.length === 0 &&
+      row.standing.status === 'SKIP' && row.standing.px === 0 && row.standing.samples.length === 0 &&
         row.standing.unread_cells === 4 && row.standing.unread_corridors?.length === 4 &&
         row.standing.unread_corridors.every(corridor => corridor.axis === 'horizontal' && corridor.cell_count === 1 &&
           equal(corridor.endpoints.map(endpoint => endpoint[4]), expectedOwners)) &&
-        equal(row.standing.unread_corridors.map(corridor => corridor.cells), [[[4.5, 3.5]], [[4.5, 2.5]], [[4.5, 1.5]], [[4.5, 0.5]]])) &&
-        onlyUnread.pair.standing.status === 'SKIP' && onlyUnread.pair.read_frames === 0 && onlyUnread.pair.unmeasured_frames === 3 &&
-        onlyUnread.reading.status === 'FAIL' && onlyUnread.problems.some(problem => problem.code === BEHIND_SEAM_UNMEASURED_CODE) &&
+        equal(row.standing.unread_corridors.map(corridor => corridor.cells), [[[4.5, 3.5]], [[4.5, 2.5]], [[4.5, 1.5]], [[4.5, 0.5]]]) &&
+        onlyUnread.pair.standing.status === 'SKIP' &&
+        onlyUnread.reading.status === 'FAIL' && onlyUnread.problems.some(problem => problem.code === BEHIND_SEAM_UNMEASURED_CODE && problem.object === 'a|b (setup)') &&
         !onlyUnread.problems.some(problem => problem.code === BEHIND_SEAM_CODE) &&
-        frameSkipLines.length === 3 && frameSkipLines.every((line, i) =>
-          line === `${BEHIND_SEAM_LINE}: pair "a|b" idle frame ${i} SKIP — HOLE: ${ambiguousFixtureReason(owner, side === 'left' ? 3.5 : 5.5, 4)}`),
-      JSON.stringify({ owner, side, reading: summary(onlyUnread.reading), unread: onlyUnread.pair.setup!.standing.unread_corridors, frameSkipLines }));
+        setupSkipLines.length === 1 &&
+        setupSkipLines[0] === `${BEHIND_SEAM_LINE}: pair "a|b" setup SKIP — HOLE: ${ambiguousFixtureReason(owner, side === 'left' ? 3.5 : 5.5, 4)}`,
+      JSON.stringify({ owner, side, reading: summary(onlyUnread.reading), unread: onlyUnread.pair.setup!.standing.unread_corridors, setupSkipLines }));
   }
 
   const withinBarMixed = measured(ambiguousMixed, { threshold: 40, allowance: 3 });
   const fullyUnread = measured(behindAmbiguousFixture(3, 'left', false), { threshold: 40 });
-  const frameLine = (line: string): boolean => /pair "a\|b" idle frame \d+ /.test(line);
+  const unmeasuredSetupLine = (line: string): boolean => line.includes('pair "a|b" setup ') && line.includes('HOLE:');
   const setupLine = (line: string): boolean => line.includes('pair "a|b" setup ');
   const mixedLogVerdict = (failLines: readonly string[], allowedLines: readonly string[], unreadLines: readonly string[]): boolean => {
-    const failFrames = failLines.filter(frameLine);
-    const allowedFrames = allowedLines.filter(frameLine);
-    const unreadFrames = unreadLines.filter(frameLine);
-    return failFrames.length === 3 && allowedFrames.length === 3 && unreadFrames.length === 3 &&
-      failFrames.every((line, i) => !line.includes('SKIP') &&
-        line === `${BEHIND_SEAM_LINE}: pair "a|b" idle frame ${i} standing FAIL, 3 cells — unread corridors: 1 (cells 1); HOLE: ${ambiguousFixtureReason(3, 3.5, 1)}`) &&
-      allowedFrames.every((line, i) => !line.includes('SKIP') &&
-        line === `${BEHIND_SEAM_LINE}: pair "a|b" idle frame ${i} standing 3 cells — unread corridors: 1 (cells 1); HOLE: ${ambiguousFixtureReason(3, 3.5, 1)}`) &&
+    const failFrames = failLines.filter(unmeasuredSetupLine);
+    const allowedFrames = allowedLines.filter(unmeasuredSetupLine);
+    const unreadFrames = unreadLines.filter(unmeasuredSetupLine);
+    return failFrames.length === 1 && allowedFrames.length === 1 && unreadFrames.length === 1 &&
+      !failFrames[0].includes('SKIP') &&
+      failFrames[0] === `${BEHIND_SEAM_LINE}: pair "a|b" setup standing FAIL, 3 cells — unread corridors: 1 (cells 1); HOLE: ${ambiguousFixtureReason(3, 3.5, 1)}` &&
+      !allowedFrames[0].includes('SKIP') &&
+      allowedFrames[0] === `${BEHIND_SEAM_LINE}: pair "a|b" setup standing 3 cells — unread corridors: 1 (cells 1); HOLE: ${ambiguousFixtureReason(3, 3.5, 1)}` &&
       failLines.filter(setupLine).every(line => !line.includes('SKIP') && line.includes('3 cells')) &&
       allowedLines.filter(setupLine).every(line => !line.includes('SKIP') && line.includes('3 cells')) &&
-      unreadFrames.every((line, i) => line === `${BEHIND_SEAM_LINE}: pair "a|b" idle frame ${i} SKIP — HOLE: ${ambiguousFixtureReason(3, 3.5, 4)}`);
+      unreadFrames[0] === `${BEHIND_SEAM_LINE}: pair "a|b" setup SKIP — HOLE: ${ambiguousFixtureReason(3, 3.5, 4)}`;
   };
   const oldTextMutant = localised.reading.unmeasured.map(u =>
     `${BEHIND_SEAM_LINE}: ${u.pair === null ? 'rig' : `pair "${u.pair}"`} ${u.frame} SKIP — ${u.reason}`);
@@ -625,9 +675,9 @@ function runBehindSeamPrimitiveChecks(say: Say): void {
       !mixedLogVerdict(oldTextMutant, withinBarMixed.lines, fullyUnread.lines) &&
       !mixedLogVerdict(localised.lines, oldTextMutant, fullyUnread.lines) &&
       equal(jsonBefore, jsonAfter),
-    JSON.stringify({ failFrame0: localised.lines.find(frameLine),
-      allowedFrame0: withinBarMixed.lines.find(frameLine),
-      unreadFrame0: fullyUnread.lines.find(frameLine),
+    JSON.stringify({ failSetup: localised.lines.find(unmeasuredSetupLine),
+      allowedSetup: withinBarMixed.lines.find(unmeasuredSetupLine),
+      unreadSetup: fullyUnread.lines.find(unmeasuredSetupLine),
       mutantRejected: !mixedLogVerdict(oldTextMutant, withinBarMixed.lines, fullyUnread.lines),
       jsonUnchanged: equal(jsonBefore, jsonAfter) }));
 
@@ -635,14 +685,15 @@ function runBehindSeamPrimitiveChecks(say: Say): void {
   crossUnread.pages.get('b')!.set(1, 2, [...FRONT, 255]);
   crossUnread.pages.get('b')!.set(2, 1, [...FRONT, 255]);
   const unreadCross = measured(crossUnread, { threshold: 40 });
+  const crossRow = unreadCross.pair.setup!;
   say('BHS47_CROSS_AXIS_UNREAD_CELL_UNION_COUNTS_CENTRE_ONCE',
-    [unreadCross.pair.setup!, ...unreadCross.pair.frames].every(row => row.standing.status === 'SKIP' &&
-      row.standing.px === 0 && row.standing.unread_cells === 1 && row.standing.unread_corridors?.length === 2 &&
-      equal(row.standing.unread_corridors.map(corridor => [corridor.axis, corridor.cell_count, corridor.cells]),
+    crossRow.standing.status === 'SKIP' &&
+      crossRow.standing.px === 0 && crossRow.standing.unread_cells === 1 && crossRow.standing.unread_corridors?.length === 2 &&
+      equal(crossRow.standing.unread_corridors.map(corridor => [corridor.axis, corridor.cell_count, corridor.cells]),
         [['horizontal', 1, [[2.5, 2.5]]], ['vertical', 1, [[2.5, 2.5]]]]) &&
-      equal(row.standing.unread_corridors.map(corridor => corridor.endpoints),
-        [[[2, 3, 1.5, 2.5, 3], [4, 3, 3.5, 2.5, 2]], [[3, 2, 2.5, 3.5, 3], [3, 4, 2.5, 1.5, 2]]])) &&
-      unreadCross.reading.status === 'FAIL' && unreadCross.problems.some(problem => problem.code === BEHIND_SEAM_UNMEASURED_CODE),
+      equal(crossRow.standing.unread_corridors.map(corridor => corridor.endpoints),
+        [[[2, 3, 1.5, 2.5, 3], [4, 3, 3.5, 2.5, 2]], [[3, 2, 2.5, 3.5, 3], [3, 4, 2.5, 1.5, 2]]]) &&
+      unreadCross.reading.status === 'FAIL' && unreadCross.problems.some(problem => problem.code === BEHIND_SEAM_UNMEASURED_CODE && problem.object === 'a|b (setup)'),
     JSON.stringify({ unread: unreadCross.pair.setup!.standing.unread_corridors,
       distinct: unreadCross.pair.setup!.standing.unread_cells, status: unreadCross.reading.status }));
 
@@ -660,12 +711,13 @@ function runBehindSeamPrimitiveChecks(say: Say): void {
   underflowFixture.setup = frame([...underflowFixture.setup.pieces, ...veils], 0);
   underflowFixture.frames = underflowFixture.frames.map(pose => frame([...pose.pieces, ...veils], pose.index));
   const numericUnread = measured(underflowFixture, { threshold: 40 });
+  const underflowSetup = numericUnread.pair.setup!;
   say('BHS49_NUMERIC_REAR_UNDERFLOW_REMAINS_UNMEASURED_WITHOUT_ENDPOINT_AMBIGUITY',
-    [numericUnread.pair.setup!, ...numericUnread.pair.frames].every(row => row.standing.status === 'SKIP' && row.standing.px === 0 &&
-      !Object.hasOwn(row.standing, 'unread_cells') && !Object.hasOwn(row.standing, 'unread_corridors')) &&
+    underflowSetup.standing.status === 'SKIP' && underflowSetup.standing.px === 0 &&
+      !Object.hasOwn(underflowSetup.standing, 'unread_cells') && !Object.hasOwn(underflowSetup.standing, 'unread_corridors') &&
       numericUnread.pair.read_frames === 0 && numericUnread.pair.unmeasured_frames === 3 &&
       numericUnread.reading.status === 'FAIL' && numericUnread.problems.some(problem => problem.code === BEHIND_SEAM_UNMEASURED_CODE &&
-        problem.detail.includes('underflowed its numeric colour weight')),
+        problem.object === 'a|b (setup)' && problem.detail.includes('underflowed its numeric colour weight')),
     brief(numericUnread));
 }
 
@@ -714,8 +766,13 @@ function runBehindSeamRequirementChecks(dir: string, say: Say): void {
   }
 }
 
-/** A three-block variant of the established check fixture, generated only in this suite's temp directory. */
-export function writeBehindSeamCheckRig(dir: string): void {
+/** A three-block variant of the established check fixture, generated only in this suite's temp directory.
+ * When asymmetricSetupGap is true, images/back.png leaves a 2-row setup gap (y 38..39) across 10 overlap columns
+ * (x 16..25, crop sx 20..29 -> 20 geometric cells) while keeping a 2x2 setup overlap on x 26..27 (crop sx 30..31);
+ * parts/back.png closes the left 6 of those gap columns (x 16..21, crop sx 20..25 -> 12 counted cells, world box
+ * [-4, 40, 2, 42]) and leaves the right 4 gap columns (x 22..25, crop sx 26..29 -> 8 excused cells) open in the
+ * flat recomposite. */
+export function writeBehindSeamCheckRig(dir: string, asymmetricSetupGap = true): void {
   writeCheckRig(dir, { peak: 0, duration: 1 / 6 });
   const rigPath = join(dir, 'rig.json');
   const rig = JSON.parse(readFileSync(rigPath, 'utf8')) as {
@@ -734,18 +791,25 @@ export function writeBehindSeamCheckRig(dir: string): void {
   parts.parts.unshift({ ...parts.parts[0], name: 'rear' });
   parts.motion_seams = [{ part: 'back', neighbour: 'front' }];
   for (const part of parts.parts) {
-    const image = newRaster(part.w, part.h);
+    const rigImage = newRaster(part.w, part.h);
+    const partImage = newRaster(part.w, part.h);
     let opaque = 0;
     // The back's bottom is at crop y42; front starts at crop y40: two rows overlap.
     // Carrier translation +4 opens two rows over rear at peak; trough returns closed.
     for (let y = 2; y < part.h - 2; y++) for (let x = 2; x < part.w - 2; x++) {
       if ((part.name === 'back' && y >= 42) || (part.name === 'front' && y < 20)) continue;
-      image.data.set([...(part.name === 'rear' ? REAR : FRONT), 255], (y * part.w + x) * 4);
-      opaque++;
+      const rgb = part.name === 'rear' ? REAR : FRONT;
+      const inSetupGap = asymmetricSetupGap && part.name === 'back' && y >= 38 && x >= 16 && x < 26;
+      const inRecompositeGap = asymmetricSetupGap && part.name === 'back' && y >= 38 && x >= 22 && x < 26;
+      if (!inSetupGap) rigImage.data.set([...rgb, 255], (y * part.w + x) * 4);
+      if (!inRecompositeGap) {
+        partImage.data.set([...rgb, 255], (y * part.w + x) * 4);
+        opaque++;
+      }
     }
     part.opaque_px = opaque;
-    writePng(join(dir, 'images', part.name + '.png'), image);
-    writePng(join(dir, 'parts', part.name + '.png'), image);
+    writePng(join(dir, 'images', part.name + '.png'), rigImage);
+    writePng(join(dir, 'parts', part.name + '.png'), partImage);
   }
   writeFileSync(join(dir, 'parts.json'), serializeParts(parts));
   const motionPath = join(dir, 'motion.json');
@@ -855,7 +919,7 @@ export function runBehindTurnPrimitiveChecks(say: Say): void {
 
 /** Real emitted slider constraints, consumed by rigc's own existing poser. */
 export function writeBehindSeamTurnCheckRig(dir: string, repaired = false): void {
-  writeBehindSeamCheckRig(dir);
+  writeBehindSeamCheckRig(dir, false);
   const rigPath = join(dir, 'rig.json'), motionPath = join(dir, 'motion.json');
   const rig = JSON.parse(readFileSync(rigPath, 'utf8')) as { bones: Array<Record<string, unknown>>; constraints?: Array<Record<string, unknown>> };
   const motion = JSON.parse(readFileSync(motionPath, 'utf8')) as { animations: Record<string, { duration: number; loop: boolean; tracks: Array<Record<string, unknown>> }> };
@@ -903,9 +967,14 @@ function runBehindSeamIntegrationChecks(dir: string, say: Say, rigc: RigcRunner)
   const red = run('declared-mutant', requirement('declared', { threshold: 0 }));
   const block = red.figures[BEHIND_SEAM_LINE] as BehindSeamsMeasured | undefined;
   say('BHS40_ACTUAL_CHECK_STAGE_CONNECTS_READER_STOCK_DETECTOR_AND_REQUIRED_FAILURE',
-    block?.status === 'FAIL' && block.pairs.some(pair => pair.motion_opened.max_px > 0 && pair.standing.max_px > 0) &&
+    block?.status === 'FAIL' && block.pairs.some(pair => pair.motion_opened.max_px > 0 &&
+      pair.setup?.standing.status === 'FAIL' && pair.setup.standing.px === 12 &&
+      pair.setup.standing.geometric_px === 20 && pair.setup.standing.raw_px === 12 &&
+      equal(pair.setup.standing.box?.map(v => Math.round(v)), [-4, 40, 2, 42]) &&
+      pair.standing.status === 'SKIP' && pair.standing.reason === IDLE_STANDING_MOTION_READ_REASON && pair.standing.max_px === 0) &&
       red.report.behindSeams !== null && equal(red.report.behindSeams, block) && red.figures.PASS === false &&
-      red.report.problems.some(problem => problem.code === BEHIND_SEAM_CODE) &&
+      red.report.problems.some(problem => problem.code === BEHIND_SEAM_CODE && problem.object === 'pair "back|front" setup standing') &&
+      red.report.problems.some(problem => problem.code === BEHIND_SEAM_CODE && problem.object === 'pair "back|front" motion_opened') &&
       red.lines.some(line => line.includes(BEHIND_SEAM_LINE) && line.includes('FAIL')) &&
       red.calls.includes('build') && red.calls.includes('render'),
     JSON.stringify({ reading: block === undefined ? null : summary(block),
@@ -1047,15 +1116,15 @@ function runBehindSampleCapChecks(say: Say): void {
 /** Issue #1405, "neither" case: plate columns 0..3 of a are opaque and 6..9 of b; both
  * paint column 4 below 128/255 (a 100, b 90; together 1 - (155/255)(165/255) >= 1/2), so column 4 is
  * an owner-0 endpoint and column 5 the one-cell corridor, on each of four rows. */
-function behindNeitherFixture(aEdge: number, bEdge: number | null): BehindSeamFixture {
+function behindNeitherFixture(aEdge: number, bEdge: number | null, frontRgb: RGB = FRONT): BehindSeamFixture {
   const rear = rectangle('rear', -2, -2, 26, 8);
   const a = rectangle('a', 0, 0, 10, 4), b = rectangle('b', 0, 0, 10, 4);
   const pa = new Plate(10, 4), pb = new Plate(10, 4);
   for (let y = 0; y < 4; y++) {
-    for (let x = 0; x < 4; x++) pa.set(x, y, [...FRONT, 255]);
-    for (let x = 6; x < 10; x++) pb.set(x, y, [...FRONT, 255]);
-    pa.set(4, y, [...FRONT, aEdge]);
-    if (bEdge !== null) pb.set(4, y, [...FRONT, bEdge]);
+    for (let x = 0; x < 4; x++) pa.set(x, y, [...frontRgb, 255]);
+    for (let x = 6; x < 10; x++) pb.set(x, y, [...frontRgb, 255]);
+    pa.set(4, y, [...frontRgb, aEdge]);
+    if (bEdge !== null) pb.set(4, y, [...frontRgb, bEdge]);
   }
   const setup = [rear, a, b];
   return fixture(new Map([['rear', plate(26, 8, REAR)], ['a', pa], ['b', pb]]), setup, [setup, setup, setup]);
@@ -1078,14 +1147,14 @@ function behindBothFixture(aEnd: number, bColumns: (x: number) => boolean): Behi
 
 function runBehindUnreadRemedyChecks(say: Say): void {
   const holed = (x: number): boolean => (x >= 4 && x < 6) || x >= 8;
-  // By hand: four one-cell (neither) or two-cell (both) row corridors; the top row's endpoint is first.
+  // By hand: four one-cell (neither) or two-cell (both) row corridors at setup; the top row's endpoint is first.
   const neitherReason = 'standing endpoints include ambiguous half-alpha owners: 4 unread corridor(s), 4 cell(s); ' +
     'neither "a" nor "b" reaches 128/255 at 4 endpoint cell(s), first at world (4.5, 3.5) ("a" 100/255, "b" 90/255); ' +
     'each endpoint requires exactly one member at 128/255 or more; unread corridors are not zero';
   const bothReason = 'standing endpoints include ambiguous half-alpha owners: 4 unread corridor(s), 8 cell(s); ' +
     'both "a" and "b" reach 128/255 at 4 endpoint cell(s), first at world (5.5, 3.5) ("a" 255/255, "b" 255/255); ' +
     'each endpoint requires exactly one member at 128/255 or more; unread corridors are not zero';
-  const frames = ['setup', 'idle frame 0', 'idle frame 1', 'idle frame 2'];
+  const frames = ['setup'];
   const names = (result: ReturnType<typeof measured>, reason: string): boolean =>
     frames.every(frame => result.reading.unmeasured.some(u => u.pair === 'a|b' && u.frame === frame && u.reason === `HOLE: ${reason}`)) &&
     frames.every(frame => result.problems.some(p => p.code === BEHIND_SEAM_UNMEASURED_CODE && p.object === `a|b (${frame})` &&
@@ -1101,14 +1170,14 @@ function runBehindUnreadRemedyChecks(say: Say): void {
   say('BHU01_NEITHER_OWNER_LINE_NAMES_BOTH_MEMBERS_ALPHA_AND_POINT',
     names(neither, neitherReason) && neither.pair.setup?.standing.status === 'SKIP' && neither.pair.setup.standing.px === 0 &&
       neither.pair.setup.standing.unread_corridors?.every(c => c.endpoints[0][4] === 0 && c.endpoints[1][4] === 2) === true &&
-      neither.lines.includes(`${BEHIND_SEAM_LINE}: pair "a|b" idle frame 0 SKIP — HOLE: ${neitherReason}`), evidence(neither));
+      neither.lines.includes(`${BEHIND_SEAM_LINE}: pair "a|b" setup SKIP — HOLE: ${neitherReason}`), evidence(neither));
   const both = measured(behindBothFixture(6, holed), { threshold: 12 });
   say('BHU02_BOTH_OWNERS_LINE_NAMES_BOTH_MEMBERS_ALPHA_AND_POINT',
     names(both, bothReason) && both.pair.setup?.standing.status === 'SKIP' && both.pair.setup.standing.px === 0 &&
       both.pair.setup.standing.unread_corridors?.every(c => c.endpoints[0][4] === 3 && c.endpoints[1][4] === 2) === true &&
       both.pair.motion_opened.status === 'PASS', evidence(both));
 
-  // Remedy: one member at >= 128/255 at the endpoint, the other not painting it; the corridor is then read.
+  // Remedy: one member at >= 128/255 at the endpoint, the other not painting it; the corridor is then read at setup.
   const aOwns = measured(behindNeitherFixture(128, 90), { threshold: 12 });
   const bLeaves = measured(behindNeitherFixture(100, null), { threshold: 12 });
   const bTrimmed = measured(behindBothFixture(6, x => x === 4 || x >= 8), { threshold: 12 });
@@ -1116,19 +1185,338 @@ function runBehindUnreadRemedyChecks(say: Say): void {
   say('BHU03_ONE_OWNER_AT_THE_ENDPOINT_CLEARS_THE_LINE_AND_THE_CORRIDOR_IS_READ',
     [aOwns, bLeaves, bTrimmed, holeFilled].every(result => ambiguous(result) === 0 && result.pair.setup?.standing.unread_corridors === undefined) &&
       // column 5 x 4 rows; columns 4..5 x 4 rows; columns 6..7 x 4 rows; no corridor.
-      aOwns.pair.setup?.standing.status === 'FAIL' && aOwns.pair.setup.standing.px === 4 && aOwns.pair.standing.max_px === 4 &&
-      bLeaves.pair.setup?.standing.status === 'FAIL' && bLeaves.pair.setup.standing.px === 8 && bLeaves.pair.standing.max_px === 8 &&
-      bTrimmed.pair.setup?.standing.status === 'FAIL' && bTrimmed.pair.setup.standing.px === 8 && bTrimmed.pair.standing.max_px === 8 &&
-      holeFilled.reading.status === 'PASS' && holeFilled.pair.standing.status === 'PASS' && holeFilled.pair.standing.max_px === 0,
+      aOwns.pair.setup?.standing.status === 'FAIL' && aOwns.pair.setup.standing.px === 4 &&
+      bLeaves.pair.setup?.standing.status === 'FAIL' && bLeaves.pair.setup.standing.px === 8 &&
+      bTrimmed.pair.setup?.standing.status === 'FAIL' && bTrimmed.pair.setup.standing.px === 8 &&
+      holeFilled.reading.status === 'PASS' && holeFilled.pair.setup?.standing.status === 'PASS' && holeFilled.pair.setup.standing.px === 0 &&
+      holeFilled.pair.standing.status === 'SKIP' && holeFilled.pair.standing.reason === IDLE_STANDING_MOTION_READ_REASON &&
+      holeFilled.pair.standing.max_px === 0,
     evidence(aOwns, bLeaves, bTrimmed, holeFilled));
 
-  // Negative: the declaration's numbers do not reach ownership.
-  const declarations: BehindSeams[] = [{ threshold: 255 }, { threshold: 12, allowance: 1000 },
-    { threshold: 12, pairs: [{ part: 'a', neighbour: 'b', threshold: 0, allowance: 1000 }] }];
-  const kept = declarations.flatMap(declaration => [measured(behindNeitherFixture(100, 90), declaration), measured(behindBothFixture(6, holed), declaration)]);
+  // BHU04 (issue #1405, #1408): with T below the 200-step recomposite distance (|224 - 24| = 200), the ambiguous-owner
+  // line is present and stays unread when allowance is raised (allowance 1000 never clears it); with T at or above the
+  // recomposite distance (T = 200, 255), the cells match the recomposite within T so the ambiguous-owner line is absent
+  // AND those same thresholds make the corresponding readable-endpoint cells uncountable (px === 0).
+  // In behindNeitherFixture(128, 90, [0, 0, 0]), endpoint contrast is max(|224-0|,|232-0|,|240-0|) = 240 while recomposite
+  // distance to FRONT [24, 48, 72] is 200: at T = 199 it counts 4 cells, and at T = 200 endpoint contrast (240 > 200)
+  // still holds so only the recomposite rule (dr = 200 > 200 is false) makes those 4 cells uncountable (px === 0).
+  const belowDeclarations: BehindSeams[] = [{ threshold: 199 }, { threshold: 12, allowance: 1000 },
+    { threshold: 199, allowance: 1000 }, { threshold: 12, pairs: [{ part: 'a', neighbour: 'b', threshold: 0, allowance: 1000 }] }];
+  const kept = belowDeclarations.flatMap(declaration => [measured(behindNeitherFixture(100, 90), declaration), measured(behindBothFixture(6, holed), declaration)]);
+  const atOrAboveDeclarations: BehindSeams[] = [{ threshold: 200 }, { threshold: 255 },
+    { threshold: 12, pairs: [{ part: 'a', neighbour: 'b', threshold: 255, allowance: 0 }] }];
+  const droppedAmbiguous = atOrAboveDeclarations.flatMap(declaration => [measured(behindNeitherFixture(100, 90), declaration), measured(behindBothFixture(6, holed), declaration)]);
+  const blackEndpointAt199 = measured(behindNeitherFixture(128, 90, [0, 0, 0]), { threshold: 199 });
+  const uncountableReadable = atOrAboveDeclarations.flatMap(declaration => [measured(behindNeitherFixture(128, 90, [0, 0, 0]), declaration), measured(behindBothFixture(6, x => x === 4 || x >= 8), declaration)]);
   say('BHU04_THRESHOLD_ALLOWANCE_AND_PAIR_OVERRIDE_LEAVE_THE_LINE_IN_PLACE',
-    kept.every((result, i) => names(result, i % 2 === 0 ? neitherReason : bothReason) && result.reading.status === 'FAIL'),
-    evidence(...kept));
+    kept.every((result, i) => names(result, i % 2 === 0 ? neitherReason : bothReason) && result.reading.status === 'FAIL') &&
+      droppedAmbiguous.every(result => ambiguous(result) === 0 &&
+        result.pair.setup?.standing.unread_corridors === undefined &&
+        result.pair.setup?.standing.unread_cells === undefined) &&
+      // On behindNeitherFixture(100, 90), dropping its only corridor leaves 0 boundary support (no-support HOLE);
+      // on behindBothFixture(6, holed), columns 4..5 supply overlap support so setup standing is PASS 0.
+      droppedAmbiguous.every((result, i) => i % 2 === 0
+        ? result.pair.setup?.standing.status === 'SKIP' && result.pair.setup.standing.boundary_cells === 0 &&
+          result.reading.unmeasured.some(u => u.frame === 'setup' && u.reason.includes('no A/B boundary support was measured'))
+        : result.pair.setup?.standing.status === 'PASS' && result.pair.setup.standing.px === 0) &&
+      blackEndpointAt199.pair.setup?.standing.status === 'FAIL' && blackEndpointAt199.pair.setup.standing.px === 4 &&
+      uncountableReadable.every(result => result.pair.setup?.standing.status === 'PASS' && result.pair.setup.standing.px === 0),
+    evidence(...kept, ...droppedAmbiguous, blackEndpointAt199, ...uncountableReadable));
+}
+
+const MID: RGB = [150, 40, 40];
+
+/** Build a fixture whose default recomposite is its own setup pose ("matches its recomposite" by construction). */
+function matchingFixture(pages: Map<string, Plate>, setup: Piece[], poses: Piece[][], recompositePieces: Piece[] = setup): BehindSeamFixture {
+  return { ...fixture(pages, setup, poses), recomposite: frame(recompositePieces, 0) };
+}
+
+/** Issue #1408, 7a: a and b do not touch; third part c is painted between them on every row. */
+function behind7aFixture(cOrder: 'behind' | 'between' = 'behind'): BehindSeamFixture {
+  const rear = rectangle('rear', -2, -2, 26, 8);
+  const a = rectangle('a', 0, 0, 4, 4), b = rectangle('b', 14, 0, 4, 4), c = rectangle('c', 6, 0, 6, 4);
+  const pages = new Map([['rear', plate(26, 8, REAR)], ['a', plate(4, 4, FRONT)], ['b', plate(4, 4, FRONT)], ['c', plate(6, 4, MID)]]);
+  const setup = cOrder === 'behind' ? [rear, c, a, b] : [rear, a, c, b];
+  return matchingFixture(pages, setup, [setup, setup, setup]);
+}
+
+/** Issue #1408, 7b: a and b touch on 3 top rows (or overlap 1 col when overlapped=true); b's foot sits 6 cells away on 7 bottom rows. */
+function behind7bFixture(overlapped = false): BehindSeamFixture {
+  const rear = rectangle('rear', -2, -2, 20, 14);
+  const aWidth = overlapped ? 5 : 4;
+  const a = rectangle('a', 0, 0, aWidth, 10), b = rectangle('b', 4, 0, 10, 10);
+  const pb = new Plate(10, 10);
+  for (let y = 0; y < 10; y++) for (let x = 0; x < 10; x++) if (y < 3 || x >= 6) pb.set(x, y, [...FRONT, 255]);
+  const pages = new Map([['rear', plate(20, 14, REAR)], ['a', plate(aWidth, 10, FRONT)], ['b', pb]]);
+  const setup = [rear, a, b];
+  return matchingFixture(pages, setup, [setup, setup, setup]);
+}
+
+/** Issue #1408, 7c / 7c-widen: plain contact at setup; when widen=true, b moves one cell right on idle frame 1. */
+function behind7cFixture(widen = false): BehindSeamFixture {
+  const rear = rectangle('rear', -2, -2, 26, 8);
+  const a = rectangle('a', 0, 0, 4, 4), b = rectangle('b', 4, 0, 4, 4);
+  const pages = new Map([['rear', plate(26, 8, REAR)], ['a', plate(4, 4, FRONT)], ['b', plate(4, 4, FRONT)]]);
+  const setup = [rear, a, b];
+  const peak = widen ? [rear, a, shifted(b, 1, 0)] : setup;
+  return matchingFixture(pages, setup, [setup, peak, setup]);
+}
+
+/** Issue #1408, 8-apart: painted touching in recomposite (b at x=4), assembled one cell apart at setup (b at x=5). */
+function behind8ApartFixture(): BehindSeamFixture {
+  const rear = rectangle('rear', -2, -2, 26, 8);
+  const a = rectangle('a', 0, 0, 4, 4), bAssembled = rectangle('b', 5, 0, 4, 4), bPainted = rectangle('b', 4, 0, 4, 4);
+  const pages = new Map([['rear', plate(26, 8, REAR)], ['a', plate(4, 4, FRONT)], ['b', plate(4, 4, FRONT)]]);
+  const setup = [rear, a, bAssembled];
+  return matchingFixture(pages, setup, [setup, setup, setup], [rear, a, bPainted]);
+}
+
+function shiftAllPieces(fx: BehindSeamFixture, dx: number, dy = 0): BehindSeamFixture {
+  const moved = fx.setup.pieces.map(p => shifted(p, dx, dy));
+  return { ...fx, frames: [frame(fx.setup.pieces, 0), frame(moved, 1), frame(fx.setup.pieces, 2)] };
+}
+
+function runBehindRecompositeChecks(dir: string, say: Say, rigc: RigcRunner): void {
+  const T: BehindSeams = { threshold: 12 };
+  // 7a: members do not touch; c painted between them -> setup standing 0; code-path plant (plantSkipRecomposite) fails 40 (c behind) / 16 (c between).
+  const fx7aBehind = behind7aFixture('behind');
+  const fx7aBetween = behind7aFixture('between');
+  const read7aBehind = measured(fx7aBehind, T);
+  const read7aBetween = measured(fx7aBetween, T);
+  const plant7aBehind = measured(fx7aBehind, T, { plantSkipRecomposite: true });
+  const plant7aBetween = measured(fx7aBetween, T, { plantSkipRecomposite: true });
+  say('BHP01_7A_PAINTED_INTERVENING_PART_READS_SETUP_STANDING_ZERO_AND_PLANT_FAILS_40',
+    read7aBehind.pair.setup?.standing.status === 'PASS' && read7aBehind.pair.setup.standing.px === 0 &&
+      read7aBehind.pair.setup.standing.raw_px === 0 && read7aBehind.pair.setup.standing.geometric_px === 40 &&
+      read7aBetween.pair.setup?.standing.status === 'PASS' && read7aBetween.pair.setup.standing.px === 0 &&
+      read7aBetween.pair.setup.standing.raw_px === 0 && read7aBetween.pair.setup.standing.geometric_px === 16 &&
+      plant7aBehind.pair.setup?.standing.status === 'FAIL' && plant7aBehind.pair.setup.standing.px === 40 &&
+      plant7aBetween.pair.setup?.standing.status === 'FAIL' && plant7aBetween.pair.setup.standing.px === 16,
+    brief(read7aBehind, read7aBetween, plant7aBehind, plant7aBetween));
+
+  // 7b: members touch on 3 rows; one member's foot sits 6 cells away on 7 rows -> setup standing 0; code-path plant fails 42.
+  const fx7b = behind7bFixture();
+  const read7b = measured(fx7b, T);
+  const plant7b = measured(fx7b, T, { plantSkipRecomposite: true });
+  say('BHP02_7B_PARTIAL_CONTACT_WITH_DISTANT_FOOT_NOTCH_READS_SETUP_STANDING_ZERO',
+    read7b.pair.setup?.standing.status === 'PASS' && read7b.pair.setup.standing.px === 0 &&
+      read7b.pair.setup.standing.raw_px === 0 && read7b.pair.setup.standing.geometric_px === 42 &&
+      plant7b.pair.setup?.standing.status === 'FAIL' && plant7b.pair.setup.standing.px === 42,
+    brief(read7b, plant7b));
+
+  // 7c: contact only -> PASS 0 at setup.
+  const read7c = measured(behind7cFixture(false), T);
+  say('BHP03_7C_CONTACT_ONLY_READS_PASS_ZERO_AT_SETUP',
+    read7c.pair.setup?.standing.status === 'PASS' && read7c.pair.setup.standing.px === 0 &&
+      read7c.pair.setup.standing.boundary_cells === 8 && read7c.pair.setup.standing.geometric_px === 0,
+    brief(read7c));
+
+  // 8-apart: painted touching, assembled one cell apart -> FAIL 4 at setup.
+  const read8Apart = measured(behind8ApartFixture(), T);
+  say('BHP04_8_APART_PAINTED_TOUCHING_ASSEMBLED_ONE_CELL_APART_FAILS_4_AT_SETUP',
+    read8Apart.pair.setup?.standing.status === 'FAIL' && read8Apart.pair.setup.standing.px === 4 &&
+      read8Apart.pair.setup.standing.raw_px === 4 && read8Apart.pair.setup.standing.geometric_px === 4 &&
+      equal(read8Apart.pair.setup.standing.box, [4, 0, 5, 4]) &&
+      read8Apart.problems.some(p => p.code === BEHIND_SEAM_CODE && p.object === 'pair "a|b" setup standing' && p.detail.includes('setup (4 cells)')),
+    brief(read8Apart));
+
+  // common-shift: every part moves one cell on idle frame 1 -> no false idle cells. The code-path plant
+  // (plantMeasureIdleStanding) measures standing on idle frames without an oracle, so every idle frame (0, 1 and 2,
+  // unshifted and shifted alike) counts 40 cells on 7a and 35 cells on 7b-overlapped.
+  const fx7bShift = shiftAllPieces(behind7bFixture(true), 1);
+  const fx7aShift = shiftAllPieces(behind7aFixture('behind'), 1);
+  const fx7cShift = shiftAllPieces(behind7cFixture(false), 1);
+  const shift7bOverlapped = measured(fx7bShift, T);
+  const shift7a = measured(fx7aShift, T);
+  const shift7c = measured(fx7cShift, T);
+  const plantIdle7a = measured(fx7aShift, T, { plantMeasureIdleStanding: true });
+  const plantIdle7b = measured(fx7bShift, T, { plantMeasureIdleStanding: true });
+  say('BHP05_COMMON_SHIFT_EVERY_PART_MOVES_ONE_CELL_ON_IDLE_READS_NO_FALSE_IDLE_CELLS_AND_PLANT_FAILS',
+    shift7bOverlapped.reading.status === 'PASS' && shift7bOverlapped.problems.length === 0 &&
+      shift7bOverlapped.pair.setup?.standing.status === 'PASS' && shift7bOverlapped.pair.setup.standing.px === 0 &&
+      shift7bOverlapped.pair.motion_opened.status === 'PASS' && shift7bOverlapped.pair.motion_opened.max_px === 0 &&
+      shift7bOverlapped.pair.standing.status === 'SKIP' && shift7bOverlapped.pair.standing.reason === IDLE_STANDING_MOTION_READ_REASON &&
+      shift7bOverlapped.pair.standing.max_px === 0 &&
+      shift7bOverlapped.pair.frames.every(f => f.standing.px === 0 && f.motion_opened.px === 0 && f.standing.reason === IDLE_STANDING_MOTION_READ_REASON) &&
+      shift7a.pair.frames.every(f => f.standing.px === 0 && f.motion_opened.px === 0 && f.standing.reason === IDLE_STANDING_NO_ORACLE_REASON) &&
+      shift7c.pair.frames.every(f => f.standing.px === 0 && f.motion_opened.px === 0 && f.standing.reason === IDLE_STANDING_NO_ORACLE_REASON) &&
+      plantIdle7a.pair.standing.status === 'FAIL' && plantIdle7a.pair.standing.max_px === 40 &&
+      equal(plantIdle7a.pair.frames.map(f => f.standing.px), [40, 40, 40]) &&
+      plantIdle7a.problems.some(p => p.code === BEHIND_SEAM_CODE && p.object === 'pair "a|b" standing') &&
+      plantIdle7b.pair.standing.status === 'FAIL' && plantIdle7b.pair.standing.max_px === 35 &&
+      equal(plantIdle7b.pair.frames.map(f => f.standing.px), [35, 35, 35]),
+    brief(shift7bOverlapped, shift7a, shift7c, plantIdle7a, plantIdle7b));
+
+  // 7c-widen: one member moves one cell away on an idle frame -> the named HOLE, not PASS and not a false FAIL.
+  const read7cWiden = measured(behind7cFixture(true), T);
+  say('BHP06_7C_WIDEN_CONTACT_ONLY_IDLE_OPENING_READS_NAMED_HOLE_NOT_PASS_AND_NOT_FALSE_FAIL',
+    read7cWiden.pair.setup?.standing.status === 'PASS' && read7cWiden.pair.setup.standing.px === 0 &&
+      read7cWiden.reading.status === 'FAIL' &&
+      read7cWiden.pair.motion_opened.status === 'SKIP' &&
+      read7cWiden.pair.standing.status === 'SKIP' && read7cWiden.pair.standing.reason === IDLE_STANDING_NO_ORACLE_REASON &&
+      read7cWiden.pair.standing.max_px === 0 &&
+      read7cWiden.reading.unmeasured.length === 3 &&
+      read7cWiden.reading.unmeasured.every(u => u.reason.includes('stock transported setup-overlap support is unavailable on every idle frame')) &&
+      read7cWiden.problems.every(p => p.code === BEHIND_SEAM_UNMEASURED_CODE) &&
+      !read7cWiden.problems.some(p => p.code === BEHIND_SEAM_CODE),
+    brief(read7cWiden));
+
+  // No --parts: setup standing is the named SKIP, and the combined line is not PASS (tested at frame reader, measureBehindSeams, and checkStage).
+  // Also verifies that measureBehindSeams refuses a recomposite whose rig_size differs from stage without silent resampling.
+  const noPartsFrames = measured({ ...behindMotionFixture(true), recomposite: null }, T);
+  const noPartsDir = join(dir, 'no-parts-check');
+  const noPartsInput = join(noPartsDir, 'input');
+  writeBehindSeamCheckRig(noPartsInput, false);
+  rmSync(join(noPartsInput, 'parts.json'), { force: true });
+  rmSync(join(noPartsInput, 'parts'), { recursive: true, force: true });
+  const noPartsReq = join(noPartsDir, 'req.json');
+  writeFileSync(noPartsReq, JSON.stringify({ spec: 'spine-parts-requirements/1', fps: 12, requirements: [], behind_seams: T }) + '\n');
+  const noPartsLines: string[] = [];
+  const noPartsOut = join(noPartsDir, 'out');
+  const noPartsReport = checkStage({ rig: noPartsInput, out: noPartsOut, requirements: noPartsReq, noExtremes: true },
+    rigc, 'fixture-rigc', line => noPartsLines.push(line));
+  const noPartsBlock = noPartsReport.behindSeams;
+  const mismatchProblems: Problem[] = [];
+  const mismatchReading = measureBehindSeams(officialRenderer(), {
+    build: join(noPartsOut, 'build'),
+    rig: JSON.parse(readFileSync(join(noPartsInput, 'rig.json'), 'utf8')) as Record<string, unknown>,
+    pairs: [{ pair: 'back|front', a: 'back', b: 'front', declared: ['motion_seams'] }],
+    stockDir: null,
+    fps: 12,
+    recomposite: { stage: { x: -24, y: 0, width: 48, height: 80 }, raster: newRaster(24, 40) },
+  }, T, mismatchProblems);
+  say('BHP07_NO_PARTS_SETUP_STANDING_IS_NAMED_SKIP_AND_COMBINED_LINE_IS_NOT_PASS',
+    noPartsFrames.pair.setup?.standing.status === 'SKIP' &&
+      noPartsFrames.pair.setup.standing.reason === NO_PARTS_SETUP_STANDING_REASON &&
+      noPartsFrames.pair.setup.standing.px === 0 &&
+      noPartsFrames.reading.status === 'FAIL' &&
+      noPartsFrames.reading.unmeasured.some(u => u.pair === 'a|b' && u.frame === 'setup' && u.reason === `HOLE: ${NO_PARTS_SETUP_STANDING_REASON}`) &&
+      noPartsFrames.problems.some(p => p.code === BEHIND_SEAM_UNMEASURED_CODE && p.object === 'a|b (setup)' && p.detail.includes('--parts')) &&
+      noPartsBlock !== null && noPartsBlock.status === 'FAIL' &&
+      noPartsBlock.unmeasured.some(u => u.frame === 'setup' && u.reason === `HOLE: ${NO_PARTS_SETUP_STANDING_REASON}`) &&
+      noPartsReport.problems.some(p => p.code === BEHIND_SEAM_UNMEASURED_CODE && p.detail.includes('--parts')) &&
+      noPartsLines.some(l => l.includes(NO_PARTS_SETUP_STANDING_REASON)) &&
+      mismatchReading.status === 'FAIL' &&
+      mismatchReading.unmeasured.some(u => u.reason.includes("parts.json rig_size (24x40) differs from rig stage (48x80); setup standing does not resample the parts' recomposite")) &&
+      mismatchProblems.some(p => p.code === BEHIND_SEAM_UNMEASURED_CODE && p.detail.includes('does not resample')),
+    JSON.stringify({ frames: summary(noPartsFrames.reading), stage: noPartsBlock === null ? null : summary(noPartsBlock),
+      mismatch: mismatchReading.unmeasured }));
+
+  // Matching rig with a half-alpha rear in the gap reads setup 0 (both full render and recomposite flatten on white to the same RGB;
+  // straight rear colour [224,232,240] differs from white-flattened [239,243,247] by 15 > threshold 12).
+  const halfRearBase = behindStandingFixture({ gap: 1 });
+  halfRearBase.pages.set('rear', plate(12, 6, REAR, 128));
+  const halfRearMatching: BehindSeamFixture = { ...halfRearBase, recomposite: halfRearBase.setup };
+  const halfRearRead = measured(halfRearMatching, T);
+  const halfRearClosedGap = measured(halfRearBase, T);
+  say('BHP08_MATCHING_RIG_WITH_HALF_ALPHA_REAR_IN_GAP_READS_SETUP_ZERO',
+    halfRearRead.pair.setup?.standing.status === 'PASS' && halfRearRead.pair.setup.standing.px === 0 &&
+      halfRearRead.pair.setup.standing.raw_px === 0 && halfRearRead.pair.setup.standing.geometric_px === 4 &&
+      halfRearClosedGap.pair.setup?.standing.status === 'FAIL' && halfRearClosedGap.pair.setup.standing.px === 4,
+    brief(halfRearRead, halfRearClosedGap));
+
+  // Ambiguous endpoint corridor whose cells all match the recomposite is not unread:
+  // - when the pair has real boundary support (e.g. overlap in bothBase, or a clean contact row in neitherWithContact), setup standing is PASS 0;
+  // - when the fixture's ONLY corridor is ambiguous (owner 0) and fully matched (neitherBase), dropping it does not fabricate support, so setup standing reads the no-support HOLE (item B9);
+  // - with a closed-gap recomposite, both fixtures are unread with the #1411 message.
+  const holed = (x: number): boolean => (x >= 4 && x < 6) || x >= 8;
+  const neitherBase = behindNeitherFixture(100, 90);
+  const neitherWithContact = behindNeitherFixture(100, 90);
+  // Give row 3 unambiguous contact at columns 4 (a=255) and 5 (b=255), while rows 0..2 stay owner-0 ambiguous corridors.
+  neitherWithContact.pages.get('a')!.set(4, 3, [...FRONT, 255]);
+  neitherWithContact.pages.get('b')!.set(4, 3, [0, 0, 0, 0]);
+  neitherWithContact.pages.get('b')!.set(5, 3, [...FRONT, 255]);
+  const bothBase = behindBothFixture(6, holed);
+  const neitherOnlyMatching = measured({ ...neitherBase, recomposite: neitherBase.setup }, T);
+  const neitherContactMatching = measured({ ...neitherWithContact, recomposite: neitherWithContact.setup }, T);
+  const bothMatching = measured({ ...bothBase, recomposite: bothBase.setup }, T);
+  const neitherClosed = measured(neitherBase, T);
+  const bothClosed = measured(bothBase, T);
+  say('BHP09_AMBIGUOUS_ENDPOINT_CORRIDOR_MATCHING_RECOMPOSITE_IS_NOT_UNREAD_AND_DOES_NOT_FABRICATE_SUPPORT',
+    neitherOnlyMatching.pair.setup?.standing.status === 'SKIP' &&
+      neitherOnlyMatching.pair.setup.standing.px === 0 &&
+      neitherOnlyMatching.pair.setup.standing.boundary_cells === 0 &&
+      neitherOnlyMatching.pair.setup.standing.unread_corridors === undefined &&
+      neitherOnlyMatching.pair.setup.standing.unread_cells === undefined &&
+      !neitherOnlyMatching.reading.unmeasured.some(u => u.reason.includes('ambiguous half-alpha owners')) &&
+      neitherOnlyMatching.reading.unmeasured.some(u => u.frame === 'setup' && u.reason.includes('no A/B boundary support was measured')) &&
+      neitherContactMatching.pair.setup?.standing.status === 'PASS' &&
+      neitherContactMatching.pair.setup.standing.px === 0 &&
+      neitherContactMatching.pair.setup.standing.boundary_cells === 2 &&
+      neitherContactMatching.pair.setup.standing.unread_corridors === undefined &&
+      neitherContactMatching.pair.setup.standing.unread_cells === undefined &&
+      bothMatching.reading.status === 'PASS' && bothMatching.problems.length === 0 &&
+      bothMatching.pair.setup?.standing.status === 'PASS' && bothMatching.pair.setup.standing.px === 0 &&
+      bothMatching.pair.setup.standing.unread_corridors === undefined && bothMatching.pair.setup.standing.unread_cells === undefined &&
+      neitherClosed.pair.setup?.standing.status === 'SKIP' && neitherClosed.pair.setup.standing.unread_corridors?.length === 4 &&
+      neitherClosed.reading.unmeasured.some(u => u.frame === 'setup' && u.reason.includes('neither "a" nor "b" reaches 128/255 at 4 endpoint cell(s)')) &&
+      bothClosed.pair.setup?.standing.status === 'SKIP' && bothClosed.pair.setup.standing.unread_corridors?.length === 4 &&
+      bothClosed.reading.unmeasured.some(u => u.frame === 'setup' && u.reason.includes('both "a" and "b" reach 128/255 at 4 endpoint cell(s)')),
+    brief(neitherOnlyMatching, neitherContactMatching, bothMatching, neitherClosed, bothClosed));
+
+  // A cell outside the recomposite's canvas is not excused.
+  const outOfCanvasBase = behindStandingFixture({ gap: 1 });
+  const shortRecomposite = frame([{ ...rectangle('recomposite', 0, 0, 4, 4), page: 'a' }], 0);
+  const outOfCanvasRead = measured({ ...outOfCanvasBase, recomposite: shortRecomposite }, T);
+  say('BHP10_CELL_OUTSIDE_RECOMPOSITE_CANVAS_IS_NOT_EXCUSED',
+    outOfCanvasRead.pair.setup?.standing.status === 'FAIL' && outOfCanvasRead.pair.setup.standing.px === 4,
+    brief(outOfCanvasRead));
+
+  // Production registration (item C12): real checkStage with an asymmetric setup gap vs parts' flat recomposite.
+  // In the rig's setup render (images/back.png), 10 columns x 2 rows = 20 geometric cells expose rear at crop sx 20..29, sy 38..39;
+  // in parts/back.png, only the left 6 of those columns (crop sx 20..25, world x -4..2, y 40..42 -> 12 cells) are closed, while
+  // the right 4 columns (crop sx 26..29 -> 8 cells) are already open in the recomposite. Flipping UVs vertically gives 20 cells
+  // (box [-4, 40, 6, 42]); flipping horizontally gives 16 cells (box [-2, 40, 6, 42]).
+  const regDir = join(dir, 'asymmetric-registration');
+  const regInput = join(regDir, 'input');
+  writeBehindSeamCheckRig(regInput, true);
+  const regReq = join(regDir, 'req.json');
+  writeFileSync(regReq, JSON.stringify({ spec: 'spine-parts-requirements/1', fps: 12, requirements: [], behind_seams: T }) + '\n');
+  const regReport = checkStage({ rig: regInput, out: join(regDir, 'out'), requirements: regReq, noExtremes: true },
+    rigc, 'fixture-rigc', () => {});
+  const regSetup = regReport.behindSeams?.pairs[0]?.setup?.standing;
+  say('BHP11_PRODUCTION_REGISTRATION_ASYMMETRIC_RECOMPOSITE_ORACLE',
+    regSetup?.status === 'FAIL' && regSetup.geometric_px === 20 && regSetup.raw_px === 12 &&
+      regSetup.px === 12 && regSetup.max_spatial_run_cells === 6 &&
+      equal(regSetup.box?.map(v => Math.round(v)), [-4, 40, 2, 42]) &&
+      regReport.problems.some(p => p.code === BEHIND_SEAM_CODE && p.object === 'pair "back|front" setup standing' && p.detail.includes('setup (12 cells)')),
+    JSON.stringify({ setup: regSetup, problems: regReport.problems }));
+
+  // Idle motion_opened consecutive-frame spans, max_run, max_spatial_run_world and worst.index (item C13),
+  // plus per-frame idle standing reason independence when one frame's motion_opened is SKIP (item C16).
+  const baseMotion = behindMotionFixture();
+  const [mRear, mA, mB] = baseMotion.setup.pieces;
+  const twoFrameOpen: BehindSeamFixture = {
+    ...baseMotion,
+    recomposite: baseMotion.setup,
+    frames: [
+      frame([mRear, mA, mB], 0),
+      frame([mRear, shifted(mA, 0, 2), mB], 1),
+      frame([mRear, shifted(mA, 0, 3), mB], 2),
+      frame([mRear, mA, mB], 3),
+    ],
+  };
+  const twoFrameRead = measured(twoFrameOpen, T);
+  const mo = twoFrameRead.pair.motion_opened;
+  // Item C16: frame 2 drops slot 'b' so frame 2's motion_opened is SKIP while frames 0 and 1 have motion_opened read (and frame 1 fails).
+  const baseStock = stockOf(baseMotion);
+  const partialIdleSkip = measureBehindSeamFrames(API, {
+    ...inputOf({ ...baseMotion, recomposite: baseMotion.setup }),
+    idle: [asFrame(baseMotion.frames[0]), asFrame(baseMotion.frames[1]), asFrame(frame([mRear, mA], 2))],
+    stock: baseStock,
+  }, T, []);
+  const pf = partialIdleSkip.pairs[0].frames;
+  say('BHP12_MOTION_OPENED_CONSECUTIVE_IDLE_SPANS_MAX_RUN_AND_PER_FRAME_IDLE_REASON',
+    mo.status === 'FAIL' && mo.hit_frames === 2 && mo.max_px === 12 &&
+      mo.worst?.index === 2 && mo.worst.px === 12 &&
+      mo.spans.length === 1 && mo.spans[0].first === 1 && mo.spans[0].last === 2 &&
+      mo.spans[0].frames === 2 && mo.spans[0].seconds === 2 / 12 &&
+      mo.max_run.frames === 2 && mo.max_run.seconds === 2 / 12 &&
+      mo.max_spatial_run_cells === 6 && mo.max_spatial_run_world === 6 &&
+      pf[0]?.motion_opened.status === 'PASS' && pf[0].standing.reason === IDLE_STANDING_MOTION_READ_REASON &&
+      pf[1]?.motion_opened.status === 'FAIL' && pf[1].standing.reason === IDLE_STANDING_MOTION_READ_REASON &&
+      pf[2]?.motion_opened.status === 'SKIP' && pf[2].standing.reason === IDLE_STANDING_NO_ORACLE_REASON,
+    JSON.stringify({ motion_opened: mo, frame_reasons: pf.map(f => [f.index, f.motion_opened.status, f.standing.reason]) }));
 }
 
 export function runBehindSeamChecks(dir: string, say: Say, rigc: RigcRunner): void {
@@ -1138,6 +1526,7 @@ export function runBehindSeamChecks(dir: string, say: Say, rigc: RigcRunner): vo
   runBehindSeamPrimitiveChecks(say);
   runBehindTurnPrimitiveChecks(say);
   runBehindUnreadRemedyChecks(say);
+  runBehindRecompositeChecks(join(dir, 'recomposite'), say, rigc);
   runBehindSeamRequirementChecks(dir, say);
   runBehindSeamIntegrationChecks(join(dir, 'pipeline'), say, rigc);
 }

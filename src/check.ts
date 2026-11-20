@@ -7676,8 +7676,10 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
           }
         }
       }
+      const behindSlotOrder = (Array.isArray(inp.rig.slots) ? inp.rig.slots : []).filter(isRecord).map((sl) => String(sl.name));
       behindSeams = measureBehindSeams(officialRenderer(), {
         build: buildDir, rig: inp.rig, pairs: behindPairs, stockDir: behindStockDir, fps: IDLE_FPS,
+        recomposite: inp.parts === null ? null : { stage: inp.stage, raster: flatComposite(inp.parts, inp.partsDir, [255, 255, 255, 255], behindSlotOrder) },
         ...(turnBuild === undefined ? {} : { turnBuild }),
         ...(behindUnsupported.length === 0 ? {} : { unsupported: behindUnsupported.join('; ') }),
       }, behindDeclared, problems);
