@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.48.0 (2026-11-21)
+
+`BEHIND_PART_SEAMS` no longer counts painted areas between a pair's members. Setup standing is now measured against the parts' own recomposite at their painted positions, and idle standing is no longer measured: `motion_opened` is the idle reading. A rig that failed only on those counts now reads on what is actually open.
+
+**Read before upgrading:**
+
+* **A declared `behind_seams` needs `--parts`.** Setup standing compares the setup render with the parts' flat recomposite, which `check` builds from `--parts`. `--source` is not needed for this reading. Without parts, setup standing is `SKIP` with a reason, and a pair with an authored threshold fails `CHECK_BEHIND_PART_SEAMS_UNMEASURED`, naming the missing `--parts`.
+* **`check.json` changes shape under `BEHIND_PART_SEAMS`, for rigs that declare `behind_seams`.** `pairs[].standing` is now the idle summary only, and it is always `SKIP` with a `reason`. The setup status moved to `pairs[].setup.standing`. Each `pairs[].frames[].standing` is `SKIP` with a `reason`, zero counts and no samples. `read_frames` counts an idle frame when `motion_opened` read it. `unmeasured[]` carries no idle standing rows.
+* **No `parts.json` field moved.** Consumers need no ordered rollout for this release.
+* **What setup standing now means.** A corridor cell counts when the setup render differs from the recomposite there by more than the pair's threshold and the endpoint rule holds. It catches a part the rig places away from where it was painted. It does not measure fidelity to the painting: that is `SETUP_MATCHES_PAINTING` and the recomposite record.
+* **Turn readings are unchanged** (`behind_seams.turn`). They still read standing by endpoint contrast alone; `#1412` tracks it.
+
+### Bug Fixes
+
+* **check:** compare `BEHIND_PART_SEAMS` setup standing with the parts' flat recomposite, and stop measuring idle standing. On a corridor whose endpoint owner is ambiguous, cells within the threshold of the recomposite leave the unread population; a cell beyond it stays unread, and an allowance never clears it. A corridor whose cells are all left out adds no boundary support. `motion_opened` is unchanged (`#1408`, `#1413`, `5fd3e39`).
+* **check:** `CHECK_BEHIND_PART_SEAMS_UNMEASURED` for an ambiguous endpoint owner now names the case (neither member reaches 128/255 at the endpoint, or both do), both members with their alpha, and the world point. The failure map gives the remedy, with the file to edit (`#1405`, `#1411`, `01494f9`).
+
 ## 2.47.1 (2026-11-21)
 
 `check` no longer fails with `RangeError: Out of memory` when `behind_seams` is declared on a large rig. The check now finishes and writes `check.json`.
