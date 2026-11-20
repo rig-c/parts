@@ -8398,21 +8398,22 @@ The two readings are independent:
   (`dRecomposite = Infinity`). Equal-colour antialias ramps count zero contrast,
   and later opaque art — or any intervening or behind part already visible in
   the parts' recomposite at their painted positions — contributes zero
-  recomposite difference. On ambiguous-endpoint corridors at setup
-  (`owner === 0` or `3`), cells within T of the recomposite
-  (`dRecomposite <= T`) are dropped before ownership is judged, without adding
-  their endpoints to `boundary_cells` (`support`), so a corridor whose cells all
-  match the recomposite within T is not unread (a threshold at or above the
-  cell's distance to the recomposite removes the cell from the reading
-  altogether; the threshold decides what could count; it does not clear a cell
-  that could, and `allowance` never clears an unread cell). An ambiguous
-  endpoint makes a corridor unread only when at least one of its cells differs
-  from the recomposite by more than T (`dRecomposite > T`). Other readable
-  corridors on that frame retain their measured cells. A counted total above
-  allowance stays FAIL even when another corridor is unread; an unread
-  population cannot turn a measured failure into SKIP. With unread corridors and
-  no measured excess, standing is SKIP, never PASS. Without `--parts`
-  (`parts.json` and `parts/*.png`), setup standing is `SKIP` with
+  recomposite difference. On a corridor whose endpoint owner is ambiguous
+  (`0` or `3`) at setup, cells within T of the recomposite (`dRecomposite <= T`)
+  are left out of the unread population, without adding their endpoints to
+  `boundary_cells` (`support`), so a corridor whose cells all match the
+  recomposite within T is not unread; elsewhere they stay geometric (`geometric_px`
+  and `samples`) but cannot count (a threshold at or above the cell's distance
+  to the recomposite removes the cell from the reading altogether; the
+  threshold decides what could count; it does not clear a cell that could, and
+  `allowance` never clears an unread cell). An ambiguous endpoint makes a
+  corridor unread only when at least one of its cells differs from the
+  recomposite by more than T (`dRecomposite > T`). Other readable corridors on
+  that frame retain their measured cells. A counted total above allowance stays
+  FAIL even when another corridor is unread; an unread population cannot turn a
+  measured failure into SKIP. With unread corridors and no measured excess,
+  standing is SKIP, never PASS. Without `--parts` (`parts.json` and
+  `parts/*.png`), setup standing is `SKIP` with
   `reason: "no --parts manifest was supplied; setup standing compares the setup render with the parts' flat recomposite"`,
   records a `setup` `unmeasured[]` row, and with an authored T emits
   [`CHECK_BEHIND_PART_SEAMS_UNMEASURED`](#CHECK_BEHIND_PART_SEAMS_UNMEASURED).
@@ -8454,9 +8455,13 @@ excess); setup motion-opened is zero by definition only if setup was read.
 applicable idle `reason`), without folding setup into it, so a pair with setup
 `PASS 0`, `motion_opened` `PASS`, and not-applicable idle standing reads
 `PASS`. Rows name the pair, declaration provenance, animation, `behind_slots`,
-grid and sampled/read/unmeasured frame counts. Independent `motion_opened` and
-`standing` readings retain per-frame `index`, `time`, `px`, `cell`, `box`,
-`max_px`, the earliest worst hit, contiguous spans and optional `reason`.
+grid and sampled/read/unmeasured frame counts. The `motion_opened` reading
+retains per-frame hits (`index`, `time`, `px`, `cell`, `area`, `box`),
+`max_px`, the earliest worst hit and contiguous `spans`; the idle `standing`
+summary (`pairs[].standing`) is always `SKIP` with its `reason`, zero counts,
+`worst: null`, and empty `frames` and `spans` (while setup standing at
+`pairs[].setup.standing` and turn standing poses retain their measured counts,
+`box` and `samples`).
 `max_run` is temporal, in frames and seconds; `max_spatial_run_cells` is the
 longest counted horizontal/vertical run, with world length equal to cells times
 cell side. Counts named `px` are seam cells; rig-pixel area is count times cell

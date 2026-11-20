@@ -1590,13 +1590,17 @@ recomposite's canvas has `dRecomposite = Infinity`). Setup standing catches a
 part that the rig places away from where it was painted; it does not measure
 fidelity to the `--source` painting (which is `SETUP_MATCHES_PAINTING`'s and the
 `RECOMPOSITE_HOLES` / `parts.json` `recomposite` record's job), and `--source`
-is not required for `behind_seams`. On ambiguous-endpoint corridors at setup
-(`owner === 0` or `3`), cells within T of the recomposite (`dRecomposite <= T`)
-are dropped before ownership is judged, without adding their endpoints to
-`boundary_cells` (`support`); an ambiguous endpoint makes a corridor unread only
-when at least one of its cells differs from the recomposite by more than T
-(`dRecomposite > T`), and `allowance` never clears an unread cell. Without
-`--parts` (`parts.json` and `parts/*.png`), setup standing is `SKIP` with
+is not required for `behind_seams`. A recomposite whose size differs from the
+stage is refused by name and never resampled; and through `check` the loader
+refuses the same mismatch earlier, as `CHECK_RIG_STAGE_IS_THE_CANVAS`. On a
+corridor whose endpoint owner is ambiguous (`0` or `3`) at setup, cells within T
+of the recomposite (`dRecomposite <= T`) are left out of the unread population,
+without adding their endpoints to `boundary_cells` (`support`); elsewhere they
+stay geometric (`geometric_px` and `samples`) but cannot count. An ambiguous
+endpoint makes a corridor unread only when at least one of its cells differs
+from the recomposite by more than T (`dRecomposite > T`), and `allowance` never
+clears an unread cell. Without `--parts` (`parts.json` and `parts/*.png`), setup
+standing is `SKIP` with
 `reason: "no --parts manifest was supplied; setup standing compares the setup render with the parts' flat recomposite"`,
 adds a `setup` `unmeasured[]` row, and with an authored T emits
 `CHECK_BEHIND_PART_SEAMS_UNMEASURED`. On idle frames, `standing` is never
@@ -1620,8 +1624,10 @@ PASS. Existing render/sidecar refusals remain refusals. The standing
 bracketed-run definition does not certify curved or diagonal openings.
 
 Per-cell samples are a bounded diagnostic sample; the counts are the
-measurement (issue #1403). Each `samples[]` list (standing and motion-opened,
-at setup, on every idle frame and on every turn pose) holds at most 64 rows.
+measurement (issue #1403). Each measured `samples[]` list (setup standing, idle
+`motion_opened` on every idle frame, and turn `standing` and `motion_opened` on
+every turn pose; idle `standing` is never measured and its `samples[]` is always
+`[]`) holds at most 64 rows.
 A list that measured more holds 64 and gains `samples_omitted`, the number of
 rows left out; a list of 64 or fewer has no such field and is written as before.
 Standing keeps its 64 worst rows: counted first, then the larger of the two
@@ -1641,7 +1647,10 @@ min/max corner, deduplicated in that order. It records planned and observed dial
 spans: pose indices are sample identities, and time is 0 for every reset.
 Turn uses its own setup, rest geometry and transported stock seam evidence;
 idle stock and idle counts are unchanged. The same thresholds, allowances,
-rear-set and unread rules apply. Optional unread-corridor evidence also applies
+rear-set and endpoint-ownership unread rules apply, without a recomposite
+comparison (turn poses have no per-pose recomposite oracle, so turn standing is
+judged by endpoint contrast alone and reports all interior cells of an unread
+corridor). Optional unread-corridor evidence also applies
 to turn standing rows. No declared dial persists turn SKIP and a named HOLE;
 an effective authored T makes that missing required reading a
 `CHECK_BEHIND_PART_SEAMS_UNMEASURED` failure. Legacy `turn.x` has no declared
@@ -1671,7 +1680,7 @@ the table are relative to that standing record.
 | `unread_corridors` | Nonempty array of ambiguous-endpoint runs (at setup, those with at least one cell where `dRecomposite > T`), horizontal rows before vertical columns, each in native scan order. |
 | `unread_corridors[].axis` | `horizontal` or `vertical`. |
 | `unread_corridors[].endpoints` | Two `[grid_x, grid_y, world_x, world_y, owner]` tuples in left/right or top/bottom order. Grid indices are zero-based, x right and y down; world coordinates are cell centres, y up. Owner codes are 0 for neither A/B reaching half alpha, 1 for A only, 2 for B only and 3 for both; no owner is inferred. |
-| `unread_corridors[].cells` | Interior world-centre `[x, y]` tuples in run order, excluding endpoints. At setup, cells within T of the parts' recomposite (`dRecomposite <= T`) are left out before ownership is judged; the remaining interior cells (and on turn poses, all interior cells of the run) are reported without a rear-colour or endpoint-contrast filter; intersections may repeat across corridors. |
+| `unread_corridors[].cells` | Interior world-centre `[x, y]` tuples in run order, excluding endpoints. On a corridor whose endpoint owner is ambiguous (`0` or `3`) at setup, cells within T of the parts' recomposite (`dRecomposite <= T`) are left out of the unread population; the remaining interior cells (and on turn poses, all interior cells of the run) are reported without a rear-colour or endpoint-contrast filter; intersections may repeat across corridors. |
 | `unread_corridors[].cell_count` | The number of reported interior cells in that corridor (at setup, leaving out cells within T of the recomposite), exactly `cells.length`. |
 | `unread_corridors[].row_scope` | `pair`. |
 | `unread_corridors[].row_kind` | `evidence`. |

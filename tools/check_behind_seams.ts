@@ -1116,15 +1116,15 @@ function runBehindSampleCapChecks(say: Say): void {
 /** Issue #1405, "neither" case: plate columns 0..3 of a are opaque and 6..9 of b; both
  * paint column 4 below 128/255 (a 100, b 90; together 1 - (155/255)(165/255) >= 1/2), so column 4 is
  * an owner-0 endpoint and column 5 the one-cell corridor, on each of four rows. */
-function behindNeitherFixture(aEdge: number, bEdge: number | null): BehindSeamFixture {
+function behindNeitherFixture(aEdge: number, bEdge: number | null, frontRgb: RGB = FRONT): BehindSeamFixture {
   const rear = rectangle('rear', -2, -2, 26, 8);
   const a = rectangle('a', 0, 0, 10, 4), b = rectangle('b', 0, 0, 10, 4);
   const pa = new Plate(10, 4), pb = new Plate(10, 4);
   for (let y = 0; y < 4; y++) {
-    for (let x = 0; x < 4; x++) pa.set(x, y, [...FRONT, 255]);
-    for (let x = 6; x < 10; x++) pb.set(x, y, [...FRONT, 255]);
-    pa.set(4, y, [...FRONT, aEdge]);
-    if (bEdge !== null) pb.set(4, y, [...FRONT, bEdge]);
+    for (let x = 0; x < 4; x++) pa.set(x, y, [...frontRgb, 255]);
+    for (let x = 6; x < 10; x++) pb.set(x, y, [...frontRgb, 255]);
+    pa.set(4, y, [...frontRgb, aEdge]);
+    if (bEdge !== null) pb.set(4, y, [...frontRgb, bEdge]);
   }
   const setup = [rear, a, b];
   return fixture(new Map([['rear', plate(26, 8, REAR)], ['a', pa], ['b', pb]]), setup, [setup, setup, setup]);
@@ -1197,13 +1197,17 @@ function runBehindUnreadRemedyChecks(say: Say): void {
   // line is present and stays unread when allowance is raised (allowance 1000 never clears it); with T at or above the
   // recomposite distance (T = 200, 255), the cells match the recomposite within T so the ambiguous-owner line is absent
   // AND those same thresholds make the corresponding readable-endpoint cells uncountable (px === 0).
+  // In behindNeitherFixture(128, 90, [0, 0, 0]), endpoint contrast is max(|224-0|,|232-0|,|240-0|) = 240 while recomposite
+  // distance to FRONT [24, 48, 72] is 200: at T = 199 it counts 4 cells, and at T = 200 endpoint contrast (240 > 200)
+  // still holds so only the recomposite rule (dr = 200 > 200 is false) makes those 4 cells uncountable (px === 0).
   const belowDeclarations: BehindSeams[] = [{ threshold: 199 }, { threshold: 12, allowance: 1000 },
     { threshold: 199, allowance: 1000 }, { threshold: 12, pairs: [{ part: 'a', neighbour: 'b', threshold: 0, allowance: 1000 }] }];
   const kept = belowDeclarations.flatMap(declaration => [measured(behindNeitherFixture(100, 90), declaration), measured(behindBothFixture(6, holed), declaration)]);
   const atOrAboveDeclarations: BehindSeams[] = [{ threshold: 200 }, { threshold: 255 },
     { threshold: 12, pairs: [{ part: 'a', neighbour: 'b', threshold: 255, allowance: 0 }] }];
   const droppedAmbiguous = atOrAboveDeclarations.flatMap(declaration => [measured(behindNeitherFixture(100, 90), declaration), measured(behindBothFixture(6, holed), declaration)]);
-  const uncountableReadable = atOrAboveDeclarations.flatMap(declaration => [measured(behindNeitherFixture(128, 90), declaration), measured(behindBothFixture(6, x => x === 4 || x >= 8), declaration)]);
+  const blackEndpointAt199 = measured(behindNeitherFixture(128, 90, [0, 0, 0]), { threshold: 199 });
+  const uncountableReadable = atOrAboveDeclarations.flatMap(declaration => [measured(behindNeitherFixture(128, 90, [0, 0, 0]), declaration), measured(behindBothFixture(6, x => x === 4 || x >= 8), declaration)]);
   say('BHU04_THRESHOLD_ALLOWANCE_AND_PAIR_OVERRIDE_LEAVE_THE_LINE_IN_PLACE',
     kept.every((result, i) => names(result, i % 2 === 0 ? neitherReason : bothReason) && result.reading.status === 'FAIL') &&
       droppedAmbiguous.every(result => ambiguous(result) === 0 &&
@@ -1215,8 +1219,9 @@ function runBehindUnreadRemedyChecks(say: Say): void {
         ? result.pair.setup?.standing.status === 'SKIP' && result.pair.setup.standing.boundary_cells === 0 &&
           result.reading.unmeasured.some(u => u.frame === 'setup' && u.reason.includes('no A/B boundary support was measured'))
         : result.pair.setup?.standing.status === 'PASS' && result.pair.setup.standing.px === 0) &&
+      blackEndpointAt199.pair.setup?.standing.status === 'FAIL' && blackEndpointAt199.pair.setup.standing.px === 4 &&
       uncountableReadable.every(result => result.pair.setup?.standing.status === 'PASS' && result.pair.setup.standing.px === 0),
-    evidence(...kept, ...droppedAmbiguous, ...uncountableReadable));
+    evidence(...kept, ...droppedAmbiguous, blackEndpointAt199, ...uncountableReadable));
 }
 
 const MID: RGB = [150, 40, 40];
@@ -1315,7 +1320,9 @@ function runBehindRecompositeChecks(dir: string, say: Say, rigc: RigcRunner): vo
       read8Apart.problems.some(p => p.code === BEHIND_SEAM_CODE && p.object === 'pair "a|b" setup standing' && p.detail.includes('setup (4 cells)')),
     brief(read8Apart));
 
-  // common-shift: every part moves one cell on an idle frame -> no false idle cells; code-path plant (plantMeasureIdleStanding) fails 40 (7a) and 42 (7b-overlapped).
+  // common-shift: every part moves one cell on idle frame 1 -> no false idle cells. The code-path plant
+  // (plantMeasureIdleStanding) measures standing on idle frames without an oracle, so every idle frame (0, 1 and 2,
+  // unshifted and shifted alike) counts 40 cells on 7a and 35 cells on 7b-overlapped.
   const fx7bShift = shiftAllPieces(behind7bFixture(true), 1);
   const fx7aShift = shiftAllPieces(behind7aFixture('behind'), 1);
   const fx7cShift = shiftAllPieces(behind7cFixture(false), 1);
@@ -1334,10 +1341,10 @@ function runBehindRecompositeChecks(dir: string, say: Say, rigc: RigcRunner): vo
       shift7a.pair.frames.every(f => f.standing.px === 0 && f.motion_opened.px === 0 && f.standing.reason === IDLE_STANDING_NO_ORACLE_REASON) &&
       shift7c.pair.frames.every(f => f.standing.px === 0 && f.motion_opened.px === 0 && f.standing.reason === IDLE_STANDING_NO_ORACLE_REASON) &&
       plantIdle7a.pair.standing.status === 'FAIL' && plantIdle7a.pair.standing.max_px === 40 &&
-      plantIdle7a.pair.frames[1]?.standing.px === 40 &&
+      equal(plantIdle7a.pair.frames.map(f => f.standing.px), [40, 40, 40]) &&
       plantIdle7a.problems.some(p => p.code === BEHIND_SEAM_CODE && p.object === 'pair "a|b" standing') &&
       plantIdle7b.pair.standing.status === 'FAIL' && plantIdle7b.pair.standing.max_px === 35 &&
-      plantIdle7b.pair.frames[1]?.standing.px === 35,
+      equal(plantIdle7b.pair.frames.map(f => f.standing.px), [35, 35, 35]),
     brief(shift7bOverlapped, shift7a, shift7c, plantIdle7a, plantIdle7b));
 
   // 7c-widen: one member moves one cell away on an idle frame -> the named HOLE, not PASS and not a false FAIL.
