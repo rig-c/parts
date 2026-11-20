@@ -1918,7 +1918,7 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null, p
       checkAlternates(c, t.assemble.alternates, made, limbs, names?.bones ?? null, names?.chains ?? null, t.regions, t.meshes);
     }
     const output = new Set([...made.parts.filter(n => !limbs?.consumed.has(n)), ...made.patches, ...made.cuts, ...(limbs?.parts.keys() ?? [])]);
-    if (isPlainObject(t.assemble)) checkYieldRefused(c, t.assemble, output);
+    if (isPlainObject(t.assemble)) checkYieldRefused(c, t.assemble, new Set([...finalLayerPartNames(made.parts, made.cuts, limbs), ...made.patches]), limbs);
     if (isPlainObject(t.assemble) && 'extend_painting' in t.assemble) checkPaintingExtensions(c, t.assemble.extend_painting, new Set([...output].filter(n => !made.patches.includes(n) && !limbs?.consumed.has(n))));
     if ('motion_seams' in t) {
       c.problems.push(...motionSeamProblems(t.motion_seams, output, 'config.motion_seams', 'CONFIG_MOTION_SEAM'));
@@ -2141,12 +2141,9 @@ function parseConfigFrom(raw: Json, base: string | null): { config: CharacterCon
     checkAlternates(c, t.assemble.alternates, { parts, patches, cuts }, limbs, names.bones, names.chains, t.regions, t.meshes);
   }
   if (isPlainObject(t.assemble)) {
-    const output = new Set([...parts.filter(n => !limbs?.consumed.has(n)), ...patches, ...cuts, ...(limbs?.parts.keys() ?? [])]);
-    checkYieldRefused(c, t.assemble, output);
-  }
-  if (isPlainObject(t.assemble) && 'extend_painting' in t.assemble) {
-    const output = new Set([...parts.filter(n => !limbs?.consumed.has(n)), ...cuts.filter(n => !limbs?.consumed.has(n)), ...(limbs?.parts.keys() ?? [])]);
-    checkPaintingExtensions(c, t.assemble.extend_painting, output);
+    const output = finalLayerPartNames(parts, cuts, limbs);
+    checkYieldRefused(c, t.assemble, new Set([...output, ...patches]), limbs);
+    if ('extend_painting' in t.assemble) checkPaintingExtensions(c, t.assemble.extend_painting, output);
   }
   if ('meshes' in t) checkMeshes(c, t.meshes, names.bones, names.chains, t.stops);
   if ('regions' in t) checkRegions(c, t.regions, names.bones);
@@ -2725,7 +2722,11 @@ function checkOccluderFiles(c: Check, assemble: Json, base: string | null): void
   c.problems.push(...occluderFileProblems(declarations, base));
 }
 
-function checkYieldRefused(c: Check, assemble: Record<string, Json>, outputs?: Set<string>): void {
+function finalLayerPartNames(parts: readonly string[], cuts: readonly string[], limbs: LimbNames | null): Set<string> {
+  return new Set([...parts, ...cuts].filter(name => !limbs?.consumed.has(name)).concat([...(limbs?.parts.keys() ?? [])]));
+}
+
+function checkYieldRefused(c: Check, assemble: Record<string, Json>, outputs?: Set<string>, limbs?: LimbNames | null): void {
   const value = assemble.yield_refused;
   if (!('yield_refused' in assemble) || typeof value === 'boolean') return;
   const at = 'config.assemble.yield_refused';
@@ -2748,7 +2749,12 @@ function checkYieldRefused(c: Check, assemble: Record<string, Json>, outputs?: S
     if (seen.has(name)) c.fail('CONFIG_PART_UNIQUE', entry, `names ${show(name)} again; each yielding part is named once`);
     seen.add(name);
     if (names !== undefined && !names.has(name)) {
-      c.fail('CONFIG_NAME_RESOLVES', entry, `names ${show(name)}; a final output part name is required (source tags and aliases are not accepted)`);
+      const limb = limbs?.consumed.get(name);
+      const segments = limb === undefined ? [] : limbs?.chains.get(limb)?.parts ?? [];
+      const detail = limb === undefined
+        ? 'a final output part name is required (source tags and aliases are not accepted)'
+        : `config.limbs.${limb} consumes it; list its final segment parts instead (${segments.map(part => show(part)).join(', ')})`;
+      c.fail('CONFIG_NAME_RESOLVES', entry, `names ${show(name)}; ${detail}`);
     }
   }
 }

@@ -2222,6 +2222,34 @@ function runConfigSuite(): number {
   section('config: the character config loader');
   const { say, bad } = counter();
   runHiddenExtentConfigChecks((name, ok, detail) => say(name, ok, detail, 'issue #1047: declared original-source enclosed material'));
+  const scopedCutConfig = (name: string) => {
+    const base = minimalConfig();
+    return {
+      ...base,
+      seethrough: { resolution: 64, steps: 1, seed: 0, offload: false, head_box: [0, 0, 32, 32] },
+      assemble: {
+        ...(base.assemble as object),
+        cuts: [{ from: 'robe', into: 'sleeve', polygon: [[4, 4], [12, 4], [12, 20]], draw: 'front', overlap: 0 }],
+        yield_refused: [name],
+      },
+      limbs: { arm: { segments: [
+        { part: 'upper', from: 'sleeve', bone: 'chest' },
+        { part: 'lower', from: 'sleeve', bone: 'head', joint: 'elbow' },
+      ] } },
+      regions: { ...(base.regions as object), upper: 'chest', lower: 'head' },
+    };
+  };
+  const scopedCutDoors = [parseConfig, (raw: unknown) => parseEarlyConfig(raw, 'assemble')];
+  const scopedCutReads = scopedCutDoors.map(load => ({
+    consumed: refusals(() => load(scopedCutConfig('sleeve'))),
+    final: refusals(() => load(scopedCutConfig('lower'))),
+  }));
+  say('CF1384_SCOPED_YIELD_REFUSES_A_LIMB_CONSUMED_CUT_AND_ACCEPTS_ITS_SEGMENT',
+    scopedCutReads.every(({ consumed, final }) => final === null && consumed?.problems.length === 1 &&
+      consumed.problems[0].code === 'CONFIG_NAME_RESOLVES' && consumed.problems[0].object === 'config.assemble.yield_refused[0]' &&
+      consumed.problems[0].detail === 'names "sleeve"; config.limbs.arm consumes it; list its final segment parts instead ("upper", "lower")'),
+    scopedCutReads.map(({ consumed, final }) => `cut: ${consumed?.problems.map(p => p.detail).join(' | ') ?? 'loads'}; segment: ${codes(final)}`).join(' / '),
+    'limb segments replace the consumed cut in final part order, so both config doors resolve only the segment names');
   const seamDir = temp('seam-config-905');
   try { runSeamConfigChecks(seamDir, (name, ok, detail) => say(name, ok, detail, 'issue #905: CLI > config > unchanged default, with real readers and CLI controls')); }
   finally { rmSync(seamDir, { recursive: true, force: true }); }
