@@ -202,7 +202,7 @@ function projectionEntries(cfg: ProjectionSource) {
         };
       }) : undefined,
       ...Object.fromEntries((a.take ?? []).flatMap((take, i) => {
-        if ('tags' in take) return [];
+        if (!('occluder' in take)) return [];
         const field = `assemble.take[${i}].meta`;
         const digest: ReadDigest = ({ base, file }) => file(resolve(base, take.run_dir, 'meta.json'), field);
         return [[field, digest]];
