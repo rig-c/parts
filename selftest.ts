@@ -17783,8 +17783,8 @@ function buildReportForwardProblem(checkOut: string, rigDir: string): string | n
     return `BUILD_REPORT_FORWARD: ${reportPath} — spec=${JSON.stringify(report?.spec)} command=${JSON.stringify(report?.command)}; spec "build-report/1" and command "build" are required`;
   }
   const gates = Array.isArray(report.gates) ? report.gates.filter(isDriveRecord) : [];
-  if (gates.length !== 2 || !gates.every((g) => g.passed === true && Array.isArray(g.failures) && g.failures.length === 0)) {
-    return `BUILD_REPORT_FORWARD: ${reportPath} gates[] — ${gates.length} gate(s) (${gates.map((g) => `passed=${String(g.passed)}`).join(', ')}); 2 passing gates (compile and packed) are required`;
+  if (gates.length !== 2 || !gates.every((g) => Array.isArray(g.passed) && g.passed.length > 0 && Array.isArray(g.failures) && g.failures.length === 0)) {
+    return `BUILD_REPORT_FORWARD: ${reportPath} gates[] — ${gates.length} gate(s) (${gates.map((g) => `passed=${Array.isArray(g.passed) ? g.passed.length : 'invalid'},failures=${Array.isArray(g.failures) ? g.failures.length : 'invalid'}`).join('; ')}); 2 passing gates (compile and packed) are required`;
   }
   if (!Array.isArray(report.pack) || report.pack.length === 0) {
     return `BUILD_REPORT_FORWARD: ${reportPath} pack[] — non-empty packed page list is required`;
@@ -24612,7 +24612,8 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
     const redReportHasA19 =
       redReport?.spec === 'build-report/1' &&
       redReport.command === 'build' &&
-      redReportGates.some((g) => g.passed === false && Array.isArray(g.failures) && g.failures.some((f) => isDriveRecord(f) && f.id === 'A19_OVERLAY_PNGS_HAVE_ALPHA'));
+      redReportGates.length > 0 &&
+      redReportGates.some((g) => Array.isArray(g.failures) && g.failures.some((f) => isDriveRecord(f) && f.code === 'A19_OVERLAY_PNGS_HAVE_ALPHA'));
     say(
       'CK1394_PRIMARY_COMPILE_FORWARDS_BUILD_REPORT_BOUND_TO_RUN_JSON_AND_DROPPING_THE_FORWARD_OR_FAILING_COMPILE_IS_CAUGHT',
       greenForwardProblem === null &&

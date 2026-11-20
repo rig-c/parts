@@ -43,8 +43,7 @@ import { baseAnchorMoves, type AnchorRegion } from './baseanchor.ts';
  *
  * | output | what |
  * | --- | --- |
- * | `build/` | `rigc build --profile rig-play --pack --page-edges free --pack-shape polygon` (or `pot`, `rect`, when the caller names them; {@link PAGE_EDGES}, {@link PACK_SHAPES}) — the packed atlas is the final artifact |
- * | `build-report.json` | rigc's own `build-report/1` (`--report`) for that primary packed compile, written verbatim beside `build/` (and recorded in `build/run.json`'s `outputs[]` as `../build-report.json`), on a failing compile as on a green one (issue #1394) |
+ * | `build/`, `build-report.json` | `rigc build --profile rig-play --pack --page-edges free --pack-shape polygon` (or `pot`, `rect`, when the caller names them; {@link PAGE_EDGES}, {@link PACK_SHAPES}) — the packed atlas is the final artifact, and `build-report.json` beside `build/` holds rigc's own `build-report/1` (`--report`) for that primary packed compile on a failing compile as on a green one (issue #1394) |
  * | `gate_spine-html.txt` | that build's gate lines, verbatim — the one gate: rigc's `build` runs it once over the compile and once over the packed pages on disk, and `rig-play` holds every rule `spine` measures (selftest `CH09`) |
  * | `idle_frames/` | `rigc render --animation idle --fps 12 --max 640 --geometry`: `frames.json` + `idle/f*.png` + `idle/geometry.json` (each mesh's skinned vertices, which `TEXTURE_STRETCH` reads, every attachment's posed triangles, which `TIP_OVER_ROOT` and both halves of `STILL_REGIONS_DARK` read since issues #118 and #123, and every bone's world transform, which the face half reads its head bone from) |
  * | `contact.png` | rigc's own contact sheet of that render, copied out |
@@ -274,8 +273,6 @@ export const RIGC_GEOMETRY_VERSION = '1.4.0';
 /** The geometry export's file name inside a frame set directory, and the format tag it carries. */
 export const GEOMETRY_FILE = 'geometry.json';
 export const GEOMETRY_SPEC = 'rigc-geometry/1';
-/** The compiler's `build-report/1` (`--report`) written beside `build/` on the primary packed compile (issue #1394). */
-export const BUILD_REPORT_FILE = 'build-report.json';
 
 /** Issue #2's yardstick, measured on the Spine example export `spineboy.png` (alpha > 0). */
 export const SPINEBOY_YARDSTICK = '1024x256, 40 region(s), 45.8% opaque (alpha > 0)';
@@ -6901,8 +6898,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const out = resolve(outDir);
   const outExisted = existsSync(out);
   mkdirSync(out, { recursive: true });
-  const buildDir = join(out, 'build');
-  const buildReportPath = join(out, BUILD_REPORT_FILE);
+  const buildDir = join(out, 'build'), buildReportPath = join(out, BUILD_REPORT_FILE);
   const idleDir = join(out, 'idle_frames');
   const stillDir = join(out, '_still');
   const isoDir = join(out, '_isolated');
@@ -6923,8 +6919,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   // 1. build, packed, under the policy profile
   const build = rigc(['build', '--rig', inp.rigPath, '--motion', inp.motionPath, '--out', buildDir, '--report', buildReportPath, ...packedBuildArgs(mode)]);
   const gateHtml = buildGateLines(build.out);
-  write('gate_spine-html.txt', `${gateHtml.join('\n')}\n`);
-  if (existsSync(buildReportPath)) written.push(BUILD_REPORT_FILE);
+  write('gate_spine-html.txt', `${gateHtml.join('\n')}\n`); if (existsSync(buildReportPath)) written.push(BUILD_REPORT_FILE);
   if (build.status !== 0) refuseIfAny(rigcFailed(packedBuildLabel(mode), build, gateHtml));
   const pack = parsePackLines(gateHtml);
   refuseIfAny(packEdgeProblems(pack, mode));
@@ -6976,8 +6971,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
       windBandRead = measureWindBand(wb, buildDir, windBandDir, animationNames, rigc);
     } catch (err) {
       rmSync(windBandDir, { recursive: true, force: true });
-      rmSync(join(out, 'gate_spine-html.txt'), { force: true });
-      rmSync(buildReportPath, { force: true });
+      for (const p of [join(out, 'gate_spine-html.txt'), buildReportPath]) rmSync(p, { force: true });
       rmSync(buildDir, { recursive: true, force: true });
       if (!outExisted) rmSync(out, { recursive: true, force: true });
       throw err;
@@ -9974,3 +9968,6 @@ export function stretchLine(geo: IdleGeometry | null, path: string, problems: Pr
     per_mesh: rows,
   };
 }
+
+/** The compiler's `build-report/1` (`--report`) written beside `build/` on the primary packed compile (issue #1394). */
+export const BUILD_REPORT_FILE = 'build-report.json';
