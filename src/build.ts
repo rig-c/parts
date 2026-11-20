@@ -1,4 +1,4 @@
-import { changedAssemblyFields, effectiveAssemblyRules, readAssemblyConfig, refuseStaleAssembly, type AssemblyRules } from './assembly-reading.ts';
+import { changedAssemblyFields, effectiveAssemblyRules, projectAssemblyConfig, readProjectedAssemblyConfig, type AssemblyLimb, refuseStaleAssembly, type AssemblyRules } from './assembly-reading.ts';
 import { editedPartFrontColourLines, readEditedParts } from './editedparts.ts';
 import { SOURCE_COVER_FILE, sourceCoverReport, type SourceCoverSet } from './sourcecover.ts';
 import { STAGE_MAP_FILE } from './provenance.ts';
@@ -70,7 +70,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { type AnimFrame, EncodeError, encodeApng, encodeIndexedApng, INDEXED_DEFAULTS } from './apng.ts';
-import { assemble, type AssembleResult, boxOf, cutLines, edgeSplitLines, ERROR_LIMIT, type ExcludedCount, excludedLines, setExclusions, islandLines, setIslandSources, type IslandCount, hiddenLines, SINGLE_RUN_FACE_TAGS, singleRunHeadBox, softOcclusionLine, driftLine, limbLines, FIGURE_MASK_FILE, figureMaskLines, figuresLine, groundWarning, holeKindsLine, holeLines, measurePinholes, measureRecomposite, pinholeProblems, pinholesLine, type ProjectRule, recomposite, recompositeRecord, scenePhrase, type SeamRule, sourceInRig, stageFields, uncoveredLine, underBox } from './assemble.ts';
+import { assemble, type AssembleResult, boxOf, cutLines, edgeSplitLines, ERROR_LIMIT, type ExcludedCount, excludedLines, setExclusions, islandLines, setIslandSources, type IslandCount, hiddenLines, SINGLE_RUN_FACE_TAGS, singleRunHeadBox, softOcclusionLine, driftLine, limbLines, FIGURE_MASK_FILE, figureMaskLines, figuresLine, groundWarning, holeKindsLine, holeLines, measurePinholes, measureRecomposite, pinholeProblems, pinholesLine, type ProjectRule, recomposite, recompositeRecord, scenePhrase, type SeamRule, sourceInRig, projectedStageFields, stageFields, uncoveredLine, underBox } from './assemble.ts';
 import { allocationClause, type Reducer, stageBClause, unboundedClause } from './automesh.ts';
 import { residualClause } from './autoenvelope.ts';
 import { type AutoMotionCase, failingRows, idleSchedule, localRow, motionClause, motionDeformation, motionDocument, motionInput, motionRowText, motionStimulus, motionVerdict, noStimulusProblem, prepareComparison, type ReplayCandidate, runComparison, runPreparedComparison, sourceSelfFailure, stimulusMotion, withStimulus } from './automotion.ts';
@@ -98,7 +98,7 @@ import {
   untestedIntervals,
 } from './autoreplay.ts';
 import { besideIdleLine, checkSummaryLine, inputFileRecord, type InputFileRecord, CLOTH_LINE, type ClothLine, clothWarnText, figureOpeningLines, frameRuns, MOTION_SEAM_LINE, type MotionSeamLine, type MotionSeamPlant, motionSeamRequiredLine, motionSeamWarnText, motionJointContactLines, FOLD_LINE, type FoldsLine, LEVEL_LINE, type LevelLine, LIMB_LINE, type LimbLine, STRESS_LINE, SWEEP_LINE, type SweepLine, buildGateLines, causeLines, environmentLine, IDLE_FPS, IDLE_MAX_PX, maxRgbDiff, REQUIREMENTS_DIR, type CheckReport, type PackLine, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, GATE_PROFILE, JUDGEMENT_LINES, type JudgementLine, packedBuildArgs, packedBuildLabel, type PackMode, parsePageSize, readCheckEnvironment, readWindBand, type PackShape, type PageEdges, readFrameSet, rigcFailed, rigcIdentity, rigcRanClause, REPORTED_LINES, type ReportedLine, type RigcRunner, runCheck, SEAM_DIR, SEAM_MEAN_BAR, seamPairText, seamRigPxText, SOURCE_LINE, SEAM_PX_BAR, SEAM_PX_LEVEL, SEAM_PX_LEVEL_HIGH, SPINEBOY_YARDSTICK, STILL_DIR, WIND_BAND_LINE, windBandLines } from './check.ts';
-import { type CharacterConfig, type Cut, type Extend, type Limb, loadConfigAndAnimations, loadConfigWithBytes, loadEarlyConfig, type Patch, type PlanEntry } from './config.ts';
+import { type CharacterConfig, type Cut, type Extend, loadConfigAndAnimations, loadConfigWithBytes, loadEarlyConfig, type Patch, type PlanEntry } from './config.ts';
 import { coreCompileGuideLine, failLine, foldName, PartsError, type Problem, refuseIfAny } from './errors.ts';
 import { editedConfigImages, editedRunImages, missingReceipts, readEditorReceipts } from './editreceipt.ts';
 import { untracedPartSources } from './partsource.ts';
@@ -440,7 +440,7 @@ export function emitFillMasksStage(input: EmitFillMasksInput, log: Log): Array<{
  * (`ASSEMBLE_LIMB_CAP_PRESENT`), or a file that does not decode as a PNG
  * (`ASSEMBLE_LIMB_CAP_DECODES`). The stage holds the image to the cap's box.
  */
-export function readCaps(configPath: string, limbs: Readonly<Record<string, Limb>>): Map<string, Raster> {
+export function readCaps(configPath: string, limbs: Readonly<Record<string, AssemblyLimb>>): Map<string, Raster> {
   const problems: Problem[] = [];
   const out = new Map<string, Raster>();
   for (const [l, limb] of Object.entries(limbs)) {
@@ -504,13 +504,17 @@ function sourceCoverSet(result: AssembleResult, set: string | null, painting: st
 
 /** Read, assemble, and write only after every refusal has had its chance. Throws a PartsError on a refusal, having written nothing. */
 export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, log: Log): AssembleResult {
+  // Flag-only figure masks and the region-take tolerance are effective
+  // inputs outside the legacy config reading.
   const requirementsFile = input.requirements === undefined ? null : readRequirements(input.requirements);
   const materialAsked = requirementsFile?.cut_material !== undefined;
   // Issue #944: the pinhole bar is measured only when the requirements file declares it required.
   const pinholesAsked = requirementsFile !== null && pinholesRequired(requirementsFile);
   // The early door: assemble runs before propose has drafted bones, meshes,
   // regions and motion, so it requires only what it reads (issue #20).
-  const cfg = loadEarlyConfig(input.config, 'assemble', input.project);
+  const projection = projectAssemblyConfig(loadEarlyConfig(input.config, 'assemble', input.project));
+  // The assemble loader requires seethrough before projection.
+  const cfg = { ...projection.config, seethrough: projection.config.seethrough! };
   const supportDeclarations = JSON.stringify(cfg.assemble.cuts ?? []);
   const { seam, project } = effectiveAssemblyRules(cfg.assemble, input);
   const requirements = cfg.assemble.ground === 'busy' && project === 'visible'
@@ -525,7 +529,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   const takenRuns = applyTakenLayers(read, src, cfg, input.config);
   const runs = applyTakenRegions(takenRuns, src, cfg, input.config, requirementsFile?.setup_painting, receipts, input.source);
   for (const note of runs.notes) log(note.startsWith('WARN  ') ? note : `note: ${note}`);
-  const fields = stageFields(cfg, runs.single ? { w: src.width, h: src.height } : null);
+  const fields = projectedStageFields(cfg, runs.single ? { w: src.width, h: src.height } : null);
   const setupPainting = requirements === null || fields.ground !== 'busy' || project !== 'visible' ? undefined
     : readRequirements(requirements.read).setup_painting;
   const figureSupport = setupPainting === undefined ? undefined
@@ -716,7 +720,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       for (const sg of limb.segments) if (sg.hybrid !== undefined) { coveredSet.add(sg.hybrid.part); generatedBands.push(sg.hybrid.part); }
     }
     let rawCuts = alt.cuts !== undefined ? alt.cuts : fields.cuts.filter((c) => coveredSet.has(c.into) && coveredSet.has(c.from)).map((c) => ({ ...c, under: undefined }));
-    let altLimbs: Record<string, Limb> = {};
+    let altLimbs: Record<string, AssemblyLimb> = {};
     if (fields.limbs !== undefined) {
       for (const [ln, limb] of Object.entries(fields.limbs)) {
         if (limb.segments.every((sg) => coveredSet.has(sg.part))) {
@@ -783,7 +787,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     const originalIslands = alt.parts === undefined || input.setIslands === 'all' ? [] : setIslandSources(fields.limbs ?? {}, originalAltLimbs);
     const altIslands = alternateLayerIslands(originalIslands, selectedLayers.groups);
     // Issue #609: the limbs of those layers the set does not carry — the other leg of a two-leg layer.
-    const otherLimbs: Record<string, Limb> =
+    const otherLimbs: Record<string, AssemblyLimb> =
       input.setSplit === 'connectivity'
         ? {}
         : Object.fromEntries(Object.entries(fields.limbs ?? {}).filter(([ln, l]) => !(ln in altLimbs) && l.segments.some((sg) => originalIslands.includes(sg.from))));
@@ -1073,7 +1077,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     result.parts.alternates = altBuilt.map((b) => b.record);
   }
 
-  const reading = readAssemblyConfig(cfg, result.parts, input.config, { seam, project });
+  const reading = readProjectedAssemblyConfig(projection, result.parts, input.config, { seam, project });
   let previousAssembly = undefined;
   if (existsSync(outs.partsJson)) {
     try { previousAssembly = readPartsManifest(outs.partsJson).assembly_config; }
@@ -1249,7 +1253,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
  * base parts at alpha above `OPAQUE_ALPHA_ABOVE`, at their `parts.json` x, y.
  */
 function otherLimbsOf(
-  limbs: Readonly<Record<string, Limb>>,
+  limbs: Readonly<Record<string, AssemblyLimb>>,
   setPlaced: ReadonlySet<string>,
   bones: readonly BoneEntry[],
   base: ReadonlyArray<{ record: PartRecord; image: Raster }>,

@@ -54,7 +54,10 @@ export function tracePartsDeclared(cfg: Pick<AssembleConfig, 'assemble'>): boole
  * Order is the config's: cuts, each alternate set's cuts, patches, painting
  * extensions, the arm split, limb splits in key order.
  */
-export function untracedPartSources(cfg: Pick<AssembleConfig, 'assemble' | 'seethrough' | 'limbs'>): Problem[] {
+export function untracedPartSources(cfg: Pick<AssembleConfig, 'assemble'> & {
+  seethrough: Pick<AssembleConfig['seethrough'], 'arm_split'>;
+  limbs?: Record<string, Pick<NonNullable<AssembleConfig['limbs']>[string], 'segments' | 'split'>>;
+}): Problem[] {
   if (!tracePartsDeclared(cfg)) return [];
   const out: Problem[] = [];
   const refuse = (object: string, found: string): void => {

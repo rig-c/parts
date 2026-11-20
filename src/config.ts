@@ -940,15 +940,15 @@ export function partBoundBones(b: PartBinding): Map<string, string[]> {
  * Returns null when `config.turn` is absent, so a rig without a turn block is
  * untouched.
  */
-export function turnMovingPartPair(
+export function turnMovingPartPair<C extends Pick<ConfigConstraint, 'type'> & { bone?: unknown }>(
   cfg: {
     assemble?: CharacterConfig['assemble'];
     turn?: TurnSpec;
     bones?: BoneEntry[];
     meshes?: Record<string, MeshSpec>;
     regions?: Record<string, RegionSpec>;
-    limbs?: Record<string, Limb>;
-    constraints?: ConfigConstraint[];
+    limbs?: Record<string, Pick<Limb, 'segments'>>;
+    constraints?: C[];
   },
 ): ((a: string, b: string) => boolean) | null {
   const turn = cfg.turn;

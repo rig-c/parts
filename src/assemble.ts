@@ -1,3 +1,4 @@
+import { projectAssemblyConfig, type AssemblyLimb, type AssemblySource, type AssemblyView } from './assembly-reading.ts';
 import { sourceCoverRun, type SourceCoverReading } from './sourcecover.ts';
 import { replaceEditedParts, type EditedPartContext, type EditedPartFrontColourReading, type VerifiedEditedPart } from './editedparts.ts';
 import { paintingReceivers, rawPaintingOwner, type PaintingOwner } from './paintingowner.ts';
@@ -119,7 +120,7 @@ import { COPIED_ALPHA_ABOVE, OCCLUDER_EMPTY, occluderDrawCycleProblems, type Occ
  * Pure: no clock, no randomness, no file access. The CLI reads and writes.
  */
 import { sourceLimbTarget, nearestTargetPart } from './limbownership.ts';
-import { type ArmSplit, type BoneEntry, type CharacterConfig, type ConfigConstraint, type ControlSkeleton, controlSkeletonOf, type CropEdge, type Cut, type EarlyConfig, type Extend, type Limb, type MeshSpec, type Patch, type PlanEntry, type RegionSpec, type Run, type SeeThrough, turnMovingPartPair, type TurnSpec } from './config.ts';
+import { type ArmSplit, type BoneEntry, type ControlSkeleton, controlSkeletonOf, type CropEdge, type Cut, type EarlyConfig, type Extend, type MeshSpec, type Patch, type PlanEntry, type RegionSpec, type Run, type SeeThrough, turnMovingPartPair, type TurnSpec } from './config.ts';
 import { foldName, PartsError, type Problem, refuseIfAny } from './errors.ts';
 import { CORE_ALPHA, figuresPhrase, implausibleRules, type Layer, type LayerFigures, layerFigures, type LayerSet, NEAR_WHITE_MIN, OPAQUE_ALPHA_ABOVE, ruleSummary } from './layers.ts';
 import { padToSquare, squarePad } from './inputs.ts';
@@ -335,7 +336,7 @@ export interface AssembleInput {
   turn?: TurnSpec;
   regions?: Record<string, RegionSpec>;
   meshes?: Record<string, MeshSpec>;
-  motion?: CharacterConfig['motion'];
+  motion?: AssemblyView['motion'];
   depth?: DepthConfig;
   /** Config-relative user sheet paths; caller supplies its actual base. */
   depthBase?: string;
@@ -371,7 +372,7 @@ export interface AssembleInput {
   /** `config.scene` (issue #242): the painting is a scene, so the recomposite is read inside the figure ({@link sceneFigure}). Absent or false: nothing changes. */
   scene?: boolean;
   /** `config.limbs` (issue #349): the parts cut at their joints ({@link LimbCount}). Absent or empty: nothing changes. */
-  limbs?: Record<string, Limb>;
+  limbs?: Record<string, AssemblyLimb>;
   /** Alternate sources with different layers retain the original joint cut bounds. */
   limbSourceGroups?: ReadonlyMap<string, string>;
   /** `config.bones`, read for the limbs' joints; required with `limbs`. */
@@ -455,7 +456,7 @@ export interface OtherLimbs {
   /** Issue #638's test-only pre-fix mutant; absent uses only segments taking the source. No CLI/config field. */
   line?: 'whole-limb';
   /** The config's limbs, by name, that the set does not carry and that take one of `limbIslands`. */
-  limbs: Readonly<Record<string, Limb>>;
+  limbs: Readonly<Record<string, AssemblyLimb>>;
   /**
    * Per limb, its segment bones the set does not place: neither its skeleton names it (`SKELETON_LIMB_BONES`) nor
    * its `drawn`, nor an ancestor of it. Empty: the limb stands where the set's own bones (`bones`) put it.
@@ -553,8 +554,8 @@ export interface IslandCount {
  * limb that takes a part shares its pixels by the nearest polyline, so each limb gets its own side; a set that carries
  * fewer of them puts every pixel of the part on the limbs it carries, both legs of a two-leg layer on one leg.
  */
-export function setIslandSources(limbs: Readonly<Record<string, Limb>>, setLimbs: Readonly<Record<string, Limb>>): string[] {
-  const takes = (all: Readonly<Record<string, Limb>>, src: string): number => Object.values(all).filter((l) => l.segments.some((sg) => sg.from === src)).length;
+export function setIslandSources(limbs: Readonly<Record<string, AssemblyLimb>>, setLimbs: Readonly<Record<string, AssemblyLimb>>): string[] {
+  const takes = (all: Readonly<Record<string, AssemblyLimb>>, src: string): number => Object.values(all).filter((l) => l.segments.some((sg) => sg.from === src)).length;
   const froms = [...new Set(Object.values(setLimbs).flatMap((l) => l.segments.map((sg) => sg.from)))];
   return froms.filter((src) => takes(limbs, src) > takes(setLimbs, src));
 }
@@ -679,7 +680,7 @@ function squaredDistanceTo(cc: Components, W: number, label: number, at: readonl
  * transparent (a `cap_shape: "ball"` lower half from the cap image) is on no island and kept.
  */
 /** Layer variants share the original source's segment line for ownership, without changing its pixel source. */
-function logicalSourceLimb(limb: Limb, source: string, groups: ReadonlyMap<string, string>): Limb {
+function logicalSourceLimb(limb: AssemblyLimb, source: string, groups: ReadonlyMap<string, string>): AssemblyLimb {
   if (!groups.has(source)) return limb;
   const original = groups.get(source);
   return { ...limb, segments: limb.segments.map(s => (groups.get(s.from) ?? s.from) === original ? { ...s, from: source } : s) };
@@ -687,7 +688,7 @@ function logicalSourceLimb(limb: Limb, source: string, groups: ReadonlyMap<strin
 
 function keepJointIslands(
   sources: readonly string[],
-  limbs: Readonly<Record<string, Limb>>,
+  limbs: Readonly<Record<string, AssemblyLimb>>,
   bones: readonly BoneEntry[],
   parts: readonly LimbPart[],
   pieces: readonly Built[],
@@ -918,7 +919,7 @@ function skeletonsTooClose(own: readonly LinePt[], other: readonly LinePt[], hal
 function splitOneIsland(
   src: string,
   source: Built,
-  limbs: Readonly<Record<string, Limb>>,
+  limbs: Readonly<Record<string, AssemblyLimb>>,
   places: ReadonlyMap<string, BonePlace>,
   parts: readonly LimbPart[],
   pieces: readonly Built[],
@@ -965,10 +966,10 @@ function splitOneIsland(
   if (refused || posed.length === 0) return;
   // Issue #638: a separate footwear layer belongs to the ankle-to-toe segments, not to a nearby thigh or shin.
   // The same source selection applies to every segment, without reading a part name or a layer tag.
-  const taking = (l: string, all: Readonly<Record<string, Limb>>): Limb => others.line === 'whole-limb'
+  const taking = (l: string, all: Readonly<Record<string, AssemblyLimb>>): AssemblyLimb => others.line === 'whole-limb'
     ? all[l]
     : { ...all[l], segments: logicalSourceLimb(all[l], src, sourceGroups).segments.filter((sg) => sg.from === src) };
-  const polyOf = (l: string, all: Readonly<Record<string, Limb>>): Array<[number, number]> =>
+  const polyOf = (l: string, all: Readonly<Record<string, AssemblyLimb>>): Array<[number, number]> =>
     others.line === 'whole-limb' ? limbPolyline(all[l], places) : sourceLimbTarget(logicalSourceLimb(all[l], src, sourceGroups), src, places).line;
   for (const [l, all] of [...ownNames.map((l) => [l, limbs] as const), ...posed.map((l) => [l, others.limbs] as const)]) {
     const selected = taking(l, all);
@@ -1072,7 +1073,7 @@ function splitOneIsland(
  * a source verdict. Cap origin is provenance, never proof of ownership.
  */
 function assignCapOwnership(
-  sources: readonly string[], limbs: Readonly<Record<string, Limb>>, bones: readonly BoneEntry[],
+  sources: readonly string[], limbs: Readonly<Record<string, AssemblyLimb>>, bones: readonly BoneEntry[],
   parts: readonly LimbPart[], pieces: readonly Built[], sourceOf: (name: string) => Built | null,
   capFrom: ReadonlyArray<CapFrom | null>, W: number, H: number, others?: OtherLimbs, tips?: Record<string, [number, number]>,
   sourceGroups: ReadonlyMap<string, string> = new Map(),
@@ -4346,7 +4347,7 @@ function shiftedAt(line: JointLine, offset: number): [number, number] {
 function limbBands(
   cuts: readonly Cut[],
   pieces: ReadonlyArray<Built | null>,
-  limbs: Readonly<Record<string, Limb>>,
+  limbs: Readonly<Record<string, AssemblyLimb>>,
   bones: readonly BoneEntry[],
   W: number,
   H: number,
@@ -4441,7 +4442,7 @@ function limbBands(
  * box's size, or transparent over every cap pixel).
  */
 function cutLimbs(
-  limbs: Readonly<Record<string, Limb>>,
+  limbs: Readonly<Record<string, AssemblyLimb>>,
   bones: readonly BoneEntry[],
   caps: ReadonlyMap<string, Raster>,
   W: number,
@@ -4533,7 +4534,7 @@ function cutLimbs(
       const underNames = on.filter((l) => l !== coverLimb);
       const underIndices = underNames.map((l) => names.indexOf(l));
       const underPolys = underNames.map((l) => polylines.get(l) as Array<[number, number]>);
-      assignCrossedLimbs(coverIdx, polylines.get(coverLimb) as Array<[number, number]>, limbs[coverLimb].split as NonNullable<Limb['split']>, underIndices, underPolys, b.r, OPAQUE_ALPHA_ABOVE, own);
+      assignCrossedLimbs(coverIdx, polylines.get(coverLimb) as Array<[number, number]>, limbs[coverLimb].split as NonNullable<AssemblyLimb['split']>, underIndices, underPolys, b.r, OPAQUE_ALPHA_ABOVE, own);
     }
     owners.set(src, own);
     jobs.push({ src, b, on, own, before });
@@ -5230,7 +5231,7 @@ export function checkSingleRun(full: LayerSet, plan: readonly PlanEntry[] | null
 
 /** All output pieces that consume a taken source, including cut-to-limb paths.
  * Painting patches have no source-part edge in the supported Patch schema. */
-export function regionTakeTargets(names: readonly string[], cuts: readonly Cut[], limbs: Readonly<Record<string, Limb>> = {}): ReadonlySet<string> {
+export function regionTakeTargets(names: readonly string[], cuts: readonly Cut[], limbs: Readonly<Record<string, AssemblyLimb>> = {}): ReadonlySet<string> {
   const targets = new Set(names);
   const edges = cuts.map(c => ({ from: c.from, into: c.into }));
   for (const limb of Object.values(limbs)) for (const [index, segment] of limb.segments.entries()) {
@@ -7705,24 +7706,19 @@ function unplannedNotes(
 // ---------------------------------------------------------------------------
 
 /**
- * The config fields the stage reads: `seethrough.resolution` and `.head_box`,
- * `assemble.rig_scale`, `.plan`, `.extend_below_crop`, `.patches` and `.cuts` — and
- * nothing of the rig. The CLI hands it a config from
- * `parseEarlyConfig(raw, 'assemble')`; a config the full loader accepted is
- * the same shape with more in it. The head box is refused here rather than by
- * the loader, because `inputs` runs before it exists; `seethrough` too, for a
- * full-loader config, where it is optional.
+ * Select the assembly view before deriving geometry. A full-loader config may
+ * omit seethrough, and an early config can precede the head-box declaration.
+ * Keep those refusals here, where the run shape is known.
  */
 export function stageFields(
-  cfg: Pick<CharacterConfig, 'seethrough' | 'assemble' | 'scene' | 'motion_seams'> & {
-    limbs?: Record<string, Limb>;
-    bones?: BoneEntry[];
-    meshes?: Record<string, MeshSpec>;
-    regions?: Record<string, RegionSpec>;
-    constraints?: ConfigConstraint[];
-    turn?: TurnSpec;
-    motion?: CharacterConfig['motion'];
-  },
+  cfg: Omit<AssemblySource, 'key' | 'proposed_rig_scale'>,
+  single: { w: number; h: number } | null = null,
+): ReturnType<typeof projectedStageFields> {
+  return projectedStageFields(projectAssemblyConfig(cfg).config, single);
+}
+
+export function projectedStageFields(
+  cfg: AssemblyView,
   single: { w: number; h: number } | null = null,
 ): {
   resolution: number;
@@ -7734,7 +7730,7 @@ export function stageFields(
   cuts: Cut[];
   motion_seams?: MotionSeamDeclaration[];
   scene?: boolean;
-  limbs?: Record<string, Limb>;
+  limbs?: Record<string, AssemblyLimb>;
   bones?: BoneEntry[];
   single?: boolean;
   armSplit?: ArmSplit;
@@ -7756,7 +7752,7 @@ export function stageFields(
   turn?: TurnSpec;
   regions?: Record<string, RegionSpec>;
   meshes?: Record<string, MeshSpec>;
-  motion?: CharacterConfig['motion'];
+  motion?: AssemblyView['motion'];
   /** `assemble.ground` (issue #996); absent, `plain`. */
   ground?: Ground;
 } {
@@ -7768,8 +7764,8 @@ export function stageFields(
     problems.push({ code: 'ASSEMBLE_FIELD_PRESENT', object: 'config.seethrough.head_box', detail: 'is absent; the head run cannot be placed on the painting without the box it was cropped from' });
   }
   refuseIfAny(problems);
-  const st = cfg.seethrough as SeeThrough;
-  const keySkeleton = controlSkeletonOf(cfg);
+  const st = cfg.seethrough!;
+  const keySkeleton = cfg.keySkeleton;
   const turnMovingPair = turnMovingPartPair(cfg);
   return {
     resolution: st.resolution,
@@ -7793,7 +7789,7 @@ export function stageFields(
     patches: cfg.assemble.patches ?? [],
     cuts: cfg.assemble.cuts ?? [],
     ...(cfg.motion_seams === undefined ? {} : { motion_seams: cfg.motion_seams }),
-    ...(cfg.scene === undefined ? {} : { scene: true }),
+    ...(cfg.scene === undefined ? {} : { scene: cfg.scene }),
     ...(cfg.limbs === undefined ? {} : { limbs: cfg.limbs, bones: cfg.bones ?? [] }),
   };
 }
