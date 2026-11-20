@@ -1,7 +1,7 @@
 /** Independent analytic controls for #897; no private art or measured expectations. */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { writeEditorReceiptFixture } from '../fixtures/editor_receipts.ts';
 import { rigParts } from '../fixtures/rig.ts';
@@ -135,9 +135,11 @@ export function runDepthRelocationChecks(dir: string, say: Say): void {
     say('DMP1283_' + name + '_LEGACY_OUTPUT_BYTES', mismatches.length === 0,
       JSON.stringify({ expectedFiles: names, actualFiles: Object.keys(actual).sort(), mismatches }));
     const read = readRigInputs(join(out, 'config.json'), out);
-    say('DMP1283_' + name + '_OUTPUT_READER', read.cfg.turn?.pivot === 31 && read.images.has('face_depth.png') &&
+    say('DMP1283_' + name + '_OUTPUT_READER', caseParts.assembly_config !== undefined &&
+      read.parts.assembly_config?.sha256 === caseParts.assembly_config.sha256 &&
+      read.cfg.turn?.pivot === 31 && read.images.has('face_depth.png') &&
       (name === 'DEFAULT' || (read.cfg.requirements !== undefined && read.from !== null)),
-      'actual output reader resolves the legacy inputs and generated depth sheet');
+      'actual output reader retains the assembly stamp and resolves the legacy inputs and generated depth sheet');
   }
 
   const relativeParts = readParts(join(dir, 'baseline-relative/parts.json'));
@@ -196,6 +198,79 @@ export function runDepthRelocationChecks(dir: string, say: Say): void {
       entry: check?.rigc_entry, logs: ['build.stdout.txt', 'build.stderr.txt'],
       ...(builtGreen ? {} : { outputTail: ((run.stdout ?? '') + (run.stderr ?? '')).slice(-4000) }) }));
   if (!builtGreen) return;
+
+  const cliRun = (...args: string[]) => spawnSync(process.execPath, [cli, ...args], {
+    encoding: 'utf8', timeout: 30000, maxBuffer: 1 << 23,
+  });
+  const cliOutput = (run: ReturnType<typeof cliRun>): string => run.stdout + run.stderr;
+  const boundHandoff = (name: string, parts: string, cfg: string, expectStamp = true): string => {
+    const prepared = join(dir, name + '-inference'), bound = join(dir, name + '-bound');
+    const rig = join(dir, name + '-rig'), map = join(dir, name + '-map.json');
+    const bindingRecipe = join(dir, name + '-recipe.json');
+    writeFileSync(map, readFileSync(mapPath));
+    json(bindingRecipe, { ...recipe, parts: { face: { ...recipe.parts.face, map: relative(dir, map) } } });
+    const prepare = cliRun('depth-prepare', '--parts', parts, '--config', bindingRecipe, '--out', prepared);
+    const bind = cliRun('depth-bind', '--map', map, '--input', join(prepared, 'face.png'), '--part', 'face');
+    const apply = (config: string, out: string) => cliRun('depth-apply', '--parts', parts, '--manifest',
+      join(prepared, 'manifest.json'), '--config', bindingRecipe, '--rig-config', config, '--out', out);
+    const applied = apply(cfg, bound);
+    const boundConfig = join(bound, 'config.json');
+    const rigged = cliRun('rig', '--parts', bound, '--config', boundConfig, '--out', rig);
+    const before = readParts(join(parts, 'parts.json')).assembly_config;
+    const afterPath = join(bound, 'parts.json');
+    const after = existsSync(afterPath) ? readParts(afterPath).assembly_config : undefined;
+    const runs = [prepare, bind, applied, rigged];
+    const rigSheets = join(rig, 'depth_sheets.json');
+    say('DMP1388_' + name + '_BOUND_RIG',
+      runs.every(run => run.status === 0) && !cliOutput(applied).includes('DEPTH_MAP_BINDING_ABSENT') &&
+      (before !== undefined) === expectStamp && JSON.stringify(before) === JSON.stringify(after) &&
+      existsSync(rigSheets) && JSON.parse(readFileSync(rigSheets, 'utf8')).spec === 'rig-parts-depth-sheets/1',
+      JSON.stringify(runs.map(run => ({ exit: run.status, stderr: run.stderr, error: run.error?.message }))));
+    if (name === 'ASSEMBLED') {
+      const stale = join(dirname(cfg), 'stale-resolution.json');
+      const raw = JSON.parse(readFileSync(cfg, 'utf8'));
+      raw.seethrough.resolution += 1;
+      json(stale, raw);
+      const rejected = join(dir, 'stale-depth-out'), attempt = apply(stale, rejected);
+      const staleField = 'assembly config changed at config.seethrough.resolution; re-run assemble';
+      const refusal = (run: ReturnType<typeof cliRun>): boolean =>
+        run.status === 1 && cliOutput(run).includes('ASSEMBLY_CONFIG_STALE:') && cliOutput(run).includes(staleField);
+      say('DMP1388_STALE_DEPTH_INPUT_NO_OUTPUT', refusal(attempt) && !existsSync(rejected),
+        JSON.stringify({ exit: attempt.status, output: cliOutput(attempt), outputExists: existsSync(rejected) }));
+      if (applied.status === 0) {
+        const staleBound = join(bound, 'stale-resolution.json'), out = join(dir, 'stale-rig-out');
+        const relocated = JSON.parse(readFileSync(boundConfig, 'utf8'));
+        relocated.seethrough.resolution += 1;
+        json(staleBound, relocated);
+        const rejectedRig = cliRun('rig', '--parts', bound, '--config', staleBound, '--out', out);
+        say('DMP1388_STALE_BOUND_CONFIG_REFUSED', refusal(rejectedRig),
+          JSON.stringify({ exit: rejectedRig.status, output: cliOutput(rejectedRig) }));
+      }
+    }
+    return bound;
+  };
+  const cliAssembly = join(dir, 'cli-assembly');
+  const assembled = cliRun('assemble', '--source', join(input, 'painting.png'), '--full', join(input, 'full'),
+    '--config', configPath, '--out', cliAssembly);
+  say('DMP1388_ASSEMBLE_CLI', assembled.status === 0 && existsSync(join(cliAssembly, 'rig/parts.json')),
+    JSON.stringify({ exit: assembled.status, stderr: assembled.stderr }));
+  if (assembled.status === 0) boundHandoff('ASSEMBLED', join(cliAssembly, 'rig'), configPath);
+  const boundEdited = boundHandoff('EDITED', built, editedPath);
+  say('DMP1388_BOUND_EDITED_ART_BYTES', receipts.every(receipt => {
+    const output = join(boundEdited, 'parts', receipt.part + '.png');
+    return existsSync(output) && readFileSync(output).equals(readFileSync(join(edits, receipt.file)));
+  }), 'both bound edited PNGs retain the authored bytes');
+  const legacyParts = join(dir, 'unstamped');
+  cpSync(baseline, legacyParts, { recursive: true });
+  const legacyManifest = join(legacyParts, 'parts.json'), unstamped = JSON.parse(readFileSync(legacyManifest, 'utf8'));
+  delete unstamped.assembly_config;
+  json(legacyManifest, unstamped);
+  const legacyRigConfig = join(input, 'legacy-rig.json');
+  const legacyRaw = { ...config };
+  delete legacyRaw.seethrough;
+  json(legacyRigConfig, legacyRaw);
+  boundHandoff('LEGACY', legacyParts, legacyRigConfig, false);
+
   const editedPrepared = join(dir, 'edited-prepared'); prepareDepth({ parts: built, config: recipePath, out: editedPrepared });
   const depthOut = join(dir, 'edited-depth');
   applyDepth({ parts: built, manifest: join(editedPrepared, 'manifest.json'), config: recipePath, rigConfig: editedPath, out: depthOut });
