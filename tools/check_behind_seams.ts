@@ -874,6 +874,7 @@ export function runBehindTurnPrimitiveChecks(say: Say): void {
       red.reading.turn.pairs[0].frames[1].pose === 'yaw_dial=15' && red.reading.turn.pairs[0].frames[1].motion_opened.px === 12 &&
       red.problems.some(p => p.code === BEHIND_SEAM_CODE && p.object === 'pair "a|b" turn yaw_dial=15 motion_opened') &&
       !red.problems.some(p => p.object.includes('turn') && p.object.endsWith('standing')) &&
+      red.reading.turn.limitations === 'independent setup-reset turn endpoints and full range corners only; no sweep, idle motion, temporal spans or alternate skins; standing is not measured on turn poses, and motion_opened is the turn reading' &&
       red.lines.some(l => l.includes('turn yaw_dial=15') && l.includes(`standing SKIP (${TURN_STANDING_MOTION_READ_REASON}), 0 cells`)),
     JSON.stringify({ idle: base.reading.status, turn: turnBrief(red.reading.turn), codes: red.problems.map(p => p.code) }));
   const fixed = { ...turn, frames: frames.map((_, index) => ({ ...asFrame(moving.setup), index, time: 0 })),

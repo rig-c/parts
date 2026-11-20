@@ -1177,7 +1177,7 @@ remains a diagnostic and the bar uses the precedence below.
 | `CUT_JOINT_MATERIAL` | Declared joint cut-material support and crossing evidence | `undeclared` |
 | `SETUP_MATCHES_PAINTING` | Native-grid source vs rendered setup under authored regional mismatch limits | `undeclared`, `no-limit` (at least one region lacks a limit and none fail) |
 | `BOUNDARY_COLOUR_STEP` | Authored allowance for excess colour step between parts in idle | `undeclared` |
-| `BEHIND_PART_SEAMS` | Authored thresholds for standing and motion-opened rear seam cells, including requested turn poses | `undeclared`, `no-complete-threshold-reading` (including no eligible pairs or an incomplete non-failing reading) |
+| `BEHIND_PART_SEAMS` | Authored thresholds for standing at setup and motion-opened rear seam cells, including `motion_opened` at requested turn poses | `undeclared`, `no-complete-threshold-reading` (including no eligible pairs or an incomplete non-failing reading) |
 | `SEAM_OVER_MOTION` | Body-root gap plus under-owned ghost floor and required zero-background seam readings | `no-root-gate`, `no-animation`, `no-complete-root-reading` (root evidence unmeasured) |
 
 | SEAM_OVER_MOTION precedence | Declared outcome |

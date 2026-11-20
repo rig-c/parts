@@ -706,7 +706,7 @@ export function measureBehindSeamFrames(api: BehindSeamsApi, input: BehindSeamsF
 function measureBehindTurnFrames(api: BehindSeamsApi, input: BehindSeamsFramesInput, declared: BehindSeams, problems: Problem[]): BehindSeamsTurnMeasured {
   const turn = input.turn;
   const result: BehindSeamsTurnMeasured = { status: 'SKIP', poses: turn?.poses.map(p => p.name) ?? [], pairs: [], unmeasured: [],
-    limitations: 'independent setup-reset turn endpoints and full range corners only; no sweep, idle motion, temporal spans or alternate skins; standing and transported setup-overlap are separate' };
+    limitations: 'independent setup-reset turn endpoints and full range corners only; no sweep, idle motion, temporal spans or alternate skins; standing is not measured on turn poses, and motion_opened is the turn reading' };
   if (turn?.poser !== undefined) result.limitations += `; poser ${turn.poser}`;
   if (turn?.sourceSkeletonSha256 !== undefined) result.limitations += `; original skeleton sha256 ${turn.sourceSkeletonSha256}`;
   const required = declared.threshold !== undefined || declared.pairs?.some(p => p.threshold !== undefined) === true;
@@ -757,6 +757,7 @@ function measureBehindTurnFrames(api: BehindSeamsApi, input: BehindSeamsFramesIn
           object: `pair "${pair.pair}" turn ${pose.name} standing`, detail: `${row.standing.px} native seam cells exceeds allowance ${allowance}; authored threshold ${threshold}; independent declared turn pose` });
       }
     }
+    // Both clauses overlap on purpose, as in idle readFrames: every path leaving motion_opened SKIP also records turn.unmeasured[].
     const read = rows.filter(row => row.motion_opened.status !== 'SKIP' &&
       !result.unmeasured.some(u => u.pair === pair.pair && u.frame === `turn ${row.pose}`)).length;
     const aggregate = (kind: 'motion_opened' | 'standing'): { status: BehindSeamsCount['status']; max_px: number } => ({
