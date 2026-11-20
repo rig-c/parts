@@ -360,6 +360,12 @@ checks a recorded digest against a config refuses a mismatch as
 `ASSEMBLY_CONFIG_STALE`, names the changed fields and directs the author to
 re-run assemble.
 
+An occluder-split take binds the donor's `meta.json` bytes at
+`assemble.take[i].meta`, where `i` is the zero-based take index. When only
+these new fields are missing from an older stamp, the stale refusal says
+that the stamp predates the binding and asks for one re-assemble with the
+same config.
+
 The stable named subpath `@rig-c/parts/assembly-reading` exports
 `assemblyConfigReading(configPath: string, parts: PartsFile): AssemblyConfigRecord`
 and `assemblyConfigChanges(configPath: string, parts: PartsFile): string[]`.
