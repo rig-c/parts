@@ -6396,8 +6396,8 @@ outside the consumed inputs pending [#1177](https://github.com/rig-c/parts/issue
 | <a id="CHECK_SETUP_PAINTING_MEASURED"></a>`CHECK_SETUP_PAINTING_MEASURED` | missing native setup/ownership or unsupported clipping | supply observable textured setup geometry; an unavailable instrument never passes |
 | <a id="CHECK_BOUNDARY_COLOUR_STEP"></a>`CHECK_BOUNDARY_COLOUR_STEP` | the requirements file declares `boundary_colour.max_step_excess` and a part boundary's colour step in the rig's render exceeds the same boundary's step in the rig's own pieces by more than it; the part pair, the frame (`setup` or `idle frame <n> (t <s> s)`), the stage pixel, the excess, the declared allowance and both steps are quoted. Unlike [`CHECK_SETUP_MATCHES_PAINTING`](#CHECK_SETUP_MATCHES_PAINTING), which compares the painting per declared region at the setup pose, this compares against the rig's own flat pieces (`parts.json` placement at setup, each piece's rest colour through its art UVs on every idle frame), so a part drawn over its neighbour's line art is not a failure | the pair's rig image or mesh: `rig/images/<part>.png` (a texture stretched into its padded UVs, or a notch cut out of it), or that part's mesh in `config.json` `meshes` when the mesh cuts a corner off the art; see [Boundary colour step](#boundary-colour-step-issue-942) |
 | <a id="CHECK_BOUNDARY_COLOUR_UNMEASURED"></a>`CHECK_BOUNDARY_COLOUR_UNMEASURED` | `boundary_colour` is declared and the step cannot be taken: no `parts.json`, no `idle`, or a default-skin region or mesh image without a sequence, with a parts record, whose rig image is not its parts PNG with one even pad on every side (refused before anything is built); otherwise a drawn slot has no `parts.json` piece, is clipped, or its rig image is not its parts PNG with one even pad on every side (the slot and frame are named). Never a pass | make every drawn slot a `parts.json` piece, or drop `boundary_colour` from the requirements file (the bar then reports SKIP) |
-| <a id="CHECK_BEHIND_PART_SEAMS"></a>`CHECK_BEHIND_PART_SEAMS` | `behind_seams` is declared and a selected pair exceeds its allowance in the independent `motion_opened` reading on an idle frame, in the `standing` reading at setup (compared against the parts' flat recomposite at their painted positions), or in either reading at an opted-in named turn pose; the pair, behind slots, reading, frame, counted seam cells and allowance are named | repair the declared seam in `parts/<part>.png` or `config.json` (`regions`, `meshes`, or `bones`), or author its allowance in `requirements.json` (`behind_seams.allowance` or `behind_seams.pairs[].allowance`); no WARN mode or rest-visible mask; see [Behind-part seams](#behind-part-seams-issue-1314) |
-| <a id="CHECK_BEHIND_PART_SEAMS_UNMEASURED"></a>`CHECK_BEHIND_PART_SEAMS_UNMEASURED` | a pair with an authored effective threshold cannot read a mandatory population: selected pair, eligible behind slots, `--parts` manifest (`parts.json` and `parts/*.png`) for setup standing's flat recomposite, idle, readable setup, motion support, boundary population, or verified render/grid/material evidence; mandatory unread evidence makes the combined line FAIL. A missing threshold alone is a nonrequired SKIP and HOLE without this refusal code | for the detail `no --parts manifest was supplied; setup standing compares the setup render with the parts' flat recomposite`, supply `parts.json` and `parts/<part>.png` (or pass `--parts <dir>` on the `rig-parts check` command line). For the detail `standing endpoints include ambiguous half-alpha owners`, the line names the case and, for each case, the first endpoint in scan order with both members' alpha: *neither* member reaches 128/255 there (both members' soft edges paint the same cell, each below 128/255) or *both* do (the members' overlap reaches the gap's edge). Edit `parts/<part>.png` of one member, or its source layer, so that exactly one member reaches 128/255 at that endpoint and the other is below it or does not paint it; the corridor is then read and may fail [`CHECK_BEHIND_PART_SEAMS`](#CHECK_BEHIND_PART_SEAMS) on a real gap. A threshold at or above the cell's distance to the recomposite removes the cell from the reading altogether; the threshold decides what could count; it does not clear a cell that could. `requirements.json` `behind_seams.allowance` never clears an unread cell; removing `behind_seams.threshold` (or `behind_seams.pairs[].threshold`), or the pair from `behind_seams.pairs[]` in `requirements.json`, only silences the reading (issues #1405, #1408). For any other detail, supply the named measurement evidence in `parts/<part>.png`, `config.json` or `requirements.json` `behind_seams`; an invalid selected-pair override in `requirements.json` `behind_seams.pairs[]` also refuses by name, and existing renderer or sidecar refusals remain refusals |
+| <a id="CHECK_BEHIND_PART_SEAMS"></a>`CHECK_BEHIND_PART_SEAMS` | `behind_seams` is declared and a selected pair exceeds its allowance in the independent `motion_opened` reading on an idle frame, in the `standing` reading at setup (compared against the parts' flat recomposite at their painted positions), or in the `motion_opened` reading at an opted-in named turn pose (idle and turn `standing` are not measured); the pair, behind slots, reading, frame, counted seam cells and allowance are named | repair the declared seam in `parts/<part>.png` or `config.json` (`regions`, `meshes`, or `bones`), or author its allowance in `requirements.json` (`behind_seams.allowance` or `behind_seams.pairs[].allowance`); no WARN mode or rest-visible mask; see [Behind-part seams](#behind-part-seams-issue-1314) |
+| <a id="CHECK_BEHIND_PART_SEAMS_UNMEASURED"></a>`CHECK_BEHIND_PART_SEAMS_UNMEASURED` | a pair with an authored effective threshold cannot read a mandatory population: selected pair, eligible behind slots, `--parts` manifest (`parts.json` and `parts/*.png`) for setup standing's flat recomposite, idle, readable setup, motion support, boundary population, or verified render/grid/material evidence; mandatory unread evidence makes the combined line FAIL. A missing threshold alone is a nonrequired SKIP and HOLE without this refusal code | for the detail `no --parts manifest was supplied; setup standing compares the setup render with the parts' flat recomposite`, supply `parts.json` and `parts/<part>.png` (or pass `--parts <dir>` on the `rig-parts check` command line). For the detail `standing endpoints include ambiguous half-alpha owners` (measured at setup only), the line names the case and, for each case, the first endpoint in scan order with both members' alpha: *neither* member reaches 128/255 there (both members' soft edges paint the same cell, each below 128/255) or *both* do (the members' overlap reaches the gap's edge). Edit `parts/<part>.png` of one member, or its source layer, so that exactly one member reaches 128/255 at that endpoint and the other is below it or does not paint it; the corridor is then read and may fail [`CHECK_BEHIND_PART_SEAMS`](#CHECK_BEHIND_PART_SEAMS) on a real gap. A threshold at or above the cell's distance to the recomposite removes the cell from the reading altogether; the threshold decides what could count; it does not clear a cell that could. `requirements.json` `behind_seams.allowance` never clears an unread cell; removing `behind_seams.threshold` (or `behind_seams.pairs[].threshold`), or the pair from `behind_seams.pairs[]` in `requirements.json`, only silences the reading (issues #1405, #1408). When a turn pose (or idle frame) reads the `motion_opened` `HOLE` (`stock transported setup-overlap support is unavailable on every named turn pose; motion-opened is not measured`, or `both named front slots must draw on this frame`, or `no eligible slot is drawn strictly behind both pair members`), give the pair's two front members a setup overlap band in `parts/<part>.png` or `config.json` (`regions`, `meshes`, or `bones`) and ensure both members and at least one rear slot in `behind_slots` draw in consistent order at setup and on every turn pose so `motion_opened` can transport setup-overlap cells, or — when the pair is not a turn-tracked overlap seam — omit `behind_seams.turn` (or the pair's threshold in `requirements.json` `behind_seams`; issue #1412). For any other detail, supply the named measurement evidence in `parts/<part>.png`, `config.json` or `requirements.json` `behind_seams`; an invalid selected-pair override in `requirements.json` `behind_seams.pairs[]` also refuses by name, and existing renderer or sidecar refusals remain refusals |
 | <a id="SETUP_PAINTING_REQUIRED_LIMIT"></a>`SETUP_PAINTING_REQUIRED_LIMIT` | `setup_painting.required` is `true` and a limit the check needs is absent: `rgb_tolerance`, `regions`, or a region's `max_pixels` (the object names the region). Refused when the requirements file is read, before anything is built (issue #943) | author the named limit; none is derived from the art. Without `required` the same region reports SKIP |
 | <a id="CHECK_SOURCE_GRID"></a>`CHECK_SOURCE_GRID` | the setup-pose still and its black-tinted twin (the coverage `SETUP_POSE_VS_SOURCE` reads) did not come back on one grid over one opaque background | a rigc problem; report it |
 | <a id="CHECK_RIGC_VERSION"></a>`CHECK_RIGC_VERSION` | `rigc --version` is below 1.4.0, or prints no version: its `render` has no `--geometry`, which `TEXTURE_STRETCH` reads. Refused before anything is built | `bun install` (this package depends on rig-c ^2.20.4), or put a newer `rigc` first on `PATH` |
@@ -8333,8 +8333,24 @@ setup, followed by every full min/max corner; duplicate poses occur once.
 For yaw, pitch and body yaw this means six axis endpoints and eight corners.
 Each row names the planned and observed dial locals and observed slider mapped
 times, using independent t=0 reset samples rather than idle time. The turn block records selected pose names, per-pair native
-frames and sampled/read/unmeasured pose counts, and separate standing and
-motion-opened maxima. No sweep or temporal span is claimed. Its stock transported
+frames and sampled/read/unmeasured pose counts, the `motion_opened` status and
+maximum count, and the `standing` summary (`status: "SKIP"`, `reason`,
+`max_px: 0`). Because a turn pose is an independent `t=0` pose and the parts'
+flat recomposite is not transported to it, turn `standing` is never measured
+(issue #1412): on each turn pose, `turn.pairs[].frames[].standing` is `SKIP`
+with zero counts, `box: null`, `samples: []`, no `unread_cells` or
+`unread_corridors`, and its per-pose `reason`
+(`"not applicable: motion_opened reads the pair"` when `motion_opened` reads the
+pair on that pose, or
+`"turn standing is not measured: turn poses have no recomposite oracle, and the pair's turn reading is motion_opened"`
+when `motion_opened` cannot read that pose), while `motion_opened` is the turn
+reading. When a turn pose reads the `motion_opened` `HOLE`
+(`stock transported setup-overlap support is unavailable on every named turn pose; motion-opened is not measured`),
+give the pair a setup overlap band in `parts/<part>.png` or `config.json`
+(`regions`, `meshes`, or `bones`) and keep both members and at least one rear
+slot drawn in front/behind order across the turn poses so `motion_opened` can
+transport setup-overlap support, or omit `behind_seams.turn` (or the pair's
+threshold in `requirements.json`). No sweep or temporal span is claimed. Its stock transported
 setup-overlap evidence is computed separately with the official seam reader;
 the idle's exact stock binding is unchanged. One throwaway rig-c build appends a
 duration-0 animation for each selected pose, retaining the accepted setup,
@@ -8351,8 +8367,8 @@ the original accepted skeleton SHA-256 once. The scratch copy is removed even
 on refusal; without the turn opt-in no copy or extra build is created.
 A missing optional poser is a named HOLE. A missing dial persists turn SKIP and
 its HOLE; an effective T makes it a required-unmeasured failure. Legacy `turn.x`
-has no finite range declaration and stays unread. Unread corridors cannot become
-zero counts. Thresholds and per-pair allowances apply unchanged to turn. A pair
+has no finite range declaration and stays unread. Per-pair allowances apply
+unchanged to turn `motion_opened`. A pair
 without its own effective T stays SKIP with a HOLE; another pair's override
 does not make that optional reading fail the turn block.
 
@@ -8377,10 +8393,10 @@ The two readings are independent:
   transparent at the exact seam-cell centre, and setup attribution must show A
   or B covering that material. It uses no one-cell floor. A rigidly translated
   closed pair stays closed; no setup overlap band means this half is unmeasured
-  on idle.
+  on idle and turn.
 - `standing` is measured at `setup` against the parts' flat recomposite at their
-  painted positions (issue #1408), and at opted-in turn poses
-  (`behind_seams.turn: true`) by pose endpoint contrast alone. At `setup`, it
+  painted positions (issues #1408, #1412); it is not measured on idle frames or
+  turn poses. At `setup`, it
   scans row and column runs whose combined A/B alpha is below 128/255, bracketed
   immediately by different unambiguous A/B owners (`1` and `2`), and compares
   the full setup render at each cell with the parts' flat recomposite
@@ -8417,15 +8433,18 @@ The two readings are independent:
   `reason: "no --parts manifest was supplied; setup standing compares the setup render with the parts' flat recomposite"`,
   records a `setup` `unmeasured[]` row, and with an authored T emits
   [`CHECK_BEHIND_PART_SEAMS_UNMEASURED`](#CHECK_BEHIND_PART_SEAMS_UNMEASURED).
-  On idle frames, `standing` is never measured: where a frame's `motion_opened`
-  is read, `frames[].standing` reports `SKIP` with
-  `reason: "not applicable: motion_opened reads the pair"`, zero counts,
-  `box: null`, `samples: []`, no unread fields, and no idle standing problem or
-  unmeasured row; where a frame's `motion_opened` cannot be read,
-  `frames[].standing` reports `SKIP` with
+  On idle frames and opted-in turn poses, `standing` is never measured: where a
+  frame's or pose's `motion_opened` is read, `frames[].standing` reports `SKIP`
+  with `reason: "not applicable: motion_opened reads the pair"`, zero counts,
+  `box: null`, `samples: []`, no unread fields, and no standing problem or
+  unmeasured row; where `motion_opened` cannot be read on an idle frame or turn
+  pose, `frames[].standing` reports `SKIP` with
   `reason: "idle standing is not measured: idle frames have no recomposite oracle, and the pair's idle reading is motion_opened"`
-  while `motion_opened` records its named `HOLE` (and `pairs[].standing`
-  carries the pair's idle summary reason). This bracketed-run definition does
+  (on idle) or
+  `reason: "turn standing is not measured: turn poses have no recomposite oracle, and the pair's turn reading is motion_opened"`
+  (on turn) while `motion_opened` records its named `HOLE` (and
+  `pairs[].standing` / `turn.pairs[].standing` carry the pair's idle or turn
+  summary reason). This bracketed-run definition does
   not certify curved or diagonal openings.
 
 Setup standing in `BEHIND_PART_SEAMS` measures whether the rig's setup pose
@@ -8459,8 +8478,9 @@ grid and sampled/read/unmeasured frame counts. The `motion_opened` reading
 retains per-frame hits (`index`, `time`, `px`, `cell`, `area`, `box`),
 `max_px`, the earliest worst hit and contiguous `spans`; the idle `standing`
 summary (`pairs[].standing`) is always `SKIP` with its `reason`, zero counts,
-`worst: null`, and empty `frames` and `spans` (while setup standing at
-`pairs[].setup.standing` and turn standing poses retain their measured counts,
+`worst: null`, and empty `frames` and `spans`, and the turn `standing` summary
+(`turn.pairs[].standing`) is always `SKIP` with its `reason` and `max_px: 0`
+(while setup standing at `pairs[].setup.standing` retains its measured counts,
 `box` and `samples`).
 `max_run` is temporal, in frames and seconds; `max_spatial_run_cells` is the
 longest counted horizontal/vertical run, with world length equal to cells times
@@ -8470,18 +8490,16 @@ counts remain distinct. Overlapping pair counts are not a unique whole-rig
 area.
 
 Issue #1325 adds optional unread-corridor evidence to the per-frame `standing`
-record at `BEHIND_PART_SEAMS.pairs[].setup.standing` (and on turn standing
-frames when `behind_seams.turn: true`; idle `frames[].standing` is never
-measured). The fields below are relative to that record. They describe
+record at `BEHIND_PART_SEAMS.pairs[].setup.standing` (idle `frames[].standing`
+and turn `turn.pairs[].frames[].standing` are never measured). The fields below
+are relative to that record. They describe
 bracketed low-alpha runs with an endpoint owner of 0 or 3 that have at least
 one cell differing from the parts' recomposite by more than T at setup
 (`dRecomposite > T`); they do not infer an owner or count those runs as
 measured contrast. At setup, `unread_corridors[].cells`, `cell_count` and
 `unread_cells` leave out cells within T of the recomposite (`dRecomposite <= T`)
 and report the remaining interior cells of the run, excluding its endpoints,
-whether or not rear colour would qualify against endpoint contrast T (on turn
-poses, which have no recomposite oracle, all interior cells of the run are
-reported). A cell can be unread on one axis and readable on the other; unread
+whether or not rear colour would qualify against endpoint contrast T. A cell can be unread on one axis and readable on the other; unread
 evidence does not remove a measured hit.
 
 | Field | Contract |
@@ -8495,7 +8513,7 @@ evidence does not remove a measured hit.
 | `unread_corridors[].endpoints[][2]` | World-space x coordinate of the endpoint cell centre. |
 | `unread_corridors[].endpoints[][3]` | World-space y coordinate of the endpoint cell centre, y up. |
 | `unread_corridors[].endpoints[][4]` | Observed half-alpha owner code: 0 means neither A nor B reaches 128/255; 1 means only A does; 2 means only B does; 3 means both do. A and B are the selected pair's named members; 0 and 3 are not resolved by guessing. |
-| `unread_corridors[].cells` | Interior native-cell centres as numeric `[world_x, world_y]` tuples, y up, left-to-right or top-to-bottom along the run, leaving out cells within T of the parts' recomposite at setup (on turn poses, all interior cells of the run). A centre may occur in multiple corridors. |
+| `unread_corridors[].cells` | Interior native-cell centres as numeric `[world_x, world_y]` tuples, y up, left-to-right or top-to-bottom along the run, leaving out cells within T of the parts' recomposite at setup. A centre may occur in multiple corridors. |
 | `unread_corridors[].cell_count` | The number of reported interior cells in this corridor (at setup, leaving out cells within T of the recomposite), exactly `cells.length`. |
 | `unread_corridors[].row_scope` | `pair`; the corridor observes the selected front pair, not an individual rear slot. |
 | `unread_corridors[].row_kind` | `evidence`, including when the required check fails. |
@@ -8511,7 +8529,9 @@ fully read frame.
 `sampled_frames`, `read_frames` and `unmeasured_frames` count idle frames only.
 An idle frame enters `read_frames` when `motion_opened` is read on that frame;
 when `motion_opened` is unavailable on that frame, the frame enters
-`unmeasured_frames` (idle `standing` is never measured). Setup is reported
+`unmeasured_frames` (and on turn poses, `sampled_poses`, `read_poses` and
+`unmeasured_poses` follow the same `motion_opened` rule; idle and turn
+`standing` are never measured). Setup is reported
 separately at `pairs[].setup` and is not counted as an idle frame.
 
 A measured count above the effective allowance is
@@ -8521,7 +8541,7 @@ effective T reports a nonrequired SKIP and HOLE; missing T alone emits no
 PASS. With authored T, missing behind slots, `--parts` manifest for setup
 standing's recomposite, idle, setup, motion support, boundary population or
 verified render/material evidence cannot establish PASS. An unavailable reading
-is SKIP; a partially unread setup (or turn) standing reading retains any
+is SKIP; a partially unread setup standing reading retains any
 measured FAIL as described above. An unread population reports a HOLE and emits
 [`CHECK_BEHIND_PART_SEAMS_UNMEASURED`](#CHECK_BEHIND_PART_SEAMS_UNMEASURED),
 making the combined line FAIL. Existing hard render and sidecar failures
@@ -9604,18 +9624,18 @@ Internal `SeamSupport.drawings` never enters check JSON. Named requirement
 | `ANIMATIONS_DO_NOT_FOLD.declared_not_folding` | `ANIMATIONS_DO_NOT_FOLD.declared_not_folding` | part when the supplied mapping resolves a piece; otherwise rig | finding | resolved piece for e.slot; otherwise [] | [check.ts:3697](../src/check.ts#L3697) |
 | `ANIMATIONS_DO_NOT_FOLD.folding` | `ANIMATIONS_DO_NOT_FOLD.folding` | part when the supplied mapping resolves a piece; otherwise rig | finding when entry === undefined; otherwise evidence | resolved piece for slot; otherwise [] | [check.ts:3659](../src/check.ts#L3659) |
 | `ART_JOINT_DISTANCE.joints` | `ART_JOINT_DISTANCE.joints` | 'rig' | finding when status === 'FAIL'; otherwise evidence | [] | [artjoints.ts:86](../src/artjoints.ts#L86) |
-| `BEHIND_PART_SEAMS.contributors` | `BEHIND_PART_SEAMS.turn.pairs[].frames[].standing.samples[].contributors`; `BEHIND_PART_SEAMS.turn.pairs[].frames[].motion_opened.samples[].contributors`; `BEHIND_PART_SEAMS.pairs[].setup.motion_opened.samples[].contributors`; `BEHIND_PART_SEAMS.pairs[].setup.standing.samples[].contributors`; `BEHIND_PART_SEAMS.pairs[].frames[].motion_opened.samples[].contributors`; `BEHIND_PART_SEAMS.pairs[].frames[].standing.samples[].contributors` | 'pair' | evidence | [pair.a, pair.b] | [behindseams.ts:520](../src/behindseams.ts#L520) |
-| `BEHIND_PART_SEAMS.hits` | `BEHIND_PART_SEAMS.pairs[].motion_opened.frames`; `BEHIND_PART_SEAMS.pairs[].standing.frames`; `BEHIND_PART_SEAMS.pairs[].motion_opened.worst`; `BEHIND_PART_SEAMS.pairs[].standing.worst` | 'pair' | finding when r.px > allowance; otherwise evidence | parts | [behindseams.ts:597](../src/behindseams.ts#L597) |
-| `BEHIND_PART_SEAMS.pairs` | `BEHIND_PART_SEAMS.pairs` | 'pair' | finding when failed; otherwise evidence | parts | [behindseams.ts:682](../src/behindseams.ts#L682) |
+| `BEHIND_PART_SEAMS.contributors` | `BEHIND_PART_SEAMS.turn.pairs[].frames[].standing.samples[].contributors`; `BEHIND_PART_SEAMS.turn.pairs[].frames[].motion_opened.samples[].contributors`; `BEHIND_PART_SEAMS.pairs[].setup.motion_opened.samples[].contributors`; `BEHIND_PART_SEAMS.pairs[].setup.standing.samples[].contributors`; `BEHIND_PART_SEAMS.pairs[].frames[].motion_opened.samples[].contributors`; `BEHIND_PART_SEAMS.pairs[].frames[].standing.samples[].contributors` | 'pair' | evidence | [pair.a, pair.b] | [behindseams.ts:526](../src/behindseams.ts#L526) |
+| `BEHIND_PART_SEAMS.hits` | `BEHIND_PART_SEAMS.pairs[].motion_opened.frames`; `BEHIND_PART_SEAMS.pairs[].standing.frames`; `BEHIND_PART_SEAMS.pairs[].motion_opened.worst`; `BEHIND_PART_SEAMS.pairs[].standing.worst` | 'pair' | finding when r.px > allowance; otherwise evidence | parts | [behindseams.ts:608](../src/behindseams.ts#L608) |
+| `BEHIND_PART_SEAMS.pairs` | `BEHIND_PART_SEAMS.pairs` | 'pair' | finding when failed; otherwise evidence | parts | [behindseams.ts:693](../src/behindseams.ts#L693) |
 | `BEHIND_PART_SEAMS.pairs[].frames` | `BEHIND_PART_SEAMS.pairs[].frames` |  |  |  |  |
 | `BEHIND_PART_SEAMS.pairs[].setup` | `BEHIND_PART_SEAMS.pairs[].setup` |  |  |  |  |
-| `BEHIND_PART_SEAMS.samples` | `BEHIND_PART_SEAMS.turn.pairs[].frames[].standing.samples`; `BEHIND_PART_SEAMS.turn.pairs[].frames[].motion_opened.samples`; `BEHIND_PART_SEAMS.pairs[].setup.motion_opened.samples`; `BEHIND_PART_SEAMS.pairs[].setup.standing.samples`; `BEHIND_PART_SEAMS.pairs[].frames[].motion_opened.samples`; `BEHIND_PART_SEAMS.pairs[].frames[].standing.samples` | 'pair' | evidence | [pair.a, pair.b] | [behindseams.ts:519](../src/behindseams.ts#L519) |
-| `BEHIND_PART_SEAMS.spans` | `BEHIND_PART_SEAMS.pairs[].motion_opened.spans`; `BEHIND_PART_SEAMS.pairs[].standing.spans` | 'pair' | evidence | parts | [behindseams.ts:605](../src/behindseams.ts#L605) |
-| `BEHIND_PART_SEAMS.turn.pairs` | `BEHIND_PART_SEAMS.turn.pairs` | 'pair' | finding when required; otherwise evidence; finding when motion.status === 'FAIL' &#124;&#124; standing.status === 'FAIL' &#124;&#124; threshold !== null && read !== turn.poses.length; otherwise evidence | [pair.a, pair.b]; parts | [behindseams.ts:712](../src/behindseams.ts#L712), [behindseams.ts:754](../src/behindseams.ts#L754) |
+| `BEHIND_PART_SEAMS.samples` | `BEHIND_PART_SEAMS.turn.pairs[].frames[].standing.samples`; `BEHIND_PART_SEAMS.turn.pairs[].frames[].motion_opened.samples`; `BEHIND_PART_SEAMS.pairs[].setup.motion_opened.samples`; `BEHIND_PART_SEAMS.pairs[].setup.standing.samples`; `BEHIND_PART_SEAMS.pairs[].frames[].motion_opened.samples`; `BEHIND_PART_SEAMS.pairs[].frames[].standing.samples` | 'pair' | evidence | [pair.a, pair.b] | [behindseams.ts:525](../src/behindseams.ts#L525) |
+| `BEHIND_PART_SEAMS.spans` | `BEHIND_PART_SEAMS.pairs[].motion_opened.spans`; `BEHIND_PART_SEAMS.pairs[].standing.spans` | 'pair' | evidence | parts | [behindseams.ts:616](../src/behindseams.ts#L616) |
+| `BEHIND_PART_SEAMS.turn.pairs` | `BEHIND_PART_SEAMS.turn.pairs` | 'pair' | finding when required; otherwise evidence; finding when motion.status === 'FAIL' &#124;&#124; standing.status === 'FAIL' &#124;&#124; threshold !== null && read !== turn.poses.length; otherwise evidence | [pair.a, pair.b]; parts | [behindseams.ts:723](../src/behindseams.ts#L723), [behindseams.ts:772](../src/behindseams.ts#L772) |
 | `BEHIND_PART_SEAMS.turn.pairs[].frames` | `BEHIND_PART_SEAMS.turn.pairs[].frames` |  |  |  |  |
-| `BEHIND_PART_SEAMS.turn.unmeasured` | `BEHIND_PART_SEAMS.turn.unmeasured` | pair === null ? 'rig' : 'pair' | finding when mandatory; otherwise evidence | pair === null ? [] : [pair.a, pair.b] | [behindseams.ts:704](../src/behindseams.ts#L704) |
-| `BEHIND_PART_SEAMS.unmeasured` | `BEHIND_PART_SEAMS.unmeasured` | pair === null ? 'rig' : 'pair'; 'rig' | finding when required; otherwise evidence; finding | pair === null ? [] : [pair.a, pair.b]; [] | [behindseams.ts:618](../src/behindseams.ts#L618), [behindseams.ts:955](../src/behindseams.ts#L955), [behindseams.ts:1003](../src/behindseams.ts#L1003) |
-| `BEHIND_PART_SEAMS.unread_corridors` | `BEHIND_PART_SEAMS.turn.pairs[].frames[].standing.unread_corridors`; `BEHIND_PART_SEAMS.pairs[].setup.standing.unread_corridors`; `BEHIND_PART_SEAMS.pairs[].frames[].standing.unread_corridors` | 'pair' | evidence | [pair.a, pair.b] | [behindseams.ts:453](../src/behindseams.ts#L453) |
+| `BEHIND_PART_SEAMS.turn.unmeasured` | `BEHIND_PART_SEAMS.turn.unmeasured` | pair === null ? 'rig' : 'pair' | finding when mandatory; otherwise evidence | pair === null ? [] : [pair.a, pair.b] | [behindseams.ts:715](../src/behindseams.ts#L715) |
+| `BEHIND_PART_SEAMS.unmeasured` | `BEHIND_PART_SEAMS.unmeasured` | pair === null ? 'rig' : 'pair'; 'rig' | finding when required; otherwise evidence; finding | pair === null ? [] : [pair.a, pair.b]; [] | [behindseams.ts:629](../src/behindseams.ts#L629), [behindseams.ts:973](../src/behindseams.ts#L973), [behindseams.ts:1021](../src/behindseams.ts#L1021) |
+| `BEHIND_PART_SEAMS.unread_corridors` | `BEHIND_PART_SEAMS.turn.pairs[].frames[].standing.unread_corridors`; `BEHIND_PART_SEAMS.pairs[].setup.standing.unread_corridors`; `BEHIND_PART_SEAMS.pairs[].frames[].standing.unread_corridors` | 'pair' | evidence | [pair.a, pair.b] | [behindseams.ts:459](../src/behindseams.ts#L459) |
 | `BOUNDARY_COLOUR_STEP.over` | `BOUNDARY_COLOUR_STEP.over` | 'pair' | finding | r.parts | [boundarycolour.ts:221](../src/boundarycolour.ts#L221) |
 | `BOUNDARY_COLOUR_STEP.unmeasured` | `BOUNDARY_COLOUR_STEP.unmeasured` | part when the supplied mapping resolves a piece; otherwise rig | evidence | resolved piece for r.slot; otherwise [] | [boundarycolour.ts:222](../src/boundarycolour.ts#L222) |
 | `CLOTH_SETTLES.rows` | `CLOTH_SETTLES.rows` | 'rig' | finding when speeds.length > 0 && s < speeds.length; otherwise evidence | [] | [check.ts:6144](../src/check.ts#L6144) |
