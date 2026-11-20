@@ -1,3 +1,4 @@
+import { changedAssemblyFields, readAssemblyConfig, refuseStaleAssembly } from './assembly-reading.ts';
 import { editedPartFrontColourLines, readEditedParts } from './editedparts.ts';
 import { SOURCE_COVER_FILE, sourceCoverReport, type SourceCoverSet } from './sourcecover.ts';
 import { STAGE_MAP_FILE } from './provenance.ts';
@@ -108,7 +109,7 @@ import { CONTROL_SUFFIX, withAnimations } from './motion.ts';
 import type { PaletteError } from './palette.ts';
 import { type LayerSet, readLayers } from './layers.ts';
 import { placeBoneEntriesForSkeleton, poseBoneEntriesForDrawn, REGISTER_OFFSET_BAR, REGISTER_SCALE_BAR, registeredWithinBar, registerSkeleton, SKELETON_LIMB_BONES, skeletonDrawnLength, skeletonLimbJoints } from './limbs.ts';
-import { type AlternatePartsRecord, PAINTING_IN_RIG_FILE, FRONT_SUFFIX, type OccluderPlateRecord, type PartRecord, partImageReference, depthImageReference, readParts, type RecompositeRecord, type SingleRunPad, tagOf, writeParts } from './parts.ts';
+import { type AlternatePartsRecord, PAINTING_IN_RIG_FILE, FRONT_SUFFIX, type OccluderPlateRecord, type PartRecord, partImageReference, depthImageReference, readParts, readPartsManifest, type RecompositeRecord, type SingleRunPad, tagOf, writeParts } from './parts.ts';
 import { encodePngBytes, readPng, writePng } from './raster/png.ts';
 import type { Raster } from './raster/types.ts';
 import { type Mask, newMask } from './raster/types.ts';
@@ -1071,6 +1072,14 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     result.parts.alternates = altBuilt.map((b) => b.record);
   }
 
+  const reading = readAssemblyConfig(cfg, result.parts);
+  let previousAssembly = undefined;
+  if (existsSync(outs.partsJson)) {
+    try { previousAssembly = readPartsManifest(outs.partsJson).assembly_config; }
+    catch (error) { if (!(error instanceof PartsError)) throw error; }
+  }
+  result.parts.assembly_config = reading;
+
   const allocationPath = join(dirname(outs.partsJson), PAINTING_ALLOCATION_FILE);
   let previousAllocationFiles: string[] = [];
   if (existsSync(allocationPath)) {
@@ -1099,6 +1108,10 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     sha256: createHash('sha256').update(paintingBytes).digest('hex'), resample: 'lanczos3-rgb-opaque' };
   writeFileSync(join(dirname(outs.partsJson), PAINTING_IN_RIG_FILE), paintingBytes);
   writeParts(outs.partsJson, result.parts);
+  if (previousAssembly !== undefined) {
+    const changes = changedAssemblyFields(previousAssembly, reading);
+    if (changes.length > 0) log(`note: reassembled parts after changes to ${changes.map(name => `config.${name}`).join(', ')}`);
+  }
   writeFileSync(join(dirname(outs.partsJson), SOURCE_COVER_FILE), JSON.stringify(sourceCoverReport(sourceCoverSets), null, 2) + '\n');
   const stageMapPath = join(dirname(outs.partsJson), STAGE_MAP_FILE);
   if (result.stageMap === undefined) rmSync(stageMapPath, { force: true });
@@ -1858,6 +1871,7 @@ export interface RigInputs {
 export function readRigInputs(config: string, partsDir: string): RigInputs {
   const { config: cfg, animations: from } = loadConfigAndAnimations(config);
   const parts = readParts(join(partsDir, 'parts.json'));
+  refuseStaleAssembly(config, parts, cfg);
   const images = new Map<string, Raster>();
   const depthProblems: Problem[] = [];
   for (const p of parts.parts) {

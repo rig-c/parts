@@ -14,7 +14,7 @@ import type { CharacterConfig } from './config.ts';
 import { orderedEditedPartReceipt, type EditedPartReceipt } from './editedparts.ts';
 import type { Proposal, PROPOSAL_CONFIG_SECTIONS } from './propose.ts';
 import { PartsError } from './errors.ts';
-import { parseConfig, parseProposalSections } from './config.ts';
+import { parseConfig, parseEarlyConfig, parseProposalSections } from './config.ts';
 import type { ConfigEdit } from './meshdraft.ts';
 
 export type ConfigJson = null | boolean | number | string | ConfigJson[] | ConfigObject;
@@ -88,15 +88,17 @@ function changes(before: ConfigObject, after: ConfigObject, parent = ''): Config
   return result;
 }
 
-/** The caller validates the returned candidate through its existing config door before saving it. */
-export function mergeConfigProposal(raw: unknown, patch: ConfigWritePatch): ConfigWriteResult {
+/** The caller validates the returned candidate through its existing config door before saving it.
+ * Receipt patches can also read a source config through the assembly door.
+ */
+export function mergeConfigProposal(raw: unknown, patch: ConfigWritePatch, receiptDoor: 'full' | 'assemble' = 'full'): ConfigWriteResult {
   if (!object(raw)) return refuse('config', 'is not an object; an existing config JSON object is required');
   const before = clone(raw, 'config') as ConfigObject;
   const config = clone(before, 'config') as ConfigObject;
   const edits: ConfigEdit[] = [];
   switch (patch.kind) {
     case 'edited-part-receipt': {
-      const checked = parseConfig(before);
+      const checked = receiptDoor === 'assemble' ? parseEarlyConfig(before, 'assemble') : parseConfig(before);
       const spec = checked.assemble.edited_parts;
       if (spec === undefined) throw new PartsError([{ code: 'EDITED_PART_BLOCK', object: 'config.assemble.edited_parts', detail: 'has no assemble.edited_parts; declare {dir, receipts: []} before recording an edited part' }]);
       const { part } = patch.receipt;

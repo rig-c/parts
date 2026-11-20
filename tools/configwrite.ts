@@ -108,26 +108,35 @@ function unchanged(target: ConfigWriteTarget): void {
   } catch { /* Removal is also a change, never a reason to create a new config. */ }
   if (!same) refusal('CONFIG_WRITE_CHANGED', target.path, 'changed after it was read; nothing was replaced — rerun against the current config');
 }
+
+function configWriteDoor(patch: ConfigWritePatch, receiptDoor: 'full' | 'assemble'): 'layers' | 'assemble' | 'full' {
+  if (patch.kind === 'head-box') return 'layers';
+  if (patch.kind === 'assemble-plan') return 'assemble';
+  return patch.kind === 'edited-part-receipt' ? receiptDoor : 'full';
+}
+
 /** One file-writing adapter for all --write-config modes. Existing-file ownership
  * produces whole-value edits for splicedEdits, the engine clothConfigEdits uses.
  * Fresh cloth text already passed writtenClothConfig's splice check: it is never
  * sent through a full loader that would reject an intentional partial config.
  */
-export function stageConfigWrite(target: ConfigWriteTarget | FreshConfigWrite, patch?: ConfigWritePatch, files: ConfigWriteFiles = {}): StagedConfigWrite {
+export function stageConfigWrite(target: ConfigWriteTarget | FreshConfigWrite, patch?: ConfigWritePatch, files: ConfigWriteFiles = {}, receiptDoor: 'full' | 'assemble' = 'full'): StagedConfigWrite {
   const fresh = 'kind' in target;
   const path = resolve(target.path);
   let text: string;
   let changes: readonly ConfigWriteChange[];
+  let door: ReturnType<typeof configWriteDoor> | undefined;
   if (fresh) {
     text = target.text;
     changes = [];
   } else {
     if (patch === undefined) return refusal('CONFIG_FIELD_TYPE', path, 'has no config patch; a supported proposal operation is required');
-    const merged = mergeConfigProposal(target.raw, patch);
+    const merged = mergeConfigProposal(target.raw, patch, receiptDoor);
     const spliced = merged.changes.length === 0 ? { text: target.original, moved: null } : splicedEdits(target.original, merged.edits);
     if (spliced.moved !== null) return refusal('CONFIG_WRITE_FAILED', path, `spliced proposal values moved ${spliced.moved}; the original was not replaced`);
     text = spliced.text;
     changes = merged.changes;
+    door = configWriteDoor(patch, receiptDoor);
   }
   const freshAbsent = (): void => {
     try { lstatSync(path); }
@@ -155,11 +164,9 @@ export function stageConfigWrite(target: ConfigWriteTarget | FreshConfigWrite, p
     if (!fresh) fchmodSync(fd, target.mode);
     closeSync(fd);
     fd = undefined;
-    if (!fresh) {
-      if (patch?.kind === 'head-box') loadEarlyConfig(temp, 'layers');
-      else if (patch?.kind === 'assemble-plan') loadEarlyConfig(temp, 'assemble');
-      else loadConfigAndAnimations(temp);
-    }
+    if (door === 'layers') loadEarlyConfig(temp, 'layers');
+    else if (door === 'assemble') loadEarlyConfig(temp, 'assemble');
+    else if (door === 'full') loadConfigAndAnimations(temp);
   } catch (error) {
     if (fd !== undefined) {
       try { closeSync(fd); }
@@ -204,7 +211,7 @@ export function configWriteLines(target: ConfigWriteTarget, changes: readonly Co
   return changes.length === 0 ? [`config ${target.path}: unchanged`] : changes.map((c) => `config ${target.path}: ${c.kind} ${c.path}${c.value === undefined ? '' : ` ${c.value}`}`);
 }
 
-export interface ConfigWriteRequest { target: ConfigWriteTarget; patch: ConfigWritePatch }
+export interface ConfigWriteRequest { target: ConfigWriteTarget; patch: ConfigWritePatch; receiptDoor?: 'full' | 'assemble' }
 export interface StagedConfigWriteBatch {
   writes: ReadonlyArray<{ target: ConfigWriteTarget; changes: readonly ConfigWriteChange[] }>;
   commit(): void;
@@ -231,14 +238,15 @@ export function stageConfigWriteBatch(requests: readonly ConfigWriteRequest[], f
     }
     // Candidate shape refusals precede even temporary writes. The existing
     // stage loader then validates each real same-directory staged file, including
-    // relative sidecars. Edited receipts are full-config updates, not early drafts.
-    for (const { target, patch } of requests) {
-      const candidate = mergeConfigProposal(target.raw, patch).config;
-      if (patch.kind === 'head-box') parseEarlyConfig(candidate, 'layers');
-      else if (patch.kind === 'assemble-plan') parseEarlyConfig(candidate, 'assemble');
+    // relative sidecars.
+    for (const { target, patch, receiptDoor = 'full' } of requests) {
+      const candidate = mergeConfigProposal(target.raw, patch, receiptDoor).config;
+      const door = configWriteDoor(patch, receiptDoor);
+      if (door === 'layers') parseEarlyConfig(candidate, 'layers');
+      else if (door === 'assemble') parseEarlyConfig(candidate, 'assemble');
       else parseConfig(candidate);
     }
-    for (const { target, patch } of requests) entries.push({ target, staged: stageConfigWrite(target, patch, files), backup: null, committed: false, restoreFailed: false });
+    for (const { target, patch, receiptDoor } of requests) entries.push({ target, staged: stageConfigWrite(target, patch, files, receiptDoor), backup: null, committed: false, restoreFailed: false });
   } catch (error) {
     throw new PartsError([...problemsOf(error, 'config batch', 'staging configs failed'), ...cancelAll()]);
   }

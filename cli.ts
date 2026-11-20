@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { assemblyChangeDetail, assemblyConfigChanges } from './src/assembly-reading.ts';
 import { diffComponentsCommand } from './src/diffcomponents.ts';
 import { DIFF_DRAFTS_SPEC, diffDraftsCommand } from './src/diffdrafts.ts';
 import { applyTakenLayers } from './src/takelayers.ts';
@@ -76,7 +77,7 @@ const LATER: ReadonlyArray<[string, string]> = [];
 const HELP = `rig-parts ${version()} — Spine-ready parts from one painting and its See-through layers
 
 usage:
-  rig-parts edited-part --config <config.json> --part <name> --file <edited.png> --from <assembled.png> (--producer <json> | --editor <text>) [--rig-config <config.json>]
+  rig-parts edited-part --config <config.json> --part <name> --file <edited.png> --from <assembled.png> (--producer <json> | --editor <text>) [--parts <parts.json>] [--rig-config <config.json>]
   rig-parts external-receipt --kind mask --file <png> --painting <png> --producer <json> --out <receipt.json>
   rig-parts external-receipt --verify <receipt.json>
       Record both file hashes and the declared editor in one edited_parts receipt.
@@ -1208,7 +1209,7 @@ function printLayerTable(set: LayerSet): void {
  * no row; `layers` takes one positional path beside its flags (issue #359).
  */
 const TAKES = {
-  'edited-part': { valued: ['--config', '--part', '--file', '--from', '--editor', '--producer', '--rig-config'], switches: ['--help'] },
+  'edited-part': { valued: ['--config', '--part', '--file', '--from', '--editor', '--producer', '--parts', '--rig-config'], switches: ['--help'] },
   'external-receipt': { valued: ['--kind', '--file', '--painting', '--producer', '--out', '--verify'], switches: ['--help'] },
   'check-parts': { valued: ['--parts', '--out'], switches: ['--json', '--help'] },
   'diff-components': { valued: ['--stack', '--painting', '--parts', '--figure', '--floor', '--threshold', '--out', '--verify'], switches: ['--owners', '--help'] },
@@ -1901,6 +1902,16 @@ function cmdPropose(args: string[]): number {
     if (staged !== null) {
       staged.commit();
       if (target !== null) for (const line of configWriteLines(target, staged.changes)) console.error(line);
+      const writtenPath = target?.path ?? written?.at;
+      if (writtenPath !== undefined && P.manifest.assembly_config !== undefined) {
+        try {
+          const changes = assemblyConfigChanges(writtenPath, P.manifest);
+          if (changes.length > 0) console.log(`note: ${assemblyChangeDetail(changes)}`);
+        } catch (error) {
+          if (!(error instanceof PartsError)) throw error;
+          console.log('note: the written config is not ready for assemble; complete its assembly inputs and re-run assemble');
+        }
+      }
     }
     console.log(`wrote proposal.json (${prop.bones.length} bone entries, ${Object.keys(prop.meshes).length} meshes) and render/landmarks.png (+_head) under ${out}`);
     for (const n of prop.notes) console.log(n.startsWith('WARN  PROPOSE_TORSO_ISLAND_LEFT_OUT:') ? n : `note: ${n}`);
@@ -2632,8 +2643,9 @@ function cmdEditedPart(args: string[]): number {
   if (typeof f === 'string') return usage(f);
   if (!f.has('--editor') && !f.has('--producer')) return usage('edited-part needs --producer <json> or --editor <text>');
   try {
-    const { receipt, writes } = writeEditedPart({ config: f.get('--config')!, part: f.get('--part')!, file: f.get('--file')!, from: f.get('--from')!, editor: f.get('--editor'), producer: f.get('--producer'), rigConfig: f.get('--rig-config') });
+    const { receipt, writes } = writeEditedPart({ config: f.get('--config')!, part: f.get('--part')!, file: f.get('--file')!, from: f.get('--from')!, editor: f.get('--editor'), producer: f.get('--producer'), rigConfig: f.get('--rig-config'), parts: f.get('--parts') });
     for (const { target, changes } of writes) for (const line of configWriteLines(target, changes)) console.error(line);
+    if (!f.has('--parts')) console.log('note: no assembly config check ran; pass --parts <parts.json> to check the assembled inputs');
     console.log(`edited-part: part ${JSON.stringify(receipt.part)} sha256=${receipt.sha256} from_sha256=${receipt.from_sha256} ${receipt.editor === undefined ? 'producer' : 'editor'}=${JSON.stringify(receipt.editor ?? receipt.producer)}`);
     return EXIT_OK;
   } catch (error) { return printRefusal(error); }

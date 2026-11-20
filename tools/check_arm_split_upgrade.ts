@@ -260,6 +260,8 @@ export function runArmSplitUpgradeChecks(dir: string, say: Say, runner: RigcRunn
   const twin = fixture('split-plan', { splitPlan: true });
   const twinOut = assembleInto(twin.at);
   const twinParts = readFileSync(join(twinOut, 'parts.json'), 'utf8');
+  const withoutReading = (text: string): string => text.replace(/^  "assembly_config": \{\n[\s\S]*?^  \},\n/m, '');
+  const legacyBytesSame = withoutReading(twinParts) === withoutReading(oldParts0);
   const twinRun = onlyMissing(twin.at, twinOut);
   const twinAfter = readFileSync(join(twin.at, 'config.json'), 'utf8');
   const twinFig = spliceFigures(twin.text, twinAfter);
@@ -275,8 +277,8 @@ export function runArmSplitUpgradeChecks(dir: string, say: Say, runner: RigcRunn
   const twinRig = rigInto(twin.at, twinRebuilt, runner);
   record(
     'AU09_THE_MIGRATED_SPLIT_PLAN_CONFIG_BUILDS_GREEN',
-    twinRig.length === 0 && readFileSync(join(twinRebuilt, 'parts.json'), 'utf8') === twinParts && twinParts === oldParts0,
-    `assemble -> rig ${twinRig.length === 0 ? 'green' : `refused ${twinRig.map((p) => `${p.code} ${p.object}`).join(', ')}`}; parts.json the same bytes as before the write ${readFileSync(join(twinRebuilt, 'parts.json'), 'utf8') === twinParts} and as the pre-1.37 config's ${twinParts === oldParts0} (check not run: the fixture's idle is static)`,
+    twinRig.length === 0 && readFileSync(join(twinRebuilt, 'parts.json'), 'utf8') === twinParts && legacyBytesSame,
+    `assemble -> rig ${twinRig.length === 0 ? 'green' : `refused ${twinRig.map((p) => `${p.code} ${p.object}`).join(', ')}`}; parts.json the same bytes as before the write ${readFileSync(join(twinRebuilt, 'parts.json'), 'utf8') === twinParts} and as the pre-1.37 config after removing assembly_config ${legacyBytesSame} (check not run: the fixture's idle is static)`,
   );
 
   // ---- AU11: a set made before 1.37.0 over the split sleeve, which now draws the base hand beside its own -------------

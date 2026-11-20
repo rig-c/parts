@@ -684,10 +684,10 @@ export class PartSet {
   private readonly masks = new Map<string, Mask>();
   private preLimbs: PartSet | null = null;
 
-  constructor(file: PartsFile, images: ReadonlyMap<string, Raster>) {
-    [this.W, this.H] = file.rig_size;
-    this.rigScale = file.scale_rig_per_source;
-    this.recs = file.parts;
+  constructor(readonly manifest: PartsFile, images: ReadonlyMap<string, Raster>) {
+    [this.W, this.H] = manifest.rig_size;
+    this.rigScale = manifest.scale_rig_per_source;
+    this.recs = manifest.parts;
     this.images = images;
   }
 

@@ -165,7 +165,18 @@ export function runAlternateTipsChecks(dir: string, say: Say, runner: RigcRunner
   say('NORMALIZED_PARTS_TO_RIG_ACTUAL_CORE_GATE',gate.length>0&&gate.every(g=>g.status===0),JSON.stringify(gate.map(g=>({status:g.status,lines:g.lines}))));
   const stage=rigStage({config:join(f.d,'config.json'),parts:out,out:join(f.d,'standalone')},runner,join(f.d,'scratch'),()=>{});
   say('STANDALONE_AND_MEMORY_RIG_BYTES_MATCH',rigJsonText(stage.rig)===rigJsonText(r.rig)&&!Object.hasOwn(r.sets!.sets.step_r,'tips')&&!Object.hasOwn(r.rig,'tips'),'recorded endpoints consumed locally; no unconsumed sets/core fields');
+  const originalManifest = join(original, 'parts.json');
+  const originalManifestBytes = readFileSync(originalManifest);
+  const plantedCfg = join(f.d, 'config.json');
+  const staleConfig = refused(() => readRigInputs(plantedCfg, original));
+  say('ADDED_TIPS_WITH_ASSEMBLY_READING_NAME_THE_STALE_INPUT',
+    staleConfig.includes('ASSEMBLY_CONFIG_STALE') && staleConfig.includes('config.assemble.alternates'),
+    staleConfig);
+  const legacyOriginal = readParts(originalManifest);
+  delete legacyOriginal.assembly_config;
+  writeFileSync(originalManifest, serializeParts(legacyOriginal));
   const stale=refused(()=>rigStage({config:join(f.d,'config.json'),parts:original,out:join(f.d,'stale-output')},runner,join(f.d,'stale-scratch'),()=>{}));
+  writeFileSync(originalManifest, originalManifestBytes);
   say('CONFIG_TIPS_WITHOUT_RECORDED_PROVENANCE_REFUSED',stale.includes('RIG_ALT_TIPS_RECORDED')&&!existsSync(join(f.d,'stale-output')),stale);
   const badParts=structuredClone(input.parts);badParts.alternates![0].tips={absent:[1,2]};
   const noDeclaredTips=structuredClone(input.cfg);delete noDeclaredTips.assemble.alternates;
@@ -264,6 +275,15 @@ export function runAlternateTipsChecks(dir: string, say: Say, runner: RigcRunner
   const removedTipsCfg=structuredClone(orderInput.cfg);
   delete removedTipsCfg.assemble.alternates![0].tips;
   persist(orderDir,removedTipsCfg);
+  const orderedManifestPath = join(orderOut, 'parts.json');
+  const orderedManifestBytes = readFileSync(orderedManifestPath);
+  const staleReading = refused(() => readRigInputs(join(orderDir, 'config.json'), orderOut));
+  say('DELETED_TIPS_WITH_ASSEMBLY_READING_NAME_THE_STALE_INPUT',
+    staleReading.includes('ASSEMBLY_CONFIG_STALE') && staleReading.includes('config.assemble.alternates') && staleReading.includes('re-run assemble'),
+    staleReading);
+  const legacyOrdered = readParts(orderedManifestPath);
+  delete legacyOrdered.assembly_config;
+  writeFileSync(orderedManifestPath, serializeParts(legacyOrdered));
   const removedLoaded=readRigInputs(join(orderDir,'config.json'),orderOut);
   const staleDirect=refused(()=>buildRig(removedLoaded.cfg,removedLoaded.parts,removedLoaded.images));
   let deletedGateCalls=0;const deletedOut=join(orderDir,'deleted-tips-output');
@@ -288,5 +308,6 @@ export function runAlternateTipsChecks(dir: string, say: Say, runner: RigcRunner
   const extraParts=readParts(join(extraOut,'parts.json'));
   say('CLI_EXTRA_WITHOUT_CONFIG_SET_REMAINS_SUPPORTED',extraCalls>0&&extraExits.every(n=>n===0)&&extraParts.alternates?.length===1&&extraParts.alternates[0].name==='extra'&&extraParts.alternates[0].tips===undefined&&extraParts.alternates[0].tips_source_size===undefined&&attachment(extra,'extra_panel').weights.length>0,
     JSON.stringify({setNames:extraParts.alternates?.map(a=>a.name),gateCalls:extraCalls,gateExits:extraExits,bones:boneNames(extra,'extra_panel')}));
+  writeFileSync(orderedManifestPath, orderedManifestBytes);
   persist(orderDir,orderInput.cfg);
 }

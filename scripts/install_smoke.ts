@@ -37,6 +37,8 @@
  * install of `@rig-c/play` (`loadModel` and `readSetupMesh`, issue #741).
  * A Bun consumer applies an in-memory mesh edit to the installed auto rig and
  * reads the resulting revision and act binding from disk.
+ * A Bun consumer reads and compares assembly config digests through the named
+ * `assembly-reading` subpath (issue #1385).
  *
  * 🔒 **Nothing under this repository is on the fixture's path at run time.** The
  * fixture generator below is authored as text into the install directory and
@@ -101,6 +103,8 @@ const ROOT = resolve(import.meta.dir, '..');
 const ROOT_PKG = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { name: string; devDependencies?: Record<string, string> };
 /** The package's name, read from the tree's package.json: the directory an install puts it in, the specifier the fixtures import it by, and the registry spec. */
 const PACKAGE = ROOT_PKG.name;
+const ASSEMBLY_READING_SUBPATH = './assembly-reading';
+const ASSEMBLY_READING_PATH = 'src/assembly-reading.ts';
 const REMESH_API_PATH = 'src/remesh-api.ts';
 const REMESH_API_IMPORT = `${PACKAGE}/${REMESH_API_PATH}`;
 const BUILD_PROCESS_PATH = 'tools/build-process.ts';
@@ -611,6 +615,31 @@ for (const path of ['rig.json', 'motion.json', 'mesh_report.json', 'images/cloth
   assert.deepEqual(row, { path, bytes: bytes.length, sha256: sha256(bytes) });
 }
 console.log('REMESH_API ' + JSON.stringify({ part, ops: request.ops, constrained: request.applied.constrained, actId, payloadSha256, files: written.length }));
+`;
+
+const ASSEMBLY_READING_PROBE = `import assert from 'node:assert/strict';
+import { writeFileSync } from 'node:fs';
+import { assemblyConfigReading, assemblyConfigChanges } from '${PACKAGE}/assembly-reading';
+import type { PartsFile } from '${PACKAGE}/src/parts.ts';
+
+const path = 'assembly_reading_config.json';
+const config = {
+  key: 'smoke_assembly_reading',
+  seethrough: { resolution: 32, steps: 20, seed: 1, offload: false },
+  assemble: { rig_scale: 1, plan: [['face', 'full', 'face']] },
+};
+const parts: PartsFile = { rig_size: [32, 32], scale_rig_per_source: 1, parts: [], ghost_px: {} };
+writeFileSync(path, JSON.stringify(config));
+const reading = assemblyConfigReading(path, parts);
+assert.match(reading.sha256, /^[a-f0-9]{64}$/);
+assert.ok(reading.fields.some(field => field.name === 'assemble.rig_scale'));
+const recorded = { ...parts, assembly_config: reading };
+assert.deepEqual(assemblyConfigChanges(path, recorded), []);
+config.assemble.rig_scale = 0.5;
+writeFileSync(path, JSON.stringify(config));
+assert.deepEqual(assemblyConfigChanges(path, recorded), ['assemble.rig_scale']);
+assert.deepEqual(assemblyConfigChanges(path, parts), []);
+console.log('RESOLVED ' + import.meta.resolve('${PACKAGE}/assembly-reading'));
 `;
 
 // The installed `build --all-sets` output loaded through `@rig-c/play` (issue #741): an 80x80 painting scaled 0.5 to a
@@ -1166,7 +1195,9 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, fetchedTgz?: strin
     if (!keep) rmSync(home, { recursive: true, force: true });
     return { faults, steps, notes, output };
   }
-  const installedPkg = JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf8')) as { version?: string; bin?: Record<string, string>; dependencies?: Record<string, string> };
+  const installedPkg = JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf8')) as {
+    version?: string; bin?: Record<string, string>; dependencies?: Record<string, string>; exports?: Record<string, unknown>;
+  };
   for (const name of Object.keys(installedPkg.bin ?? {})) smokePackages[name] = PACKAGE;
   const runRemeshApi = (args: string[]): void => {
     const probeFile = join(home, 'remesh_api_probe.ts');
@@ -1202,6 +1233,23 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, fetchedTgz?: strin
     else notes.push('a direct @rig-c/core dependency beside parts still has one core and one rigc owner');
   }
 
+
+  // Older registry artifacts predate the named export. The tree must always carry it.
+  const assemblyReadingPath = join(pkgRoot, ASSEMBLY_READING_PATH);
+  const assemblyReadingTarget = installedPkg.exports?.[ASSEMBLY_READING_SUBPATH];
+  if (spec.plant === 'none' && (spec.source.kind === 'tree' || assemblyReadingTarget !== undefined || existsSync(assemblyReadingPath))) {
+    const probeFile = join(home, 'assembly_reading_probe.ts');
+    writeFileSync(probeFile, ASSEMBLY_READING_PROBE);
+    const probe = run('bun', [probeFile], home);
+    output += probe.out;
+    const resolved = probe.out.split(/\r?\n/).find(line => line.startsWith('RESOLVED '))?.slice('RESOLVED '.length);
+    const resolvedPath = resolved?.startsWith('file://') ? fileURLToPath(resolved) : resolved;
+    if (assemblyReadingTarget !== `./${ASSEMBLY_READING_PATH}` || probe.status !== 0 || resolvedPath !== assemblyReadingPath || !isSmokePathInside(pkgRoot, resolvedPath)) {
+      fault('assembly-reading', `SMOKE_ASSEMBLY_READING_FROM_THE_INSTALL: ${PACKAGE}/assembly-reading must resolve to ${assemblyReadingPath} and pass the digest probe; export ${JSON.stringify(assemblyReadingTarget)}, exit ${probe.status}. ${probe.out.trim().slice(0, 1500)}`);
+    } else {
+      notes.push(`${PACKAGE}/assembly-reading matched its recorded digest, named the changed assemble.rig_scale field, and accepted a legacy manifest`);
+    }
+  }
 
   // --version, from the install, against the installed package.json.
   const version = run(bin, ['--version'], home);

@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { assemblyConfigChanges, assemblyConfigReading } from './src/assembly-reading.ts';
 import { buildDepth25DTurn, type Depth25DTurnOptions } from './src/turn.ts';
 import { turnNeighbourMeshes } from './src/rig.ts';
 import { boundaryDepthSamplers, type BoundaryDepths } from './src/boundarydepth.ts';
@@ -18634,8 +18635,8 @@ function runSweepCheckCases(report: FixtureCaseReporter): void {
     const sameOtherBytes = withoutSweep(covered.fig) === withoutSweep(plain.fig);
     const plainConfig = (plain.fig?.config ?? null) as Record<string, unknown> | null;
     const plainConfigNamed = plainConfig !== null && plainConfig.path === join(dir, 'plain.json') && plainConfig.sha256 === createHash('sha256').update(readFileSync(join(dir, 'plain.json'))).digest('hex');
-    const coveredParts = readFileSync(join(dir, 'covered', 'parts.json'), 'utf8');
-    const plainParts = readFileSync(join(dir, 'plain', 'parts.json'), 'utf8');
+    const coveredParts = withoutAssemblyConfig(readFileSync(join(dir, 'covered', 'parts.json'), 'utf8'));
+    const plainParts = withoutAssemblyConfig(readFileSync(join(dir, 'plain', 'parts.json'), 'utf8'));
     say(
       'CK432_WITHOUT_A_RANGE_NOTHING_IS_POSED_AND_CHECK_WRITES_WHAT_IT_WROTE',
       plain.status === 0 &&
@@ -18651,7 +18652,7 @@ function runSweepCheckCases(report: FixtureCaseReporter): void {
         plainConfigNamed &&
         !existsSync(join(dir, 'covered', 'check', '_sweep')),
       `without a range: exit ${plain.status}, keys ${keys(plain.fig)}; range outcome: ${JSON.stringify(checkBarOutcomes(plain.fig)[SWEEP_LINE])} -> ${JSON.stringify(checkBarOutcomes(covered.fig)[SWEEP_LINE])}; other check bytes: ${sameOtherBytes ? 'the same bytes' : 'DIFFERENT'}; parts.json with the range less it: ${coveredParts.replace(/,\n\s*"range": \[\n?\s*0,\n?\s*120\n?\s*\]/, '') === plainParts ? 'the same bytes' : 'DIFFERENT'}`,
-      'opt-in by construction: a limb with no declared range is not posed, so its check renders, prints and writes exactly what it did; the planted negative is the covered build, which differs from this one by the range in parts.json, the sweep block and its outcome in check.json, and each build\'s own config record (issue #607)',
+      'opt-in by construction: a limb with no declared range is not posed, so its check renders, prints and writes exactly what it did; the planted negative is the covered build, which differs from this one by the range in parts.json, the sweep block and its outcome in check.json, and each build\'s own config and assembly config records (issues #607 and #1385)',
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -28535,7 +28536,7 @@ function runBuildSuite(): number {
     const buildExpectedParts: PartsFile = { ...EXPECTED_PARTS, painting_in_rig: {
       path: 'painting_in_rig.png', sha256: createHash('sha256').update(buildPainting).digest('hex'), resample: 'lanczos3-rgb-opaque',
     } };
-    const partsSame = existsSync(join(out, 'parts.json')) && serializeParts(readParts(join(out, 'parts.json'))) === serializeParts(buildExpectedParts);
+    const partsSame = existsSync(join(out, 'parts.json')) && withoutAssemblyConfig(serializeParts(readParts(join(out, 'parts.json')))) === serializeParts(buildExpectedParts);
     say(
       'BU01_A_GREEN_BUILD_WRITES_ITS_TREE_AND_ENDS_WITH_THE_PACK_LINE_AND_THE_THREE_ARTIFACT_PATHS',
       green.status === 0 &&
@@ -28684,7 +28685,7 @@ function runBuildSuite(): number {
     const wideExpectedParts: PartsFile = { ...LANDSCAPE_EXPECTED_PARTS, painting_in_rig: {
       path: 'painting_in_rig.png', sha256: createHash('sha256').update(widePainting).digest('hex'), resample: 'lanczos3-rgb-opaque',
     } };
-    const wideParts = existsSync(join(wideOut, 'parts.json')) ? serializeParts(readParts(join(wideOut, 'parts.json'))) : 'absent';
+    const wideParts = existsSync(join(wideOut, 'parts.json')) ? withoutAssemblyConfig(serializeParts(readParts(join(wideOut, 'parts.json')))) : 'absent';
     const pngs = entries(join(out, 'parts'));
     const pngSame = pngs.filter((f) => existsSync(join(wideOut, 'parts', f)) && Buffer.compare(readFileSync(join(out, 'parts', f)), readFileSync(join(wideOut, 'parts', f))) === 0);
     say(
@@ -28706,7 +28707,7 @@ function runBuildSuite(): number {
     const highTop = highParts?.parts.find((p) => p.name === 'topwear');
     say(
       'BU12_A_FULL_RUN_READ_WITHOUT_ITS_TOP_PAD_MOVES_THE_BUILD_S_PARTS_BY_THE_PAD',
-      highParts !== null && highTop?.y === 19 && serializeParts(highParts) !== wideParts,
+      highParts !== null && highTop?.y === 19 && withoutAssemblyConfig(serializeParts(highParts)) !== wideParts,
       `the unmoved full run on the 128x124 painting: parts.json ${highParts === null ? 'absent' : `topwear at y ${highTop?.y}`} (20 with the pad, 19 = 20 - 2 x 0.5 without)`,
       'a dropped vertical pad is not a refusal anywhere downstream — the parts are plausible, one pad too high — so the expectation has to be a number derived by hand',
     );
@@ -34449,8 +34450,8 @@ function runCutBandCases(say: (name: string, ok: boolean, detail: string, why: s
 
   // AS471 — no stroke in the band, no drift. The plain arm (C everywhere) with cut_band 3: the 56 px the band's lines
   // cross hold one luma, so nothing splits, every line crosses 0, and the joint line (offset 0) wins — every part
-  // image and the recomposite are the build without cut_band's bytes, and parts.json differs only by forearm_r's cut
-  // keys. A stroke outside the band (NAVY over rows 40 and 41, 10 rows past the joint) changes nothing of that: the
+  // image and the recomposite are the build without cut_band's bytes, and parts.json differs by forearm_r's cut
+  // keys and the assembly config reading. A stroke outside the band (NAVY over rows 40 and 41) changes nothing: the
   // band's art is still one luma.
   guarded(
     'AS471_WITH_NO_STROKE_IN_THE_BAND_THE_JOINT_ROW_IS_CHOSEN_AND_EVERY_PART_IS_THE_PLAIN_CUT_S_BYTES',
@@ -34469,7 +34470,7 @@ function runCutBandCases(say: (name: string, ok: boolean, detail: string, why: s
       };
       const cutKeys = ['cut_band', 'cut_offset', 'cut_at', 'cut_crossed', 'joint_crossed', 'band_px', 'stroke_luma_max'];
       const stripped = (b: { out: string }): string => {
-        const raw = JSON.parse(readFileSync(join(b.out, 'parts.json'), 'utf8')) as { parts: Array<{ name: string; limb?: { cap?: Record<string, unknown> } }> };
+        const raw = JSON.parse(withoutAssemblyConfig(readFileSync(join(b.out, 'parts.json'), 'utf8'))) as { parts: Array<{ name: string; limb?: { cap?: Record<string, unknown> } }> };
         for (const q of raw.parts) if (q.limb?.cap !== undefined) for (const k of cutKeys) delete q.limb.cap[k];
         return JSON.stringify(raw);
       };
@@ -34484,7 +34485,7 @@ function runCutBandCases(say: (name: string, ok: boolean, detail: string, why: s
           sameFiles(far, farPlain) &&
           stripped(flat) === stripped(plain) &&
           stripped(far) === stripped(farPlain) &&
-          readFileSync(join(flat.out, 'parts.json'), 'utf8') !== readFileSync(join(plain.out, 'parts.json'), 'utf8'),
+          withoutAssemblyConfig(readFileSync(join(flat.out, 'parts.json'), 'utf8')) !== withoutAssemblyConfig(readFileSync(join(plain.out, 'parts.json'), 'utf8')),
         `flat arm: ${tail(capLine(flat))}; a stroke 10 rows past the joint: ${tail(capLine(far))}; part images and recomposite against the build without cut_band: ${sameFiles(flat, plain) ? 'the same bytes' : 'DIFFERENT'}, with the far stroke ${sameFiles(far, farPlain) ? 'the same bytes' : 'DIFFERENT'}; parts.json without the cut keys ${stripped(flat) === stripped(plain) && stripped(far) === stripped(farPlain) ? 'the same' : 'DIFFERENT'}`,
       ];
     },
@@ -35160,11 +35161,145 @@ function runCrossedLimbFeatherCases(say: (name: string, ok: boolean, detail: str
   );
 }
 
+/** Preserve the original manifest bytes in comparisons predating the optional reading. */
+function withoutAssemblyConfig(text: string): string {
+  return text.replace(/^  "assembly_config": \{\n[\s\S]*?^  \},\n/m, '');
+}
+
+export function runAssemblyConfigControls(dir: string, say: FixtureCaseReporter): void {
+  // The flat fixture's short bottomwear produces coincident drafted skirt joints at this scale.
+  const initial = assembleConfig({ plan: PLAN.filter(([name]) => name !== 'bottomwear') });
+  Object.assign(initial.assemble as object, { edited_parts: { dir: '.', receipts: [] } });
+  writeAssembleFixture(dir, initial);
+  const config = join(dir, 'config.json');
+  const out = join(dir, 'out');
+  const partsDir = join(out, 'rig');
+  const manifest = join(partsDir, 'parts.json');
+  const source = join(dir, 'painting.png');
+  const runs = ['--full', join(dir, 'full'), '--head', join(dir, 'head')];
+  const assembleArgs = ['assemble', '--source', source, ...runs, '--config', config, '--out', out];
+  const rig = (label: string) => runCli(['rig', '--parts', partsDir, '--config', config, '--out', join(dir, label)]);
+  const refusalLine = (result: { out: string }) => result.out.split('\n').find(line => /^\s*FAIL  /.test(line))?.trim() ?? 'no CLI refusal';
+  const assembled = runCli(assembleArgs);
+  const before = assembled.status === 0 ? readParts(manifest) : null;
+  const reading = before?.assembly_config;
+  const beforeText = readOr(manifest);
+  const fields = reading?.fields.map(row => row.name) ?? [];
+  say('AS1385_ASSEMBLE_WRITES_A_ROUND_TRIPPING_CONFIG_READING',
+    assembled.status === 0 && before !== null && reading !== undefined && serializeParts(before) === beforeText &&
+      ['assemble.edited_parts', 'assemble.plan', 'assemble.rig_scale', 'seethrough.head_box'].every(name => fields.includes(name)) &&
+      !fields.includes('assemble') && !fields.includes('turn'),
+    `assemble exit ${assembled.status}; ${fields.join(', ') || refusalLine(assembled)}`,
+    'the normal assemble command writes a readable digest and field digests for its initial config');
+  if (reading === undefined || before === null) return;
+
+  const proposed = runCli(['propose', '--parts', partsDir, '--source', source, ...runs, '--no-bust', 'synthetic blocks',
+    '--write-config', config, '--out', join(dir, 'proposal')]);
+  const staleDetail = 'assembly config changed at config.turn; re-run assemble from the current config';
+  const notes = proposed.out.split('\n').filter(line => line.startsWith('note: assembly config changed'));
+  say('AS1385_PROPOSE_NAMES_THE_STALE_TURN_WITHOUT_REWRITING_PARTS',
+    proposed.status === 0 && notes.join('\n') === `note: ${staleDetail}` && readOr(manifest) === beforeText,
+    `propose exit ${proposed.status}; ${notes.join(' | ') || refusalLine(proposed)}`,
+    'the draft adds turn relationships to a config after the parts have already been written');
+
+  const proposedText = readOr(config);
+  const staleRig = rig('stale-rig');
+  const from = join(partsDir, 'parts', 'face.png');
+  const editedPath = join(dir, 'edited-face.png');
+  const editedPart = (): ReturnType<typeof runCli> => {
+    const edited = readPng(from);
+    edited.data[0] ^= 1;
+    writePng(editedPath, edited);
+    return runCli(['edited-part', '--config', config, '--part', 'face', '--file', editedPath, '--from', from,
+      '--editor', 'synthetic control', '--parts', manifest]);
+  };
+  const staleEdit = editedPart();
+  const namesStaleTurn = (result: ReturnType<typeof runCli>): boolean =>
+    result.status === 1 && refusalLine(result).startsWith(`FAIL  ASSEMBLY_CONFIG_STALE: ${config} — ${staleDetail}`);
+  say('AS1385_RIG_AND_EDITED_PART_REFUSE_THE_STALE_MANIFEST',
+    namesStaleTurn(staleRig) && namesStaleTurn(staleEdit) && !existsSync(join(dir, 'stale-rig', 'rig.json')) &&
+      readOr(config) === proposedText && readOr(manifest) === beforeText,
+    `rig exit ${staleRig.status}, ${refusalLine(staleRig)}; edited-part exit ${staleEdit.status}, ${refusalLine(staleEdit)}`,
+    'either door refuses the existing manifest before emitting a rig or appending a receipt');
+
+  const legacy = join(dir, 'legacy');
+  mkdirSync(legacy);
+  cpSync(join(partsDir, 'parts'), join(legacy, 'parts'), { recursive: true });
+  copyFileSync(join(partsDir, 'painting_in_rig.png'), join(legacy, 'painting_in_rig.png'));
+  writeFileSync(join(legacy, 'parts.json'), withoutAssemblyConfig(beforeText));
+  const legacyError = refusals(() => readRigInputs(config, legacy));
+  const malformed = [
+    { ...reading, sha256: 'malformed' },
+    { ...reading, sha256: (reading.sha256.startsWith('0') ? '1' : '0') + reading.sha256.slice(1) },
+    { ...reading, fields: reading.fields.map((row, i) => i === 0 ? { ...row, sha256: 'malformed' } : row) },
+  ].map((assembly_config, i) => {
+    const planted = join(dir, `malformed-${i}.json`);
+    writeFileSync(planted, JSON.stringify({ ...before, assembly_config }));
+    return refusals(() => readParts(planted));
+  });
+  say('AS1385_LEGACY_MANIFEST_LOADS_AND_INVALID_DIGESTS_ARE_NAMED',
+    legacyError === null && readParts(join(legacy, 'parts.json')).assembly_config === undefined &&
+      malformed.every(error => error?.problems.length === 1 && error.problems[0].code === 'PARTS_FIELD_TYPE' &&
+        error.problems[0].object.endsWith(' field "assembly_config"')),
+    `legacy rig inputs: ${codes(legacyError)}; malformed aggregate, mismatched aggregate and malformed field: ${malformed.map(codes).join(' | ')}`,
+    'the field may be absent on older manifests; a present digest must be well formed and agree with its field digests');
+
+  const refreshed = runCli(assembleArgs);
+  const after = refreshed.status === 0 ? readParts(manifest) : null;
+  const greenRig = rig('fresh-rig');
+  const refreshNote = 'note: reassembled parts after changes to config.turn';
+  say('AS1385_REASSEMBLE_NAMES_CHANGED_KEYS_AND_RIG_ACCEPTS_THE_REFRESHED_PARTS',
+    refreshed.status === 0 && refreshed.out.split('\n').includes(refreshNote) && after?.assembly_config !== undefined &&
+      after.assembly_config.sha256 !== reading.sha256 && greenRig.status === 0 && existsSync(join(dir, 'fresh-rig', 'rig.json')),
+    `assemble exit ${refreshed.status}, ${refreshed.out.includes(refreshNote) ? refreshNote : refusalLine(refreshed)}; rig exit ${greenRig.status}${greenRig.status === 0 ? '' : `, ${refusalLine(greenRig)}`}`,
+    'reusing the assembly output replaces its old digest and makes the actual rig command accept the new parts');
+  if (after?.assembly_config === undefined) return;
+
+  const cfg = JSON.parse(proposedText) as { motion: Record<string, unknown> };
+  writeFileSync(join(dir, 'extra-motion.json'), JSON.stringify({ spec: ANIMATIONS_FROM_SPEC, animations: { settle: { duration: 1, tracks: [] } } }));
+  const physics = (bone: string, strength: number) => ({
+    type: 'physics', name: `${bone}_physics`, bone, rotate: 1, inertia: 0.5, strength, damping: 0.85, mass: 1, mix: 1,
+  });
+  const variant = (label: string, fields: Record<string, unknown>): string => {
+    const at = join(dir, `${label}.json`);
+    writeFileSync(at, JSON.stringify({ ...cfg, ...fields }));
+    return at;
+  };
+  const animation = variant('animation', { motion: { ...cfg.motion, animations_from: 'extra-motion.json' } });
+  const hair = variant('hair', { constraints: [physics('hairback_r0', 60)] });
+  const tunedHair = variant('tuned-hair', { constraints: [physics('hairback_r0', 40)] });
+  const robe = variant('robe', { constraints: [physics('hairback_r0', 40), physics('robe_r0', 60)] });
+  const unchanged = [animation, hair, tunedHair].map(at => ({
+    name: basename(at), same: assemblyConfigReading(at, after).sha256 === after.assembly_config?.sha256,
+    error: refusals(() => readRigInputs(at, partsDir)),
+  }));
+  const physicsError = refusals(() => readRigInputs(robe, partsDir));
+  const physicsChanges = assemblyConfigChanges(robe, after);
+  const topwearMoves = (at: string) => turnMovingPartPair(loadEarlyConfig(at, 'assemble'))?.('topwear', 'face');
+  say('AS1385_TURNED_RIG_INPUTS_STAY_FRESH_UNLESS_PHYSICS_ADDS_A_MOVING_PAIR',
+    unchanged.every(q => q.same && q.error === null) && topwearMoves(tunedHair) === false && topwearMoves(robe) === true &&
+      physicsChanges.join(',') === 'constraints.physics' && physicsError?.problems.length === 1 &&
+      physicsError.problems[0].code === 'ASSEMBLY_CONFIG_STALE' && physicsError.problems[0].detail.includes('config.constraints.physics'),
+    `${unchanged.map(q => `${q.name}: digest ${q.same ? 'same' : 'changed'}, rig inputs ${codes(q.error)}`).join('; ')}; added robe physics: ${physicsChanges.join(', ')}, ${codes(physicsError)}`,
+    'hair already moves relative to the other parts; robe physics makes equal-depth topwear and face move relative to each other');
+
+  const freshEdit = editedPart();
+  const receipts = loadEarlyConfig(config, 'assemble').assemble.edited_parts?.receipts ?? [];
+  const sha = (file: string) => createHash('sha256').update(readFileSync(file)).digest('hex');
+  say('AS1385_EDITED_PART_WITH_FRESH_PARTS_PATH_RECORDS_THE_RECEIPT',
+    freshEdit.status === 0 && freshEdit.out.includes('edited-part: part "face"') && receipts.length === 1 &&
+      receipts[0].part === 'face' && receipts[0].sha256 === sha(editedPath) && receipts[0].from_sha256 === sha(from) &&
+      receipts[0].sha256 !== receipts[0].from_sha256 && readOr(manifest) === serializeParts(after),
+    `edited-part exit ${freshEdit.status}; ${receipts.length} receipt(s)${freshEdit.status === 0 ? '' : `, ${refusalLine(freshEdit)}`}`,
+    'an explicit current parts.json allows the edit receipt to be written against the refreshed part PNG');
+}
+
 function runAssembleSuite(): number {
   section('assemble: the stage, on generated runs');
   const { say, bad } = counter();
   const dir = temp('assemble');
   try {
+    runAssemblyConfigControls(join(dir, 'assembly-config'), say);
     runHiddenExtentChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #1047: production assembly refuses declared enclosed source holes'));
     runOccluderConfigChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #1230: config.assemble.occluders at every config door, each plant refused by its code'));
     runOccluderCopyChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #1230: copied occluder colour is named with its count, silent without it, and moves no byte'));
@@ -36709,7 +36844,7 @@ function runAssembleSuite(): number {
     const r2 = runCli(args(out2));
     const files = filesUnder(out1).filter((f) => f !== RUN_STAMP_FILE);
     const same = files.length > 0 && files.join(',') === filesUnder(out2).filter((f) => f !== RUN_STAMP_FILE).join(',') && files.every((f) => Buffer.compare(readFileSync(join(out1, f)), readFileSync(join(out2, f))) === 0);
-    const readBack = r1.status === 0 ? serializeParts(readParts(join(out1, 'rig', 'parts.json'))) : '';
+    const readBack = r1.status === 0 ? withoutAssemblyConfig(serializeParts(readParts(join(out1, 'rig', 'parts.json')))) : '';
     const paintingBytes = encodePngBytes(result.paintingInRig);
     const cliWant = serializeParts({ ...EXPECTED_PARTS, painting_in_rig: {
       path: 'painting_in_rig.png', sha256: createHash('sha256').update(paintingBytes).digest('hex'), resample: 'lanczos3-rgb-opaque',

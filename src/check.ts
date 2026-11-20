@@ -1,3 +1,4 @@
+import { refuseStaleAssembly } from './assembly-reading.ts';
 import { checkRow, checkSlotRow, checkSlotParts, serializeCheckRows } from './checkrow.ts';
 import { readSetupFigureMask } from './setupfiguremask.ts';
 import { readSetupBackdrop } from './setupbackdrop.ts';
@@ -6808,6 +6809,11 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
       return null;
     }
   };
+  const readInputs = (): CheckInputs => {
+    const inputs = readCheckInputs(rigDir, partsHome, source, set, allSets);
+    if (config !== undefined && inputs.parts !== null) refuseStaleAssembly(config.path, inputs.parts);
+    return inputs;
+  };
   let setupBackdrop: Raster | undefined;
   let setupFigureMask: Uint8Array | undefined;
   // Issue #538: the schedule is read once, first, by rigc's own reader; refused, nothing is built or written.
@@ -6815,12 +6821,12 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   // Issue #590: the steady-wind band spec is read and resolved before anything is built or written.
   const wb = windBand === undefined ? null : take(() => readWindBand(windBand));
   if (requirements === undefined) {
-    const got = take(() => readCheckInputs(rigDir, partsHome, source, set, allSets));
+    const got = take(readInputs);
     if (got !== null && wb !== null) take(() => resolveWindBand(wb, got));
     refuseIfAny(refused);
     inp = got as CheckInputs;
   } else {
-    const got = take(() => readCheckInputs(rigDir, partsHome, source, set, allSets));
+    const got = take(readInputs);
     reqFile = take(() => readRequirements(requirements));
     if (got === null || reqFile === null) {
       if (got !== null && wb !== null) take(() => resolveWindBand(wb, got));

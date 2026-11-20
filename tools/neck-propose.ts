@@ -1,6 +1,7 @@
 /** Filesystem adapter for the explicit --write-config sampled-turn context. */
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { readAssemblyConfig } from '../src/assembly-reading.ts';
 import { loadConfig, parseConfig } from '../src/config.ts';
 import { draftIndependentNeck } from '../src/neckdraft.ts';
 import { readRigInputs, readUnders, readCaps } from '../src/build.ts';
@@ -23,6 +24,7 @@ export function proposeNeck(target: ConfigWriteTarget, args: { source: string; f
   try {
     const out = join(args.out, 'rig');
     mkdirSync(join(out, 'parts'), { recursive: true });
+    draft.assembled.parts.assembly_config = readAssemblyConfig(draft.config, draft.assembled.parts);
     writeParts(join(out, 'parts.json'), draft.assembled.parts);
     for (const p of draft.assembled.images) {
       writePng(join(out, 'parts', `${p.record.name}.png`), p.image);
