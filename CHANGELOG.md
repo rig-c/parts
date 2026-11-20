@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.49.0 (2026-11-21)
+
+The assembly reading now covers the tolerance a region take reads, and `assemble` and `build` read one requirements file: the one `config.requirements` names. `BEHIND_PART_SEAMS` stops measuring standing on turn poses, as 2.48.0 did for idle frames.
+
+**Read before upgrading:**
+
+* **Release order is fixed for one kind of config: Parts, then Review, then Create.** It applies to a config with a region take (an `assemble.take` entry with `seed`) and a declared `setup_painting.rgb_tolerance`, outside `ground: "busy"` with `project: "visible"`. The reading now binds that tolerance at `requirements.setup_painting.rgb_tolerance`. `readParts` on 2.46.0 and later accepts the name, but a stale check on 2.48.0 or earlier refuses a stamp this release writes for such a config, with a false `ASSEMBLY_CONFIG_STALE` at `config.requirements.setup_painting.rgb_tolerance`. Every other config needs no order.
+* **Re-assemble such a config once, with the same config.** A stamp written before this release lacks the new row. It is refused as `ASSEMBLY_CONFIG_STALE`, and the refusal says that the stamp predates the binding. Configs with no region take, with no declared tolerance, or under busy-visible keep their `assembly_config` bytes.
+* **`assemble` reads `config.requirements`, as `build` does.** Where requirements reach assembly (a region take's tolerance, or the busy-visible figure mask), the config's file is the one source. `--requirements` is optional there, and when given it must name the same file: the same resolved file, or a file with the same bytes. A region take whose tolerance is declared in the config's file now assembles with no flag. Every `assemble` that succeeded before writes the same bytes.
+* **A `--requirements` file the config does not name is refused when its content reaches assembly.** That is a region take, or a busy-visible config whose flag file declares `setup_painting.figure_mask`. With no `config.requirements` the refusal is `ASSEMBLE_REQUIREMENTS_UNDECLARED`, and its detail gives the line to add to the config. A config that names another file is `BUILD_REQUIREMENTS_CONFLICT`, whose detail now names the field. A `--requirements` file that reaches no assembly input is accepted and writes the same bytes. No stored digest moves for this rule.
+* **With `behind_seams.turn: true`, turn standing is no longer measured.** A turn pose has no recomposite to compare with, so `motion_opened` is the turn reading. `turn.pairs[].standing` and each pose's `standing` are `SKIP` with a `reason`, and `turn.limitations` says so. This reading has no real-size run behind it: no consumer rig at hand declares `behind_seams.turn`, so it is held by the integration controls only. A rig that does not declare `behind_seams.turn` writes the same `check.json` bytes as 2.48.0.
+
+### Bug Fixes
+
+* **assemble, build:** refuse a `--requirements` file that `config.requirements` does not name when a field of it reaches assembly, and read the requirements for assembly from `config.requirements` in `assemble` as in `build`. Following each refusal's remedy as written ends in a success (`#1418`, `#1420`, `579f02c`).
+* **assemble, assembly-reading:** bind a region take's `setup_painting.rgb_tolerance` at `requirements.setup_painting.rgb_tolerance`, so a changed tolerance is refused as `ASSEMBLY_CONFIG_STALE` naming the field. Before, tolerance 0 and 255 took different pixels under one digest (`#1393`, `#1417`, `fde6f8a`).
+* **check:** stop measuring `BEHIND_PART_SEAMS` standing on turn poses. Each pose keeps its own reason, `read_poses` follows `motion_opened`, and `turn.unmeasured[]` carries no turn standing rows. `motion_opened` on turn poses is unchanged (`#1412`, `#1416`, `cf46b38`).
+
 ## 2.48.0 (2026-11-21)
 
 `BEHIND_PART_SEAMS` no longer counts painted areas between a pair's members. Setup standing is now measured against the parts' own recomposite at their painted positions, and idle standing is no longer measured: `motion_opened` is the idle reading. A rig that failed only on those counts now reads on what is actually open.
