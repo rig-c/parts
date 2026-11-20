@@ -315,6 +315,27 @@ function counted(count: BehindSeamsCount, cells: ReadonlySet<number>, grid: Seam
   }
 }
 
+/** Issue #1405: the unread reason names each ambiguous owner case that occurs, with
+ * both members' composite alpha at one endpoint. The named point is the case's first
+ * endpoint in scan order, which is `unread_corridors` order: horizontal corridors top
+ * to bottom and left to right, then vertical corridors left to right and top to bottom,
+ * the left/top endpoint before the right/bottom one. Counts are distinct endpoint cells;
+ * a case with none is omitted. */
+export function ambiguousOwnerReason(a: string, b: string, corridors: readonly BehindSeamsUnreadCorridor[], cells: number,
+  alpha: (gridX: number, gridY: number) => [number, number]): string {
+  const byte = (v: number): string => `${Math.round(v * 255 * 100) / 100}/255`;
+  const clauses: string[] = [];
+  for (const owner of [0, 3]) {
+    const seen = new Set<string>();
+    let first: BehindSeamsEndpoint | null = null;
+    for (const c of corridors) for (const e of c.endpoints) if (e[4] === owner) { seen.add(`${e[0]},${e[1]}`); first ??= e; }
+    if (first === null) continue;
+    const [ax, bx] = alpha(first[0], first[1]);
+    clauses.push(`${owner === 0 ? `neither "${a}" nor "${b}" reaches` : `both "${a}" and "${b}" reach`} 128/255 at ${seen.size} endpoint cell(s), first at world (${first[2]}, ${first[3]}) ("${a}" ${byte(ax)}, "${b}" ${byte(bx)})`);
+  }
+  return `standing endpoints include ambiguous half-alpha owners: ${corridors.length} unread corridor(s), ${cells} cell(s); ${clauses.join('; ')}; each endpoint requires exactly one member at 128/255 or more; unread corridors are not zero`;
+}
+
 interface Corridor { endpoints: Array<[number, number]> }
 interface RasterCache { full: Plate; hidden: Plate }
 
@@ -477,7 +498,7 @@ function readBehindFrame(api: BehindSeamsApi, input: BehindSeamsFramesInput, pai
     // Incomplete coverage cannot certify PASS, but cannot hide a measured failure.
     if (support.size === 0 || unreadCorridors.length > 0 || standingUnderflow) {
       if (row.standing.status !== 'FAIL') row.standing.status = 'SKIP';
-      if (unreadCorridors.length > 0) unread(label, 'standing endpoints include ambiguous half-alpha owners; unread corridors are not zero');
+      if (unreadCorridors.length > 0) unread(label, ambiguousOwnerReason(pair.a, pair.b, unreadCorridors, unreadCells.size, (x, y) => [A.alpha[y * width + x], B.alpha[y * width + x]]));
       else if (support.size === 0) unread(label, 'no A/B boundary support was measured (no overlap, contact or bracketed corridor)');
     }
     for (const k of motionCells.keys()) {

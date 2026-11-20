@@ -142,6 +142,16 @@ function behindAmbiguousFixture(owner: 0 | 3, side: 'left' | 'right', mixed = fa
   return fixture(new Map([['rear', plate(12, 6, REAR)], ['a', pa], ['b', pb]]), setup, [setup, setup, setup]);
 }
 
+/** By hand from {@link behindAmbiguousFixture} (issue #1405): one one-cell row corridor per
+ * ambiguous row, each with one ambiguous endpoint cell at world x 3.5 (left) or 5.5 (right);
+ * the top row (world y 3.5) is first in scan order; alpha is 96 (owner 0) or 255 (owner 3). */
+function ambiguousFixtureReason(owner: 0 | 3, x: number, rows: number): string {
+  const alpha = owner === 0 ? 96 : 255;
+  return `standing endpoints include ambiguous half-alpha owners: ${rows} unread corridor(s), ${rows} cell(s); ` +
+    `${owner === 0 ? 'neither "a" nor "b" reaches' : 'both "a" and "b" reach'} 128/255 at ${rows} endpoint cell(s), ` +
+    `first at world (${x}, 3.5) ("a" ${alpha}/255, "b" ${alpha}/255); each endpoint requires exactly one member at 128/255 or more; unread corridors are not zero`;
+}
+
 /** Change actual frame order: rear, then intervening, then in front of both. */
 export function behindOrderFixture(): BehindSeamFixture {
   const out = behindStandingFixture();
@@ -581,7 +591,7 @@ function runBehindSeamPrimitiveChecks(say: Say): void {
         onlyUnread.reading.status === 'FAIL' && onlyUnread.problems.some(problem => problem.code === BEHIND_SEAM_UNMEASURED_CODE) &&
         !onlyUnread.problems.some(problem => problem.code === BEHIND_SEAM_CODE) &&
         frameSkipLines.length === 3 && frameSkipLines.every((line, i) =>
-          line === `${BEHIND_SEAM_LINE}: pair "a|b" idle frame ${i} SKIP — HOLE: standing endpoints include ambiguous half-alpha owners; unread corridors are not zero`),
+          line === `${BEHIND_SEAM_LINE}: pair "a|b" idle frame ${i} SKIP — HOLE: ${ambiguousFixtureReason(owner, side === 'left' ? 3.5 : 5.5, 4)}`),
       JSON.stringify({ owner, side, reading: summary(onlyUnread.reading), unread: onlyUnread.pair.setup!.standing.unread_corridors, frameSkipLines }));
   }
 
@@ -595,12 +605,12 @@ function runBehindSeamPrimitiveChecks(say: Say): void {
     const unreadFrames = unreadLines.filter(frameLine);
     return failFrames.length === 3 && allowedFrames.length === 3 && unreadFrames.length === 3 &&
       failFrames.every((line, i) => !line.includes('SKIP') &&
-        line === `${BEHIND_SEAM_LINE}: pair "a|b" idle frame ${i} standing FAIL, 3 cells — unread corridors: 1 (cells 1); HOLE: standing endpoints include ambiguous half-alpha owners; unread corridors are not zero`) &&
+        line === `${BEHIND_SEAM_LINE}: pair "a|b" idle frame ${i} standing FAIL, 3 cells — unread corridors: 1 (cells 1); HOLE: ${ambiguousFixtureReason(3, 3.5, 1)}`) &&
       allowedFrames.every((line, i) => !line.includes('SKIP') &&
-        line === `${BEHIND_SEAM_LINE}: pair "a|b" idle frame ${i} standing 3 cells — unread corridors: 1 (cells 1); HOLE: standing endpoints include ambiguous half-alpha owners; unread corridors are not zero`) &&
+        line === `${BEHIND_SEAM_LINE}: pair "a|b" idle frame ${i} standing 3 cells — unread corridors: 1 (cells 1); HOLE: ${ambiguousFixtureReason(3, 3.5, 1)}`) &&
       failLines.filter(setupLine).every(line => !line.includes('SKIP') && line.includes('3 cells')) &&
       allowedLines.filter(setupLine).every(line => !line.includes('SKIP') && line.includes('3 cells')) &&
-      unreadFrames.every((line, i) => line === `${BEHIND_SEAM_LINE}: pair "a|b" idle frame ${i} SKIP — HOLE: standing endpoints include ambiguous half-alpha owners; unread corridors are not zero`);
+      unreadFrames.every((line, i) => line === `${BEHIND_SEAM_LINE}: pair "a|b" idle frame ${i} SKIP — HOLE: ${ambiguousFixtureReason(3, 3.5, 4)}`);
   };
   const oldTextMutant = localised.reading.unmeasured.map(u =>
     `${BEHIND_SEAM_LINE}: ${u.pair === null ? 'rig' : `pair "${u.pair}"`} ${u.frame} SKIP — ${u.reason}`);
@@ -1034,12 +1044,100 @@ function runBehindSampleCapChecks(say: Say): void {
       planted_max: Math.max(...sampleLists(open.reading).map(c => c.samples.length), ...sampleLists(mo.reading).map(c => c.samples.length)) }));
 }
 
+/** Issue #1405, "neither" case: plate columns 0..3 of a are opaque and 6..9 of b; both
+ * paint column 4 below 128/255 (a 100, b 90; together 1 - (155/255)(165/255) >= 1/2), so column 4 is
+ * an owner-0 endpoint and column 5 the one-cell corridor, on each of four rows. */
+function behindNeitherFixture(aEdge: number, bEdge: number | null): BehindSeamFixture {
+  const rear = rectangle('rear', -2, -2, 26, 8);
+  const a = rectangle('a', 0, 0, 10, 4), b = rectangle('b', 0, 0, 10, 4);
+  const pa = new Plate(10, 4), pb = new Plate(10, 4);
+  for (let y = 0; y < 4; y++) {
+    for (let x = 0; x < 4; x++) pa.set(x, y, [...FRONT, 255]);
+    for (let x = 6; x < 10; x++) pb.set(x, y, [...FRONT, 255]);
+    pa.set(4, y, [...FRONT, aEdge]);
+    if (bEdge !== null) pb.set(4, y, [...FRONT, bEdge]);
+  }
+  const setup = [rear, a, b];
+  return fixture(new Map([['rear', plate(26, 8, REAR)], ['a', pa], ['b', pb]]), setup, [setup, setup, setup]);
+}
+
+/** Issue #1405, "both" case: a covers columns 0..aEnd-1; b covers 4..5 and 8..11 with a
+ * hole at 6..7. With aEnd 6 the overlap reaches the hole: column 5 is an owner-3 endpoint
+ * and columns 6..7 the corridor, on each of four rows. */
+function behindBothFixture(aEnd: number, bColumns: (x: number) => boolean): BehindSeamFixture {
+  const rear = rectangle('rear', -2, -2, 26, 8);
+  const a = rectangle('a', 0, 0, 12, 4), b = rectangle('b', 0, 0, 12, 4);
+  const pa = new Plate(12, 4), pb = new Plate(12, 4);
+  for (let y = 0; y < 4; y++) for (let x = 0; x < 12; x++) {
+    if (x < aEnd) pa.set(x, y, [...FRONT, 255]);
+    if (bColumns(x)) pb.set(x, y, [...FRONT, 255]);
+  }
+  const setup = [rear, a, b];
+  return fixture(new Map([['rear', plate(26, 8, REAR)], ['a', pa], ['b', pb]]), setup, [setup, setup, setup]);
+}
+
+function runBehindUnreadRemedyChecks(say: Say): void {
+  const holed = (x: number): boolean => (x >= 4 && x < 6) || x >= 8;
+  // By hand: four one-cell (neither) or two-cell (both) row corridors; the top row's endpoint is first.
+  const neitherReason = 'standing endpoints include ambiguous half-alpha owners: 4 unread corridor(s), 4 cell(s); ' +
+    'neither "a" nor "b" reaches 128/255 at 4 endpoint cell(s), first at world (4.5, 3.5) ("a" 100/255, "b" 90/255); ' +
+    'each endpoint requires exactly one member at 128/255 or more; unread corridors are not zero';
+  const bothReason = 'standing endpoints include ambiguous half-alpha owners: 4 unread corridor(s), 8 cell(s); ' +
+    'both "a" and "b" reach 128/255 at 4 endpoint cell(s), first at world (5.5, 3.5) ("a" 255/255, "b" 255/255); ' +
+    'each endpoint requires exactly one member at 128/255 or more; unread corridors are not zero';
+  const frames = ['setup', 'idle frame 0', 'idle frame 1', 'idle frame 2'];
+  const names = (result: ReturnType<typeof measured>, reason: string): boolean =>
+    frames.every(frame => result.reading.unmeasured.some(u => u.pair === 'a|b' && u.frame === frame && u.reason === `HOLE: ${reason}`)) &&
+    frames.every(frame => result.problems.some(p => p.code === BEHIND_SEAM_UNMEASURED_CODE && p.object === `a|b (${frame})` &&
+      p.detail === `HOLE: ${reason}; a declared required reading cannot pass unmeasured`));
+  const ambiguous = (result: ReturnType<typeof measured>): number =>
+    result.reading.unmeasured.filter(u => u.reason.includes('ambiguous half-alpha owners')).length;
+  const evidence = (...results: ReturnType<typeof measured>[]): string => JSON.stringify(results.map(result => ({
+    status: result.reading.status, setup: result.pair.setup?.standing.status, setup_px: result.pair.setup?.standing.px,
+    idle: result.pair.standing.status, idle_max: result.pair.standing.max_px,
+    reasons: [...new Set(result.reading.unmeasured.map(u => u.reason))] })));
+
+  const neither = measured(behindNeitherFixture(100, 90), { threshold: 12 });
+  say('BHU01_NEITHER_OWNER_LINE_NAMES_BOTH_MEMBERS_ALPHA_AND_POINT',
+    names(neither, neitherReason) && neither.pair.setup?.standing.status === 'SKIP' && neither.pair.setup.standing.px === 0 &&
+      neither.pair.setup.standing.unread_corridors?.every(c => c.endpoints[0][4] === 0 && c.endpoints[1][4] === 2) === true &&
+      neither.lines.includes(`${BEHIND_SEAM_LINE}: pair "a|b" idle frame 0 SKIP — HOLE: ${neitherReason}`), evidence(neither));
+  const both = measured(behindBothFixture(6, holed), { threshold: 12 });
+  say('BHU02_BOTH_OWNERS_LINE_NAMES_BOTH_MEMBERS_ALPHA_AND_POINT',
+    names(both, bothReason) && both.pair.setup?.standing.status === 'SKIP' && both.pair.setup.standing.px === 0 &&
+      both.pair.setup.standing.unread_corridors?.every(c => c.endpoints[0][4] === 3 && c.endpoints[1][4] === 2) === true &&
+      both.pair.motion_opened.status === 'PASS', evidence(both));
+
+  // Remedy: one member at >= 128/255 at the endpoint, the other not painting it; the corridor is then read.
+  const aOwns = measured(behindNeitherFixture(128, 90), { threshold: 12 });
+  const bLeaves = measured(behindNeitherFixture(100, null), { threshold: 12 });
+  const bTrimmed = measured(behindBothFixture(6, x => x === 4 || x >= 8), { threshold: 12 });
+  const holeFilled = measured(behindBothFixture(6, x => x >= 4), { threshold: 12 });
+  say('BHU03_ONE_OWNER_AT_THE_ENDPOINT_CLEARS_THE_LINE_AND_THE_CORRIDOR_IS_READ',
+    [aOwns, bLeaves, bTrimmed, holeFilled].every(result => ambiguous(result) === 0 && result.pair.setup?.standing.unread_corridors === undefined) &&
+      // column 5 x 4 rows; columns 4..5 x 4 rows; columns 6..7 x 4 rows; no corridor.
+      aOwns.pair.setup?.standing.status === 'FAIL' && aOwns.pair.setup.standing.px === 4 && aOwns.pair.standing.max_px === 4 &&
+      bLeaves.pair.setup?.standing.status === 'FAIL' && bLeaves.pair.setup.standing.px === 8 && bLeaves.pair.standing.max_px === 8 &&
+      bTrimmed.pair.setup?.standing.status === 'FAIL' && bTrimmed.pair.setup.standing.px === 8 && bTrimmed.pair.standing.max_px === 8 &&
+      holeFilled.reading.status === 'PASS' && holeFilled.pair.standing.status === 'PASS' && holeFilled.pair.standing.max_px === 0,
+    evidence(aOwns, bLeaves, bTrimmed, holeFilled));
+
+  // Negative: the declaration's numbers do not reach ownership.
+  const declarations: BehindSeams[] = [{ threshold: 255 }, { threshold: 12, allowance: 1000 },
+    { threshold: 12, pairs: [{ part: 'a', neighbour: 'b', threshold: 0, allowance: 1000 }] }];
+  const kept = declarations.flatMap(declaration => [measured(behindNeitherFixture(100, 90), declaration), measured(behindBothFixture(6, holed), declaration)]);
+  say('BHU04_THRESHOLD_ALLOWANCE_AND_PAIR_OVERRIDE_LEAVE_THE_LINE_IN_PLACE',
+    kept.every((result, i) => names(result, i % 2 === 0 ? neitherReason : bothReason) && result.reading.status === 'FAIL'),
+    evidence(...kept));
+}
+
 export function runBehindSeamChecks(dir: string, say: Say, rigc: RigcRunner): void {
   mkdirSync(dir, { recursive: true });
   runBehindSeamFixtureChecks(say);
   runBehindSampleCapChecks(say);
   runBehindSeamPrimitiveChecks(say);
   runBehindTurnPrimitiveChecks(say);
+  runBehindUnreadRemedyChecks(say);
   runBehindSeamRequirementChecks(dir, say);
   runBehindSeamIntegrationChecks(join(dir, 'pipeline'), say, rigc);
 }
