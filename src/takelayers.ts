@@ -161,7 +161,10 @@ function supportOverlap(a: Layer, b: Layer): number {
   return px;
 }
 /** Apply every declaration together, so replacing all tied layers from one run can retain its known order. */
-export function applyTakenLayers(runs: { full: LayerSet; head: LayerSet; single: boolean }, painting: Raster, cfg: Pick<EarlyConfig, 'seethrough' | 'depth'> & { assemble: { take?: TakeDeclaration[]; plan?: PlanEntry[]; occluders?: OccluderDeclaration[] } }, configPath: string): { full: LayerSet; head: LayerSet; single: boolean; notes: string[] } {
+export function applyTakenLayers<T extends Pick<EarlyConfig, 'depth'> & {
+  seethrough: Pick<EarlyConfig['seethrough'], 'resolution' | 'head_box'>;
+  assemble: { take?: TakeDeclaration[]; plan?: PlanEntry[]; occluders?: OccluderDeclaration[] };
+}>(runs: { full: LayerSet; head: LayerSet; single: boolean }, painting: Raster, cfg: T, configPath: string): { full: LayerSet; head: LayerSet; single: boolean; notes: string[] } {
   const wholeDeclarations = (cfg.assemble.take ?? []).filter((item): item is TakeLayers => 'tags' in item);
   const declarations = (cfg.assemble.take ?? []).filter((item): item is TakeLayers | TakeOccluderSplit => 'tags' in item || 'occluder' in item);
   const occluders = cfg.assemble.occluders ?? [];

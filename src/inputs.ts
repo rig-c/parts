@@ -73,7 +73,7 @@ export function padToSquare(w: number, h: number, side: number): SquarePad {
   return { side, left: Math.floor((side - w) / 2), top: Math.floor((side - h) / 2) };
 }
 
-export function makeInputs(painting: Raster, cfg: Pick<CharacterConfig, 'seethrough'>, label: string): SeeThroughInputs {
+export function makeInputs(painting: Raster, cfg: { seethrough?: Partial<Pick<NonNullable<CharacterConfig['seethrough']>, 'head_box' | 'resolution'>> }, label: string): SeeThroughInputs {
   const problems: Problem[] = [];
   const { width: w, height: h } = painting;
   let translucent = 0;

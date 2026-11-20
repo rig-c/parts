@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { assemblyConfigChanges, assemblyConfigReading, refuseStaleAssembly } from './src/assembly-reading.ts';
+import { assemblyConfigChanges, assemblyConfigReading, assemblyProjectionProblems, projectAssemblyConfig, refuseStaleAssembly } from './src/assembly-reading.ts';
 import { buildDepth25DTurn, type Depth25DTurnOptions } from './src/turn.ts';
 import { turnNeighbourMeshes } from './src/rig.ts';
 import { boundaryDepthSamplers, type BoundaryDepths } from './src/boundarydepth.ts';
@@ -35440,11 +35440,75 @@ function runScopedYieldCases(dir: string, say: ReturnType<typeof counter>['say']
     'only final output names resolve; malformed entries are collected in declaration order');
 }
 
+function runAssemblyProjectionControls(say: FixtureCaseReporter): void {
+  const config = {
+    assemble: { rig_scale: 1, plan: PLAN, stage_map: true },
+    seethrough: { resolution: RESOLUTION, steps: 1, seed: 0, offload: false, head_box: HEAD_BOX },
+    constraints: [
+      { type: 'physics' as const, name: 'sleeve_sway', bone: 'upper', strength: 50 },
+      { type: 'ik' as const, name: 'sleeve_ik', bones: ['upper'], target: 'lower' },
+    ],
+    motion: {
+      duration: 1,
+      tracks: [],
+      blink: { t: 0.5, eyes: ['eye'], squash: 0.1, still: { lash: { row: 3, bone: 'lash' } } },
+    },
+    limbs: {
+      sleeve: {
+        segments: [
+          { part: 'upper', from: 'topwear', bone: 'upper' },
+          { part: 'lower', from: 'topwear', bone: 'lower', joint: 'elbow', cut_band: 2 },
+        ],
+        layout: { after: { part: 'topwear' } },
+      },
+    },
+  };
+  const projection = projectAssemblyConfig(config);
+  const good = assemblyProjectionProblems(projection.rows);
+  const { constraints, motion } = projection.config;
+  const limbs = Object.values(stageFields(config).limbs ?? {});
+  // @ts-expect-error The assembly limb view excludes the rig-only layout field.
+  const layouts = limbs.map(({ layout }) => layout);
+  say('AS1390_ASSEMBLY_PROJECTION_BINDS_ITS_SELECTED_FIELDS',
+    good.length === 0 && limbs.length === 1 && limbs[0].segments[1].cut_band === 2 &&
+      !Object.hasOwn(limbs[0], 'layout') && layouts[0] === undefined &&
+      JSON.stringify(constraints) === '[{"type":"physics","bone":"upper"}]' &&
+      JSON.stringify(motion) === '{"blink":{"still":{"lash":{"bone":"lash"}}}}',
+    `${Object.keys(projection.rows).length} entries; ${good.join(' | ') || 'no binding faults'}`,
+    'the projection retains joint cut geometry, physics binding and the blink carrier while dropping the other rig fields');
+
+  const unbound = assemblyProjectionProblems({
+    ...projection.rows,
+    'assemble.unbound_plant': { value: true },
+  });
+  say('AS1390_UNBOUND_ASSEMBLY_FIELD_IS_NAMED',
+    unbound.length === 1 && unbound[0] === 'config.assemble.unbound_plant is projected without a digest binding or exemption',
+    unbound.join(' | '), 'adding a projected input requires a binding or an explicit exemption');
+
+  const stageMap = projection.rows['assemble.stage_map'];
+  const hashed = assemblyProjectionProblems({
+    ...projection.rows,
+    'digest_plant': { value: true, bindings: { 'assemble.stage_map': () => undefined } },
+  });
+  say('AS1390_EXEMPTION_IS_STALE_WHEN_A_DIGEST_BINDS_THE_FIELD',
+    hashed.length === 1 && hashed[0] === 'config.assemble.stage_map has an exemption and a digest binding',
+    hashed.join(' | '), 'a declared hash binding makes the exemption stale even when the digest value is absent');
+
+  const unprojected = assemblyProjectionProblems({
+    ...projection.rows,
+    'assemble.stage_map': { exemption: stageMap.exemption },
+  });
+  say('AS1390_EXEMPTION_IS_STALE_WHEN_THE_FIELD_IS_UNPROJECTED',
+    unprojected.length === 1 && unprojected[0] === 'config.assemble.stage_map has an exemption but is not projected',
+    unprojected.join(' | '), 'an exemption requires a corresponding selected value');
+}
+
 function runAssembleSuite(): number {
   section('assemble: the stage, on generated runs');
   const { say, bad } = counter();
   const dir = temp('assemble');
   try {
+    runAssemblyProjectionControls(say);
     runAssemblyConfigControls(join(dir, 'assembly-config'), say);
     runHiddenExtentChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #1047: production assembly refuses declared enclosed source holes'));
     runOccluderConfigChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #1230: config.assemble.occluders at every config door, each plant refused by its code'));

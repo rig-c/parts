@@ -1,5 +1,5 @@
 /** Fully explicit unit consumers may omit their unused scalar transport (#877). */
-import type { MeshSpec, Motion, RegionSpec, TurnSpec } from './config.ts';
+import type { BlinkStill, MeshSpec, RegionSpec, TurnSpec } from './config.ts';
 import { turnUnitBone } from './turn.ts';
 
 export interface AuthoredUnitDepth {
@@ -12,7 +12,7 @@ export function authoredUnitDepths(cfg: {
   turn?: TurnSpec;
   regions?: Record<string, RegionSpec>;
   meshes?: Record<string, MeshSpec>;
-  motion?: Pick<Motion, 'blink'>;
+  motion?: { blink?: { still?: Record<string, Pick<BlinkStill, 'bone'>> } };
 }): ReadonlyMap<string, AuthoredUnitDepth> {
   const out = new Map<string, AuthoredUnitDepth>();
   const turn = cfg.turn;

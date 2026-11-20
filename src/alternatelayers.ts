@@ -1,5 +1,6 @@
 /** Per-covered-part alternate sources; all coordinates and pixels stay in their original run. */
 import type { Cut, Limb, PlanEntry } from './config.ts';
+import type { AssemblyLimb } from './assembly-reading.ts';
 import type { OtherLimbs } from './assemble.ts';
 import { refuseIfAny, type Problem } from './errors.ts';
 import { readLayerTag } from './tags.ts';
@@ -16,7 +17,7 @@ export interface AlternateLayerSources {
 
 /** Resolve output names before the stage checks required layers. Never mutate the base plan or limb declarations. */
 export function alternateLayerSources(
-  plan: PlanEntry[], cuts: Cut[], limbs: Record<string, Limb>, covered: ReadonlySet<string>, layers?: Readonly<Record<string, string>>,
+  plan: PlanEntry[], cuts: Cut[], limbs: Record<string, AssemblyLimb>, covered: ReadonlySet<string>, layers?: Readonly<Record<string, string>>,
 ): AlternateLayerSources {
   if (layers === undefined || Object.keys(layers).length === 0) return { plan, cuts, limbs, cutLayers: new Map(), groups: new Map() };
   const problems: Problem[] = [];

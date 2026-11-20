@@ -118,7 +118,10 @@ export function deriveTakenRegion(base: Layer, donor: Layer, painting: Raster, s
 }
 
 /** Called beside whole-layer take, before assembly or any output emission. */
-export function applyTakenRegions(runs: Runs, painting: Raster, cfg: AssembleConfig, configPath: string, setup: SetupPainting | undefined, receipts: ReceiptLedger, sourcePath?: string): Runs {
+export function applyTakenRegions(runs: Runs, painting: Raster, cfg: Pick<AssembleConfig, 'depth'> & {
+  seethrough: Pick<AssembleConfig['seethrough'], 'head_box'> | undefined;
+  assemble: Pick<AssembleConfig['assemble'], 'take' | 'plan'>;
+}, configPath: string, setup: SetupPainting | undefined, receipts: ReceiptLedger, sourcePath?: string): Runs {
   const declarations = (cfg.assemble.take ?? []).filter((item): item is TakeRegion => 'seed' in item);
   if (declarations.length === 0) return runs;
   const tolerance = setup?.rgb_tolerance;
