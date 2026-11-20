@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.47.0 (2026-11-20)
+
+`build`, `check` and `compose` now keep the compiler's own build report for the compile they checked, so a registered build carries the report of the run that made it. The assembly reading covers two more inputs: each occluder-split take's donor `meta.json`, and a named list for `assemble.yield_refused`. Assemble and the reading now share one projection of the config, so an input that assemble reads without hashing it fails a control. A config that declares none of the new fields assembles and builds the same bytes as 2.46.0.
+
+**Read before upgrading:**
+
+* **Release order is fixed: Parts, then Review, then Create.** A split-take manifest written by this release carries the indexed field `assemble.take[i].meta`. A reader on Parts 2.46.0 or earlier refuses that manifest in `readParts` with `PARTS_FIELD_TYPE`, before `assemblyConfigChanges` or `assemblyConfigReading` runs; `rig --parts` and `edited-part --parts` exit 1. Whole-layer takes, and manifests with no split take, read as before on 2.46.0. So upgrade every reader of split-take manifests before you read one this release writes.
+* **Re-assemble existing stamped occluder-split takes once, with the same config.** The reading now binds each split donor's `meta.json`. An older stamp that lacks only that binding is refused as `ASSEMBLY_CONFIG_STALE`, and the refusal says that the stamp predates the binding. A `parts.json` with no `assembly_config` is read as before.
+* **`assembly_config` field names may carry an index.** This release's reader accepts one indexed form, `assemble.take[i].meta`. A later release may accept more, and a reader refuses an indexed name it does not accept with `PARTS_FIELD_TYPE` (STABILITY, *Assembly config reading*).
+* **`check/` gains `build-report.json`.** It is rig-c's `build-report/1` for the primary packed compile, written beside `check/build/` and listed in `check/build/run.json`'s `outputs[]` as `../build-report.json`. Standalone `check` writes it at `<out>/build-report.json`. A failing compile leaves the failing report. `rig` writes none, because its compiles are throwaway.
+
+### Features
+
+* **check, build, compose:** forward the compiler's `--report` on the compile that writes `build/`, and keep rigc's own `build-report/1` bytes beside it (`#1394`, `#1400`, `8aec8b7`).
+* **assemble:** `assemble.yield_refused` accepts a list of part names, and only the named parts yield. `true` and an absent key keep their bytes. An unknown name, or a cut that a limb consumes, is refused by name, and the list enters `assembly_config` (`#1384`, `#1391`, `be581ac`).
+
+### Bug Fixes
+
+* **assembly-reading:** bind an occluder-split take's donor `meta.json` at `assemble.take[i].meta`, so a changed donor is refused as `ASSEMBLY_CONFIG_STALE` naming the take. The `assemble.take` digest is unchanged (`#1392`, `#1398`, `77267d4`).
+* **assemble, assembly-reading:** assemble and the reading share one typed projection of the config. Each projected field carries a digest binding, or an exemption with an issue and a reason. A field with neither, and a stale exemption, fail a control. Digests are unchanged (`#1390`, `#1397`, `8f3aaf2`).
+* **depth-apply:** refuse a stale rig config as `ASSEMBLY_CONFIG_STALE` before writing, and again after relocation (`#1388`, `#1389`, `4885871`).
+* **edited-part:** `ASSEMBLE_EDITED_PART_BASELINE` keeps both hashes and adds a recovery hint that points at `edited-part --parts`. AUTHORING says to finalize the assembly inputs (`turn` and `constraints.physics` included) and assemble again before taking edit baselines (`#1395`, `#1396`, `5a2bc48`).
+* **docs:** STABILITY names the one indexed field-name form the reader accepts (`#1399`, `b29ba09`).
+
 ## 2.46.0 (2026-11-20)
 
 `parts.json` now records which effective config inputs produced the parts, and the stages that read assembled parts refuse a config that would assemble them differently. Before, a config could drift after `assemble` with nothing to say so. A new stable subpath, `@rig-c/parts/assembly-reading`, gives a consumer the same reading.
