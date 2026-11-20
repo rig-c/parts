@@ -411,11 +411,11 @@
     }
   ],
   "assembly_config": {
-    "sha256": "cbf63e4d17c2ae9f842d6f7870a69b655d22bdb5b27c11d1c7ef8de6f009c32e",
+    "sha256": "5c31550c3ea9cf61d5e48be5e17d312ee4bf664622687fd8b8bf055576257bf5",
     "fields": [
       {
         "name": "assemble.alternates",
-        "sha256": "d2815582dc313d6dada93628ee818236060983f144e480c822b28b8f42715e90"
+        "sha256": "ffef551aca9903b555676adab2df928911f6fe1e0234f361fbc276a014f4d35f"
       },
       {
         "name": "assemble.ground",
@@ -443,7 +443,7 @@
       },
       {
         "name": "generation.control.skeleton",
-        "sha256": "4ce1598e5ac89793bc0dde47d25c2d2997991a7cdec991a606db45de03c2fa2c"
+        "sha256": "2159f0b1b0dedf12a4680e6260fa5013868322411e1c57b8ec86307418bba4ce"
       },
       {
         "name": "limbs",

@@ -936,7 +936,7 @@
     }
   ],
   "assembly_config": {
-    "sha256": "373a804ae99b94a6c1907322facdb60d45f679bd35b377d7355a77136f123693",
+    "sha256": "0d2361e9da42dfd88d11be5b7e9d6b73a0c992423722b47495e2a4bfd4edeebf",
     "fields": [
       {
         "name": "assemble.ground",
@@ -960,7 +960,7 @@
       },
       {
         "name": "generation.control.skeleton",
-        "sha256": "aa815b0ffe4de70e29d4955cf3a7918021b630be060f8c556c003b095ca8ec8e"
+        "sha256": "f4d98e3ae8d4f1c7ef16c615fa53b344ce509bc0083f7566469a05198f3bc6a3"
       },
       {
         "name": "seethrough.head_box",

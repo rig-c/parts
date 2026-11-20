@@ -435,7 +435,7 @@
     }
   ],
   "assembly_config": {
-    "sha256": "773c59e19d4f3c1e7e934f34529729911c72b6c6d9900b127ef92e28d1b0b9f3",
+    "sha256": "e9ca79f12709f6891931bcea4f499ff747634176fbb8abf4653a4fa00e7c1a25",
     "fields": [
       {
         "name": "assemble.ground",
@@ -463,7 +463,7 @@
       },
       {
         "name": "generation.control.skeleton",
-        "sha256": "4ce1598e5ac89793bc0dde47d25c2d2997991a7cdec991a606db45de03c2fa2c"
+        "sha256": "2159f0b1b0dedf12a4680e6260fa5013868322411e1c57b8ec86307418bba4ce"
       },
       {
         "name": "limbs",

@@ -1374,7 +1374,7 @@
     }
   ],
   "assembly_config": {
-    "sha256": "aa36c256da0a3649fd9fd4e2cbfdf27342bb05199ea7ef7734bb453e8ac42e40",
+    "sha256": "70853824c98e205f34ad82cfbaec2e321e40d48121caa5a92494f3f2ea8e6cf8",
     "fields": [
       {
         "name": "assemble.extend_below_crop",
@@ -1406,7 +1406,7 @@
       },
       {
         "name": "generation.control.skeleton",
-        "sha256": "a5f6caea93da44e872fd8e9bf2eeac22fb8bfa89a7c9a2b0e8e225ae68917839"
+        "sha256": "c753dc1663005db47a2431ee3e5444be1a91ef196c3060e4262ada973b9ec6b1"
       },
       {
         "name": "limbs",

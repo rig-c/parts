@@ -345,6 +345,10 @@ object shaped as `{ sha256, fields: [{ name, sha256 }] }`. Its lowercase
 SHA-256 digests describe the effective assembly config inputs, in deterministic
 field-name order. Entries name the individual inputs, such as
 `assemble.rig_scale`. The aggregate binds the ordered field names and digests.
+Declared assembly files are resolved relative to their declaring config or
+requirements file and hashed by content. Equivalent path spellings give the
+same reading. A built-in control skeleton is identified by its name and latent
+size. A missing declared input produces a named refusal.
 The `assemble.seam` and `assemble.project` entries hash the effective rules,
 resolved in order from the CLI override, the config value and the default.
 `build` carries its effective rules to the in-process rig and check stages.

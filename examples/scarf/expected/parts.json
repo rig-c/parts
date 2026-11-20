@@ -903,7 +903,7 @@
     }
   ],
   "assembly_config": {
-    "sha256": "41f435119ae2d1bc99650304c00f42b1ec8f4ba6ffd8af1c68c33fa16e1367cb",
+    "sha256": "402d3175cecb7ef781c18bdbeb36083848c393e86455fceea06d8e0aca78a5c9",
     "fields": [
       {
         "name": "assemble.extend_below_crop",
@@ -935,7 +935,7 @@
       },
       {
         "name": "generation.control.skeleton",
-        "sha256": "989a495579f940483d2e03ae1491bc376dac75993a382650a23931f9239712d1"
+        "sha256": "dfb294f9de89309e80119add7bf8b30002817c074b8249fa848a33a2aad3bcf8"
       },
       {
         "name": "seethrough.head_box",

@@ -10,6 +10,7 @@ import { configFileReferences } from '../src/config.ts';
 import { alphaSupport, floatBox, integrateNormals, mapToSheet, readNumericMap, type NumericMap } from '../src/depthmaps.ts';
 import { applyDepth, bindDepthMap, parseDepthRecipe, prepareDepth } from '../src/depthworkflow.ts';
 import { depthImageReference, readParts, writeParts } from '../src/parts.ts';
+import { assemblyConfigChanges, assemblyConfigReading } from '../src/assembly-reading.ts';
 import { assembleStage, readRigInputs } from '../src/build.ts';
 import { depthReading } from '../src/depthsheets.ts';
 import { type EditedPartReceipt } from '../src/editedparts.ts';
@@ -83,20 +84,8 @@ export function runDepthRelocationChecks(dir: string, say: Say): void {
     parts: { face: { map: 'map.json', source: 'depth', frame: 'part', group: 'head', median: 50, relief: 10 } }, clear: [] });
   const recipePath = join(dir, 'depth.json'), mapPath = join(dir, 'map.json'); json(recipePath, recipe);
   json(mapPath, { spec: 'rig-parts-map/1', width: face.w, height: face.h, channels: 1, data });
-  const prepared = join(dir, 'prepared');
-  const manifest = prepareDepth({ parts: baseline, config: recipePath, out: prepared });
-  const manifestPath = join(prepared, 'manifest.json'), preparedFace = manifest.parts[0];
   const { sheet, reading } = mapToSheet(data, art, 50, 10, 'white', 100, 'face');
   const sheetBytes = encodePngBytes(sheet), mapSha256 = sha256(readFileSync(mapPath));
-  const expectedParts = JSON.parse(readFileSync(join(baseline, 'parts.json'), 'utf8')) as { parts: Obj[] };
-  expectedParts.parts.find(p => p.name === 'face')!.depth = { image: 'face_depth.png', near: 'white', zScale: 100,
-    sources: [{ from: face.from, image: 'map.json', sha256: mapSha256, crop: [0, 0, face.w, face.h], reading: depthReading(sheet, art, null) }] };
-  const expectedReport = (cfg: string): unknown => ({ spec: 'rig-parts-depth-report/1', partsSha256: sha256(readFileSync(join(baseline, 'parts.json'))),
-    recipeSha256: sha256(pretty(recipe)), manifestSha256: sha256(readFileSync(manifestPath)), rigConfigSha256: sha256(readFileSync(cfg)),
-    alpha: 128, normalization: 'median, linear p5..p95', extension: 'nearest alpha>=128, row-major ties', cleared: [],
-    parts: [{ part: 'face', group: 'head', source: 'depth', frame: 'part', sourceSha256: preparedFace.sourceSha256,
-      mapSha256, inputSha256: preparedFace.inputSha256, sheetSha256: sha256(sheetBytes), median: 50, relief: 10,
-      near: 'white', zScale: 100, pivot: 31, ...reading, sign: 1 }] });
   const generation = { checkpoint: 'fixture', loras: [], trigger: '', identity: 'fixture',
     sampler: { steps: 1, cfg: 1, sampler: 'fixture', scheduler: 'fixture' }, costume: 'fixture', negative_extra: '',
     style: 'fixture', negative_pose: 'fixture', latent: [64, 64], seed: 0, pose: 'standing',
@@ -105,18 +94,40 @@ export function runDepthRelocationChecks(dir: string, say: Say): void {
   json(join(input, 'animations.json'), { spec: 'rigc-motion/1', animations: { extra: { duration: 1, tracks: [] } } });
   json(join(input, 'requirements.json'), { spec: 'spine-parts-requirements/1', fps: 12, requirements: [] });
   const legacy = { ...config, requirements: 'requirements.json', motion: { ...(config.motion as Obj), animations_from: 'animations.json' }, generation };
+  const relativeDepth = { full: { layers: { face: { image: 'face-depth.png', near: 'white', zScale: 100 } } } };
   const absolute = { ...legacy, requirements: resolve(input, 'requirements.json'),
     motion: { ...legacy.motion, animations_from: resolve(input, 'animations.json') },
     generation: { ...generation, control: { ...generation.control, skeleton: resolve(input, 'pose.json') } } };
   const builtin = { ...legacy, generation: { ...generation, control: { ...generation.control, skeleton: 'stand_clasp' } } };
-  for (const [name, raw] of [['DEFAULT', config], ['RELATIVE', legacy], ['ABSOLUTE', absolute], ['BUILTIN', builtin]] as const) {
+  const digests = new Map<string, string | undefined>();
+  for (const [name, raw] of [['DEFAULT', config], ['RELATIVE', { ...legacy, depth: relativeDepth }], ['ABSOLUTE', absolute], ['BUILTIN', builtin]] as const) {
     const cfg = join(input, name.toLowerCase() + '.json'), out = join(dir, 'legacy-' + name.toLowerCase()); json(cfg, raw);
-    applyDepth({ parts: baseline, manifest: manifestPath, config: recipePath, rigConfig: cfg, out });
+    const caseBaseline = name === 'DEFAULT' ? baseline : join(dir, 'baseline-' + name.toLowerCase());
+    if (name !== 'DEFAULT') assemble(cfg, caseBaseline);
+    const caseParts = readParts(join(caseBaseline, 'parts.json'));
+    digests.set(name, caseParts.assembly_config?.sha256);
+    const prepared = join(dir, 'prepared-' + name.toLowerCase());
+    const manifest = prepareDepth({ parts: caseBaseline, config: recipePath, out: prepared });
+    const manifestPath = join(prepared, 'manifest.json'), preparedFace = manifest.parts[0];
+    const expectedParts = JSON.parse(readFileSync(join(caseBaseline, 'parts.json'), 'utf8')) as { parts: Obj[] };
+    expectedParts.parts.find(p => p.name === 'face')!.depth = { image: 'face_depth.png', near: 'white', zScale: 100,
+      sources: [{ from: face.from, image: 'map.json', sha256: mapSha256, crop: [0, 0, face.w, face.h], reading: depthReading(sheet, art, null) }] };
+    const expectedReport = (cfg: string): unknown => ({ spec: 'rig-parts-depth-report/1', partsSha256: sha256(readFileSync(join(caseBaseline, 'parts.json'))),
+      recipeSha256: sha256(pretty(recipe)), manifestSha256: sha256(readFileSync(manifestPath)), rigConfigSha256: sha256(readFileSync(cfg)),
+      alpha: 128, normalization: 'median, linear p5..p95', extension: 'nearest alpha>=128, row-major ties', cleared: [],
+      parts: [{ part: 'face', group: 'head', source: 'depth', frame: 'part', sourceSha256: preparedFace.sourceSha256,
+        mapSha256, inputSha256: preparedFace.inputSha256, sheetSha256: sha256(sheetBytes), median: 50, relief: 10,
+        near: 'white', zScale: 100, pivot: 31, ...reading, sign: 1 }] });
+    applyDepth({ parts: caseBaseline, manifest: manifestPath, config: recipePath, rigConfig: cfg, out });
     // No expected byte is read from applyDepth's output. The old function owns config text;
     // analytic map/manifest inputs own the new sheet, manifest and report; source bytes own retained files.
-    const expected: Record<string, string> = { ...files(baseline), 'parts/face_depth.png': Buffer.from(sheetBytes).toString('hex'),
+    const expectedConfig = legacyDepthConfig(raw, cfg, out, 31) as Obj;
+    if (name === 'RELATIVE') expectedConfig.depth = { full: { layers: {
+      face: { ...relativeDepth.full.layers.face, image: relative(out, initialDepthPath) },
+    } } };
+    const expected: Record<string, string> = { ...files(caseBaseline), 'parts/face_depth.png': Buffer.from(sheetBytes).toString('hex'),
       'parts.json': Buffer.from(pretty(expectedParts)).toString('hex'),
-      'config.json': Buffer.from(pretty(legacyDepthConfig(raw, cfg, out, 31))).toString('hex'),
+      'config.json': Buffer.from(pretty(expectedConfig)).toString('hex'),
       'depth-report.json': Buffer.from(pretty(expectedReport(cfg))).toString('hex') };
     if (face.depth !== undefined && depthImageReference(face.depth).path !== 'parts/face_depth.png') delete expected[depthImageReference(face.depth).path];
     const actual = files(out), names = Object.keys(expected).sort();
@@ -128,6 +139,40 @@ export function runDepthRelocationChecks(dir: string, say: Say): void {
       (name === 'DEFAULT' || (read.cfg.requirements !== undefined && read.from !== null)),
       'actual output reader resolves the legacy inputs and generated depth sheet');
   }
+
+  const relativeParts = readParts(join(dir, 'baseline-relative/parts.json'));
+  const builtinParts = readParts(join(dir, 'baseline-builtin/parts.json'));
+  const builtinName = join(input, 'changed-builtin.json'), missing = join(input, 'missing-pose.json');
+  json(builtinName, { ...builtin, generation: { ...generation, control: { ...generation.control, skeleton: 'stand_sides' } } });
+  json(missing, { ...legacy, generation: { ...generation, control: { ...generation.control, skeleton: 'missing.json' } } });
+  const skeletonField = 'generation.control.skeleton';
+  const relativeDigest = digests.get('RELATIVE'), absoluteDigest = digests.get('ABSOLUTE');
+  const relocatedParts = readParts(join(dir, 'legacy-relative/parts.json'));
+  const relocatedDigest = assemblyConfigReading(join(dir, 'legacy-relative/config.json'), relocatedParts).sha256;
+  say('DMP1385_RELOCATED_SKELETON_CONTENT',
+    relativeDigest !== undefined && relativeDigest === absoluteDigest && relativeDigest === relocatedDigest,
+    JSON.stringify({ relativeDigest, absoluteDigest, relocatedDigest }));
+  const pose = join(input, 'pose.json'), poseBytes = readFileSync(pose);
+  writeFileSync(pose, Buffer.concat([poseBytes, Buffer.from('\n')]));
+  try {
+    const changed = assemblyConfigChanges(join(input, 'relative.json'), relativeParts);
+    say('DMP1385_SKELETON_FILE_BYTES_STALE', changed.join(',') === skeletonField, JSON.stringify(changed));
+  } finally {
+    writeFileSync(pose, poseBytes);
+  }
+  const sheetBefore = readFileSync(initialDepthPath);
+  initialDepth.data.set([133, 133, 133, 255], 0);
+  writePng(initialDepthPath, initialDepth);
+  try {
+    const changed = assemblyConfigChanges(join(input, 'relative.json'), relativeParts);
+    say('DMP1385_DEPTH_FILE_BYTES_STALE', changed.join(',') === 'depth', JSON.stringify(changed));
+  } finally {
+    writeFileSync(initialDepthPath, sheetBefore);
+  }
+  const builtinChanged = assemblyConfigChanges(builtinName, builtinParts);
+  say('DMP1385_BUILTIN_NAME_STALE', builtinChanged.join(',') === skeletonField, JSON.stringify(builtinChanged));
+  const missingFaults = codes(() => assemblyConfigReading(missing, relativeParts));
+  say('DMP1385_MISSING_SKELETON_REFUSED', missingFaults.includes('CONFIG_FILE_PRESENT: config.' + skeletonField), JSON.stringify(missingFaults));
 
   const edits = join(input, 'edits'), receipts: EditedPartReceipt[] = [];
   for (const [i, part] of ['face', 'body'].entries()) {

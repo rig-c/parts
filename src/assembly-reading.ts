@@ -1,15 +1,21 @@
 import { createHash } from 'node:crypto';
+import { readFileSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { authoredUnitDepths } from './authoredunit.ts';
-import { controlSkeletonOf, isDoorKey, loadEarlyConfig, turnMovingPartPair, type AssembleConfig } from './config.ts';
-import { PartsError } from './errors.ts';
+import { isDoorKey, loadEarlyConfig, turnMovingPartPair, type AssembleConfig, type CharacterConfig, type Cut } from './config.ts';
+import type { DepthRunConfig, UserDepthSheet } from './depthsheets.ts';
+import { PartsError, refuseIfAny } from './errors.ts';
+import { readWrapperLayers } from './layers.ts';
 import { bonePlaces } from './limbs.ts';
 import type { AssemblyConfigRecord, PartsFile } from './parts.ts';
+import { PLATE_RECEIPT_FILE, verifyPlateReceipt } from './plate.ts';
+import { isSkeletonName } from './skeleton.ts';
+import { setupPaintingFilePath, type SetupPainting } from './setuppainting.ts';
 import { DEFAULT_GROUND, DEFAULT_PROJECT_RULE, type ProjectRule } from './projectrule.ts';
 import { DEFAULT_SEAM_RULE, type SeamRule } from './seamrule.ts';
 import { readRequirements } from './requirements.ts';
 
-type AssemblySource = Omit<AssembleConfig, 'seethrough'> & Partial<Pick<AssembleConfig, 'seethrough'>>;
+type AssemblySource = Omit<AssembleConfig, 'seethrough'> & Partial<Pick<AssembleConfig, 'seethrough'>> & Pick<CharacterConfig, 'generation'>;
 
 export interface AssemblyRules {
   seam?: SeamRule;
@@ -20,7 +26,33 @@ export function effectiveAssemblyRules(config: AssemblyRules, overrides: Assembl
   return { seam: overrides.seam ?? config.seam ?? DEFAULT_SEAM_RULE, project: overrides.project ?? config.project ?? DEFAULT_PROJECT_RULE };
 }
 
-const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex');
+const sha256 = (text: string | Uint8Array): string => createHash('sha256').update(text).digest('hex');
+
+function fileBytes(path: string, field: string): Buffer {
+  try {
+    if (statSync(path).isFile()) return readFileSync(path);
+  } catch {
+    // Give callers the same named refusal for missing and unreadable files.
+  }
+  throw new PartsError([{ code: 'CONFIG_FILE_PRESENT', object: `config.${field}`, detail: `names ${path}; a readable file is required` }]);
+}
+
+function layerRunDigest(path: string, field: string): unknown {
+  if (/\.psd$/i.test(path)) return sha256(fileBytes(path, field));
+  const run = readWrapperLayers(path);
+  return {
+    manifest: sha256(fileBytes(run.source, field)),
+    // Wrapper layers always retain a file. PSD files are handled above.
+    layers: [...run.layers, ...run.hidden].map(layer => sha256(fileBytes(layer.file!, field))),
+  };
+}
+
+function plateDigest(path: string, field: string): string {
+  const receipt = resolve(path, PLATE_RECEIPT_FILE);
+  const bytes = fileBytes(receipt, field);
+  refuseIfAny(verifyPlateReceipt(receipt));
+  return sha256(bytes);
+}
 
 // These maps use authored part, bone or layer names as keys, independently
 // of the loader's metadata spelling for structural fields.
@@ -48,9 +80,36 @@ export function readAssemblyConfig(
 ): AssemblyConfigRecord {
   const { seam, project } = effectiveAssemblyRules(cfg.assemble, overrides);
   const ground = project === 'visible' ? cfg.assemble.ground ?? DEFAULT_GROUND : DEFAULT_GROUND;
-  const setup = ground === 'busy' && cfg.requirements !== undefined
-    ? readRequirements(resolve(dirname(configPath), cfg.requirements)).setup_painting
+  const base = dirname(resolve(configPath));
+  const file = (path: string | undefined, field: string): string | undefined =>
+    path === undefined ? undefined : sha256(fileBytes(resolve(base, path), field));
+  const run = (path: string | undefined, field: string): unknown =>
+    path === undefined ? undefined : layerRunDigest(resolve(base, path), field);
+  const plate = (path: string | undefined, field: string): string | undefined =>
+    path === undefined ? undefined : plateDigest(resolve(base, path), field);
+  const cuts = (entries: Cut[] | undefined, field: string): unknown => entries?.length
+    ? entries.map((cut, i) => ({
+      ...cut,
+      under: typeof cut.under === 'string' ? file(cut.under, `${field}[${i}].under`)
+        : cut.under === undefined ? undefined : { plate: plate(cut.under.plate, `${field}[${i}].under.plate`) },
+    }))
     : undefined;
+  const sheet = (value: UserDepthSheet, field: string): unknown => ({ ...value, image: file(value.image, field) });
+  const depthRun = (value: DepthRunConfig | undefined, field: string): unknown => value === undefined ? undefined : ({
+    atlas: value.atlas === undefined ? undefined : sheet(value.atlas, `${field}.atlas.image`),
+    layers: value.layers === undefined ? undefined : Object.fromEntries(Object.entries(value.layers)
+      .map(([name, layer]) => [name, sheet(layer, `${field}.layers.${name}.image`)])),
+  });
+  const skeleton = cfg.generation?.control?.skeleton;
+  const requirementsPath = ground === 'busy' && cfg.requirements !== undefined
+    ? resolve(base, cfg.requirements) : undefined;
+  const setup = requirementsPath === undefined ? undefined : readRequirements(requirementsPath).setup_painting;
+  const setupImage = (declaration: SetupPainting['figure_mask'] | SetupPainting['backdrop'], field: string) =>
+    declaration === undefined ? undefined : {
+      ...declaration,
+      path: sha256(fileBytes(setupPaintingFilePath(requirementsPath!, declaration.path), `requirements.setup_painting.${field}.path`)),
+    };
+  const edited = cfg.assemble.edited_parts;
   const names = [...new Set([
     ...parts.parts.map(part => part.name),
     ...(parts.alternates ?? []).flatMap(set => set.records.map(part => part.name)),
@@ -71,7 +130,8 @@ export function readAssemblyConfig(
   const hybridWidths = new Map<string, Array<{ set: string | null; width?: number }>>();
   const limbs = Object.entries(cfg.limbs ?? {}).map(([name, { segments, split, front }]) => {
     const activeFront = front?.parts.filter(part => frontParts.has(part)) ?? [];
-    const resolvedSegments = segments.map(({ hybrid, ...segment }) => {
+    const resolvedSegments = segments.map(({ hybrid, ...declared }, i) => {
+      const segment = { ...declared, cap: file(declared.cap, `limbs.${name}.segments[${i}].cap`) };
       if (hybrid === undefined) return segment;
       hybridWidths.set(hybrid.part, bands.flatMap(({ name: set, records }) => {
         const band = records.find(record => record.name === hybrid.part)?.limb?.band;
@@ -99,22 +159,45 @@ export function readAssemblyConfig(
     seam,
     extend_below_crop: cfg.assemble.extend_below_crop?.length ? cfg.assemble.extend_below_crop : undefined,
     patches: cfg.assemble.patches?.length ? cfg.assemble.patches : undefined,
-    cuts: cfg.assemble.cuts?.length ? cfg.assemble.cuts : undefined,
+    cuts: cuts(cfg.assemble.cuts, 'assemble.cuts'),
     keep_under_occluders: cfg.assemble.keep_under_occluders?.length ? cfg.assemble.keep_under_occluders : undefined,
     require_hidden_extent: cfg.assemble.require_hidden_extent?.length ? cfg.assemble.require_hidden_extent : undefined,
     head_face_underfill: hasHeadRun && cfg.assemble.head_face_underfill === true ? true : undefined,
     yield_refused: cfg.assemble.yield_refused === true ? true : undefined,
     stage_map: undefined,
     editor_receipts: undefined,
-    edited_parts: cfg.assemble.edited_parts?.receipts.length ? cfg.assemble.edited_parts : undefined,
-    occluders: cfg.assemble.occluders?.length ? cfg.assemble.occluders.map(item => ({
+    edited_parts: edited?.receipts.length ? {
+      receipts: edited.receipts.map((receipt, i) => ({
+        ...receipt,
+        file: file(resolve(base, edited.dir, receipt.file), `assemble.edited_parts.receipts[${i}].file`),
+      })),
+    } : undefined,
+    occluders: cfg.assemble.occluders?.length ? cfg.assemble.occluders.map((item, i) => ({
       ...item,
+      image: file(item.image, `assemble.occluders[${i}].image`),
+      plate: plate(item.plate, `assemble.occluders[${i}].plate`),
       grow: item.grow === 0 ? undefined : item.grow,
       guard: item.guard === 0 ? undefined : item.guard,
     })) : undefined,
-    take: cfg.assemble.take?.length ? cfg.assemble.take : undefined,
-    alternates: cfg.assemble.alternates?.length ? cfg.assemble.alternates.map(set => ({
+    take: cfg.assemble.take?.length ? cfg.assemble.take.map((take, i) => {
+      const field = `assemble.take[${i}]`;
+      const reference = 'reference' in take ? take.reference : undefined;
+      return {
+        ...take,
+        run_dir: run(take.run_dir, `${field}.run_dir`),
+        st_input: file(take.st_input, `${field}.st_input`),
+        meta: 'tags' in take ? file(resolve(base, take.run_dir, 'meta.json'), `${field}.run_dir`) : undefined,
+        reference: reference !== undefined && 'painting' in reference
+          ? { ...reference, painting: file(reference.painting, `${field}.reference.painting`) } : reference,
+      };
+    }) : undefined,
+    alternates: cfg.assemble.alternates?.length ? cfg.assemble.alternates.map((set, i) => ({
       ...set,
+      source: file(set.source, `assemble.alternates[${i}].source`),
+      full: run(set.full, `assemble.alternates[${i}].full`),
+      head: run(set.head, `assemble.alternates[${i}].head`),
+      skeleton: file(set.skeleton, `assemble.alternates[${i}].skeleton`),
+      cuts: cuts(set.cuts, `assemble.alternates[${i}].cuts`),
       layers: Object.keys(set.layers ?? {}).length === 0 ? undefined : set.layers,
     })) : undefined,
   };
@@ -123,12 +206,23 @@ export function readAssemblyConfig(
     bones,
     'constraints.physics': physicsPairs.length === 0 ? undefined : physicsPairs,
     'depth.authored_units': cfg.depth === undefined ? undefined : [...authoredUnitDepths(cfg)].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0),
-    depth: cfg.depth,
-    'generation.control.skeleton': controlSkeletonOf(cfg),
+    depth: cfg.depth === undefined ? undefined : {
+      ...cfg.depth,
+      full: depthRun(cfg.depth.full, 'depth.full'),
+      head: depthRun(cfg.depth.head, 'depth.head'),
+    },
+    'generation.control.skeleton': skeleton === undefined ? undefined : {
+      latent: cfg.generation?.latent,
+      ...(isSkeletonName(skeleton) ? { builtin: skeleton } : { file: file(skeleton, 'generation.control.skeleton') }),
+    },
     limbs: limbs.length === 0 ? undefined : limbs,
     'limbs.hybrid_width': hybridWidths.size === 0 ? undefined : [...hybridWidths],
     motion_seams: cfg.motion_seams,
-    'requirements.setup_painting': setup,
+    'requirements.setup_painting': setup === undefined ? undefined : {
+      ...setup,
+      figure_mask: setupImage(setup.figure_mask, 'figure_mask'),
+      backdrop: setupImage(setup.backdrop, 'backdrop'),
+    },
     scene: cfg.scene === undefined ? undefined : true,
     'seethrough.resolution': resolution,
     'seethrough.head_box': hasHeadRun ? head_box : undefined,
