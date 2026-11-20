@@ -1,5 +1,28 @@
 # Changelog
 
+## 2.46.0 (2026-11-20)
+
+`parts.json` now records which effective config inputs produced the parts, and the stages that read assembled parts refuse a config that would assemble them differently. Before, a config could drift after `assemble` with nothing to say so. A new stable subpath, `@rig-c/parts/assembly-reading`, gives a consumer the same reading.
+
+**Read before upgrading:**
+
+* **New assemble and build outputs carry `assembly_config` in `parts.json`**: `{ sha256, fields: [{ name, sha256 }] }`, which holds one digest per effective assembly input, sorted by field name, and the aggregate digest. A reader that compares whole `parts.json` bytes sees the new key. Each tracked `examples/*/expected/parts.json` changes only by this key.
+* **A config that no longer matches its parts is refused as `ASSEMBLY_CONFIG_STALE`.** The rig stage (`rig`, `build`, `mesh-stats`), `check` and `edited-part --parts` compare the config they are given with `parts.json`'s `assembly_config`, name every changed field, and ask for `assemble` to be run again. A `parts.json` without `assembly_config` (written by 2.45.0 or earlier) is read as before.
+* **Paths are read by what they name.** A declared assembly file (cut plates, occluder images, take runs, limb caps, depth sheets, a control skeleton file and the rest STABILITY lists) is hashed by content, resolved from the file that declares it. A relative and an absolute spelling of the same file, and a config moved with its relative paths rebased, give the same reading. A built-in control skeleton is read by its name and latent size. A declared input that is missing is refused as `CONFIG_FILE_PRESENT`.
+* **`--seam` and `--project` are part of the reading.** `assemble` and `build` record the rules they used, whether they came from the flag, the config or the default. A standalone `rig` or `check` reads the rules from the config it is given, so parts made with `--seam` or `--project` need those values written into `assemble.seam` and `assemble.project` (AUTHORING, *Keeping assembled parts current*).
+* **`package.json` gains an `exports` map**: `./assembly-reading` and `./*`, which passes every existing file path through. A consumer that imported a file by its path under the package keeps importing it unchanged.
+
+### Features
+
+* **assemble:** record `assembly_config` in `parts.json` from the effective inputs assemble reads: rig scale, seam and project rules, ground, cuts, occluders, takes, alternates, limbs and hybrid widths, motion seams, turn moving pairs (including the cloth physics constraints that change them), depth, the control skeleton, setup-painting images, edited-part receipts and the rest STABILITY lists. Keyed-animation edits through `motion.animations_from` leave the reading unchanged (`#1385`, `#1386`, `0837772`).
+* **rig, build, check, edited-part:** refuse `ASSEMBLY_CONFIG_STALE` when the config's reading differs from the recorded one, naming the fields. `build` carries its effective `--seam` and `--project` into its own rig and check stages. `edited-part` accepts an optional `--parts <dir>` that holds the edit to the same check (`#1385`, `#1386`, `0837772`).
+* **propose:** after `--write-config`, print a note naming the assembly fields the written config changed, so the author knows a second `assemble` is needed. It writes the config either way (`#1385`, `#1386`, `0837772`).
+* **assembly-reading:** new stable subpath `@rig-c/parts/assembly-reading`, exporting `assemblyConfigReading(configPath, parts)` and `assemblyConfigChanges(configPath, parts)` (`#1385`, `#1386`, `0837772`).
+
+### Bug Fixes
+
+* **selftest:** split RG1165's run-stamp detail by conjunct and name each output file whose hash on disk differs from its recorded hash, with both hashes. The verdict logic is unchanged (`#1366`, `#1381`, `4737ce1`).
+
 ## 2.45.0 (2026-11-19)
 
 `check` now declares a versioned report with one outcome per bar and the identity of the build it judged, `compose --accept` reads those outcomes, and three new interfaces arrive: `diff-drafts` compares two assemble outputs, `external-receipt` records and verifies a mask made outside this package, and `src/remesh-api.ts` applies a finalized mesh edit in process. Cloth can be drafted from the free end and on named sleeve carriers, a turn surface can take its neighbour's depth at a shared boundary, every command answers `--help` and `-h`, and diagnostic folder names are portable. A config that declares none of the new fields builds the same rig bytes as 2.44.0; the check report gains its leading keys, and diagnostic folders with unsafe names move, as below.
