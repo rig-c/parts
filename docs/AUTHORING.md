@@ -8968,6 +8968,12 @@ rig-parts depth-apply --parts assembled --manifest inference/manifest.json --con
 rig-parts rig --parts mapped --config mapped/config.json --out compiled
 ```
 
+When parts.json carries an assembly config digest, use a rig config with the
+same assembly inputs. `depth-apply` checks both the supplied config and the
+config it would emit with the recipe applied. If either changes the assembly
+reading, it reports [`ASSEMBLY_CONFIG_STALE`](#ASSEMBLY_CONFIG_STALE) before
+writing the mapped output. A successful handoff carries the original digest.
+
 The separate recipe is not a new field on character config:
 
 ```json

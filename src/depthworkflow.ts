@@ -5,6 +5,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+import { refuseStaleAssembly } from './assembly-reading.ts';
 import { loadConfigAndAnimations, parseConfig } from './config.ts';
 import { relocateConfigReferences } from './configrelocation.ts';
 import { depthReading, readSourceDepth } from './depthsheets.ts';
@@ -223,7 +224,8 @@ export function applyDepth(input: { parts: string; manifest: string; config: str
   emptyOutput(input.out, [input.parts, input.config, input.manifest, input.rigConfig, ...Object.values(recipe.parts).flatMap(p => { const map = resolve(dirname(input.config), p.map); return [map, map + '.binding.json']; })]);
   const rawParts = object(readJson(join(input.parts, 'parts.json')), 'parts.json'), file = readParts(join(input.parts, 'parts.json'));
   for (const p of file.parts) if (Object.hasOwn(recipe.parts, p.name) && p.provenance?.depth?.kind === 'authored-unit') fail('DEPTH_AUTHORED_UNIT_CONFLICT', `part "${p.name}"`, 'has provenance.depth.kind "authored-unit"; a transported scalar reference cannot coexist with authored unit depth — retain the unit declaration or supply an explicitly reassembled scalar-compatible input; no automatic transition is made');
-  loadConfigAndAnimations(input.rigConfig);
+  const { config } = loadConfigAndAnimations(input.rigConfig);
+  refuseStaleAssembly(input.rigConfig, file, config);
   const raw = object(readJson(input.rigConfig), 'rig config'), turn = object(raw.turn, 'config.turn');
   for (const [name, group] of Object.entries(recipe.groups)) {
     const target = name === 'head' ? turn : object(turn.body, 'config.turn.body'); target.pivot = group.pivot;
@@ -231,7 +233,7 @@ export function applyDepth(input: { parts: string; manifest: string; config: str
   }
   // Keep relative paths portable when relocating the output directory with its inputs.
   relocateConfigReferences(raw, dirname(input.rigConfig), input.out, 'relative');
-  parseConfig(raw);
+  refuseStaleAssembly(join(input.out, 'config.json'), file, parseConfig(raw));
   const warnings: string[] = [];
   const writes = new Map<string, Uint8Array>(), rows: Obj[] = [], recs = rawParts.parts as Obj[];
   // Retain auxiliary art (including alternate sets) and diagnostics byte-for-byte.
