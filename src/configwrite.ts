@@ -26,7 +26,12 @@ export type ConfigWritePatch =
   | { kind: 'assemble-plan'; plan: PlanProposal['plan']; extend_below_crop: PlanProposal['extend_below_crop'] }
   | { kind: 'proposal'; proposal: Proposal; sections: typeof PROPOSAL_CONFIG_SECTIONS }
   /** Issues #671/#679: add unattached, resolvable entries; append skip explanations to the proposal's notes for the caller to print. */
-  | { kind: 'proposal-missing'; proposal: Proposal; parts: ReadonlyArray<{ name: string; from: string }> };
+  | { kind: 'proposal-missing'; proposal: Proposal; parts: ReadonlyArray<{ name: string; from: string }> }
+  /** `bust-landmarks --write-config` (issue #1382): set or remove named shape fields of one part's existing
+   * `meshes.<part>.contour.bust`; a field with no value is removed, every other key is kept where it is. */
+  | { kind: 'bust-shape'; part: string; fields: ReadonlyArray<{ key: BustShapeKey; value?: number | string }> };
+/** The `contour.bust` fields the landmarks file does not carry, the only ones a `bust-shape` patch writes. */
+export type BustShapeKey = 'alpha' | 'clearance' | 'spacing' | 'bone_r' | 'bone_l';
 export interface ConfigWriteChange {
   path: string;
   kind: 'added' | 'replaced' | 'removed';
@@ -231,7 +236,24 @@ export function mergeConfigProposal(raw: unknown, patch: ConfigWritePatch, recei
       }
       return { config, changes: added, edits };
     }
-    default: return refuse('write-config', 'has no supported operation; edited-part-receipt, neck-unit, head-box, assemble-plan, proposal or proposal-missing is required');
+    case 'bust-shape': {
+      const at = `${field('config.meshes', patch.part)}.contour.bust`;
+      const meshes = config.meshes;
+      const mesh = object(meshes) && own(meshes, patch.part) ? meshes[patch.part] : undefined;
+      const contour = object(mesh) ? mesh.contour : undefined;
+      const bust = object(contour) ? contour.bust : undefined;
+      if (!object(contour) || !object(bust)) return refuse(at, 'is absent or not an object; an existing contour.bust is required before its shape fields are written');
+      const next = clone(bust, at) as ConfigObject;
+      for (const { key, value } of patch.fields) {
+        if (value === undefined) delete next[key];
+        else next[key] = value;
+      }
+      contour.bust = next;
+      // This patch owns the one bust object, never the mesh or its other contour fields.
+      if (!equal(bust as ConfigObject, next)) edits.push({ path: ['meshes', patch.part, 'contour', 'bust'], value: next });
+      break;
+    }
+    default: return refuse('write-config', 'has no supported operation; edited-part-receipt, neck-unit, head-box, assemble-plan, proposal, proposal-missing or bust-shape is required');
   }
   return { config, changes: changes(before, config), edits };
 }

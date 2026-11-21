@@ -534,7 +534,7 @@ and do not certify visibility. See the
 | `propose` | `--head-box` with `--full`, `--canvas`; optional `--no-back-hair`, `--write-config` (existing config, issue #356), `--help` (`-h`) |
 | `propose` | `--parts`, `--source`, `--out`; optional `--compare` or `--from-config` (one of them), `--keypoints`, `--person` and `--wrist-snap` (each with `--keypoints`), `--full`, `--head` (the turn control's depths; not with `--from-config`), `--grid-rule` (`figure` or `part`, the drafted lattice's spacing; not with `--from-config`), `--cloth` (a config whose `cloth` block is the recipe, issue #364; not with `--from-config`), `--write-config` (existing config for an ordinary proposal, issue #356; a new file with `--cloth`, issue #537; not with `--from-config` — additive: without it nothing `propose` writes changes), `--from` (the config the recipe is changed from, only with `--write-config`, issue #571 — additive: without it nothing `--write-config` writes changes), `--only-missing` (only with `--parts` and `--write-config`, not with `--cloth` or `--from-config`, issue #671 — additive: without it nothing `--write-config` writes changes)  `--bust-landmarks` (rig-pixel apex_r/apex_l and optional cleavage), or `--no-bust` (non-blank omission reason), one required when drafting a chest-holding torso, both incompatible with `--from-config`, `--help` (`-h`) |
 | `propose` | `--parts`, `--source`, `--out`, `--full`, `--head`, `--write-config` together: the [neck draft](AUTHORING.md#a-neck-that-moves-on-its-own) for an existing config with `turn.body` and one neck plan row; reassembles under `<out>/rig`, preserves the sampled turn and drafts a rigid neck unit (issue #826) |
-| `bust-landmarks` | `--from-act`, `--parts`, `--config`, `--out`; optional `--help` (`-h`) (issue #1382; one `rig-review/act@9` chest row to the landmarks file `propose` reads, with `<out>.provenance.json` beside it) |
+| `bust-landmarks` | `--from-act`, `--parts`, `--config`, `--out`; optional `--write-config` (takes the act's `alpha`, `clearance`, `spacing`, `bone_r` and `bone_l` into the config's existing `meshes.<part>.contour.bust`, a field the act omits removed; the config is untouched when none differs — additive: without it nothing the command writes changes), `--help` (`-h`) (issue #1382; one `rig-review/act@9` chest row to the landmarks file `propose` reads, with `<out>.provenance.json` beside it) |
 | `compare` | `--left`, `--right`; optional `--map`, `--help` (`-h`) |
 | `rig` | `--config`, `--parts`, `--out`; optional `--idle-keys` (ctl, direct), `--page-edges` (pot, free), `--pack-shape` (rect, polygon), `--page-size`, `--help` (`-h`) |
 | `check-parts` | `--parts`, `--out`; optional `--json`, `--help` (`-h`) |
@@ -566,7 +566,7 @@ promise covers its command line and flags, and its refusal codes:
 `BUST_LANDMARKS_SHAPE` and `BUST_LANDMARKS_OUT`. It also covers the landmarks
 file it writes, which holds the three keys `propose` reads, in rig px. And it
 covers the provenance record: its spec id `rig-parts-bust-landmarks-provenance/1`,
-its keys and their order. The act's grammar is review's. This package reads
+its keys and their order. The row digest rule (the sha256 of the row's `edit` with object keys sorted recursively, recomputed and refused on a mismatch) is a copy of review's request digest. The act's grammar is review's. This package reads
 `rig-review/act@9` only, and refuses another act version by name until a later
 minor version reads it.
 

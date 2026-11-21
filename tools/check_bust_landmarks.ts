@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PROPOSE_PARTS, type ProposeFixturePart, writeProposeFixture } from '../fixtures/propose.ts';
-import { BUST_LANDMARKS_PROVENANCE_SUFFIX, bustLandmarksFromAct } from '../src/bustlandmarks.ts';
+import { BUST_LANDMARKS_PROVENANCE_SUFFIX, bustLandmarksFromAct, planBustLandmarks, stageBustLandmarks } from '../src/bustlandmarks.ts';
 import { PartsError } from '../src/errors.ts';
 import { propose, readBustLandmarks, readPartSet } from '../src/propose.ts';
 
@@ -43,10 +43,17 @@ export function runBustLandmarkChecks(dir: string, say: (name: string, pass: boo
   // A config that already declares a bust with a non-default alpha.
   const bustConfig = writeJson('config-bust.json', configOf({ apex_r: [70, 120], apex_l: [130, 120], cleavage: [100, 121], alpha: 0.3 }));
   const hex = (c: string): string => c.repeat(64);
-  const row = (over: Record<string, unknown> = {}, bust: Record<string, unknown> = { apex_r: [75.5, 125], apex_l: [125.25, 125], cleavage: [100, 126.5] }) => ({
-    edit: { slot: 'bodice', skin: 'default', attachment: 'bodice', basis: 'setup', source: { hash: hex('a'), frame: { width: 200, height: 300 } }, bust, ...over },
-    sha256: hex('c'),
-  });
+  // The row digest, computed here by its own inline copy of the rule (never the function under test): sha256 of
+  // JSON.stringify of the edit with object keys sorted recursively and array order kept.
+  const digest = (edit: unknown): string => {
+    const sorted = (v: unknown): unknown => Array.isArray(v) ? v.map(sorted)
+      : typeof v === 'object' && v !== null ? Object.fromEntries(Object.keys(v).sort().map(k => [k, sorted((v as Record<string, unknown>)[k])])) : v;
+    return createHash('sha256').update(JSON.stringify(sorted(edit))).digest('hex');
+  };
+  const row = (over: Record<string, unknown> = {}, bust: Record<string, unknown> = { apex_r: [75.5, 125], apex_l: [125.25, 125], cleavage: [100, 126.5] }) => {
+    const edit = { slot: 'bodice', skin: 'default', attachment: 'bodice', basis: 'setup', source: { hash: hex('a'), frame: { width: 200, height: 300 } }, bust, ...over };
+    return { edit, sha256: digest(edit) };
+  };
   const act = (rows: unknown[], schema = 'rig-review/act@9') => ({
     schema, actId: 'act-1382', jobId: 'job-1', askId: 'ask-1', publicationId: 'pub-1', kind: 'review-verdict',
     value: { stage: 'rig-review', verdict: 'changes-requested', comments: [], chestLandmarks: rows },
@@ -63,7 +70,7 @@ export function runBustLandmarkChecks(dir: string, say: (name: string, pass: boo
   const expectedProvenance = JSON.stringify({
     spec: 'rig-parts-bust-landmarks-provenance/1',
     act: { schema: 'rig-review/act@9', act_id: 'act-1382', file_sha256: actSha },
-    row_sha256: hex('c'),
+    row_sha256: row().sha256,
     slot: 'bodice',
     source: { hash: hex('a'), frame: { width: 200, height: 300 } },
     landmarks_sha256: landmarksSha,
@@ -162,15 +169,180 @@ export function runBustLandmarkChecks(dir: string, say: (name: string, pass: boo
   const unknown = cli('bust-landmarks', '--not-a-flag', 'x');
   const missing = cli('bust-landmarks', '--from-act', actPath);
   const cliRefusal = cli(...args(writeJson('act-cli-refusal.json', act([row({ slot: 'cape', attachment: 'cape' })])), noBustConfig, join(dir, 'out', 'cli-refusal.json')));
-  const line = 'rig-parts bust-landmarks --from-act <act.json> --parts <dir> --config <config.json> --out <landmarks.json>';
+  const line = 'rig-parts bust-landmarks --from-act <act.json> --parts <dir> --config <config.json> --out <landmarks.json> [--write-config]';
   say('THE_COMMAND_LINE_IS_IN_THE_USAGE_AND_ITS_OWN_HELP', help.status === 0 && help.stdout.includes(`  ${line}\n`) && own.status === 0 && own.stdout.startsWith(`  ${line}\n`),
     `--help exit ${help.status}, bust-landmarks --help exit ${own.status}; the line ${help.stdout.includes(line) ? 'is' : 'is not'} in the usage`);
   say('UNKNOWN_AND_MISSING_FLAGS_ARE_USAGE_ERRORS',
-    unknown.status === 2 && unknown.stdout.includes('FAIL  USAGE: bust-landmarks does not take "--not-a-flag"; it takes --from-act, --parts, --config, --out (see rig-parts guide USAGE)') &&
+    unknown.status === 2 && unknown.stdout.includes('FAIL  USAGE: bust-landmarks does not take "--not-a-flag"; it takes --from-act, --parts, --config, --out, --write-config (see rig-parts guide USAGE)') &&
       missing.status === 2 && missing.stdout.includes('bust-landmarks needs --parts <value>'),
     `unknown exit ${unknown.status}: ${unknown.stdout.split('\n')[0].trim()}; missing exit ${missing.status}: ${missing.stdout.split('\n')[0].trim()}`);
   say('A_REFUSAL_EXITS_1_WITH_A_GUIDE_POINTER_AND_WRITES_NOTHING',
     cliRefusal.status === 1 && cliRefusal.stdout.includes('  FAIL  BUST_LANDMARKS_SLOT: value.chestLandmarks[0].edit.slot — ') && cliRefusal.stdout.includes('(see rig-parts guide BUST_LANDMARKS_SLOT)') &&
       !existsSync(join(dir, 'out', 'cli-refusal.json')),
     `exit ${cliRefusal.status}: ${cliRefusal.stdout.split('\n')[0].trim()}`);
+
+  // Round 2 (issue #1382). New controls are numbered after the first 34 so those keep their numbers.
+  // The row digest: an edited point with the digest left alone, an edited digest with the points left alone, and an
+  // unedited row (accepted, its digest the inline copy's above).
+  const digestOf = (problems: readonly { code: string; object: string; detail: string }[]): string => problems.map(p => `${p.code}: ${p.object} — ${p.detail}`).join(' | ');
+  const pointEdited = row();
+  pointEdited.edit = { ...pointEdited.edit, bust: { apex_r: [76.5, 125], apex_l: [125.25, 125], cleavage: [100, 126.5] } };
+  refused('DIGEST_OF_AN_EDITED_POINT_IS_REFUSED', act([pointEdited]), 'BUST_LANDMARKS_ROW', 'value.chestLandmarks[0].sha256');
+  refused('AN_EDITED_DIGEST_IS_REFUSED', act([{ ...row(), sha256: digest({ other: true }) }]), 'BUST_LANDMARKS_ROW', 'value.chestLandmarks[0].sha256');
+  {
+    // The refusal's detail states the rule and both digests.
+    let problems: readonly { code: string; object: string; detail: string }[] = [];
+    try { bustLandmarksFromAct({ act: join(dir, 'act-DIGEST_OF_AN_EDITED_POINT_IS_REFUSED.json'), parts: partsDir, config: noBustConfig, out: join(dir, 'out', 'digest-detail.json') }); }
+    catch (error) { if (error instanceof PartsError) problems = error.problems; else throw error; }
+    const hit = problems.find(p => p.object === 'value.chestLandmarks[0].sha256');
+    const expected = `is "${row().sha256}"; "${digest(pointEdited.edit)}" is required, the digest of this row's edit by sha256 (lowercase hex) of JSON.stringify of the row's edit with object keys sorted recursively and array order kept (Review's request digest): the edit is not the one the digest names`;
+    say('THE_DIGEST_REFUSAL_STATES_THE_RULE_AND_BOTH_DIGESTS', hit?.detail === expected, hit === undefined ? digestOf(problems) || 'no refusal' : hit.detail);
+  }
+  accepted('AN_UNEDITED_ROW_IS_ACCEPTED', act([row()]), noBustConfig);
+  // Item 4: the actId check, the source.hash format check, the provenance half of the --out check.
+  const noActId: Record<string, unknown> = act([row()]);
+  delete noActId.actId;
+  refused('ACT_WITHOUT_AN_ACT_ID', noActId, 'BUST_LANDMARKS_ACT', `${join(dir, 'act-ACT_WITHOUT_AN_ACT_ID.json')} actId`);
+  refused('ROW_SOURCE_HASH_MALFORMED', act([row({ source: { hash: 'A'.repeat(64), frame: { width: 200, height: 300 } } })]), 'BUST_LANDMARKS_ROW', 'value.chestLandmarks[0].edit.source.hash');
+  mkdirSync(join(dir, 'pv'), { recursive: true });
+  const pvConfig = join(dir, 'pv', 'landmarks.json' + BUST_LANDMARKS_PROVENANCE_SUFFIX);
+  writeFileSync(pvConfig, readFileSync(noBustConfig));
+  refused('PROVENANCE_OVER_THE_CONFIG', act([row()]), 'BUST_LANDMARKS_OUT', `--out's provenance record`, pvConfig, join(dir, 'pv', 'landmarks.json'));
+  symlinkSync(partsDir, join(dir, 'pv', 'inside.json' + BUST_LANDMARKS_PROVENANCE_SUFFIX), 'dir');
+  refused('PROVENANCE_INSIDE_THE_PARTS_DIRECTORY', act([row()]), 'BUST_LANDMARKS_OUT', `--out's provenance record`, noBustConfig, join(dir, 'pv', 'inside.json'));
+  // Item 5: an --out that is a hard link to an input, compared by device and inode.
+  linkSync(noBustConfig, join(dir, 'out', 'hard.json'));
+  refused('OUT_HARD_LINKED_TO_THE_CONFIG', act([row()]), 'BUST_LANDMARKS_OUT', '--out', noBustConfig, join(dir, 'out', 'hard.json'));
+  // Item 6: a coordinate JSON cannot hold, and an act path that is a directory.
+  const infinite = join(dir, 'act-infinite.json');
+  writeFileSync(infinite, JSON.stringify(act([row()]), null, 2).replace('"apex_r": [\n              75.5,', '"apex_r": [\n              1e999,'));
+  {
+    let problems: readonly { code: string; object: string; detail: string }[] = [];
+    try { bustLandmarksFromAct({ act: infinite, parts: partsDir, config: noBustConfig, out: join(dir, 'out', 'infinite.json') }); }
+    catch (error) { if (error instanceof PartsError) problems = error.problems; else throw error; }
+    const hit = problems.find(p => p.object === 'value.chestLandmarks[0].edit.bust.apex_r');
+    say('A_COORDINATE_THAT_IS_NOT_FINITE_IS_NAMED', hit?.detail === 'is [Infinity,125], a coordinate that is not finite; a finite [x, y] point in rig px is required', hit === undefined ? digestOf(problems) || 'no refusal' : hit.detail);
+  }
+  {
+    let problems: readonly { code: string; object: string; detail: string }[] = [];
+    try { bustLandmarksFromAct({ act: join(dir, 'pv'), parts: partsDir, config: noBustConfig, out: join(dir, 'out', 'dir-act.json') }); }
+    catch (error) { if (error instanceof PartsError) problems = error.problems; else throw error; }
+    const hit = problems.find(p => p.code === 'BUST_LANDMARKS_ACT');
+    say('AN_UNREADABLE_ACT_GIVES_THE_ERROR_CODE', hit?.detail === 'is not readable (EISDIR); a rig-review/act@9 JSON file is required', hit === undefined ? digestOf(problems) || 'no refusal' : hit.detail);
+  }
+  // Item 3: atomic outputs. A provenance path that is a directory: exit 1, the landmarks file not created.
+  const pdir = join(dir, 'out', 'pdir.json');
+  mkdirSync(pdir + BUST_LANDMARKS_PROVENANCE_SUFFIX);
+  const dirRun = cli(...args(actPath, noBustConfig, pdir));
+  say('A_PROVENANCE_PATH_THAT_IS_A_DIRECTORY_WRITES_NOTHING', dirRun.status === 1 && !existsSync(pdir) && dirRun.stdout.includes(`FAIL  BUST_LANDMARKS_OUT: --out's provenance record — is ${pdir + BUST_LANDMARKS_PROVENANCE_SUFFIX}, an existing directory`),
+    `exit ${dirRun.status}; landmarks file ${existsSync(pdir) ? 'created' : 'not created'}: ${dirRun.stdout.split('\n')[0].trim()}`);
+  // An earlier good pair, then a read-only provenance record and another act: exit 1, both old files byte-unchanged.
+  const ro = join(dir, 'out', 'ro.json');
+  const roFirst = cli(...args(actPath, noBustConfig, ro));
+  const oldPair = [readFileSync(ro, 'utf8'), readFileSync(ro + BUST_LANDMARKS_PROVENANCE_SUFFIX, 'utf8')];
+  chmodSync(ro + BUST_LANDMARKS_PROVENANCE_SUFFIX, 0o444);
+  const roRun = cli(...args(noCleavage, noBustConfig, ro));
+  const roKept = readFileSync(ro, 'utf8') === oldPair[0] && readFileSync(ro + BUST_LANDMARKS_PROVENANCE_SUFFIX, 'utf8') === oldPair[1];
+  chmodSync(ro + BUST_LANDMARKS_PROVENANCE_SUFFIX, 0o644);
+  say('A_READ_ONLY_PROVENANCE_KEEPS_THE_EARLIER_PAIR', roFirst.status === 0 && roRun.status === 1 && roKept && roRun.stdout.includes('an existing file that is not writable'),
+    `first exit ${roFirst.status}, second exit ${roRun.status}; both earlier files byte-unchanged: ${roKept}: ${roRun.stdout.split('\n')[0].trim()}`);
+  // A rename that fails after the first file is in place puts the first file back and leaves no temporary.
+  const rb = join(dir, 'out', 'rollback.json');
+  bustLandmarksFromAct({ act: actPath, parts: partsDir, config: noBustConfig, out: rb });
+  const rbOld = [readFileSync(rb, 'utf8'), readFileSync(rb + BUST_LANDMARKS_PROVENANCE_SUFFIX, 'utf8')];
+  let rbDetail = 'no refusal';
+  try {
+    stageBustLandmarks(planBustLandmarks({ act: noCleavage, parts: partsDir, config: noBustConfig, out: rb }), {
+      replace: (from, to) => { if (to.endsWith(BUST_LANDMARKS_PROVENANCE_SUFFIX)) throw Object.assign(new Error('planted'), { code: 'EIO' }); renameSync(from, to); },
+    }).commit();
+  } catch (error) { rbDetail = error instanceof PartsError ? digestOf(error.problems) : String(error); }
+  const leftovers = readdirSync(join(dir, 'out')).filter(n => n.endsWith('.rig-parts.tmp'));
+  const rbKept = readFileSync(rb, 'utf8') === rbOld[0] && readFileSync(rb + BUST_LANDMARKS_PROVENANCE_SUFFIX, 'utf8') === rbOld[1];
+  say('A_FAILED_SECOND_RENAME_PUTS_THE_FIRST_FILE_BACK', rbKept && leftovers.length === 0 && rbDetail.startsWith('BUST_LANDMARKS_OUT: '),
+    `earlier pair byte-unchanged: ${rbKept}; temporaries left: ${leftovers.length === 0 ? 'none' : leftovers.join(', ')}; ${rbDetail}`);
+
+  // --write-config: the act's five shape fields into the config's existing contour.bust.
+  const points = { apex_r: [70, 120], apex_l: [130, 120], cleavage: [100, 121] };
+  const flagged = (a: string, config: string, o: string) => cli(...args(a, config, o), '--write-config');
+  const configCase = (name: string, bust: Record<string, unknown> | undefined, compact = false): string => {
+    const path = join(dir, `config-${name}.json`);
+    writeFileSync(path, compact ? JSON.stringify(configOf(bust)) + '\n' : JSON.stringify(configOf(bust), null, 2) + '\n');
+    return path;
+  };
+  const bustOf = (path: string): unknown => (JSON.parse(readFileSync(path, 'utf8')) as { meshes: { bodice: { contour: { bust?: unknown } } } }).meshes.bodice.contour.bust;
+  const alphaAct = writeJson('act-alpha.json', act([row({}, { ...points, alpha: 0.3 })]));
+  {
+    const config = configCase('flag-off', points);
+    const before = readFileSync(config, 'utf8');
+    const o = join(dir, 'out', 'flag-off.json');
+    const run = cli(...args(alphaAct, config, o));
+    say('WITHOUT_THE_FLAG_A_DIFFERENCE_IS_REFUSED_NAMING_THE_FLAG',
+      run.status === 1 && run.stdout.includes('FAIL  BUST_LANDMARKS_SHAPE: value.chestLandmarks[0].edit.bust.alpha — is 0.3; meshes.bodice.contour.bust.alpha 0.22, the default, is required: the landmarks file carries no such field; run again with --write-config to take the act\'s value into the config; propose --write-config keeps the config\'s shape fields on the redraft (#1428)') &&
+        readFileSync(config, 'utf8') === before && !existsSync(o),
+      `exit ${run.status}: ${run.stdout.split('\n')[0].trim()}`);
+  }
+  {
+    const config = configCase('flag-alpha', points);
+    const o = join(dir, 'out', 'flag-alpha.json');
+    const run = flagged(alphaAct, config, o);
+    const bust = JSON.stringify(bustOf(config));
+    const rest = JSON.parse(readFileSync(config, 'utf8')) as Record<string, unknown>;
+    delete ((rest.meshes as Record<string, { contour: Record<string, unknown> }>).bodice.contour).bust;
+    const expectedRest = configOf(points);
+    delete ((expectedRest.meshes as Record<string, { contour: Record<string, unknown> }>).bodice.contour).bust;
+    say('THE_FLAG_TAKES_ALPHA_INTO_THE_CONFIG_AND_WRITES_THE_FILE',
+      run.status === 0 && bust === '{"apex_r":[70,120],"apex_l":[130,120],"cleavage":[100,121],"alpha":0.3}' && JSON.stringify(rest) === JSON.stringify(expectedRest) &&
+        run.stderr === `config ${config}: added meshes.bodice.contour.bust.alpha\n` && existsSync(o) && existsSync(o + BUST_LANDMARKS_PROVENANCE_SUFFIX),
+      `exit ${run.status}; contour.bust ${bust}; the rest unchanged: ${JSON.stringify(rest) === JSON.stringify(expectedRest)}; stderr ${JSON.stringify(run.stderr)}; landmarks written: ${existsSync(o)}`);
+  }
+  {
+    const config = configCase('flag-remove', { ...points, alpha: 0.3 });
+    const run = flagged(writeJson('act-no-alpha.json', act([row({}, points)])), config, join(dir, 'out', 'flag-remove.json'));
+    const bust = JSON.stringify(bustOf(config));
+    say('THE_FLAG_REMOVES_A_FIELD_THE_ACT_OMITS',
+      run.status === 0 && bust === '{"apex_r":[70,120],"apex_l":[130,120],"cleavage":[100,121]}' && run.stderr === `config ${config}: removed meshes.bodice.contour.bust.alpha\n`,
+      `exit ${run.status}; contour.bust ${bust}; stderr ${JSON.stringify(run.stderr)}`);
+  }
+  {
+    const config = configCase('flag-five', points);
+    const five = { alpha: 0.3, clearance: 3, spacing: 12, bone_r: 'chest', bone_l: 'chest' };
+    const run = flagged(writeJson('act-five.json', act([row({}, { ...points, ...five })])), config, join(dir, 'out', 'flag-five.json'));
+    const bust = JSON.stringify(bustOf(config));
+    const lines = ['alpha', 'clearance', 'spacing', 'bone_r', 'bone_l'].map(k => `config ${config}: added meshes.bodice.contour.bust.${k}\n`).join('');
+    say('THE_FLAG_WRITES_ALL_FIVE_FIELDS_AT_ONCE',
+      run.status === 0 && bust === JSON.stringify({ ...points, ...five }) && run.stderr === lines,
+      `exit ${run.status}; contour.bust ${bust}; stderr ${JSON.stringify(run.stderr)}${run.status === 0 ? '' : `; ${run.stdout.split('\n')[0].trim()}`}`);
+  }
+  {
+    // A compact config, so any rewrite at all would show in its bytes; clearance spelled at its default, which the
+    // act omits: the effective values agree, so nothing is touched.
+    const config = configCase('flag-same', { ...points, alpha: 0.3, clearance: 3.8 }, true);
+    const before = readFileSync(config, 'utf8');
+    const same = writeJson('act-same.json', act([row({}, { ...points, alpha: 0.3 })]));
+    const off = cli(...args(same, config, join(dir, 'out', 'same-off.json')));
+    const offSame = readFileSync(config, 'utf8') === before;
+    const on = flagged(same, config, join(dir, 'out', 'same-on.json'));
+    const onSame = readFileSync(config, 'utf8') === before;
+    say('NOTHING_DIFFERS_THE_CONFIG_KEEPS_ITS_BYTES_WITH_AND_WITHOUT_THE_FLAG',
+      off.status === 0 && on.status === 0 && offSame && onSame && on.stderr === `config ${config}: unchanged\n`,
+      `without exit ${off.status}, byte-identical ${offSame}; with exit ${on.status}, byte-identical ${onSame}; stderr ${JSON.stringify(on.stderr)}`);
+  }
+  {
+    const config = configCase('flag-refused', points);
+    const before = readFileSync(config, 'utf8');
+    const o = join(dir, 'out', 'flag-refused.json');
+    const run = flagged(writeJson('act-alpha-frame.json', act([row({ source: { hash: hex('a'), frame: { width: 200, height: 301 } } }, { ...points, alpha: 0.3 })])), config, o);
+    say('A_REFUSAL_ELSEWHERE_WITH_THE_FLAG_LEAVES_THE_CONFIG',
+      run.status === 1 && run.stdout.includes('FAIL  BUST_LANDMARKS_FRAME: ') && readFileSync(config, 'utf8') === before && !existsSync(o),
+      `exit ${run.status}; config byte-identical ${readFileSync(config, 'utf8') === before}; landmarks ${existsSync(o) ? 'written' : 'not written'}: ${run.stdout.split('\n')[0].trim()}`);
+  }
+  {
+    const config = configCase('flag-no-bust', undefined);
+    const before = readFileSync(config, 'utf8');
+    const run = flagged(alphaAct, config, join(dir, 'out', 'flag-no-bust.json'));
+    say('THE_FLAG_WITHOUT_A_CONTOUR_BUST_IS_REFUSED_AND_SAYS_WHAT_TO_RUN_FIRST',
+      run.status === 1 && run.stdout.includes('FAIL  BUST_LANDMARKS_SHAPE: value.chestLandmarks[0].edit.bust.alpha — is 0.3; meshes.bodice.contour.bust.alpha 0.22, the default (the config declares no contour.bust), is required: the landmarks file carries no such field; the config declares no contour.bust for --write-config to update') &&
+        readFileSync(config, 'utf8') === before,
+      `exit ${run.status}; config byte-identical ${readFileSync(config, 'utf8') === before}: ${run.stdout.split('\n')[0].trim()}`);
+  }
 }

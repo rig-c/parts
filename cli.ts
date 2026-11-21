@@ -5,7 +5,7 @@ import { DIFF_DRAFTS_SPEC, diffDraftsCommand } from './src/diffdrafts.ts';
 import { applyTakenLayers } from './src/takelayers.ts';
 import { applyDepth, bindDepthMap, prepareDepth } from './src/depthworkflow.ts';
 import { externalReceipt } from './src/externalreceipt.ts';
-import { BUST_LANDMARKS_ACT_SCHEMA, BUST_LANDMARKS_PROVENANCE_SPEC, BUST_LANDMARKS_PROVENANCE_SUFFIX, bustLandmarksFromAct } from './src/bustlandmarks.ts';
+import { BUST_LANDMARKS_ACT_SCHEMA, BUST_LANDMARKS_PROVENANCE_SPEC, BUST_LANDMARKS_PROVENANCE_SUFFIX, planBustLandmarks, stageBustLandmarks, type StagedBustLandmarks } from './src/bustlandmarks.ts';
 import { writeEditedPart } from './tools/edited-part-cli.ts';
 /**
  * rig-parts — one painting and its See-through layers in, Spine-ready parts
@@ -32,8 +32,8 @@ import { ACCEPTABLE_BARS, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, findRigc, PACK
 import { ComfyClient, resolveHost, runBackground, runMatte, runPainting, runSeeThrough } from './src/comfy/index.ts';
 import { coreCfg, DEFAULT_GROW_PX, runForeground } from './src/plate.ts';
 import { type CharacterConfig, loadClothConfig, loadConfig, loadEarlyConfig, loadPaintConfig } from './src/config.ts';
-import { configWriteLines, readConfigWriteTarget, separateConfigWriteTarget, stageConfigWrite, type StagedConfigWrite } from './tools/configwrite.ts';
-import { failLine, guidePointer, PartsError } from './src/errors.ts';
+import { configWriteLines, type ConfigWriteTarget, readConfigWriteTarget, separateConfigWriteTarget, stageConfigWrite, type StagedConfigWrite } from './tools/configwrite.ts';
+import { failLine, guidePointer, PartsError, type Problem } from './src/errors.ts';
 import { GUIDE_DOC, type GuideAnswer, guideRule, guideSection } from './src/guide.ts';
 import { proposeHeadBox, type Box } from './src/headbox.ts';
 import { headCropPreflight, headCropPreflightLines } from './src/headcroppreflight.ts';
@@ -375,16 +375,21 @@ usage:
       --no-back-hair leaves "back hair" out of the box. --write-config updates
       only seethrough.head_box in an existing config through the layers loader.
 
-  rig-parts bust-landmarks --from-act <act.json> --parts <dir> --config <config.json> --out <landmarks.json>
+  rig-parts bust-landmarks --from-act <act.json> --parts <dir> --config <config.json> --out <landmarks.json> [--write-config]
       Write the file propose --bust-landmarks reads (apex_r, apex_l and
       optional cleavage, rig px) from the one chest row of a Review
       ${BUST_LANDMARKS_ACT_SCHEMA} act, and <out>${BUST_LANDMARKS_PROVENANCE_SUFFIX} beside it (spec
       "${BUST_LANDMARKS_PROVENANCE_SPEC}": the act's schema, id and
-      file sha256, the row's sha256 as given, the slot, the source hash and
-      frame). The row's slot must be a part of parts.json whose config mesh is
-      a contour, its frame parts.json's rig_size, and its alpha, clearance,
-      spacing, bone_r and bone_l those of the config's contour.bust (the
-      defaults when the config declares none). Writes nothing on a refusal.
+      file sha256, the row's sha256, verified against the row's edit, the
+      slot, the source hash and frame). The row's slot must be a part of
+      parts.json whose config mesh is a contour, its frame parts.json's
+      rig_size, and its alpha, clearance, spacing, bone_r and bone_l those of
+      the config's contour.bust (the defaults when the config declares none).
+      --write-config instead takes those five into the config's existing
+      contour.bust, a field the act omits removed, through the config loader;
+      the config is untouched when none differs, and with no contour.bust a
+      difference is still refused. Writes nothing on a refusal; the outputs
+      are renamed into place only once both are staged.
 
   rig-parts head-crop-preflight --full <run> --canvas <W>x<H> --head-box '[left,top,right,bottom]'
       Report full-run drawn pixels beyond the crop: JSON stdout, advice stderr; no head run needed.
@@ -1226,7 +1231,7 @@ const TAKES = {
   'edited-part': { valued: ['--config', '--part', '--file', '--from', '--editor', '--producer', '--parts', '--rig-config'], switches: ['--help'] },
   'external-receipt': { valued: ['--kind', '--file', '--painting', '--producer', '--out', '--verify'], switches: ['--help'] },
   'check-parts': { valued: ['--parts', '--out'], switches: ['--json', '--help'] },
-  'bust-landmarks': { valued: ['--from-act', '--parts', '--config', '--out'], switches: ['--help'] },
+  'bust-landmarks': { valued: ['--from-act', '--parts', '--config', '--out'], switches: ['--write-config', '--help'] },
   'diff-components': { valued: ['--stack', '--painting', '--parts', '--figure', '--floor', '--threshold', '--out', '--verify'], switches: ['--owners', '--help'] },
   'diff-drafts': { valued: ['--left', '--right', '--out'], switches: ['--help'] },
   'depth-bind': { valued: ['--map', '--input', '--part'], switches: ['--help'] },
@@ -2676,13 +2681,48 @@ function cmdExternalReceipt(args: string[]): number {
 }
 
 function cmdBustLandmarks(args: string[]): number {
-  const f = flags(args, 'bust-landmarks', ['--from-act', '--parts', '--config', '--out']);
+  // The one switch (issue #1382, round 2): taken out before the valued flags are read.
+  const writes = args.filter((a) => a === '--write-config').length;
+  if (writes > 1) return usage('--write-config is given twice');
+  const f = flags(args.filter((a) => a !== '--write-config'), 'bust-landmarks', ['--from-act', '--parts', '--config', '--out']);
   if (typeof f === 'string') return usage(f);
   try {
-    const result = bustLandmarksFromAct({ act: f.get('--from-act')!, parts: f.get('--parts')!, config: f.get('--config')!, out: f.get('--out')! });
-    const { landmarks, provenance } = result;
-    console.log(`bust-landmarks: slot "${provenance.slot}" apex_r ${JSON.stringify(landmarks.apex_r)} apex_l ${JSON.stringify(landmarks.apex_l)} cleavage ${landmarks.cleavage === undefined ? 'absent (propose derives it)' : JSON.stringify(landmarks.cleavage)}; act ${JSON.stringify(provenance.act.act_id)} sha256=${provenance.act.file_sha256} row sha256=${provenance.row_sha256} (recorded, not recomputed)`);
-    console.log(`wrote ${result.out} and ${result.provenancePath}; next: rig-parts propose … --bust-landmarks ${result.out}`);
+    const input = { act: f.get('--from-act')!, parts: f.get('--parts')!, config: f.get('--config')!, out: f.get('--out')!, writeConfig: writes === 1 };
+    // The config to write is read before it is checked, so its commit refuses a change made in between; a refusal
+    // reading it joins the act's and the inputs' in one report.
+    const prior: Problem[] = [];
+    let target: ConfigWriteTarget | null = null;
+    if (input.writeConfig) {
+      try { target = readConfigWriteTarget(input.config); }
+      catch (error) { if (error instanceof PartsError) prior.push(...error.problems); else throw error; }
+    }
+    const plan = planBustLandmarks(input, prior);
+    if (target !== null) separateConfigWriteTarget(target, [plan.out, plan.provenancePath], 'BUST_LANDMARKS_OUT');
+    // propose's order: the config staged (and checked through the loader) first, then the outputs written, then the
+    // config committed; a failure before the config's commit leaves it as it was, and a failed config commit puts
+    // the earlier outputs back.
+    const staged: StagedConfigWrite | null = target !== null && plan.configPatch !== null ? stageConfigWrite(target, plan.configPatch) : null;
+    let outputs: StagedBustLandmarks;
+    try {
+      outputs = stageBustLandmarks(plan);
+      outputs.commit();
+    } catch (error) {
+      if (staged !== null) staged.abort(error);
+      throw error;
+    }
+    if (staged !== null) {
+      try { staged.commit(); }
+      catch (error) {
+        const problems = error instanceof PartsError ? [...error.problems] : [];
+        try { outputs.undo(); } catch (cleanup) { if (cleanup instanceof PartsError) problems.push(...cleanup.problems); }
+        if (problems.length === 0) throw error;
+        throw new PartsError(problems);
+      }
+    }
+    const { landmarks, provenance } = plan;
+    if (target !== null) for (const line of configWriteLines(target, staged?.changes ?? [])) console.error(line);
+    console.log(`bust-landmarks: slot "${provenance.slot}" apex_r ${JSON.stringify(landmarks.apex_r)} apex_l ${JSON.stringify(landmarks.apex_l)} cleavage ${landmarks.cleavage === undefined ? 'absent (propose derives it)' : JSON.stringify(landmarks.cleavage)}; act ${JSON.stringify(provenance.act.act_id)} sha256=${provenance.act.file_sha256} row sha256=${provenance.row_sha256} (verified against the row's edit)`);
+    console.log(`wrote ${plan.out} and ${plan.provenancePath}; next: rig-parts propose … --bust-landmarks ${plan.out}`);
     return EXIT_OK;
   } catch (error) { return printRefusal(error); }
 }
