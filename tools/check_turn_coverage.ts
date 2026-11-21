@@ -51,6 +51,7 @@ export function runTurnCoverageChecks(say: Say): void {
 
   const excluded = fixture(); const source = excluded.images.get('topwear')!;
   for (let y = 42; y < 50; y++) for (let x = 24; x < 32; x++) source.data[((y - 38) * source.width + x - 16) * 4 + 3] = 0;
+  excluded.parts.parts.find(p => p.name === 'topwear')!.opaque_px -= 64;
   say('TCV06_EXCLUDED_SOURCE_ALPHA_IS_NOT_OVERLAP', !build(excluded).turnWarnings?.some(p => p.code === 'RIG_TURN_BODY_UNCOVERED' && p.object === 'part "patch"'), 'setup alpha excludes the whole patch intersection; a shared rectangle is insufficient');
   say('TCV07_DIAGNOSTICS_DO_NOT_SERIALIZE_OR_ASSIGN_A_ROLE', !(defect.rig as unknown as Record<string, unknown>).turnWarnings && !(defect.motion as unknown as Record<string, unknown>).turnWarnings && (fixture().config.turn as { body: { roles: Record<string, string> } }).body.roles.patch === undefined, 'report-only warnings; caller config and emitted rig/motion schemas unchanged');
 }

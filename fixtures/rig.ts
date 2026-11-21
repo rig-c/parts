@@ -102,6 +102,11 @@ export function rigImages(): Map<string, Raster> {
  * clears padded x 8..15 — the whole middle column of cells — leaving the left
  * and right columns of cells kept and nothing between them.
  */
+export function islandParts(): PartsFile {
+  const p = rigParts();
+  return { ...p, parts: p.parts.map((r) => (r.name === 'cloth' ? { ...r, opaque_px: 64 } : r)) };
+}
+
 export function islandImages(): Map<string, Raster> {
   return new Map([
     ['cloth', block(16, 8, [4, 12])],
@@ -412,9 +417,10 @@ export function heatStripConfig(mesh: Record<string, unknown> = {}): Record<stri
  */
 export const DUST_RIG: [number, number] = [72, 56];
 
-export function dustParts(): PartsFile {
+export function dustParts(runs: ReadonlyArray<readonly [number, number, number]> = []): PartsFile {
   const p = rigParts();
-  return { ...p, rig_size: [...DUST_RIG], parts: p.parts.map((r) => (r.name === 'cloth' ? { ...r, w: 56, h: 40, opaque_px: 2000 } : r)) };
+  const extra = runs.reduce((sum, [, , n]) => sum + n, 0);
+  return { ...p, rig_size: [...DUST_RIG], parts: p.parts.map((r) => (r.name === 'cloth' ? { ...r, w: 56, h: 40, opaque_px: 2000 + extra } : r)) };
 }
 
 /** `cloth` as the 50x40 block plus a run of `length` opaque px for each `[x, y, length]` (unpadded part px). */
@@ -483,14 +489,14 @@ function skin(w: number, h: number): Raster {
 
 /** The fixture's parts; `eyes` names which eyewhite parts it holds (both by default). */
 export function faceParts(eyes: ReadonlyArray<'r' | 'l'> = ['r', 'l']): PartsFile {
-  const rec = (name: string, from: string, x: number, y: number, w: number, h: number): PartsFile['parts'][number] => ({
+  const rec = (name: string, from: string, x: number, y: number, w: number, h: number, opaque = w * h): PartsFile['parts'][number] => ({
     name,
     from,
     x,
     y,
     w,
     h,
-    opaque_px: w * h,
+    opaque_px: opaque,
     projected_core_px: 0,
     source_px_taken: 0,
     refused_drift_px: 0,
@@ -498,8 +504,8 @@ export function faceParts(eyes: ReadonlyArray<'r' | 'l'> = ['r', 'l']): PartsFil
     seam_override_px: 0,
   });
   const parts = [rec('face', 'head:face', 8, 8, 48, 48)];
-  if (eyes.includes('r')) parts.push(rec('eyewhite_r', 'head:eyewhite-r', 14, 23, 12, 10));
-  if (eyes.includes('l')) parts.push(rec('eyewhite_l', 'head:eyewhite-l', 30, 11, 12, 10));
+  if (eyes.includes('r')) parts.push(rec('eyewhite_r', 'head:eyewhite-r', 14, 23, 12, 10, 46));
+  if (eyes.includes('l')) parts.push(rec('eyewhite_l', 'head:eyewhite-l', 30, 11, 12, 10, 46));
   parts.push(rec('mouth', 'head:mouth', 30, 36, 8, 4));
   return { rig_size: [...FACE_RIG], scale_rig_per_source: 0.5, parts, ghost_px: {} };
 }

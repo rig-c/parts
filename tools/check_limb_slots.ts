@@ -165,12 +165,13 @@ export function runLimbSlotChecks(dir: string, say: Say, frozenOriginal?: typeof
     const stillCfg = structuredClone(cfg), stillImages = new Map(images), split = structuredClone(images.get('crest_r') as Raster);
     split.data.fill(0, 2 * split.width * 4, 3 * split.width * 4);
     stillImages.set('crest_r', split);
+    const stillParts = structuredClone(parts); stillParts.parts.find((p) => p.name === 'crest_r')!.opaque_px -= split.width;
     stillCfg.motion.duration = 4;
     stillCfg.motion.blink = { t: 1, eyes: ['foot_r'], brows: ['hip'], squash: 0.12, brow_drop: 1, still: { crest_r: { row: patch.y + 2, bone: 'foot_l' } } };
-    const still = buildRig(stillCfg, parts, stillImages), stillOrder = names(still.rig);
+    const still = buildRig(stillCfg, stillParts, stillImages), stillOrder = names(still.rig);
     say('STILL_USES_OWN_BINDING', stillOrder.indexOf('crest_r_still') > stillOrder.indexOf('thigh_l') && stillOrder.indexOf('crest_r_still') < stillOrder.indexOf('crest_l'), JSON.stringify(stillOrder));
     {
-      const old = baseline('still', stillCfg, parts, stillImages);
+      const old = baseline('still', stillCfg, stillParts, stillImages);
       say('STILL_ONLY_SLOT_PERMUTATION', equal(outputBytes({ ...still, rig: { ...still.rig, slots: old.rig.slots } }), outputBytes(old)), 'the still is classified independently of its source part');
     }
     const rebound = structuredClone(cfg);

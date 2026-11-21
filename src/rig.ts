@@ -177,6 +177,7 @@ import { skeletonLimbJoints } from './limbs.ts';
 import { coalesceLimbSlots } from './limbslots.ts';
 import { layoutAlias, placeLimbLayouts, type LayoutPlan } from './limblayout.ts';
 import { artCoverage, ART_ALPHA, latticeCells, latticeMesh, latticeStray, ONE_LOOP_PASSES, type LatticeMesh } from './mesh.ts';
+import { OPAQUE_ALPHA_ABOVE } from './layers.ts';
 import { bindFaceSurfaceDeform, BLINK, blinkHoldMisses, blinkSpan, blinkTimes, CONTROL_SUFFIX, controlledBones, IDLE_FPS, idleMotion, type MotionSpec, moveKeysToControls } from './motion.ts';
 import { type PartRecord, type AlternateSetMap, FRONT_SUFFIX, PAINTING_RUN, type PartsFile, readFrom, tagOf } from './parts.ts';
 import { waistPairs, waistBand, waistInfluences } from './waist.ts';
@@ -1341,6 +1342,13 @@ function alphaCount(img: Raster, y0: number, y1: number): number {
   return n;
 }
 
+/** Pixels with alpha strictly above `OPAQUE_ALPHA_ABOVE` (8) in `img`, the count `parts.json` records as `opaque_px`. */
+function opaqueCount(img: Raster): number {
+  let n = 0;
+  for (let i = 3; i < img.data.length; i += 4) if (img.data[i] > OPAQUE_ALPHA_ABOVE) n++;
+  return n;
+}
+
 function same(a: Point, b: Point): boolean {
   return a[0] === b[0] && a[1] === b[1];
 }
@@ -1659,6 +1667,11 @@ export function buildWaistPairSource(
     if (img === undefined) fail('RIG_PNG_PRESENT', `part "${p.name}"`, `has no parts/${p.name}.png`);
     else if (img.width !== p.w || img.height !== p.h) {
       fail('RIG_PNG_MATCHES_BOX', `part "${p.name}"`, `parts/${p.name}.png is ${img.width}x${img.height}; parts.json's box is ${p.w}x${p.h}`);
+    } else {
+      const found = opaqueCount(img);
+      if (found !== p.opaque_px) {
+        fail('RIG_PNG_MATCHES_OPAQUE_PX', `part "${p.name}"`, `parts/${p.name}.png has ${found} opaque pixels; parts.json records ${p.opaque_px}`);
+      }
     }
   }
 

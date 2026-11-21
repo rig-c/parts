@@ -47,6 +47,7 @@ export function unitSupportTurnFixture(support: 'inside' | 'edge' | 'outside' | 
   if (support === 'transparent' || support === 'fringe') {
     const art = f.images.get('face')!;
     for (const x of [2, 21]) art.data[(11 * art.width + x) * 4 + 3] = support === 'transparent' ? 0 : 127;
+    if (support === 'transparent') f.parts.parts.find(p => p.name === 'face')!.opaque_px -= 2;
   }
   return f;
 }

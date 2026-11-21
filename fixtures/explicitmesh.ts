@@ -1,5 +1,5 @@
 /** Four corners of the rig fixture's padded cloth, derived in bone-local Spine pixels. */
-import { block, islandImages, rigConfig, rigImages, rigParts } from './rig.ts';
+import { block, islandImages, islandParts, rigConfig, rigImages, rigParts } from './rig.ts';
 import type { ExplicitMeshIslandSpec, ExplicitMeshSpec } from '../src/config.ts';
 import { explicitImageHash, explicitRegionHash } from '../src/explicitmesh.ts';
 
@@ -37,7 +37,7 @@ export function explicitFixture(): { config: Record<string, unknown>; mesh: Sing
 
 /** Two-island explicit cloth over islandImages() (columns 4..11 cleared: two 4x8 = 32 px islands). */
 export function explicitIslandsFixture() {
-  const parts = rigParts(), images = islandImages(), image = images.get('cloth');
+  const parts = islandParts(), images = islandImages(), image = images.get('cloth');
   if (image === undefined) throw new Error('synthetic island cloth missing');
   const mesh: IslandsExplicitMeshSpec = {
     segments: ['body', 'eye'],

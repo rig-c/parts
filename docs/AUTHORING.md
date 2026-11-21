@@ -1315,7 +1315,9 @@ mask's own path and hash. See the [refusal ledger](#EXTERNAL_RECEIPT_ARGUMENT).
 ### Edited rig-space parts (`assemble.edited_parts`, issue #1278)
 
 Use this block for a PNG edited at the exact crop and scale written by
-`assemble`, such as an alpha edge retouch. Author-made run-space layers and
+`assemble`, such as an alpha edge retouch. An in-place overwrite of an emitted
+`parts/<name>.png` is refused by `rig` (`RIG_PNG_MATCHES_OPAQUE_PX`); edit
+through `edited-part`. Author-made run-space layers and
 `assemble.editor_receipts` keep their existing behavior; a receipt ledger
 alone does not apply a replacement.
 
@@ -6255,6 +6257,7 @@ recorded transform. The record fields and sampling formula are specified in
 | --- | --- | --- |
 | <a id="RIG_PART_PRESENT"></a><a id="RIG_PART_ATTACHED"></a>`RIG_PART_PRESENT`, `RIG_PART_ATTACHED` | a `meshes`/`regions` key that is not in `parts.json`, a part with neither, or a `painting:` part with a mesh | the config and the plan must name the same parts; a patch is a region. A `drape_<s>` or `hand_<s>` from `full:drape-<s>` / `full:hand-<s>` is the 1.37.0 arm split's (issue #490), new to a config proposed before it: the detail names [MIGRATION](MIGRATION.md#after-1370-merged-arm-layers-are-split-issue-490), whose remedy is `propose … --write-config <config> --only-missing` (the two plan rows and the two entries) |
 | <a id="RIG_PNG_PRESENT"></a><a id="RIG_PNG_MATCHES_BOX"></a><a id="RIG_PART_HAS_ART"></a>`RIG_PNG_PRESENT`, `RIG_PNG_MATCHES_BOX`, `RIG_PART_HAS_ART` | a part's PNG is missing, the wrong size, or has no art pixel | re-run assemble |
+| <a id="RIG_PNG_MATCHES_OPAQUE_PX"></a>`RIG_PNG_MATCHES_OPAQUE_PX` | a part's `parts/<name>.png` has a different opaque pixel count (`alpha > 8`) than `parts.json` records as `opaque_px` (for example after an in-place overwrite of an emitted part PNG) | re-run assemble, or record the part replacement through `edited-part` (`assemble.edited_parts`) and re-run assemble |
 | <a id="RIG_NAME_RESOLVES"></a><a id="RIG_SEGMENT_DEFINED"></a><a id="RIG_CHAIN_POINTS"></a>`RIG_NAME_RESOLVES`, `RIG_SEGMENT_DEFINED`, `RIG_CHAIN_POINTS` | a segment names an undeclared bone, a bone with no `tip` and no next link, or a chain too short to make a link | that bone's `tip`, or write the segment out as `[bone, [x0,y0], [x1,y1]]` |
 | <a id="RIG_INFLUENCES_KEPT"></a>`RIG_INFLUENCES_KEPT` | a mesh's declared `influences` leaves a vertex with no bone: every capped share is under 0.03 (at or under it, for the continuous floor). The largest of k shares is at least 1/k, so this needs 34 or more kept bones; the default cap of 4 never reaches it (issue #284). The detail names the first vertex, how many more, and its largest share | declare `maxInfluences` 33 or less, or name fewer bones in `segments` |
 | <a id="RIG_LATTICE_STATION"></a>`RIG_LATTICE_STATION` | a requested lattice subdivision row is not finite | supply finite source-image row coordinates |

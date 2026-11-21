@@ -233,16 +233,17 @@ export function runLimbLayoutChecks(dir: string, say: Say, runner: RigcRunner, f
   const reboundCompanion = layoutCompanion(rebound.layout!, rebound.rig, reboundTexts[0][1], reboundTexts.find(([n]) => n === 'sets.json')?.[1]);
   say('STOPS_TURN_FINAL_RIG_AND_SETS_HASH', rebound.rig.stops?.length === 1 && rebound.turn !== null && reboundCompanion.sets?.sha256 === hash(reboundTexts.find(([n]) => n === 'sets.json')![1]), JSON.stringify(reboundCompanion));
   const splitCfg = structuredClone(cfg), splitImages = new Map(altImages), split = structuredClone(images.get('tileE') as Raster); split.data.fill(0, 2 * split.width * 4, 3 * split.width * 4); splitImages.set('tileE', split);
+  const splitParts = structuredClone(parts); splitParts.parts.find((p) => p.name === 'tileE')!.opaque_px -= split.width;
   // The region blinks on leafB; its still piece independently binds branchB1.
   // Both declared consecutive segments are selected, while tileB0 stays out.
   if (splitCfg.limbs) splitCfg.limbs.branchB.layout = { parts: ['tileB1', 'leafB'], after: { part: 'tileD' } };
   splitCfg.motion.duration = 4; splitCfg.motion.blink = { t: 1, eyes: ['leafB'], brows: ['junction'], squash: 0.12, brow_drop: 1, still: { tileE: { row: patch.y + 2, bone: 'branchB1' } } };
   const stillPath = join(home, 'still-config.json'); save(stillPath, splitCfg);
-  const splitLoaded = loadConfig(stillPath), splitBuilt = buildRig(splitLoaded, parts, splitImages);
+  const splitLoaded = loadConfig(stillPath), splitBuilt = buildRig(splitLoaded, splitParts, splitImages);
   say('ACTUAL_STILL_INHERITS_SELECTED_SOURCE', splitLoaded.regions.tileE === 'leafB' && splitLoaded.motion.blink?.still?.tileE.bone === 'branchB1' && splitBuilt.layout?.placements[0].slots.includes('tileE_still') === true && splitBuilt.layout.placements[0].slots.includes('tileE') && !splitBuilt.layout.placements[0].slots.includes('tileB0'), JSON.stringify({ loaded: true, placements: splitBuilt.layout?.placements }));
   const foreignStillCfg = structuredClone(splitCfg); foreignStillCfg.motion.blink!.still!.tileE.bone = 'branchC1';
   const foreignStillPath = join(home, 'foreign-still-config.json'); save(foreignStillPath, foreignStillCfg);
-  const foreignStill = buildRig(loadConfig(foreignStillPath), parts, splitImages), foreignTexts = rigOutputTexts(foreignStill, null);
+  const foreignStill = buildRig(loadConfig(foreignStillPath), splitParts, splitImages), foreignTexts = rigOutputTexts(foreignStill, null);
   const foreignGate = gateThroughRigc(foreignStill.images.map(([n, r]) => [n, encodePngBytes(r)] as const), foreignTexts, runner, join(home, 'foreign-still-core-gate'), null);
   say('FOREIGN_STILL_NOT_FORCED_WITH_ITS_SOURCE_PART', foreignGate.every((g) => g.status === 0) && foreignStill.layout?.placements[0].slots.includes('tileE') === true && !foreignStill.layout.placements[0].slots.includes('tileE_still'), JSON.stringify({ loaded: true, gates: foreignGate.map((g) => g.status), placements: foreignStill.layout?.placements }));
   for (const [label, candidate] of [['rebind', rebound], ['still', splitBuilt]] as const) {
