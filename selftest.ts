@@ -44791,6 +44791,81 @@ function runTreeSuite(_corpus: string | null = null, pre = false): number {
     "rig-c forbids a second copy of its coordinate conversion; one door keeps every later stage on rigc's",
   );
 
+  // TY1445 — issue #1445: no open-coded y flip (`height - y`, `stage.y + H - y`, `H - (y - stage.y)`) in src/ outside
+  // src/coords.ts. Every binary `-` in src/**/*.ts (excluding src/coords.ts) whose left operand's rightmost `+` term
+  // is a height term and whose right operand is not a numeric literal must either go through cropToSpineY or match one
+  // of the named non-flip expression reasons below.
+  const heightTerm1445 = /^(?:H|h|rigH|cropHeight|height|[A-Za-z_$][\w$.]*\.(?:H|h|height)|[A-Za-z_$][\w$.]*(?:Size|size|_size|canvas)\[1\])$/;
+  const yFlipExemptions1445: ReadonlyArray<readonly [string, (expr: string, term: string, rhs: string) => boolean]> = [
+    ['height-difference', (_expr, _term, rhs) => heightTerm1445.test(rhs)],
+    ['border-inset-constant', (_expr, _term, rhs) => /^[A-Z][A-Z0-9_]+$/.test(rhs)],
+    ['viewport-world-top-around-cropToSpineY', (expr) => /^vp\.y\s*\+\s*vp\.height\s*-\s*\(stage\.y\s*\+\s*cropToSpineY\(/.test(expr)],
+    ['union-viewport-top-offset-check', (expr) => /^y\s*\+\s*height\s*-\s*stage\.y$/.test(expr)],
+    ['neighbour-stride-loop-bound', (expr) => /^h\s*-\s*dy$/.test(expr)],
+    ['still-split-lower-piece-height', (expr) => /^p\.h\s*-\s*r$/.test(expr)],
+  ];
+  const openCodedYFlipFaults1445 = (files: ReadonlyArray<readonly [string, string]>): { faults: string[]; exempted: string[] } => {
+    const faults: string[] = [];
+    const exempted: string[] = [];
+    const unwrap1445 = (n: ts.Expression): ts.Expression => {
+      while (ts.isParenthesizedExpression(n)) n = n.expression;
+      return n;
+    };
+    const rightTerm1445 = (n: ts.Expression): ts.Expression => {
+      const u = unwrap1445(n);
+      if (ts.isBinaryExpression(u) && u.operatorToken.kind === ts.SyntaxKind.PlusToken) return rightTerm1445(u.right);
+      return u;
+    };
+    for (const [f, content] of files) {
+      if (!f.startsWith('src/') || !f.endsWith('.ts') || f === 'src/coords.ts') continue;
+      const sf = ts.createSourceFile(f, content, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+      const visit = (node: ts.Node): void => {
+        if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.MinusToken) {
+          const term = rightTerm1445(node.left).getText(sf).trim();
+          const rhs = unwrap1445(node.right).getText(sf).trim();
+          if (heightTerm1445.test(term) && !/^\d+(?:\.\d+)?$/.test(rhs)) {
+            const expr = node.getText(sf).replace(/\s+/g, ' ').trim();
+            const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
+            const why = yFlipExemptions1445.find(([, fn]) => fn(expr, term, rhs))?.[0];
+            if (why !== undefined) exempted.push(`${f}:${line} (${why})`);
+            else faults.push(`${f}:${line} open-coded y flip \`${expr}\` (route through cropToSpineY in src/coords.ts)`);
+          }
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sf);
+    }
+    return { faults, exempted };
+  };
+  const yFlipLive1445 = openCodedYFlipFaults1445(sources);
+  const scratch1445 = temp('y-flip-1445');
+  let yFlipPlant1445: { faults: string[]; exempted: string[] } = { faults: [], exempted: [] };
+  try {
+    mkdirSync(join(scratch1445, 'src'), { recursive: true });
+    writeFileSync(join(scratch1445, 'src', 'coords.ts'), 'export function cropToSpineY(cropY: number, cropHeight: number): number {\n  return cropHeight - cropY;\n}\n');
+    writeFileSync(
+      join(scratch1445, 'src', 'plant.ts'),
+      'export const row = (H: number, y: number, stageY: number): number => Math.floor(H - (y - stageY) - 0.5);\nexport const dy = (H: number, Y: number, stageY: number, y0: number): number => stageY + H - (Y + 0.5) - y0;\n',
+    );
+    const scratchFiles1445 = readdirSync(join(scratch1445, 'src'))
+      .sort()
+      .map((n) => [`src/${n}`, readFileSync(join(scratch1445, 'src', n), 'utf8')] as const);
+    yFlipPlant1445 = openCodedYFlipFaults1445(scratchFiles1445);
+  } finally {
+    rmSync(scratch1445, { recursive: true, force: true });
+  }
+  const expectedPlant1445 =
+    'src/plant.ts:1 open-coded y flip `H - (y - stageY)` (route through cropToSpineY in src/coords.ts) | ' +
+    'src/plant.ts:2 open-coded y flip `stageY + H - (Y + 0.5)` (route through cropToSpineY in src/coords.ts)';
+  say(
+    'TY1445_NO_OPEN_CODED_Y_FLIP_IN_SRC_OUTSIDE_SRC_COORDS',
+    yFlipLive1445.faults.length === 0 &&
+      yFlipExemptions1445.every(([name]) => yFlipLive1445.exempted.some((e) => e.endsWith(`(${name})`))) &&
+      yFlipPlant1445.faults.join(' | ') === expectedPlant1445,
+    `${sources.filter(([f]) => f.startsWith('src/') && f !== 'src/coords.ts').length} src/ file(s) outside src/coords.ts: ${yFlipLive1445.faults.length === 0 ? 'no open-coded y flip' : yFlipLive1445.faults.join('; ')} (${yFlipLive1445.exempted.length} non-flip expression(s) across ${yFlipExemptions1445.length} named reason(s)); planted under scratch src/: ${yFlipPlant1445.faults.join(' | ') || 'MISSED'}`,
+    'issue #1445: TY07 holds who imports @rig-c/core/transform, and this rule refuses an open-coded height - y flip in src/ outside src/coords.ts so every y conversion goes through cropToSpineY',
+  );
+
   // TY39 — issue #910: @rig-c/core 3.0.0 removed `./*.ts` from its exports map. No deep @rig-c/core/... file path
   // remains in the tree, and every @rig-c/core/... specifier in .ts sources resolves through a named entry in
   // @rig-c/core's exports map. Deep paths are assembled in pieces here so this file is scanned like every other.
