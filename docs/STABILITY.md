@@ -1945,7 +1945,14 @@ edited base image. No new flag bypasses rig-c or existing check bars.
 
 Receipt association is additive `provenance.edited_part` metadata: the complete
 receipt and `dir`, `edit: "edited_parts[i]"`, `changed_px`,
-`changed_counted_px`, `changed_excluded_px` and `removed_opaque_px`.
+`changed_counted_px`, `changed_excluded_px` and `removed_opaque_px`, then,
+when `removed_opaque_px` is above 0, `removed_opaque_regions` (issue #1383,
+additive): one `{box: [x, y, w, h], px}` per 8-connected region of removed
+positions, in part pixels, sorted by `y`, `x`, `h`, `w`, `px`, whose `px` sum
+to `removed_opaque_px`. An edit that removes nothing, and a build without the
+block, writes the same bytes as before. A manifest without the field reads as
+before; a reader that predates it refuses a manifest that carries it
+(`PARTS_FIELD_TYPE`).
 The four counts describe exact baseline-to-edited RGBA differences;
 `hand_px` keeps its existing final-alpha-above-8 partition meaning.
 The receipt covers the whole file, including unchanged and transparent

@@ -38,6 +38,46 @@ export interface EditedPartProvenance {
   changed_counted_px: number;
   changed_excluded_px: number;
   removed_opaque_px: number;
+  /**
+   * Issue #1383: where the removed opaque pixels are. One entry per
+   * 8-connected region of removed positions, as a box `[x, y, w, h]` in the
+   * part PNG's own pixels and the count of removed positions inside it; the
+   * counts sum to `removed_opaque_px`. Sorted by `y`, `x`, `h`, `w`, `px`.
+   * Written only when `removed_opaque_px > 0`, so an edit that removes
+   * nothing keeps its bytes.
+   */
+  removed_opaque_regions?: EditedPartRemovedRegion[];
+}
+export interface EditedPartRemovedRegion { box: [number, number, number, number]; px: number }
+
+/** 8-connected regions of a part-sized 0/1 mask, ordered as `removed_opaque_regions` requires. */
+export function removedOpaqueRegions(removed: Uint8Array, width: number, height: number): EditedPartRemovedRegion[] {
+  const seen = new Uint8Array(removed.length), out: EditedPartRemovedRegion[] = [];
+  for (let start = 0; start < removed.length; start++) {
+    if (removed[start] !== 1 || seen[start] === 1) continue;
+    let left = width, top = height, right = 0, bottom = 0, px = 0;
+    const stack = [start];
+    seen[start] = 1;
+    while (stack.length > 0) {
+      const p = stack.pop()!, x = p % width, y = Math.floor(p / width);
+      px++;
+      if (x < left) left = x;
+      if (y < top) top = y;
+      if (x + 1 > right) right = x + 1;
+      if (y + 1 > bottom) bottom = y + 1;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const nx = x + dx, ny = y + dy, q = ny * width + nx;
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height || removed[q] !== 1 || seen[q] === 1) continue;
+        seen[q] = 1;
+        stack.push(q);
+      }
+    }
+    out.push({ box: [left, top, right - left, bottom - top], px });
+  }
+  return out.sort(compareRemovedRegions);
+}
+export function compareRemovedRegions(a: EditedPartRemovedRegion, b: EditedPartRemovedRegion): number {
+  return a.box[1] - b.box[1] || a.box[0] - b.box[0] || a.box[3] - b.box[3] || a.box[2] - b.box[2] || a.px - b.px;
 }
 export interface EditedPartFrontColourOwner {
   owner: string;
@@ -156,6 +196,7 @@ export function replaceEditedParts(
     const provenance: PixelProvenance = { unchanged_layer_px: 0, hand_px: 0, automatic_px: 0, edits: [], automatic: [],
       ...(record.provenance?.depth === undefined ? {} : { depth: record.provenance.depth }), edited_part: metadata };
     const counts = new Map<number, number>();
+    const removed = new Uint8Array(old.width * old.height);
     let opaque = 0, visible = 0, projected = 0, paintingGain = 0;
     const partOwnerIndex = owner.names.indexOf(record.name);
     const byOwner = new Map<number, { px: number; left: number; top: number; right: number; bottom: number }>();
@@ -169,7 +210,7 @@ export function replaceEditedParts(
         metadata.changed_px++;
         if (counted) metadata.changed_counted_px++; else metadata.changed_excluded_px++;
       }
-      if (old.data[offset + 3] > OPAQUE_ALPHA_ABOVE && !counted) metadata.removed_opaque_px++;
+      if (old.data[offset + 3] > OPAQUE_ALPHA_ABOVE && !counted) { metadata.removed_opaque_px++; removed[p] = 1; }
       if (!counted) { next.excluded_px++; append(next.runs, EXCLUDED_PIXEL); append(next.pre_seam_writer_runs, EXCLUDED_PIXEL); continue; }
       opaque++;
       const x = record.x + p % record.w, y = record.y + Math.floor(p / record.w);
@@ -216,6 +257,7 @@ export function replaceEditedParts(
       else provenance.automatic_px++;
       counts.set(writer, (counts.get(writer) ?? 0) + 1);
     }
+    if (metadata.removed_opaque_px > 0) metadata.removed_opaque_regions = removedOpaqueRegions(removed, old.width, old.height);
     provenance.edits = map.edits.flatMap((edit, i) => counts.has(i + 1) ? [{ edit, px: counts.get(i + 1)! }] : []);
     provenance.automatic = (Object.keys(AUTOMATIC_WRITERS) as AutomaticWriter[]).flatMap(stage => counts.has(AUTOMATIC_WRITERS[stage]) ? [{ stage, px: counts.get(AUTOMATIC_WRITERS[stage])! }] : []);
     record.opaque_px = opaque;

@@ -1423,6 +1423,7 @@ counts relative to the normal assembled PNG:
 | `changed_counted_px` | Changed positions whose final alpha is above 8. |
 | `changed_excluded_px` | Changed positions whose final alpha is at most 8, including deletions. Together with `changed_counted_px`, sums to `changed_px`. |
 | `removed_opaque_px` | Positions whose baseline alpha was above 8 and final alpha is at most 8; a subset of `changed_excluded_px`. |
+| `removed_opaque_regions` | Where those removed positions are (issue #1383): one `{box: [x, y, w, h], px}` per 8-connected region of removed positions, the box in the part PNG's own pixels and `px` the removed positions inside it. The `px` values sum to `removed_opaque_px`; entries are sorted by `y`, `x`, `h`, `w`, `px`. Written only when `removed_opaque_px` is above 0, so an edit that removes nothing keeps its bytes. |
 
 The existing value partition is preserved:
 `unchanged_layer_px + hand_px + automatic_px = opaque_px`. `hand_px` counts
@@ -1436,6 +1437,34 @@ final-alpha partition and resolve replacement writer IDs through the sidecar's
 `edits` list. With `editor_receipts.trace_parts`, the complete edited file is
 receipt-associated; this does not exempt other config shapes or baseline
 inputs from their existing source/receipt checks.
+
+#### Outline specks at an ownership boundary (issue #1383)
+
+Projection by ownership can carry fragments of the painting's outline into a
+part along the edge where another part was visible: dark specks a part should
+not hold. Parts does not remove them. No assemble option, projection rule or
+filter decides which pixels are outline, because at the same boundary an
+outline fragment and real painting detail look alike, and a wrong deletion
+would be silent. The route is an image-editor edit with a receipt:
+
+1. Assemble, and keep the manifest (`parts.json`).
+2. Edit the part PNG written by that assembly in an image editor: erase the
+   specks (alpha 0) and keep the crop and size.
+3. Write the receipt with `rig-parts edited-part --config <config> --parts
+   <parts.json> --part <name> --file <edited.png> --from <assembled.png>
+   --editor <text>` (or `--producer <json>`).
+4. Rebuild (`assemble` or `build`) from the config that holds the receipt.
+
+The rebuilt part is the edited file. An edited file whose bytes do not match
+its receipt is refused (`ASSEMBLE_EDITED_PART_SHA256`), and a file with no
+receipt row is never read, whether or not `editor_receipts.required` is set.
+A reviewer reads the part's `provenance.edited_part` in `parts.json`: the
+receipt names the editor and both file hashes, `removed_opaque_px` counts the
+erased opaque pixels, and `removed_opaque_regions` gives a box and a count for
+each connected group of them, so every removed speck can be found in the part
+PNG. With `assemble.stage_map`, `stage-map.json` carries the same record.
+Overwriting a written `parts/<name>.png` in place, without the receipt and a
+rebuild, is not this route: nothing records it.
 
 At admission, `assemble` also prints an `edited part front colour:` measurement
 line for each receipted part (issue #1290): surviving pixels (`alpha > 8`) that
