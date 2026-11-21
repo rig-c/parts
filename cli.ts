@@ -5,6 +5,7 @@ import { DIFF_DRAFTS_SPEC, diffDraftsCommand } from './src/diffdrafts.ts';
 import { applyTakenLayers } from './src/takelayers.ts';
 import { applyDepth, bindDepthMap, prepareDepth } from './src/depthworkflow.ts';
 import { externalReceipt } from './src/externalreceipt.ts';
+import { BUST_LANDMARKS_ACT_SCHEMA, BUST_LANDMARKS_PROVENANCE_SPEC, BUST_LANDMARKS_PROVENANCE_SUFFIX, bustLandmarksFromAct } from './src/bustlandmarks.ts';
 import { writeEditedPart } from './tools/edited-part-cli.ts';
 /**
  * rig-parts — one painting and its See-through layers in, Spine-ready parts
@@ -373,6 +374,17 @@ usage:
       the box without it and how much of the side and area it took;
       --no-back-hair leaves "back hair" out of the box. --write-config updates
       only seethrough.head_box in an existing config through the layers loader.
+
+  rig-parts bust-landmarks --from-act <act.json> --parts <dir> --config <config.json> --out <landmarks.json>
+      Write the file propose --bust-landmarks reads (apex_r, apex_l and
+      optional cleavage, rig px) from the one chest row of a Review
+      ${BUST_LANDMARKS_ACT_SCHEMA} act, and <out>${BUST_LANDMARKS_PROVENANCE_SUFFIX} beside it (spec
+      "${BUST_LANDMARKS_PROVENANCE_SPEC}": the act's schema, id and
+      file sha256, the row's sha256 as given, the slot, the source hash and
+      frame). The row's slot must be a part of parts.json whose config mesh is
+      a contour, its frame parts.json's rig_size, and its alpha, clearance,
+      spacing, bone_r and bone_l those of the config's contour.bust (the
+      defaults when the config declares none). Writes nothing on a refusal.
 
   rig-parts head-crop-preflight --full <run> --canvas <W>x<H> --head-box '[left,top,right,bottom]'
       Report full-run drawn pixels beyond the crop: JSON stdout, advice stderr; no head run needed.
@@ -1214,6 +1226,7 @@ const TAKES = {
   'edited-part': { valued: ['--config', '--part', '--file', '--from', '--editor', '--producer', '--parts', '--rig-config'], switches: ['--help'] },
   'external-receipt': { valued: ['--kind', '--file', '--painting', '--producer', '--out', '--verify'], switches: ['--help'] },
   'check-parts': { valued: ['--parts', '--out'], switches: ['--json', '--help'] },
+  'bust-landmarks': { valued: ['--from-act', '--parts', '--config', '--out'], switches: ['--help'] },
   'diff-components': { valued: ['--stack', '--painting', '--parts', '--figure', '--floor', '--threshold', '--out', '--verify'], switches: ['--owners', '--help'] },
   'diff-drafts': { valued: ['--left', '--right', '--out'], switches: ['--help'] },
   'depth-bind': { valued: ['--map', '--input', '--part'], switches: ['--help'] },
@@ -2662,6 +2675,18 @@ function cmdExternalReceipt(args: string[]): number {
   } catch (error) { return printRefusal(error); }
 }
 
+function cmdBustLandmarks(args: string[]): number {
+  const f = flags(args, 'bust-landmarks', ['--from-act', '--parts', '--config', '--out']);
+  if (typeof f === 'string') return usage(f);
+  try {
+    const result = bustLandmarksFromAct({ act: f.get('--from-act')!, parts: f.get('--parts')!, config: f.get('--config')!, out: f.get('--out')! });
+    const { landmarks, provenance } = result;
+    console.log(`bust-landmarks: slot "${provenance.slot}" apex_r ${JSON.stringify(landmarks.apex_r)} apex_l ${JSON.stringify(landmarks.apex_l)} cleavage ${landmarks.cleavage === undefined ? 'absent (propose derives it)' : JSON.stringify(landmarks.cleavage)}; act ${JSON.stringify(provenance.act.act_id)} sha256=${provenance.act.file_sha256} row sha256=${provenance.row_sha256} (recorded, not recomputed)`);
+    console.log(`wrote ${result.out} and ${result.provenancePath}; next: rig-parts propose … --bust-landmarks ${result.out}`);
+    return EXIT_OK;
+  } catch (error) { return printRefusal(error); }
+}
+
 function cmdDepthBind(args: string[]): number {
   const f = flags(args, 'depth-bind', ['--map', '--input', '--part']);
   if (typeof f === 'string') return usage(f);
@@ -2702,6 +2727,7 @@ function main(argv: string[]): number | Promise<number> {
   if (command === 'depth-prepare') return cmdDepthPrepare(rest);
   if (command === 'edited-part') return cmdEditedPart(rest);
   if (command === 'external-receipt') return cmdExternalReceipt(rest);
+  if (command === 'bust-landmarks') return cmdBustLandmarks(rest);
   if (command === 'depth-bind') return cmdDepthBind(rest);
   if (command === 'depth-apply') return cmdDepthApply(rest);
   if (command === 'sheet') return cmdSheet(rest);
