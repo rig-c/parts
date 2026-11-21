@@ -118,6 +118,8 @@ export interface BehindSeamsUnreadCorridor {
   endpoints: [BehindSeamsEndpoint, BehindSeamsEndpoint];
   cells: Array<[number, number]>;
   cell_count: number;
+  /** Issue #1406: present only when the corridor held more than {@link BEHIND_SAMPLE_CAP} cells; the cells left out. */
+  cells_omitted?: number;
 }
 export interface BehindSeamsStanding extends BehindSeamsCount {
   /** Present when standing is SKIP: at setup without --parts, or on every idle frame and turn pose. */
@@ -456,8 +458,10 @@ function readBehindFrame(api: BehindSeamsApi, input: BehindSeamsFramesInput, pai
               unreadCells.add(at); cells.push(centre(grid, at));
             }
             if (cells.length === 0) continue;
+            const kept = evenlySpaced(cells.length, input.sampleCap ?? BEHIND_SAMPLE_CAP).map(i => cells[i]);
             unreadCorridors.push({ ...checkRow('BEHIND_PART_SEAMS.unread_corridors', 'pair', false, [pair.a, pair.b]),
-              axis: step === 1 ? 'horizontal' : 'vertical', endpoints: [endpoint(left, a), endpoint(right, b)], cells, cell_count: cells.length });
+              axis: step === 1 ? 'horizontal' : 'vertical', endpoints: [endpoint(left, a), endpoint(right, b)], cells: kept, cell_count: cells.length,
+              ...(cells.length > kept.length ? { cells_omitted: cells.length - kept.length } : {}) });
             continue;
           }
           if (a === b) continue;

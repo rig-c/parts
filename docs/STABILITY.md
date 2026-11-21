@@ -1671,16 +1671,18 @@ PASS. Existing render/sidecar refusals remain refusals. The standing
 bracketed-run definition does not certify curved or diagonal openings.
 
 Per-cell samples are a bounded diagnostic sample; the counts are the
-measurement (issue #1403). Each measured `samples[]` list (setup standing, idle
+measurement (issues #1403, #1406). Each measured `samples[]` list (setup standing, idle
 `motion_opened` on every idle frame, and turn `motion_opened` on every turn
 pose; idle and turn `standing` are never measured and their `samples[]` are
-always `[]`) holds at most 64 rows.
-A list that measured more holds 64 and gains `samples_omitted`, the number of
+always `[]`) and each `unread_corridors[].cells` list holds at most 64 rows.
+A list that measured more holds 64 and gains `samples_omitted` (or
+`cells_omitted` on an unread corridor), the number of
 rows left out; a list of 64 or fewer has no such field and is written as before.
 Standing keeps its 64 worst rows: counted first, then the larger of the two
-distances' minimum, then the earlier measured row. Motion-opened rows carry no
+distances' minimum, then the earlier measured row. Motion-opened rows and
+unread-corridor cells carry no
 distance and keep rows floor(j · n / 64), j = 0 … 63, of the n measured. Kept
-rows stay in measured order. Every count, `px`, `box`, hit, span, run and status
+rows stay in measured order. Every count (`cell_count`, `unread_cells`), `px`, `box`, hit, span, run and status
 is computed from all cells.
 
 Issue #1323 adds `behind_seams.turn: true` as an explicit opt-in. It references
@@ -1738,8 +1740,9 @@ the table are relative to that standing record.
 | `unread_corridors` | Nonempty array of ambiguous-endpoint runs (at setup, those with at least one cell where `dRecomposite > T`), horizontal rows before vertical columns, each in native scan order. |
 | `unread_corridors[].axis` | `horizontal` or `vertical`. |
 | `unread_corridors[].endpoints` | Two `[grid_x, grid_y, world_x, world_y, owner]` tuples in left/right or top/bottom order. Grid indices are zero-based, x right and y down; world coordinates are cell centres, y up. Owner codes are 0 for neither A/B reaching half alpha, 1 for A only, 2 for B only and 3 for both; no owner is inferred. |
-| `unread_corridors[].cells` | Interior world-centre `[x, y]` tuples in run order, excluding endpoints. On a corridor whose endpoint owner is ambiguous (`0` or `3`) at setup, cells within T of the parts' recomposite (`dRecomposite <= T`) are left out of the unread population; the remaining interior cells are reported without a rear-colour or endpoint-contrast filter; intersections may repeat across corridors. |
-| `unread_corridors[].cell_count` | The number of reported interior cells in that corridor (at setup, leaving out cells within T of the recomposite), exactly `cells.length`. |
+| `unread_corridors[].cells` | Interior world-centre `[x, y]` tuples in run order, excluding endpoints, capped at 64 evenly spaced entries (`floor(j · cell_count / 64)`, `j = 0 … 63`, when `cell_count > 64`; all `cell_count` entries when `cell_count <= 64`). On a corridor whose endpoint owner is ambiguous (`0` or `3`) at setup, cells within T of the parts' recomposite (`dRecomposite <= T`) are left out of the unread population; the remaining interior cells are reported without a rear-colour or endpoint-contrast filter; intersections may repeat across corridors. |
+| `unread_corridors[].cell_count` | The corridor's full count of unread interior cells (at setup, leaving out cells within T of the recomposite), equal to `cells.length + (cells_omitted ?? 0)`. |
+| `unread_corridors[].cells_omitted` | Optional positive integer, present only when `cell_count > 64`: the unread interior cells left out of `cells` (`cell_count - cells.length`). |
 | `unread_corridors[].row_scope` | `pair`. |
 | `unread_corridors[].row_kind` | `evidence`. |
 | `unread_corridors[].row_subjects` | The two selected part names in producer A/B order. |
