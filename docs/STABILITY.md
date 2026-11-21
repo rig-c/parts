@@ -1749,7 +1749,9 @@ turn block with one appends it to `turn.limitations`. Two limits hold. A count o
 member that separates from its partner by about its own width or more sweeps
 cells that no map carries back. A member that draws more than one fragment at
 setup or on a frame is not read: that frame is a named `HOLE` in
-`unmeasured[]` (`CHECK_BEHIND_PART_SEAMS_UNMEASURED` with an authored T). A
+`unmeasured[]` (`CHECK_BEHIND_PART_SEAMS_UNMEASURED` with an authored T), and so
+is a frame where a clip cuts either member at setup or on that frame, because a
+clipped drawing is not its attachment's and cannot be carried through it. A
 pair whose members overlap only below 128/255 and share no contact edge keeps a
 named `HOLE` that says so; a pair with neither band nor contact keeps the
 existing `HOLE` text.

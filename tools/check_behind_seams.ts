@@ -1871,6 +1871,22 @@ function behindFragmentFixture(extra: boolean): BehindSeamFixture {
   return fx;
 }
 
+/** Issue #1409 review: `piece` as the same quad drawn as a mesh, and with `clipped` marked as a clip's cut (`Mesh.source`). The
+ * source is each drawn triangle itself, so the picture and the vertices are unchanged: only the clip mark differs. */
+function asMesh(piece: Piece, clipped: boolean): Piece {
+  const triangles = [0, 1, 2, 2, 3, 0];
+  const corner = (values: ArrayLike<number>) => triangles.flatMap(i => [values[i * 2], values[i * 2 + 1]]);
+  return { kind: 'mesh', slot: piece.slot, page: piece.page, tint: piece.tint, world: Array.from(piece.world), uvs: Array.from(piece.uvs), triangles,
+    ...(clipped ? { source: { world: corner(piece.world), uvs: corner(piece.uvs) } } : {}) };
+}
+
+/** Case A (b one cell right on idle frame 1) with b drawn as a mesh, clipped at setup or on idle frame 1 (or nowhere). */
+function contactClippedFixture(where: 'none' | 'setup' | 'frame'): BehindSeamFixture {
+  const fx = contactMovedFixture(1);
+  const swap = (f: SeamFrame, clipped: boolean): SeamFrame => ({ ...f, pieces: f.pieces.map(p => p.slot === 'b' ? asMesh(p, clipped) : p) });
+  return { ...fx, setup: swap(fx.setup, where === 'setup'), frames: fx.frames.map((f, i) => swap(f, where === 'frame' && i === 1)) };
+}
+
 const HOLE_NO_SUPPORT_IDLE = 'HOLE: stock transported setup-overlap support is unavailable on every idle frame; motion-opened is not measured';
 
 export function runBehindContactChecks(dir: string, say: Say, rigc: RigcRunner): void {
@@ -1943,6 +1959,24 @@ export function runBehindContactChecks(dir: string, say: Say, rigc: RigcRunner):
       frag.problems.length === 1 && frag.problems[0].code === BEHIND_SEAM_UNMEASURED_CODE && frag.problems[0].object === 'a|b (idle frame 1)' &&
       whole.reading.status === 'PASS' && whole.pair.motion_support === CONTACT_MOTION_SUPPORT,
     brief(frag, whole));
+
+  // Issue #1409 review: a clipped member's drawing is the clip's cut, not its attachment's vertices, so it is not carried.
+  // b drawn as a mesh, otherwise identical: unclipped it reads case A ([0, 4, 0]); clipped on idle frame 1 that frame is a
+  // named HOLE; clipped at setup every idle frame is.
+  const clipHole = (where: string): string => `HOLE: setup contact support requires unclipped pair members: pair "a|b" member "b" is cut by a clip ${where}, so its drawing is no longer its attachment's and cannot be carried through its attachment map; motion-opened is not measured`;
+  const meshWhole = measured(contactClippedFixture('none'), T), clipFrame = measured(contactClippedFixture('frame'), T);
+  const clipSetup = measured(contactClippedFixture('setup'), T);
+  say('BHC11_A_CLIPPED_CONTACT_MEMBER_IS_REFUSED_BY_NAME',
+    meshWhole.reading.status === 'FAIL' && equal(meshWhole.pair.frames.map(f => f.motion_opened.px), [0, 4, 0]) &&
+      meshWhole.pair.motion_support === CONTACT_MOTION_SUPPORT && meshWhole.reading.unmeasured.length === 0 &&
+      clipFrame.reading.status === 'FAIL' && equal(clipFrame.pair.frames.map(f => f.motion_opened.status), ['PASS', 'SKIP', 'PASS']) &&
+      clipFrame.pair.frames[1].motion_opened.px === 0 && clipFrame.pair.frames[1].motion_support === undefined &&
+      clipFrame.reading.unmeasured.length === 1 && clipFrame.reading.unmeasured[0].frame === 'idle frame 1' &&
+      clipFrame.reading.unmeasured[0].reason === clipHole('on idle frame 1') &&
+      clipFrame.problems.length === 1 && clipFrame.problems[0].code === BEHIND_SEAM_UNMEASURED_CODE && clipFrame.problems[0].object === 'a|b (idle frame 1)' &&
+      clipSetup.pair.motion_opened.status === 'SKIP' && clipSetup.pair.motion_support === undefined &&
+      clipSetup.reading.unmeasured.length === 3 && clipSetup.reading.unmeasured.every(u => u.reason === clipHole('at setup')),
+    brief(meshWhole, clipFrame, clipSetup));
 
   // Faint overlap, by hand. Symmetric: both members draw x = 4 at 96/255 on 4 rows: no band, no contact edge (x = 4 is drawn by
   // neither at 128/255), so a named HOLE that says why. Asymmetric: b draws x = 4 opaque, a at 96: a-only x = 3 borders b-only

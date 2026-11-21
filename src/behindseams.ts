@@ -421,7 +421,7 @@ function inHull(h: readonly Point[], qx: number, qy: number): boolean {
  * neither member draws it, and either member's map carries it back onto setup material of `a` or `b` (core's `drawsAt`,
  * the same either-view rule as core's gap). A sweep cell drawn by neither and carried back by neither is `uncounted`:
  * where it shows rear, the count is a lower bound. Null when there is no contact edge and no faint overlap; a named
- * `hole` when a member draws more than one fragment or the members overlap only below 128/255.
+ * `hole` when a member draws more than one fragment, a clip cuts a member, or the members overlap only below 128/255.
  */
 function contactSupport(api: BehindSeamsApi, pair: MotionSeamPair, setup: Frame, frame: Frame, input: BehindSeamsFramesInput, grid: SeamGrid, label: string): ContactSupport {
   for (const [where, f] of [['at setup', setup], [`on ${label}`, frame]] as const) for (const slot of [pair.a, pair.b]) {
@@ -429,6 +429,12 @@ function contactSupport(api: BehindSeamsApi, pair: MotionSeamPair, setup: Frame,
     if (n !== 1) return { hole: `setup contact support requires one drawn fragment per pair member: pair "${pair.pair}" member "${slot}" draws ${n} fragments ${where}; 1 is required; motion-opened is not measured` };
   }
   const piece = (f: Frame, slot: string) => f.pieces.find(p => p.slot === slot)!;
+  // A clipped piece's `world` is the clipper's cut, not its attachment's vertices, so the rest triangles cannot index it
+  // (core's stock seam refuses the same drawing by name). Checked here, not left to a refusal upstream.
+  for (const [where, f] of [['at setup', setup], [`on ${label}`, frame]] as const) for (const slot of [pair.a, pair.b]) {
+    const p = piece(f, slot);
+    if (p.kind === 'mesh' && p.source !== undefined) return { hole: `setup contact support requires unclipped pair members: pair "${pair.pair}" member "${slot}" is cut by a clip ${where}, so its drawing is no longer its attachment's and cannot be carried through its attachment map; motion-opened is not measured` };
+  }
   const sa = piece(setup, pair.a), sb = piece(setup, pair.b), fa = piece(frame, pair.a), fb = piece(frame, pair.b);
   const restOf = (slot: string) => {
     const attachment = frame.attachments?.find(a => a.slot === slot)?.attachment;
