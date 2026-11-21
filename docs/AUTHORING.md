@@ -9353,6 +9353,22 @@ skeleton names remain names. A selected part whose provenance records
 to a transported scalar reference. Unselected authored units keep
 their original representation. Roles and draw order stay the author's.
 
+`--groups <name>[,<name>…]` (#1449) applies only the named recipe groups with
+the same manifest. A left-out group's recipe parts get no new sheet and lose
+any depth reference they carried; their maps are not read, and its
+`unitDepths` and `pivot` are not written. `config.turn.body` is required only
+when the body group is applied. A rig config that declares the turn of a
+left-out group — `turn.body` for body, `turn.roles` or `turn.depths` for head —
+is refused as [`DEPTH_GROUP_LEFT_OUT`](#DEPTH_GROUP_LEFT_OUT), since `rig`
+builds a group's dial and animation from that block. An empty list, a name the
+recipe does not declare, or a repeated name is refused as
+[`DEPTH_GROUP_SELECTION`](#DEPTH_GROUP_SELECTION); every problem in the list is
+named at once. The report then carries `selection`, after `cleared` and before
+`parts`: `{"groups": [...], "leftOut": [...]}`, groups in the recipe's order and
+parts in `parts.json` order. `recipeSha256` and `manifestSha256` are the full
+recipe's. Without the flag, `selection` is absent and every output byte is
+unchanged.
+
 Maps are UTF-8 JSON `{"spec":"rig-parts-map/1","width":2,"height":2,
 "channels":1,"data":[0.125,0.25,0.5,0.875]}`: row-major finite numeric values,
 with channels interleaved for signed XYZ normals (`channels:3`). JSON is open,
@@ -9479,6 +9495,8 @@ by `rig`, so their output requires no alternate compiler or dependency pin.
 | <a id="DEPTH_NORMAL_VECTOR"></a>`DEPTH_NORMAL_VECTOR` | a sampled support normal is zero | provide nonzero signed XYZ normals |
 | <a id="DEPTH_NORMAL_CONVEXITY"></a>`DEPTH_NORMAL_CONVEXITY` | core/rim or its convexity sign is unresolved | larger closed convex mask or scalar source |
 | <a id="DEPTH_GROUP_BINDING"></a>`DEPTH_GROUP_BINDING` | part outside declared turn roles, mixed retained near/zScale, or filename collision | register exact roles and one shared scale/polarity, replace/clear conflicting sheets, use distinct names |
+| <a id="DEPTH_GROUP_SELECTION"></a>`DEPTH_GROUP_SELECTION` | `depth-apply --groups` with an empty list, a group the recipe does not declare, or a group named twice | name each group to apply once, from the recipe's `groups` |
+| <a id="DEPTH_GROUP_LEFT_OUT"></a>`DEPTH_GROUP_LEFT_OUT` | `depth-apply --groups` leaves a group out while the rig config declares that group's turn (`turn.body`; `turn.roles` or `turn.depths` for head) | remove that turn block from the rig config, or name the group in `--groups` |
 | <a id="DEPTH_AUTHORED_UNIT_CONFLICT"></a>`DEPTH_AUTHORED_UNIT_CONFLICT` | a selected part already records `provenance.depth.kind: "authored-unit"`; adding scalar depth would make its two representations conflict | retain the authored unit or supply an explicitly reassembled scalar-compatible input; apply never replaces the provenance automatically |
 
 ### Unit depth precedence

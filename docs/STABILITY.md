@@ -548,7 +548,7 @@ and do not certify visibility. See the
 | `diff-drafts` | `--left`, `--right`, `--out`; optional `--help` (`-h`) (issue #1369; draft-to-draft assemble comparison, `rig-parts-draft-diff/1`) |
 | `depth-prepare` | `--parts`, `--config`, `--out`; optional `--help` (`-h`) (issue #897; separate numeric-depth recipe) |
 | `depth-bind` | `--map`, `--input`, `--part`; optional `--help` (`-h`) (issue #1284; exclusive receipt creation from current file bytes) |
-| `depth-apply` | `--parts`, `--manifest`, `--config`, `--rig-config`, `--out`; optional `--help` (`-h`) (issue #897; original character config is read-only) |
+| `depth-apply` | `--parts`, `--manifest`, `--config`, `--rig-config`, `--out`; optional `--groups` (a comma-separated list of the recipe's groups to apply, issue #1449), `--help` (`-h`) (issue #897; original character config is read-only) |
 | `layers` | one positional path: a wrapper directory, a `layers.json` or a `.psd` (a file literally named `-h` is reached as `./-h`); with it, optional `--export` (a directory to write the wrapper form into, issue #359); or `--template` with `--canvas` and no path; or a positional head run with `--full`, `--source`, `--config` together for `PLAN_HEAD_GARMENT_OVERLAP` (issue #826); or `--help` (`-h`) |
 | `sheet` | `--source`, `--layers` (repeatable), `--out`; optional `--cell`, `--cols`, `--help` (`-h`) |
 | `inputs` | `--source`, `--config`, `--out`; optional `--help` (`-h`) |
@@ -1971,7 +1971,11 @@ encoding, convexity sign and refusal remedies are in
 [AUTHORING](AUTHORING.md#per-part-provider-maps-897). No existing build path
 calls these stages; no-config builds retain their existing behavior and bytes.
 Group numbers and unit depths are explicit; no provider or absolute scale is
-inferred. A new depth stage never replaces Core's rig gate.
+inferred. `depth-apply --groups` (#1449) applies a subset of the recipe's
+groups against the same manifest and records it in the report's `selection`
+field (`groups`, `leftOut`), written after `cleared` and before `parts`; the
+field is absent without the flag, so those reports keep their bytes, and
+`recipeSha256` and `manifestSha256` are unchanged by a selection. A new depth stage never replaces Core's rig gate.
 `relief` is an explicit rig-pixel value, not an implicit width multiplier.
 Part-width and head-referenced calibrations are authored recipe choices;
 changing a calibration requires preparing its recipe again. Compare the same

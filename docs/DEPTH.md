@@ -199,6 +199,23 @@ in `work/rig` or your original config is touched. Any mismatch — a recipe edit
 after prepare, a part that moved, a map of the wrong size, a part your
 `turn.roles` does not name — is refused by name before a byte is written.
 
+**Apply only some groups.** A recipe prepared with a head and a body group
+can answer for the head alone, with the same manifest and no new inference:
+
+```sh
+rig-parts depth-apply --parts work/rig --manifest inference/manifest.json --config depth.json --rig-config head-config.json --out mapped-head --groups head
+```
+
+Only the named groups' parts get sheets. A left-out group's parts keep their
+art and lose any sheet they had, so nothing stale is carried into the rig,
+and their maps are not read. `config.turn.body` is required only when the
+body group is applied; a rig config that still declares the turn of a group
+left out (`turn.body` for body, `turn.roles` or `turn.depths` for head) is
+refused, because the rig builds a turn from that block and not from the
+sheets. `depth-report.json` records the run under `selection`: the groups
+applied and the parts left out. The recipe and manifest hashes stay those of
+the full recipe.
+
 ### 5. Rig, and look
 
 ```sh
@@ -209,7 +226,8 @@ The rig stage is the ordinary one. With `turn.roles` declared it builds the
 depth-sampled turn: `surface` parts become grids that bend with their sheets,
 `unit` parts ride a carrier at their own depth, and the motion gains `turn` and
 `tilt` animations driven by `yaw_dial` and `pitch_dial` (a body group adds
-`body_yaw_dial`). On the check fixture above the compiled motion carried
+a `body_turn` animation and its dial, `body_yaw_dial` unless
+`turn.body.slider` names another). On the check fixture above the compiled motion carried
 `idle`, `tilt` and `turn`, and the bones `faceshift`, `face_surface`,
 `yaw_dial` and `pitch_dial` beside the head. It also writes
 `depth_sheets.json`, which names every sheet the build consumed. rig-c's gate
@@ -228,7 +246,9 @@ rigc build --rig candidate/rig.json --motion candidate/motion.json --out built -
 ```
 
 The motion comes out with `turn`, `tilt` and `body_turn`, and the rig with
-`yaw_dial`, `pitch_dial` and `body_dial`, so `look/config.json` is also a worked
+`yaw_dial`, `pitch_dial` and `body_dial` (the name `look/config.json` gives
+the body dial in `turn.body.slider`; without it the dial is `body_yaw_dial`), so
+`look/config.json` is also a worked
 `turn.roles` to start your own from. To try the per-part route, run
 `depth-prepare` on `assembled/rig` with a recipe like the one above. From step 2
 on, the maps are your model's.
