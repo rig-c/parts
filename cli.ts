@@ -104,11 +104,13 @@ usage:
       Write <map>.binding.json with both file hashes; never overwrite a receipt.
       Attests the current files, not that inference used this input.
 
-  rig-parts depth-apply --parts <assembled-dir> --manifest <manifest.json> --config <depth-recipe.json> --rig-config <config.json> --out <empty-dir>
+  rig-parts depth-apply --parts <assembled-dir> --manifest <manifest.json> --config <depth-recipe.json> --rig-config <config.json> --out <empty-dir> [--groups <name>[,<name>...]]
       Register floating-point JSON depth or signed normals, normalize inside
       alpha >=128, apply declared median/relief and group near/zScale/pivot,
       extend past alpha, and write parts, relocated config and depth-report.json.
       Normals require one closed convex island. See AUTHORING for the schemas.
+      --groups applies only the named recipe groups; the others' parts get no
+      sheet, and the selection is recorded in depth-report.json.
 
   rig-parts layers <dir | layers.json | file.psd>
       Read a See-through decomposition — the ComfyUI wrapper form (a directory
@@ -1247,7 +1249,7 @@ const TAKES = {
   'diff-drafts': { valued: ['--left', '--right', '--out'], switches: ['--help'] },
   'depth-bind': { valued: ['--map', '--input', '--part'], switches: ['--help'] },
   'depth-prepare': { valued: ['--parts', '--config', '--out'], switches: ['--help'] },
-  'depth-apply': { valued: ['--parts', '--manifest', '--config', '--rig-config', '--out'], switches: ['--help'] },
+  'depth-apply': { valued: ['--parts', '--manifest', '--config', '--rig-config', '--out', '--groups'], switches: ['--help'] },
   layers: { valued: ['--export', '--template', '--canvas', '--full', '--source', '--config'], switches: ['--help'] },
   sheet: { valued: ['--source', '--layers', '--out', '--cell', '--cols'], switches: ['--help'] },
   rig: { valued: ['--config', '--parts', '--out', '--idle-keys', '--page-edges', '--pack-shape', '--page-size'], switches: ['--help'] },
@@ -2910,8 +2912,11 @@ function cmdDepthApply(args: string[]): number {
   const f = flags(args, 'depth-apply', ['--parts', '--manifest', '--config', '--rig-config', '--out']);
   if (typeof f === 'string') return usage(f);
   try {
-    const result = applyDepth({ parts: f.get('--parts')!, manifest: f.get('--manifest')!, config: f.get('--config')!, rigConfig: f.get('--rig-config')!, out: f.get('--out')! });
+    const groups = f.get('--groups'), selected = groups === undefined ? {} : { groups: groups === '' ? [] : groups.split(',') };
+    const result = applyDepth({ parts: f.get('--parts')!, manifest: f.get('--manifest')!, config: f.get('--config')!, rigConfig: f.get('--rig-config')!, out: f.get('--out')!, ...selected });
     for (const row of result.parts as Array<Record<string, unknown>>) console.log(`depth-apply: ${row.part} levels=${row.levels} clip=${row.clipFraction} reliefRigPixels=${row.reliefRigPixels} sign=${row.sign}`);
+    const selection = result.selection as { groups: string[]; leftOut: string[] } | undefined;
+    if (selection !== undefined) console.log(`depth-apply: applied groups ${selection.groups.join(', ')}; left out ${selection.leftOut.length === 0 ? 'no part' : selection.leftOut.join(', ')}, without a depth sheet`);
     console.log('depth-apply: wrote registered parts, config.json and depth-report.json; run rig for the core gate');
     return EXIT_OK;
   } catch (error) { return printRefusal(error); }
