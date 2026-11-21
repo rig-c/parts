@@ -1727,6 +1727,33 @@ one pair is optional SKIP even when another pair has a required override.
 An unavailable poser or source is a HOLE. Other animations, between-sample turns and alternate
 skins remain unmeasured.
 
+Issue #1409 reads `motion_opened` on a contact-only pair: one with no setup
+overlap band (no cell drawn at 128/255 or more by both members at setup) whose
+stock transported support is otherwise complete. Such a pair's idle and turn
+readings may change from unmeasured (`SKIP` with a `HOLE`) to `PASS` or `FAIL`.
+The reading carries a setup contact edge (a cell drawn only by A beside a cell
+drawn only by B) to the frame through both members' meshes and counts the swept
+cells, drawn by neither member there, that either map carries back onto that
+member's setup material. Pairs with a band never enter this reading and their
+`check.json` bytes are unchanged, `limitations` included. New optional fields,
+each present only on a pair read this way:
+
+| Field | Stable meaning |
+| --- | --- |
+| `pairs[].motion_support`, `pairs[].frames[].motion_support`, `turn.pairs[].motion_support`, `turn.pairs[].frames[].motion_support` | `"setup-contact"`: the motion reading came from transported setup contact edges, not an overlap band. |
+| `pairs[].frames[].motion_opened.lower_bound_cells`, `turn.pairs[].frames[].motion_opened.lower_bound_cells` | Present only when positive: swept cells that pass the hidden/full/rear tests but that neither member's map carries back onto setup material. They are not counted, so this row's count is a lower bound. |
+| `pairs[].motion_opened.lower_bound_frames`, `turn.pairs[].motion_opened.lower_bound_poses` | Present only when positive: the number of frame or pose rows that carry `lower_bound_cells`. |
+
+A line with at least one such pair appends one clause to `limitations`, and a
+turn block with one appends it to `turn.limitations`. Two limits hold. A count on a row with `lower_bound_cells` is a lower bound: a
+member that separates from its partner by about its own width or more sweeps
+cells that no map carries back. A member that draws more than one fragment at
+setup or on a frame is not read: that frame is a named `HOLE` in
+`unmeasured[]` (`CHECK_BEHIND_PART_SEAMS_UNMEASURED` with an authored T). A
+pair whose members overlap only below 128/255 and share no contact edge keeps a
+named `HOLE` that says so; a pair with neither band nor contact keeps the
+existing `HOLE` text.
+
 Issue #1325 adds the following optional evidence fields to
 `BEHIND_PART_SEAMS.pairs[].setup.standing` (idle `frames[].standing` and turn
 `turn.pairs[].frames[].standing` are never measured). Paths in
