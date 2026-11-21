@@ -236,7 +236,11 @@ neck-to-hip midline. A missing unique crossing inside the segment is refused by
 name, requiring an explicit cleavage point or apices on opposite sides of the midline.
 The derived point is rounded to the existing 1/256-pixel contour grid. Declared apex
 coordinates are preserved exactly in both the regions and their bones.
-The proposal writes `contour.bust` and `boob_r` / `boob_l` under `chest`.
+The proposal writes `contour.bust` and `boob_r` / `boob_l` under `chest`. When
+`propose --write-config` redrafts the chest carrier, it keeps the `contour.bust`
+shape fields (`alpha`, `clearance`, `bone_r`, `bone_l`, `spacing`) that the config
+being rewritten already declares for that same part, in the shorthand's key order
+after the new `apex_r`, `apex_l` and `cleavage` (issue #1428).
 
 A chest-holding torso with neither landmarks nor an explicit omission reason is
 refused with `PROPOSE_BUST_INPUT` before any proposal is written. `--no-bust "rigid breastplate"` omits the bust and records the

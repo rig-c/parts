@@ -10,11 +10,12 @@ import { CLOTH_PARTS, CLOTH_RIG, clothRecipe } from '../fixtures/cloth.ts';
 import { PROPOSE_PARTS, writeProposeFixture } from '../fixtures/propose.ts';
 import { writeWrapperFixture } from '../fixtures/synthetic.ts';
 import { block } from '../fixtures/rig.ts';
-import { mergeConfigProposal, type ConfigObject, type ConfigWritePatch } from '../src/configwrite.ts';
+import { mergeConfigProposal, type ConfigJson, type ConfigObject, type ConfigWritePatch } from '../src/configwrite.ts';
 import { parseConfig } from '../src/config.ts';
 import { PartsError } from '../src/errors.ts';
 import { KEYPOINTS_SPEC } from '../src/keypoints.ts';
-import { PROPOSAL_CONFIG_SECTIONS } from '../src/propose.ts';
+import { splicedEdits } from '../src/meshdraft.ts';
+import { DEFAULT_GRID_RULE, propose, PROPOSAL_CONFIG_SECTIONS, readPartSet } from '../src/propose.ts';
 import { KEYPOINT_NAMES } from '../src/skeleton.ts';
 import { encodePngBytes, readPng } from '../src/raster/png.ts';
 import { configWriteLines, readConfigWriteTarget, stageConfigWrite, stageConfigWriteBatch } from './configwrite.ts';
@@ -413,6 +414,140 @@ export function runConfigWriteChecks(dir: string, report: (name: string, ok: boo
   const clothHardBefore = readFileSync(clothHardTarget, 'utf8');
   const clothHard = cli([...clothBase, '--out', clothHardOut, '--write-config', clothHardTarget, '--no-bust', 'historical fixture: no bust landmarks recorded']);
   check('CW_CLOTH_HARDLINK', clothHard.status === 1 && clothHard.stdout.includes('PROPOSE_WRITE_CONFIG_FRESH') && readFileSync(clothHardTarget, 'utf8') === clothHardBefore, 'existing inode aliases remain refused by the cloth fresh-file rule');
+
+  // Issue #1428: propose --write-config keeps declared contour.bust shape fields for the same chest carrier part.
+  const bustPartsDir = join(dir, 'bust-parts');
+  const bustParts = [...PROPOSE_PARTS, { name: 'bodice', from: 'full:topwear', x: 50, y: 100, w: 100, h: 45, colour: [60, 80, 100] as [number, number, number] }];
+  const bustPainting = writeProposeFixture(bustPartsDir, bustParts);
+  const bustSet = readPartSet(bustPartsDir);
+  const oldLandmarks = { apex_r: [75, 125] as [number, number], apex_l: [125, 125] as [number, number], cleavage: [100, 125] as [number, number] };
+  const newLandmarks = { apex_r: [76, 124] as [number, number], apex_l: [124, 126] as [number, number], cleavage: [100, 125] as [number, number] };
+  const initialBustDraft = propose(bustSet, undefined, null, DEFAULT_GRID_RULE, null, true, { landmarks: oldLandmarks });
+  const redraftedRaw = propose(bustSet, undefined, null, DEFAULT_GRID_RULE, null, true, { landmarks: newLandmarks });
+  const newLandmarksPath = join(dir, 'bust-new-landmarks.json');
+  save(newLandmarksPath, newLandmarks);
+  const bustPlan = bustParts.map((p) => [p.name, ...p.from.split(':')]);
+  const makeBustConfig = (bustExtra: Record<string, ConfigJson>): ConfigObject => {
+    const meshes = structuredClone(initialBustDraft.meshes) as unknown as ConfigObject;
+    ((meshes.bodice as ConfigObject).contour as ConfigObject).bust = { ...oldLandmarks, ...bustExtra };
+    return {
+      key: 'bust-redraft',
+      assemble: { rig_scale: 1, plan: bustPlan },
+      bones: structuredClone(initialBustDraft.bones) as unknown as ConfigJson,
+      meshes,
+      regions: structuredClone(initialBustDraft.regions) as unknown as ConfigJson,
+      motion: structuredClone(initialBustDraft.motion) as unknown as ConfigJson,
+      motion_seams: structuredClone(initialBustDraft.motion_seams) as unknown as ConfigJson,
+      proposed_rig_scale: initialBustDraft.proposed_rig_scale,
+      'x-kept': { note: 'untouched' },
+    };
+  };
+  const runBustRedraft = (label: string, cfgObj: ConfigObject, extraArgs: string[] = ['--bust-landmarks', newLandmarksPath]): { path: string; outDir: string; text: string; parsed: ConfigObject; proposal: ConfigObject; run: ReturnType<typeof cli> } => {
+    const cfgPath = join(dir, `bust-${label}.json`);
+    const outDir = join(dir, `bust-out-${label}`);
+    save(cfgPath, cfgObj);
+    const run = cli(['propose', '--parts', bustPartsDir, '--source', bustPainting, '--out', outDir, '--write-config', cfgPath, ...extraArgs]);
+    return { path: cfgPath, outDir, text: readFileSync(cfgPath, 'utf8'), parsed: read(cfgPath), proposal: read(join(outDir, 'proposal.json')), run };
+  };
+  const soloCases: ReadonlyArray<readonly [string, string, Record<string, ConfigJson>, string]> = [
+    ['BWS01_ALPHA_ALONE_SURVIVES_REDRAFT', 'alpha', { alpha: 0.3 }, '{"apex_r":[76,124],"apex_l":[124,126],"cleavage":[100,125],"alpha":0.3}'],
+    ['BWS02_CLEARANCE_ALONE_SURVIVES_REDRAFT', 'clearance', { clearance: 5.5 }, '{"apex_r":[76,124],"apex_l":[124,126],"cleavage":[100,125],"clearance":5.5}'],
+    ['BWS03_BONE_R_ALONE_SURVIVES_REDRAFT', 'bone_r', { bone_r: 'chest' }, '{"apex_r":[76,124],"apex_l":[124,126],"cleavage":[100,125],"bone_r":"chest"}'],
+    ['BWS04_BONE_L_ALONE_SURVIVES_REDRAFT', 'bone_l', { bone_l: 'hip' }, '{"apex_r":[76,124],"apex_l":[124,126],"cleavage":[100,125],"bone_l":"hip"}'],
+    ['BWS05_SPACING_ALONE_SURVIVES_REDRAFT', 'spacing', { spacing: 12 }, '{"apex_r":[76,124],"apex_l":[124,126],"cleavage":[100,125],"spacing":12}'],
+  ];
+  for (const [id, label, fieldObj, expectedJson] of soloCases) {
+    const res = runBustRedraft(label, makeBustConfig(fieldObj));
+    const gotBust = JSON.stringify((((res.parsed.meshes as ConfigObject).bodice as ConfigObject).contour as ConfigObject).bust);
+    check(id, res.run.status === 0 && gotBust === expectedJson, `exit ${res.run.status}; bust=${gotBust}`);
+  }
+  const allFiveCfg = makeBustConfig({});
+  (((allFiveCfg.meshes as ConfigObject).bodice as ConfigObject).contour as ConfigObject).bust = {
+    spacing: 12,
+    bone_l: 'hip',
+    bone_r: 'chest',
+    clearance: 5.5,
+    alpha: 0.3,
+    cleavage: oldLandmarks.cleavage,
+    apex_l: oldLandmarks.apex_l,
+    apex_r: oldLandmarks.apex_r,
+  };
+  const allFiveRes = runBustRedraft('all-five', allFiveCfg);
+  const allFiveWant = '{"apex_r":[76,124],"apex_l":[124,126],"cleavage":[100,125],"alpha":0.3,"clearance":5.5,"bone_r":"chest","bone_l":"hip","spacing":12}';
+  const allFiveGot = JSON.stringify((((allFiveRes.parsed.meshes as ConfigObject).bodice as ConfigObject).contour as ConfigObject).bust);
+  check('BWS06_ALL_FIVE_TOGETHER_KEEP_VALUES_AND_CANONICAL_KEY_ORDER', allFiveRes.run.status === 0 && allFiveGot === allFiveWant, `exit ${allFiveRes.run.status}; bust=${allFiveGot}`);
+
+  const threePointsInitial = makeBustConfig({});
+  const threePointsInitialText = `${JSON.stringify(threePointsInitial, null, 2)}\n`;
+  const threePointsHandExpected = splicedEdits(
+    threePointsInitialText,
+    PROPOSAL_CONFIG_SECTIONS.filter((k) => redraftedRaw[k] !== undefined && JSON.stringify(threePointsInitial[k]) !== JSON.stringify(redraftedRaw[k])).map((k) => ({ path: [k], value: redraftedRaw[k] })),
+  ).text;
+  const threePointsRes = runBustRedraft('three-points', threePointsInitial);
+  check(
+    'BWS07_THREE_POINTS_ONLY_IS_BYTE_IDENTICAL_TO_MAIN',
+    threePointsRes.run.status === 0 && threePointsRes.text === threePointsHandExpected &&
+      JSON.stringify((((threePointsRes.parsed.meshes as ConfigObject).bodice as ConfigObject).contour as ConfigObject).bust) === '{"apex_r":[76,124],"apex_l":[124,126],"cleavage":[100,125]}',
+    `exit ${threePointsRes.run.status}; bytes match hand-derived main expectation (${threePointsRes.text.length} B): ${threePointsRes.text === threePointsHandExpected}`,
+  );
+
+  const firstDraftInitial: ConfigObject = {
+    key: 'bust-first-draft',
+    assemble: { rig_scale: 1, plan: bustPlan },
+    'x-kept': { note: 'untouched' },
+  };
+  const firstDraftInitialText = `${JSON.stringify(firstDraftInitial, null, 2)}\n`;
+  const firstDraftHandExpected = splicedEdits(
+    firstDraftInitialText,
+    PROPOSAL_CONFIG_SECTIONS.filter((k) => redraftedRaw[k] !== undefined).map((k) => ({ path: [k], value: redraftedRaw[k] })),
+  ).text;
+  const firstDraftRes = runBustRedraft('first-draft', firstDraftInitial);
+  check(
+    'BWS08_FIRST_DRAFT_WITHOUT_CONTOUR_BUST_IS_BYTE_IDENTICAL_TO_MAIN',
+    firstDraftRes.run.status === 0 && firstDraftRes.text === firstDraftHandExpected &&
+      JSON.stringify((((firstDraftRes.parsed.meshes as ConfigObject).bodice as ConfigObject).contour as ConfigObject).bust) === '{"apex_r":[76,124],"apex_l":[124,126],"cleavage":[100,125]}',
+    `exit ${firstDraftRes.run.status}; bytes match hand-derived main expectation (${firstDraftRes.text.length} B): ${firstDraftRes.text === firstDraftHandExpected}`,
+  );
+
+  const noBustRes = runBustRedraft('no-bust', allFiveCfg, ['--no-bust', 'rigid breastplate']);
+  const noBustContour = (((noBustRes.parsed.meshes as ConfigObject).bodice as ConfigObject).contour as ConfigObject);
+  check(
+    'BWS09_NO_BUST_DROPS_CHEST_STRUCTURE_AND_SHAPE_FIELDS',
+    noBustRes.run.status === 0 && !('bust' in noBustContour) &&
+      !(noBustRes.parsed.bones as ConfigObject[]).some((b) => typeof b.name === 'string' && b.name.startsWith('boob_')) &&
+      noBustRes.run.stdout.includes('bodice: contour bust omitted for the declared reason: rigid breastplate') &&
+      !noBustRes.run.stdout.includes('shape field(s)'),
+    `exit ${noBustRes.run.status}; bust present=${'bust' in noBustContour}; omitted note present=${noBustRes.run.stdout.includes('rigid breastplate')}`,
+  );
+
+  const changedCarrierCfg = makeBustConfig({});
+  const oldBodiceMesh = structuredClone((changedCarrierCfg.meshes as ConfigObject).bodice) as ConfigObject;
+  (oldBodiceMesh.contour as ConfigObject).bust = { ...oldLandmarks, alpha: 0.3, clearance: 5.5 };
+  delete (changedCarrierCfg.meshes as ConfigObject).bodice;
+  (changedCarrierCfg.meshes as ConfigObject).shirt = oldBodiceMesh;
+  const changedCarrierRes = runBustRedraft('changed-carrier', changedCarrierCfg);
+  const changedCarrierBust = JSON.stringify((((changedCarrierRes.parsed.meshes as ConfigObject).bodice as ConfigObject).contour as ConfigObject).bust);
+  const changedCarrierNote = 'shirt: contour.bust shape field(s) alpha, clearance dropped — chest carrier is now bodice';
+  check(
+    'BWS10_CHANGED_CARRIER_DROPS_OLD_PART_SHAPE_FIELDS_WITH_PRINTED_NOTE',
+    changedCarrierRes.run.status === 0 &&
+      changedCarrierBust === '{"apex_r":[76,124],"apex_l":[124,126],"cleavage":[100,125]}' &&
+      !('shirt' in (changedCarrierRes.parsed.meshes as ConfigObject)) &&
+      changedCarrierRes.run.stdout.includes(`note: ${changedCarrierNote}`) &&
+      (changedCarrierRes.proposal.notes as string[]).includes(changedCarrierNote),
+    `exit ${changedCarrierRes.run.status}; bodice bust=${changedCarrierBust}; note printed=${changedCarrierRes.run.stdout.includes(`note: ${changedCarrierNote}`)}`,
+  );
+
+  const plainBustOut = join(dir, 'bust-out-plain');
+  const plainBustRun = cli(['propose', '--parts', bustPartsDir, '--source', bustPainting, '--out', plainBustOut, '--bust-landmarks', newLandmarksPath]);
+  const plainBustProposal = read(join(plainBustOut, 'proposal.json'));
+  const plainBustJson = JSON.stringify((((plainBustProposal.meshes as ConfigObject).bodice as ConfigObject).contour as ConfigObject).bust);
+  check(
+    'BWS11_PROPOSE_WITHOUT_WRITE_CONFIG_CARRIES_THREE_POINTS_ONLY',
+    plainBustRun.status === 0 && plainBustJson === '{"apex_r":[76,124],"apex_l":[124,126],"cleavage":[100,125]}',
+    `exit ${plainBustRun.status}; proposal bust=${plainBustJson}`,
+  );
+
   check('CW_CLEAN', temporaryCount() === 0, 'no owned staging files left after positives/refusals');
   return failed;
 }

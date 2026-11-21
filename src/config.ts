@@ -570,6 +570,9 @@ export const DEFAULT_BUST_SPACING = 14;
 /** Default control bone names for derived `bust_r` and `bust_l` regions (issue #475). */
 export const DEFAULT_BUST_BONE_R = 'boob_r';
 export const DEFAULT_BUST_BONE_L = 'boob_l';
+/** Required point fields and optional shape fields of `meshes.<part>.contour.bust`, in documented shorthand key order (issues #475, #1428). */
+export const BUST_LANDMARK_FIELDS = ['apex_r', 'apex_l', 'cleavage'] as const;
+export const BUST_SHAPE_FIELDS = ['alpha', 'clearance', 'bone_r', 'bone_l', 'spacing'] as const;
 
 /**
  * Landmark shorthand for the `bust_r` and `bust_l` contour regions (issue #475):
@@ -3856,7 +3859,7 @@ function checkContour(c: Check, at: string, v: Json, bones: Set<string>): void {
   }
   if ('bust' in o) {
     const bat = `${at}.bust`;
-    const b = c.object(bat, o.bust, ['apex_r', 'apex_l', 'cleavage'], ['alpha', 'clearance', 'bone_r', 'bone_l', 'spacing']);
+    const b = c.object(bat, o.bust, BUST_LANDMARK_FIELDS, BUST_SHAPE_FIELDS);
     if (b === null) return;
     for (const dup of ['bust_r', 'bust_l'] as const) {
       if (names.has(dup)) {
