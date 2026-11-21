@@ -532,8 +532,9 @@ and do not certify visibility. See the
 | `assemble` | `--propose-plan` with `--source`, `--full`, `--config`, optional `--head`, `--write-config` (must name `--config` itself, issue #356); or `--source`, `--full`, `--config`, `--out`, optional `--head` (without it, one run: issue #359), `--seam` (near-white, silhouette), `--project` (core, visible), `--alt` (repeatable `<name>=<source>:<full>[:<head>]`, issue #454), `--requirements` (source-bound cut-material evidence only when the file declares `cut_material`, issue #888); or `--emit-fill-masks` (a directory) with `--source`, `--full`, `--config`, optional `--head` (each cut's hidden-band mask on the painting grid, issue #1230); or `--help` (`-h`) |
 | `head-crop-preflight` | `--full`, `--canvas`, `--head-box` (JSON coordinate array); optional `--help` (`-h`); read-only advice before the head run, original alpha > 8 samples (issue #1082) |
 | `propose` | `--head-box` with `--full`, `--canvas`; optional `--no-back-hair`, `--write-config` (existing config, issue #356), `--help` (`-h`) |
-| `propose` | `--parts`, `--source`, `--out`; optional `--compare` or `--from-config` (one of them), `--keypoints`, `--person` and `--wrist-snap` (each with `--keypoints`), `--full`, `--head` (the turn control's depths; not with `--from-config`), `--grid-rule` (`figure` or `part`, the drafted lattice's spacing; not with `--from-config`), `--cloth` (a config whose `cloth` block is the recipe, issue #364; not with `--from-config`), `--write-config` (existing config for an ordinary proposal, issue #356; a new file with `--cloth`, issue #537; not with `--from-config` — additive: without it nothing `propose` writes changes), `--from` (the config the recipe is changed from, only with `--write-config`, issue #571 — additive: without it nothing `--write-config` writes changes), `--only-missing` (only with `--parts` and `--write-config`, not with `--cloth` or `--from-config`, issue #671 — additive: without it nothing `--write-config` writes changes)  `--bust-landmarks` (rig-pixel apex_r/apex_l and optional cleavage), or `--no-bust` (non-blank omission reason), one required when drafting a chest-holding torso, both incompatible with `--from-config`, `--help` (`-h`) |
+| `propose` | `--parts`, `--source`, `--out`; optional `--compare` or `--from-config` (one of them), `--keypoints`, `--person` and `--wrist-snap` (each with `--keypoints`), `--full`, `--head` (the turn control's depths; not with `--from-config`), `--grid-rule` (`figure` or `part`, the drafted lattice's spacing; not with `--from-config`), `--cloth` (a config whose `cloth` block is the recipe, issue #364; not with `--from-config`), `--write-config` (existing config for an ordinary proposal, issue #356; a new file with `--cloth`, issue #537; not with `--from-config` — additive: without it nothing `propose` writes changes), `--from` (the config the recipe is changed from, only with `--write-config`, issue #571 — additive: without it nothing `--write-config` writes changes), `--only-missing` (only with `--parts` and `--write-config`, not with `--cloth` or `--from-config`, issue #671 — additive: without it nothing `--write-config` writes changes)  `--bust-landmarks` (rig-pixel apex_r/apex_l and optional cleavage; a `<file>.provenance.json` beside it is read and checked, and its pending shape needs `--write-config`, issue #1382), or `--no-bust` (non-blank omission reason), one required when drafting a chest-holding torso, both incompatible with `--from-config`, `--help` (`-h`) |
 | `propose` | `--parts`, `--source`, `--out`, `--full`, `--head`, `--write-config` together: the [neck draft](AUTHORING.md#a-neck-that-moves-on-its-own) for an existing config with `turn.body` and one neck plan row; reassembles under `<out>/rig`, preserves the sampled turn and drafts a rigid neck unit (issue #826) |
+| `bust-landmarks` | `--from-act`, `--parts`, `--config`, `--out`; optional `--write-config` (takes the act's `alpha`, `clearance`, `spacing`, `bone_r` and `bone_l` into the config's existing `meshes.<part>.contour.bust`, a field the act omits removed; the config is untouched when none differs — additive: without it nothing the command writes changes), `--help` (`-h`) (issue #1382; one `rig-review/act@9` chest row to the landmarks file `propose` reads, with `<out>.provenance.json` beside it) |
 | `compare` | `--left`, `--right`; optional `--map`, `--help` (`-h`) |
 | `rig` | `--config`, `--parts`, `--out`; optional `--idle-keys` (ctl, direct), `--page-edges` (pot, free), `--pack-shape` (rect, polygon), `--page-size`, `--help` (`-h`) |
 | `check-parts` | `--parts`, `--out`; optional `--json`, `--help` (`-h`) |
@@ -556,6 +557,27 @@ to its parser's `TAKES` row in both directions. Repeated proposal modes share on
 command's flag union; `comfy paint` and `comfy seethrough` are checked separately.
 Required combinations within a mode remain the CLI's; the `cli` suite's controls
 read them from the help.
+
+`bust-landmarks` (issue #1382) arrives in a minor version and is stable like every
+command in the table. This page does not separate provisional commands. The
+promise covers its command line and flags, and its refusal codes:
+`BUST_LANDMARKS_ACT`, `BUST_LANDMARKS_ROW`, `BUST_LANDMARKS_SLOT`,
+`BUST_LANDMARKS_PART_ROWS`, `BUST_LANDMARKS_ROWS`, `BUST_LANDMARKS_FRAME`,
+`BUST_LANDMARKS_SHAPE` and `BUST_LANDMARKS_OUT`. It also covers the landmarks
+file it writes, which holds the three keys `propose` reads, in rig px. And it
+covers the provenance record: its spec id `rig-parts-bust-landmarks-provenance/1`,
+its keys and their order: `spec`, `act` (`schema`, `act_id`, `file_sha256`),
+`row_sha256`, `slot`, `source` (`hash`, `frame`), `landmarks_sha256`, and, only
+when the config declared no `contour.bust` and the act's shape differs from the
+defaults, `shape` (`status`, `pending` or `applied`, and `fields`, in the
+shorthand's key order). `propose --bust-landmarks` reads that record when it
+sits beside the landmarks file, writes a pending shape with `--write-config` and
+marks it applied, and refuses by name `PROPOSE_BUST_SIDECAR`,
+`PROPOSE_BUST_SIDECAR_DIGEST`, `PROPOSE_BUST_SIDECAR_PART` and
+`PROPOSE_BUST_PENDING`; with no record beside the file it reads the file as
+before. The row digest rule (the sha256 of the row's `edit` with object keys sorted recursively, recomputed and refused on a mismatch) is a copy of review's request digest. The act's grammar is review's. This package reads
+`rig-review/act@9` only, and refuses another act version by name until a later
+minor version reads it.
 
 The [command reference](AUTHORING.md#command-reference) describes each mode;
 [writing proposed config fields](AUTHORING.md#writing-proposed-config-fields)
@@ -1680,16 +1702,18 @@ PASS. Existing render/sidecar refusals remain refusals. The standing
 bracketed-run definition does not certify curved or diagonal openings.
 
 Per-cell samples are a bounded diagnostic sample; the counts are the
-measurement (issue #1403). Each measured `samples[]` list (setup standing, idle
+measurement (issues #1403, #1406). Each measured `samples[]` list (setup standing, idle
 `motion_opened` on every idle frame, and turn `motion_opened` on every turn
 pose; idle and turn `standing` are never measured and their `samples[]` are
-always `[]`) holds at most 64 rows.
-A list that measured more holds 64 and gains `samples_omitted`, the number of
+always `[]`) and each `unread_corridors[].cells` list holds at most 64 rows.
+A list that measured more holds 64 and gains `samples_omitted` (or
+`cells_omitted` on an unread corridor), the number of
 rows left out; a list of 64 or fewer has no such field and is written as before.
 Standing keeps its 64 worst rows: counted first, then the larger of the two
-distances' minimum, then the earlier measured row. Motion-opened rows carry no
+distances' minimum, then the earlier measured row. Motion-opened rows and
+unread-corridor cells carry no
 distance and keep rows floor(j · n / 64), j = 0 … 63, of the n measured. Kept
-rows stay in measured order. Every count, `px`, `box`, hit, span, run and status
+rows stay in measured order. Every count (`cell_count`, `unread_cells`), `px`, `box`, hit, span, run and status
 is computed from all cells.
 
 Issue #1323 adds `behind_seams.turn: true` as an explicit opt-in. It references
@@ -1736,6 +1760,35 @@ one pair is optional SKIP even when another pair has a required override.
 An unavailable poser or source is a HOLE. Other animations, between-sample turns and alternate
 skins remain unmeasured.
 
+Issue #1409 reads `motion_opened` on a contact-only pair: one with no setup
+overlap band (no cell drawn at 128/255 or more by both members at setup) whose
+stock transported support is otherwise complete. Such a pair's idle and turn
+readings may change from unmeasured (`SKIP` with a `HOLE`) to `PASS` or `FAIL`.
+The reading carries a setup contact edge (a cell drawn only by A beside a cell
+drawn only by B) to the frame through both members' meshes and counts the swept
+cells, drawn by neither member there, that either map carries back onto that
+member's setup material. Pairs with a band never enter this reading and their
+`check.json` bytes are unchanged, `limitations` included. New optional fields,
+each present only on a pair read this way:
+
+| Field | Stable meaning |
+| --- | --- |
+| `pairs[].motion_support`, `pairs[].frames[].motion_support`, `turn.pairs[].motion_support`, `turn.pairs[].frames[].motion_support` | `"setup-contact"`: the motion reading came from transported setup contact edges, not an overlap band. |
+| `pairs[].frames[].motion_opened.lower_bound_cells`, `turn.pairs[].frames[].motion_opened.lower_bound_cells` | Present only when positive: swept cells that pass the hidden/full/rear tests but that neither member's map carries back onto setup material. They are not counted, so this row's count is a lower bound. |
+| `pairs[].motion_opened.lower_bound_frames`, `turn.pairs[].motion_opened.lower_bound_poses` | Present only when positive: the number of frame or pose rows that carry `lower_bound_cells`. |
+
+A line with at least one such pair appends one clause to `limitations`, and a
+turn block with one appends it to `turn.limitations`. Two limits hold. A count on a row with `lower_bound_cells` is a lower bound: a
+member that separates from its partner by about its own width or more sweeps
+cells that no map carries back. A member that draws more than one fragment at
+setup or on a frame is not read: that frame is a named `HOLE` in
+`unmeasured[]` (`CHECK_BEHIND_PART_SEAMS_UNMEASURED` with an authored T), and so
+is a frame where a clip cuts either member at setup or on that frame, because a
+clipped drawing is not its attachment's and cannot be carried through it. A
+pair whose members overlap only below 128/255 and share no contact edge keeps a
+named `HOLE` that says so; a pair with neither band nor contact keeps the
+existing `HOLE` text.
+
 Issue #1325 adds the following optional evidence fields to
 `BEHIND_PART_SEAMS.pairs[].setup.standing` (idle `frames[].standing` and turn
 `turn.pairs[].frames[].standing` are never measured). Paths in
@@ -1747,8 +1800,9 @@ the table are relative to that standing record.
 | `unread_corridors` | Nonempty array of ambiguous-endpoint runs (at setup, those with at least one cell where `dRecomposite > T`), horizontal rows before vertical columns, each in native scan order. |
 | `unread_corridors[].axis` | `horizontal` or `vertical`. |
 | `unread_corridors[].endpoints` | Two `[grid_x, grid_y, world_x, world_y, owner]` tuples in left/right or top/bottom order. Grid indices are zero-based, x right and y down; world coordinates are cell centres, y up. Owner codes are 0 for neither A/B reaching half alpha, 1 for A only, 2 for B only and 3 for both; no owner is inferred. |
-| `unread_corridors[].cells` | Interior world-centre `[x, y]` tuples in run order, excluding endpoints. On a corridor whose endpoint owner is ambiguous (`0` or `3`) at setup, cells within T of the parts' recomposite (`dRecomposite <= T`) are left out of the unread population; the remaining interior cells are reported without a rear-colour or endpoint-contrast filter; intersections may repeat across corridors. |
-| `unread_corridors[].cell_count` | The number of reported interior cells in that corridor (at setup, leaving out cells within T of the recomposite), exactly `cells.length`. |
+| `unread_corridors[].cells` | Interior world-centre `[x, y]` tuples in run order, excluding endpoints, capped at 64 evenly spaced entries (`floor(j · cell_count / 64)`, `j = 0 … 63`, when `cell_count > 64`; all `cell_count` entries when `cell_count <= 64`). On a corridor whose endpoint owner is ambiguous (`0` or `3`) at setup, cells within T of the parts' recomposite (`dRecomposite <= T`) are left out of the unread population; the remaining interior cells are reported without a rear-colour or endpoint-contrast filter; intersections may repeat across corridors. |
+| `unread_corridors[].cell_count` | The corridor's full count of unread interior cells (at setup, leaving out cells within T of the recomposite), equal to `cells.length + (cells_omitted ?? 0)`. |
+| `unread_corridors[].cells_omitted` | Optional positive integer, present only when `cell_count > 64`: the unread interior cells left out of `cells` (`cell_count - cells.length`). |
 | `unread_corridors[].row_scope` | `pair`. |
 | `unread_corridors[].row_kind` | `evidence`. |
 | `unread_corridors[].row_subjects` | The two selected part names in producer A/B order. |

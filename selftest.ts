@@ -66,6 +66,7 @@ import { runPlateChecks } from './tools/check_plate.ts';
 import { runEditorReceiptChecks } from './tools/check_editor_receipts.ts';
 import { runEditedPartChecks, runEditedReferenceCwdChecks } from './tools/check_edited_parts.ts';
 import { runExternalReceiptChecks } from './tools/check_external_receipt.ts';
+import { runBustLandmarkChecks } from './tools/check_bust_landmarks.ts';
 import { runEditedPartWriterChecks } from './tools/check_edited_part_writer.ts';
 import { runPartSourceChecks } from './tools/check_part_sources.ts';
 import { runReadmePolicyChecks } from './scripts/readme_policy.ts';
@@ -12765,6 +12766,9 @@ function runProposeSuite(): number {
       conflictingCli.status === 2 && !existsSync(join(bustDir, 'conflict')),
       `malformed ${malformedCli.status}; conflicting ${conflictingCli.status}`,
       'the file is a declared input, so unreadable JSON has a named refusal before output');
+    let landmarkIndex = 0;
+    runBustLandmarkChecks(join(dir, 'bust-landmarks'), (name, pass, detail) => say(`LMK${String(++landmarkIndex).padStart(2, '0')}_${name}`, pass, detail,
+      'issue #1382: a synthetic chest-landmarks act over the propose fixture, through the shipped command and propose --bust-landmarks unchanged'));
 
     const asymmetricBust = propose(bustSet, undefined, null, DEFAULT_GRID_RULE, null, true, {
       landmarks: { apex_r: [70, 115], apex_l: [125, 135] },

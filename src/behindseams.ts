@@ -3,8 +3,8 @@ import { createHash } from 'node:crypto';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { Plate } from '@rig-c/core/plate';
 import type { AttachmentRest, Frame } from '@rig-c/core/render-shared';
-import { seamGridOf, seamsOf, setupCellReader, type SeamCell, type SeamGrid } from '@rig-c/core/seam';
-import { DRAWN_ALPHA } from '@rig-c/core/passthrough';
+import { carry, seamGridOf, seamsOf, setupCellReader, type SeamCell, type SeamGrid } from '@rig-c/core/seam';
+import { DRAWN_ALPHA, drawnCells, drawsAt } from '@rig-c/core/passthrough';
 import { checkRow } from './checkrow.ts';
 import { seamSourceAttachment, type MotionSeamPair } from './check.ts';
 import type { Problem } from './errors.ts';
@@ -19,6 +19,9 @@ export const IDLE_STANDING_MOTION_READ_REASON = 'not applicable: motion_opened r
 export const IDLE_STANDING_NO_ORACLE_REASON = "idle standing is not measured: idle frames have no recomposite oracle, and the pair's idle reading is motion_opened";
 export const TURN_STANDING_MOTION_READ_REASON = IDLE_STANDING_MOTION_READ_REASON;
 export const TURN_STANDING_NO_ORACLE_REASON = "turn standing is not measured: turn poses have no recomposite oracle, and the pair's turn reading is motion_opened";
+/** Issue #1409: the marker on a pair, frame or turn row whose motion_opened is read from transported setup contact edges. */
+export const CONTACT_MOTION_SUPPORT = 'setup-contact';
+export const CONTACT_LIMITATIONS = '; contact-only pairs (no setup overlap band) read motion from transported setup contact edges, and a frame or pose with lower_bound_cells counts a lower bound';
 
 export interface BehindSeams {
   /** Opt in to the rig's declared ranges; never supplies or guesses a range. */
@@ -54,6 +57,8 @@ export interface BehindSeamsFramesInput {
   plantMeasureIdleStanding?: true;
   /** Issue #1412 plant only: measure standing on turn poses without an oracle; production never sets it. */
   plantMeasureTurnStanding?: true;
+  /** Issue #1409 plant only: withhold transported setup contact-edge support; production never sets it. */
+  plantNoContact?: true;
 }
 export interface BehindSeamsTurnPose {
   name: string;
@@ -80,8 +85,10 @@ export interface BehindSeamsTurnPair {
   sampled_poses: number;
   read_poses: number;
   unmeasured_poses: number;
-  motion_opened: { status: BehindSeamsCount['status']; max_px: number };
+  motion_opened: { status: BehindSeamsCount['status']; max_px: number; lower_bound_poses?: number };
   standing: { status: BehindSeamsCount['status']; reason?: string; max_px: number };
+  /** Issue #1409: present only when motion_opened is read from transported setup contact edges. */
+  motion_support?: typeof CONTACT_MOTION_SUPPORT;
 }
 export interface BehindSeamsTurnMeasured {
   status: BehindSeamsCount['status'];
@@ -110,6 +117,10 @@ export interface BehindSeamsCount {
   samples: BehindSeamsSample[];
   /** Issue #1403: present only when the list held more than {@link BEHIND_SAMPLE_CAP} rows; the rows left out. */
   samples_omitted?: number;
+  /** Issue #1409, contact-edge motion only: rear-visible cells inside a transported contact-edge sweep, drawn by neither
+   * member, that neither member's map carries back onto setup material of the pair. Present only when positive; px is
+   * then a lower bound. */
+  lower_bound_cells?: number;
 }
 export type BehindSeamsEndpoint = [grid_x: number, grid_y: number, world_x: number, world_y: number, owner: number];
 export interface BehindSeamsUnreadCorridor {
@@ -118,6 +129,8 @@ export interface BehindSeamsUnreadCorridor {
   endpoints: [BehindSeamsEndpoint, BehindSeamsEndpoint];
   cells: Array<[number, number]>;
   cell_count: number;
+  /** Issue #1406: present only when the corridor held more than {@link BEHIND_SAMPLE_CAP} cells; the cells left out. */
+  cells_omitted?: number;
 }
 export interface BehindSeamsStanding extends BehindSeamsCount {
   /** Present when standing is SKIP: at setup without --parts, or on every idle frame and turn pose. */
@@ -139,6 +152,8 @@ export interface BehindSeamsFrame {
   grid: SeamGrid | null;
   motion_opened: BehindSeamsCount;
   standing: BehindSeamsStanding;
+  /** Issue #1409: present only when this frame's motion_opened is read from transported setup contact edges. */
+  motion_support?: typeof CONTACT_MOTION_SUPPORT;
 }
 export interface BehindSeamsHit {
   index: number;
@@ -160,6 +175,8 @@ export interface BehindSeamsReading {
   max_run: { frames: number; seconds: number };
   max_spatial_run_cells: number;
   max_spatial_run_world: number;
+  /** Issue #1409, motion_opened of a contact-edge pair only: frames whose count is a lower bound; present only when positive. */
+  lower_bound_frames?: number;
 }
 export interface BehindSeamsPair {
   animation: 'idle';
@@ -176,6 +193,8 @@ export interface BehindSeamsPair {
   sampled_frames?: number;
   read_frames?: number;
   unmeasured_frames?: number;
+  /** Issue #1409: present only when motion_opened is read from transported setup contact edges. */
+  motion_support?: typeof CONTACT_MOTION_SUPPORT;
 }
 export interface BehindSeamsMeasured {
   status: 'PASS' | 'FAIL' | 'SKIP';
@@ -362,6 +381,112 @@ function overWhite(data: Uint8Array, q: number, c: number): number {
   return Math.round((data[q + c] * data[q + 3]) / 255 + 255 * (1 - data[q + 3] / 255));
 }
 
+type Point = [number, number];
+type ContactSupport = { cells: Set<number>; uncounted: Set<number> } | { hole: string } | null;
+
+/** The convex hull of `points`, counter-clockwise, collinear points dropped (core's own rule in its seam module). */
+function hullOf(points: Point[]): Point[] {
+  const sorted = [...points].sort((p, q) => p[0] - q[0] || p[1] - q[1]);
+  const turn = (o: Point, a: Point, b: Point): number => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const half = (list: Point[]): Point[] => {
+    const out: Point[] = [];
+    for (const p of list) {
+      while (out.length >= 2 && turn(out[out.length - 2], out[out.length - 1], p) <= 0) out.pop();
+      out.push(p);
+    }
+    return out;
+  };
+  if (sorted.length <= 1) return sorted;
+  return [...half(sorted).slice(0, -1), ...half([...sorted].reverse()).slice(0, -1)];
+}
+/** Whether (qx, qy) lies in the hull, boundary included; a two-point hull is its segment. */
+function inHull(h: readonly Point[], qx: number, qy: number): boolean {
+  if (h.length === 0) return false;
+  if (h.length === 1) return h[0][0] === qx && h[0][1] === qy;
+  if (h.length === 2) {
+    const [[x0, y0], [x1, y1]] = h;
+    if ((x1 - x0) * (qy - y0) - (qx - x0) * (y1 - y0) !== 0) return false;
+    return qx >= Math.min(x0, x1) && qx <= Math.max(x0, x1) && qy >= Math.min(y0, y1) && qy <= Math.max(y0, y1);
+  }
+  for (let i = 0; i < h.length; i++) {
+    const [x0, y0] = h[i], [x1, y1] = h[(i + 1) % h.length];
+    if ((x1 - x0) * (qy - y0) - (qx - x0) * (y1 - y0) < 0) return false;
+  }
+  return true;
+}
+
+/**
+ * Issue #1409: motion support for a pair whose two drawings share no cell at half opacity at setup (no overlap band).
+ * A setup contact edge is the shared edge between a cell only `a` draws and a cell only `b` draws at 128/255 or more
+ * (core's `drawnCells`). Each edge's two corners are carried to the frame through BOTH members' attachment maps (core's
+ * `carry`); the hull of the four images is that edge's sweep. A frame cell is support when its centre lies in a sweep,
+ * neither member draws it, and either member's map carries it back onto setup material of `a` or `b` (core's `drawsAt`,
+ * the same either-view rule as core's gap). A sweep cell drawn by neither and carried back by neither is `uncounted`:
+ * where it shows rear, the count is a lower bound. Null when there is no contact edge and no faint overlap; a named
+ * `hole` when a member draws more than one fragment, a clip cuts a member, or the members overlap only below 128/255.
+ */
+function contactSupport(api: BehindSeamsApi, pair: MotionSeamPair, setup: Frame, frame: Frame, input: BehindSeamsFramesInput, grid: SeamGrid, label: string): ContactSupport {
+  for (const [where, f] of [['at setup', setup], [`on ${label}`, frame]] as const) for (const slot of [pair.a, pair.b]) {
+    const n = f.pieces.filter(p => p.slot === slot).length;
+    if (n !== 1) return { hole: `setup contact support requires one drawn fragment per pair member: pair "${pair.pair}" member "${slot}" draws ${n} fragments ${where}; 1 is required; motion-opened is not measured` };
+  }
+  const piece = (f: Frame, slot: string) => f.pieces.find(p => p.slot === slot)!;
+  // A clipped piece's `world` is the clipper's cut, not its attachment's vertices, so the rest triangles cannot index it
+  // (core's stock seam refuses the same drawing by name). Checked here, not left to a refusal upstream.
+  for (const [where, f] of [['at setup', setup], [`on ${label}`, frame]] as const) for (const slot of [pair.a, pair.b]) {
+    const p = piece(f, slot);
+    if (p.kind === 'mesh' && p.source !== undefined) return { hole: `setup contact support requires unclipped pair members: pair "${pair.pair}" member "${slot}" is cut by a clip ${where}, so its drawing is no longer its attachment's and cannot be carried through its attachment map; motion-opened is not measured` };
+  }
+  const sa = piece(setup, pair.a), sb = piece(setup, pair.b), fa = piece(frame, pair.a), fb = piece(frame, pair.b);
+  const restOf = (slot: string) => {
+    const attachment = frame.attachments?.find(a => a.slot === slot)?.attachment;
+    return input.rest.find(r => r.slot === slot && r.attachment === attachment);
+  };
+  const ra = restOf(pair.a), rb = restOf(pair.b);
+  if (ra === undefined || rb === undefined || setup.attachments === undefined) return null;
+  const sg = seamGridOf({ a: pair.a, b: pair.b }, input.rest, { ...setup, attachments: setup.attachments }, input.pages);
+  if (sg === null) return null;
+  const page = (p: Frame['pieces'][number]): Plate => api.pageFor(input.pages, p);
+  const sv = sg.viewport, W = sv.width;
+  const dA = drawnCells(sa, page(sa), sv), dB = drawnCells(sb, page(sb), sv);
+  const own = (k: number): number => (dA[k] ? 1 : 0) | (dB[k] ? 2 : 0);
+  const X = (x: number): number => sv.minX + x * sg.cell, Y = (y: number): number => sv.maxY - y * sg.cell;
+  const edges: Array<[Point, Point]> = [];
+  for (let y = 0; y < sv.height; y++) for (let x = 0; x < W; x++) {
+    const k = y * W + x, o = own(k);
+    if (o !== 1 && o !== 2) continue;
+    if (x + 1 < W) { const q = own(k + 1); if ((q === 1 || q === 2) && q !== o) edges.push([[X(x + 1), Y(y)], [X(x + 1), Y(y + 1)]]); }
+    if (y + 1 < sv.height) { const q = own(k + W); if ((q === 1 || q === 2) && q !== o) edges.push([[X(x), Y(y + 1)], [X(x + 1), Y(y + 1)]]); }
+  }
+  if (edges.length === 0) {
+    const faintA = new Uint8Array(sv.width * sv.height), project = api.projector(sv);
+    api.rasterisePiece(page(sa), sa, project, sv, (x, y, _r, _g, _b, alpha) => { if (alpha > 0) faintA[y * W + x] = 1; });
+    let faint = 0;
+    api.rasterisePiece(page(sb), sb, project, sv, (x, y, _r, _g, _b, alpha) => { if (alpha > 0 && faintA[y * W + x] === 1) { faintA[y * W + x] = 2; faint++; } });
+    if (faint === 0) return null;
+    return { hole: `pair "${pair.pair}" has no overlap band and no setup contact edge: its members overlap only below ${DRAWN_ALPHA}/255 at setup (${faint} cell(s) drawn by both at positive alpha, none by both at ${DRAWN_ALPHA}/255 or more, and no cell drawn by one member alone borders a cell drawn by the other alone); motion-opened is not measured` };
+  }
+  const sweeps: Point[][] = [];
+  for (const [p, q] of edges) {
+    const images = [carry(ra.triangles, ra.vertices, fa.world, -1, p[0], p[1]), carry(ra.triangles, ra.vertices, fa.world, -1, q[0], q[1]),
+      carry(rb.triangles, rb.vertices, fb.world, -1, p[0], p[1]), carry(rb.triangles, rb.vertices, fb.world, -1, q[0], q[1])];
+    if (images.some(v => v === null)) return { hole: `pair "${pair.pair}": a setup contact edge cannot be carried to ${label} because every triangle of a member has collapsed; motion-opened is not measured` };
+    sweeps.push(hullOf(images as Point[]));
+  }
+  const { viewport: v, cell } = grid, cells = new Set<number>(), uncounted = new Set<number>();
+  const nowA = drawnCells(fa, page(fa), v), nowB = drawnCells(fb, page(fb), v);
+  const material = (at: Point | null): boolean => at !== null && (drawsAt(sa, page(sa), at[0], at[1], cell) || drawsAt(sb, page(sb), at[0], at[1], cell));
+  for (let y = 0; y < v.height; y++) for (let x = 0; x < v.width; x++) {
+    const k = y * v.width + x;
+    if (nowA[k] || nowB[k]) continue;
+    const qx = v.minX + (x + 0.5) * cell, qy = v.maxY - (y + 0.5) * cell;
+    if (!sweeps.some(h => inHull(h, qx, qy))) continue;
+    if (material(carry(ra.triangles, fa.world, ra.vertices, -1, qx, qy)) || material(carry(rb.triangles, fb.world, rb.vertices, -1, qx, qy))) cells.add(k);
+    else uncounted.add(k);
+  }
+  return { cells, uncounted };
+}
+
 function readBehindFrame(api: BehindSeamsApi, input: BehindSeamsFramesInput, pair: MotionSeamPair, frame: Frame, setup: boolean,
   stock: BehindSeamsStockPair | undefined, threshold: number, allowance: number, unread: (frame: string, reason: string) => void,
   cache: Map<Frame, Map<string, RasterCache>>, pose?: BehindSeamsTurnPose): BehindSeamsFrame {
@@ -456,8 +581,10 @@ function readBehindFrame(api: BehindSeamsApi, input: BehindSeamsFramesInput, pai
               unreadCells.add(at); cells.push(centre(grid, at));
             }
             if (cells.length === 0) continue;
+            const kept = evenlySpaced(cells.length, input.sampleCap ?? BEHIND_SAMPLE_CAP).map(i => cells[i]);
             unreadCorridors.push({ ...checkRow('BEHIND_PART_SEAMS.unread_corridors', 'pair', false, [pair.a, pair.b]),
-              axis: step === 1 ? 'horizontal' : 'vertical', endpoints: [endpoint(left, a), endpoint(right, b)], cells, cell_count: cells.length });
+              axis: step === 1 ? 'horizontal' : 'vertical', endpoints: [endpoint(left, a), endpoint(right, b)], cells: kept, cell_count: cells.length,
+              ...(cells.length > kept.length ? { cells_omitted: cells.length - kept.length } : {}) });
             continue;
           }
           if (a === b) continue;
@@ -478,8 +605,19 @@ function readBehindFrame(api: BehindSeamsApi, input: BehindSeamsFramesInput, pai
     }
     let motionReadable = setup;
     const motionCells = new Map<number, SeamCell>();
+    let lowerBound = new Set<number>(), contactRead = false;
     if (!setup) {
-      if (stock === undefined || stock.frames !== input.idle.length || stock.drawn !== stock.frames || stock.banded !== stock.frames) unread(label, `stock transported setup-overlap support is unavailable on every ${pose === undefined ? 'idle frame' : 'named turn pose'}; motion-opened is not measured`);
+      const complete = stock !== undefined && stock.frames === input.idle.length && stock.drawn === stock.frames;
+      const contact = complete && stock.banded === 0 && input.setup !== null && input.plantNoContact !== true
+        ? contactSupport(api, pair, input.setup, frame, input, grid, label) : null;
+      if (contact !== null && 'hole' in contact) unread(label, contact.hole);
+      else if (contact !== null) {
+        // Like stock gapCovered: support cells have positive rendered alpha from some drawing.
+        motionReadable = true;
+        contactRead = true;
+        for (const k of contact.cells) if (rasters.full.data[k * 4 + 3] !== 0) { const [x, y] = centre(grid, k); motionCells.set(k, { x, y, setupTop: null, setupUnder: null }); }
+        lowerBound = contact.uncounted;
+      } else if (!complete || stock.banded !== stock.frames) unread(label, `stock transported setup-overlap support is unavailable on every ${pose === undefined ? 'idle frame' : 'named turn pose'}; motion-opened is not measured`);
       else {
         motionReadable = true;
         const hits = stock.gapCovered.filter(h => h.index === frame.index);
@@ -497,7 +635,7 @@ function readBehindFrame(api: BehindSeamsApi, input: BehindSeamsFramesInput, pai
         }
       }
     }
-    const targets = new Set([...corridors.keys(), ...motionCells.keys()]);
+    const targets = new Set([...corridors.keys(), ...motionCells.keys(), ...lowerBound]);
     const rear = material(n), weights = new Map<number, Map<string, number>>();
     const surviving = new Set<number>(), underflow = new Set<number>();
     for (const piece of frame.pieces) api.rasterisePiece(api.pageFor(input.pages, piece), piece, project, viewport, (x, y, r, g, b, alpha) => {
@@ -574,6 +712,8 @@ function readBehindFrame(api: BehindSeamsApi, input: BehindSeamsFramesInput, pai
       if (rear.alpha[k] <= 0 || underflow.has(k)) { motionReadable = false; unread(label, 'positive symbolic rear contribution underflowed its numeric colour weight'); continue; }
       motionHits.add(k);
     }
+    let uncounted = 0;
+    for (const k of lowerBound) if (rasters.hidden.data[k * 4 + 3] === 0 && rasters.full.data[k * 4 + 3] !== 0 && surviving.has(k) && rear.alpha[k] > 0) uncounted++;
     // Motion-opened rows carry no distance; keep evenly spaced rows, built only for what is kept.
     const hitCells = [...motionHits];
     row.motion_opened.samples = evenlySpaced(hitCells.length, cap).map(i => sample(hitCells[i], null, true));
@@ -582,6 +722,8 @@ function readBehindFrame(api: BehindSeamsApi, input: BehindSeamsFramesInput, pai
     row.motion_opened.geometric_px = motionHits.size; row.motion_opened.raw_px = motionHits.size;
     counted(row.motion_opened, motionHits, grid, allowance);
     if (!motionReadable) row.motion_opened.status = 'SKIP';
+    if (contactRead && motionReadable && uncounted > 0) row.motion_opened.lower_bound_cells = uncounted;
+    if (contactRead && motionReadable) row.motion_support = CONTACT_MOTION_SUPPORT;
     if (isIdle && !plantIdleStanding) {
       row.standing = {
         ...emptyCount('SKIP'),
@@ -673,6 +815,9 @@ export function measureBehindSeamFrames(api: BehindSeamsApi, input: BehindSeamsF
     const parts: [string, string] = [pair.a, pair.b];
     const motion = reading(frames, 'motion_opened', input.fps, allowance, parts);
     if ((setup === null || setup.motion_opened.status === 'SKIP') && motion.status !== 'FAIL') motion.status = 'SKIP';
+    const contactRead = frames.some(f => f.motion_support !== undefined);
+    const lowerBoundFrames = frames.filter(f => f.motion_opened.lower_bound_cells !== undefined).length;
+    if (lowerBoundFrames > 0) motion.lower_bound_frames = lowerBoundFrames;
     const idleStandingReason = motion.status !== 'SKIP' ? IDLE_STANDING_MOTION_READ_REASON : IDLE_STANDING_NO_ORACLE_REASON;
     const rawStanding = reading(frames, 'standing', input.fps, allowance, parts);
     const standing: BehindSeamsReading = input.plantMeasureIdleStanding === true
@@ -691,8 +836,10 @@ export function measureBehindSeamFrames(api: BehindSeamsApi, input: BehindSeamsF
     const readFrames = frames.filter(f => f.motion_opened.status !== 'SKIP' &&
       !line.unmeasured.some(u => u.pair === pair.pair && u.frame === `idle frame ${f.index}`)).length;
     line.pairs.push({ ...checkRow('BEHIND_PART_SEAMS.pairs', 'pair', failed, parts), animation: 'idle', pair: pair.pair, parts, declared: [...pair.declared], threshold, allowance, setup, frames, motion_opened: motion, standing,
-      sampled_frames: input.idle.length, read_frames: readFrames, unmeasured_frames: input.idle.length - readFrames });
+      sampled_frames: input.idle.length, read_frames: readFrames, unmeasured_frames: input.idle.length - readFrames,
+      ...(contactRead ? { motion_support: CONTACT_MOTION_SUPPORT } : {}) });
   }
+  if (line.pairs.some(p => p.motion_support !== undefined)) line.limitations += CONTACT_LIMITATIONS;
   line.status = problems.length > start ? 'FAIL' : line.pairs.length === 0 || line.pairs.some(p => p.threshold === null || p.setup === null || p.setup.standing.status === 'SKIP' || p.motion_opened.status === 'SKIP') ? 'SKIP' : 'PASS';
   if (declared.turn === true) {
     line.turn = measureBehindTurnFrames(api, input, declared, problems);
@@ -760,11 +907,14 @@ function measureBehindTurnFrames(api: BehindSeamsApi, input: BehindSeamsFramesIn
     // Both clauses overlap on purpose, as in idle readFrames: every path leaving motion_opened SKIP also records turn.unmeasured[].
     const read = rows.filter(row => row.motion_opened.status !== 'SKIP' &&
       !result.unmeasured.some(u => u.pair === pair.pair && u.frame === `turn ${row.pose}`)).length;
-    const aggregate = (kind: 'motion_opened' | 'standing'): { status: BehindSeamsCount['status']; max_px: number } => ({
+    const aggregate = (kind: 'motion_opened' | 'standing'): { status: BehindSeamsCount['status']; max_px: number; lower_bound_poses?: number } => ({
       status: rows.some(r => r[kind].status === 'FAIL') ? 'FAIL' : complete && rows.length === turn.poses.length && rows.every(r => r[kind].status === 'PASS') ? 'PASS' : 'SKIP',
       max_px: Math.max(0, ...rows.map(r => r[kind].px)),
     });
     const motion = aggregate('motion_opened');
+    const lowerBoundPoses = rows.filter(r => r.motion_opened.lower_bound_cells !== undefined).length;
+    if (lowerBoundPoses > 0) motion.lower_bound_poses = lowerBoundPoses;
+    const turnContactRead = rows.some(r => r.motion_support !== undefined);
     const turnStandingReason = motion.status !== 'SKIP' ? TURN_STANDING_MOTION_READ_REASON : TURN_STANDING_NO_ORACLE_REASON;
     const rawStanding = aggregate('standing');
     const standing: BehindSeamsTurnPair['standing'] = input.plantMeasureTurnStanding === true
@@ -772,8 +922,9 @@ function measureBehindTurnFrames(api: BehindSeamsApi, input: BehindSeamsFramesIn
       : { status: 'SKIP', reason: turnStandingReason, max_px: 0 };
     result.pairs.push({ ...checkRow('BEHIND_PART_SEAMS.turn.pairs', 'pair', motion.status === 'FAIL' || standing.status === 'FAIL' || threshold !== null && read !== turn.poses.length, parts),
       pair: pair.pair, parts, threshold, allowance, frames: rows, sampled_poses: turn.poses.length, read_poses: read, unmeasured_poses: turn.poses.length - read,
-      motion_opened: motion, standing });
+      motion_opened: motion, standing, ...(turnContactRead ? { motion_support: CONTACT_MOTION_SUPPORT } : {}) });
   }
+  if (result.pairs.some(p => p.motion_support !== undefined)) result.limitations += CONTACT_LIMITATIONS;
   if (input.pairs.length === 0) unread(null, 'turn selection', 'no selected seam pair; turn boundary population is unavailable', required);
   result.status = result.pairs.some(p => p.motion_opened.status === 'FAIL' || p.standing.status === 'FAIL') || mandatoryUnread ? 'FAIL'
     : result.pairs.length === 0 || result.pairs.some(p => p.motion_opened.status === 'SKIP') ? 'SKIP' : 'PASS';
@@ -1037,14 +1188,16 @@ export function behindSeamLines(line: BehindSeamsMeasured | null): string[] {
         if (r.reason !== undefined) {
           return `${BEHIND_SEAM_LINE}: pair "${p.pair}" ${kind} ${r.status} — ${r.reason}; threshold ${p.threshold === null ? 'undeclared' : p.threshold}, allowance ${p.allowance}`;
         }
-        return `${BEHIND_SEAM_LINE}: pair "${p.pair}" ${kind} ${r.status} — ${r.hit_frames}/${p.frames.length} idle hit frames, sampled/read/unmeasured ${p.sampled_frames ?? p.frames.length}/${p.read_frames ?? 0}/${p.unmeasured_frames ?? 0}, max_px ${r.max_px}, max_run ${r.max_run.frames} frames (${r.max_run.seconds} s), max_spatial_run_cells ${r.max_spatial_run_cells} (${r.max_spatial_run_world} world units), earliest worst ${w === null ? 'none' : `frame ${w.index} t ${w.time}, cell ${w.cell}, box [${w.box.join(', ')}]`}; threshold ${p.threshold === null ? 'undeclared' : p.threshold}, allowance ${p.allowance}`;
+        const support = kind === 'motion_opened' && p.motion_support !== undefined
+          ? `; support ${p.motion_support}${r.lower_bound_frames === undefined ? '' : `, lower bound on ${r.lower_bound_frames} frame(s)`}` : '';
+        return `${BEHIND_SEAM_LINE}: pair "${p.pair}" ${kind} ${r.status} — ${r.hit_frames}/${p.frames.length} idle hit frames, sampled/read/unmeasured ${p.sampled_frames ?? p.frames.length}/${p.read_frames ?? 0}/${p.unmeasured_frames ?? 0}, max_px ${r.max_px}, max_run ${r.max_run.frames} frames (${r.max_run.seconds} s), max_spatial_run_cells ${r.max_spatial_run_cells} (${r.max_spatial_run_world} world units), earliest worst ${w === null ? 'none' : `frame ${w.index} t ${w.time}, cell ${w.cell}, box [${w.box.join(', ')}]`}; threshold ${p.threshold === null ? 'undeclared' : p.threshold}, allowance ${p.allowance}${support}`;
       };
       const setupStanding = setup === null ? '' : setup.standing.reason !== undefined ? `${setup.standing.status} (${setup.standing.reason}), ${setup.standing.px} cells` : setup.standing.px > 0 && setup.standing.status === 'SKIP' ? `${setup.standing.px} cells` : `${setup.standing.status}, ${setup.standing.px} cells`;
       return [summary('motion_opened'), summary('standing'), `${BEHIND_SEAM_LINE}: pair "${p.pair}" setup ${setup === null ? 'SKIP — HOLE: setup not read' : `standing ${setupStanding}; motion_opened ${setup.motion_opened.status}, ${setup.motion_opened.px} cells; behind [${setup.behind_slots.join(', ')}]`}`];
     }),
     ...(line.turn === undefined ? [] : [
       `${BEHIND_SEAM_LINE}: turn ${line.turn.status} — ${line.turn.poses.length} preselected endpoint/corner pose(s); ${line.turn.limitations}`,
-      ...line.turn.pairs.flatMap(p => p.frames.map(f => `${BEHIND_SEAM_LINE}: pair "${p.pair}" turn ${f.pose} — motion_opened ${f.motion_opened.status}, ${f.motion_opened.px} cells; standing ${f.standing.reason !== undefined ? `${f.standing.status} (${f.standing.reason})` : f.standing.status}, ${f.standing.px} cells; threshold ${p.threshold}, allowance ${p.allowance}`)),
+      ...line.turn.pairs.flatMap(p => p.frames.map(f => `${BEHIND_SEAM_LINE}: pair "${p.pair}" turn ${f.pose} — motion_opened ${f.motion_opened.status}, ${f.motion_opened.px} cells${f.motion_support === undefined ? '' : ` (support ${f.motion_support}${f.motion_opened.lower_bound_cells === undefined ? '' : `, lower bound: ${f.motion_opened.lower_bound_cells} uncounted`})`}; standing ${f.standing.reason !== undefined ? `${f.standing.status} (${f.standing.reason})` : f.standing.status}, ${f.standing.px} cells; threshold ${p.threshold}, allowance ${p.allowance}`)),
       ...line.turn.unmeasured.map(u => `${BEHIND_SEAM_LINE}: ${u.pair === null ? 'rig' : `pair "${u.pair}"`} ${u.frame} SKIP — ${u.reason}`),
     ]),
     ...line.unmeasured.map(u => {

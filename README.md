@@ -333,6 +333,7 @@ Command details and config saving are in the [command reference](docs/AUTHORING.
 | `edited-part` | [Record an edited part receipt](docs/AUTHORING.md#edited-rig-space-parts-assembleedited_parts-issue-1278) |
 | `external-receipt` | [Record or verify an external mask](docs/AUTHORING.md#external-mask-receipt) |
 | `propose` | [Draft or inspect a character config](docs/AUTHORING.md#command-reference) |
+| `bust-landmarks` | [Write the chest landmarks file from a review act](docs/AUTHORING.md#drafting-the-chest-carrier) |
 | `compare` | [Compare two skeletons by name](docs/AUTHORING.md#command-reference) |
 | `rig` | [Author gated rig and motion specs](docs/AUTHORING.md#command-reference) |
 | `check` | [Build, render and measure a rig](docs/AUTHORING.md#command-reference) |

@@ -240,7 +240,9 @@ The proposal writes `contour.bust` and `boob_r` / `boob_l` under `chest`. When
 `propose --write-config` redrafts the chest carrier, it keeps the `contour.bust`
 shape fields (`alpha`, `clearance`, `bone_r`, `bone_l`, `spacing`) that the config
 being rewritten already declares for that same part, in the shorthand's key order
-after the new `apex_r`, `apex_l` and `cleavage` (issue #1428).
+after the new `apex_r`, `apex_l` and `cleavage` (issue #1428). A pending shape in
+the landmarks file's record (below, issue #1382) is written the same way, and takes
+the place of any declared value for its fields.
 
 A chest-holding torso with neither landmarks nor an explicit omission reason is
 refused with `PROPOSE_BUST_INPUT` before any proposal is written. `--no-bust "rigid breastplate"` omits the bust and records the
@@ -251,6 +253,128 @@ trunk. Ambiguous art ownership is refused by name. A named dress whose topwear a
 covers the chest also takes this contour rule, keeping its recipe's segments. A
 recipe that explicitly declares `influence` for that torso conflicts with the contour
 mode and is refused, naming the field to remove or the cloth part to separate.
+
+**Where the points come from (issue #1382).** The person places them in review,
+on a drafted rig, and the act review emits carries them. The order is:
+
+1. Draft without the chest: `propose … --no-bust "<reason>"`, or with a
+   hand-written landmarks file as above. Either way the chest carrier is drafted
+   as a contour, which the review chest editor needs.
+2. Build the draft and let the person place or correct apex_r, apex_l and
+   cleavage in review's chest editor. Their Request changes is a
+   `rig-review/act@9` act with a `value.chestLandmarks` row.
+3. `rig-parts bust-landmarks --from-act <act.json> --parts <dir> --config <config.json> --out <landmarks.json>`
+   writes the landmarks file from that row. It writes
+   `<landmarks.json>.provenance.json` beside it. When the person changed a
+   shape field (`alpha`, `clearance`, `bone_r`, `bone_l`, `spacing`) and the
+   config already declares `contour.bust`, add `--write-config`: it takes the
+   act's five values into that `contour.bust` and then writes the landmarks
+   file. When the config declares no `contour.bust` yet (the first draft), the
+   changed fields are recorded as a **pending** shape in the record, and the
+   command prints the one that applies them.
+4. Redraft with `propose … --write-config <config.json> --bust-landmarks <landmarks.json>`.
+   It writes `contour.bust` with the three points, and with a pending shape it
+   writes those fields too, in the same staged write, and marks the record
+   applied. The redraft keeps the config's declared shape fields (#1428).
+   Without `--write-config`, `propose` drafts the points alone and refuses a
+   record with a pending shape, which only a config write keeps.
+
+The hand-written file stays the fallback when no review act exists.
+`bust-landmarks` reads the act's JSON itself. It reads `schema`, `actId` and the
+rows of `value.chestLandmarks`. From each row it reads `edit.slot`, `edit.skin`,
+`edit.attachment`, `edit.basis`, `edit.source.hash`, `edit.source.frame`,
+`edit.bust` and `sha256`. It refuses by name:
+
+- an act that is not readable JSON, has another `schema`, or has no chest row (`BUST_LANDMARKS_ACT`);
+- a row that is malformed for what it reads (`BUST_LANDMARKS_ROW`). That covers a
+  point that is not two finite numbers, a missing apex, a `basis` other than
+  `"setup"`, a `sha256` or `source.hash` that is not 64 lowercase hex digits, a
+  `sha256` that is not the digest of the row's `edit`, a missing frame, and a
+  `bust` field `contour.bust` does not have;
+- a slot that is not a part of `parts.json`, or whose `config.meshes` entry is
+  not a contour mesh, an attachment other than the slot (an explicit mesh's
+  island slot), or a skin other than `default` (`BUST_LANDMARKS_SLOT`);
+- two rows for one part (`BUST_LANDMARKS_PART_ROWS`), or rows for more than one
+  part (`BUST_LANDMARKS_ROWS`). `propose` drafts one chest carrier, and the
+  landmarks file names no part;
+- an `edit.source.frame` other than `parts.json`'s `rig_size`, the frame the
+  points are rig px in (`BUST_LANDMARKS_FRAME`);
+- an `alpha`, `clearance`, `spacing`, `bone_r` or `bone_l` that differs from the
+  config's `meshes.<part>.contour.bust` after defaults (`BUST_LANDMARKS_SHAPE`).
+  The landmarks file carries none of the five, so a different value would be
+  dropped. A config with no `contour.bust` yet, the first draft made with
+  `--no-bust`, compares against the defaults (alpha 0.22, clearance 3.8,
+  spacing 14, bones `boob_r` and `boob_l`). Those are the values `propose`
+  drafts `contour.bust` with from the three points, so a first correction that
+  keeps the defaults passes. The redraft keeps the config's declared shape
+  fields (#1428). With `--write-config` and a declared `contour.bust`, a
+  difference is written rather than refused (below). With no `contour.bust`, a
+  difference is not refused either: it is left pending in the record (below),
+  because the five fields alone do not make a `contour.bust`, which needs
+  `apex_r`, `apex_l` and `cleavage`, and no point is made up to build one;
+- an `--out`, or its provenance record, inside the parts directory, over the act,
+  the config or `parts.json` by path or as a hard link (the same device and inode,
+  compared when the output exists), over a directory, or over an existing file
+  that is not writable (`BUST_LANDMARKS_OUT`).
+
+`--write-config` updates the `--config` file in place through the same staged
+writer `propose --write-config` uses, and prints its change lines to stderr. After
+the run the config's five effective values equal the act's: a field the act
+spells out is written as the act gives it, and a field the act omits is removed
+from `contour.bust`, so it reads as the default. Only fields whose effective
+values differ are touched. When none differs, the config's bytes are not
+touched and the change line reads `unchanged`. The candidate config passes the
+full config loader before anything is written.
+
+Every problem is collected and printed at once, and nothing is written on a
+refusal. The two outputs are written to temporary siblings and renamed into
+place only once both are staged. With `--write-config` the config is staged
+first and committed last, the order `propose --write-config` uses. A failure
+removes the temporaries and leaves the earlier files as they were.
+
+The provenance record (spec `rig-parts-bust-landmarks-provenance/1`)
+holds, in this order: `act` (`schema`, `act_id`, and `file_sha256`, the sha256
+of the act file's bytes), `row_sha256`, `slot`, `source` (`hash`, and `frame` as
+`width` and `height`), and `landmarks_sha256`, the sha256 of the landmarks file
+written beside it. It has no clock, so the same act writes the same bytes. The
+record sits beside the landmarks file because `propose --bust-landmarks` refuses
+any key but the three points.
+
+A **pending** shape is the record's last key, `shape`, present only when the
+config declared no `contour.bust` and the act's shape differs from the defaults:
+`{"status": "pending", "fields": {…}}`, the act's fields whose value differs from
+the default, in the shorthand's key order (`alpha`, `clearance`, `bone_r`,
+`bone_l`, `spacing`). An all-default act writes no `shape`, so its record is the
+same bytes as before. `propose --bust-landmarks <file>` reads `<file>.provenance.json`
+when it is there; with none it reads the landmarks file as before. A record there
+must be well formed (`PROPOSE_BUST_SIDECAR`), its `landmarks_sha256` must be the
+landmarks file's own digest (`PROPOSE_BUST_SIDECAR_DIGEST`), and its `slot` must
+be the chest carrier the draft makes (`PROPOSE_BUST_SIDECAR_PART`). A pending
+shape needs `--write-config` into an existing config, not `--cloth` or
+`--only-missing` (`PROPOSE_BUST_PENDING`). With it, `propose` writes the fields
+after the three points in the config write it stages, and rewrites the record with
+`"status": "applied"`. The record is staged after the config, renamed in before
+the config's commit, and put back if that commit fails, so both change or
+neither. An applied record writes nothing more: a hand edit of the shape after
+that is kept by every later redraft (#1428).
+
+The row's `sha256` is recomputed and a mismatch is
+refused as `BUST_LANDMARKS_ROW` on `value.chestLandmarks[i].sha256`: it must be
+the sha256 (lowercase hex) of `JSON.stringify` of the row's `edit`, with object
+keys sorted recursively and array order kept. That rule is a copy of review's
+request digest, so the contract is held in two places. Parts does not check a
+config hash: the act carries none.
+
+| rule | means | change |
+| --- | --- | --- |
+| <a id="BUST_LANDMARKS_ACT"></a>`BUST_LANDMARKS_ACT` | the `--from-act` file is unreadable, is not JSON, is not a `rig-review/act@9` act, has no `actId`, or has no `value.chestLandmarks` row | pass the chest-landmarks act review emitted, unchanged |
+| <a id="BUST_LANDMARKS_ROW"></a>`BUST_LANDMARKS_ROW` | a `value.chestLandmarks[i]` field the command reads is missing or malformed: a point, `basis`, `sha256` (or a `sha256` that is not the digest of the row's `edit`), `source.hash`, `source.frame`, a shape field, or an unknown `bust` field | re-emit the act from review, unedited; the named field is the one to fix |
+| <a id="BUST_LANDMARKS_SLOT"></a>`BUST_LANDMARKS_SLOT` | the row's slot is not a part of `parts.json` or not a contour mesh in `config.meshes`, its attachment is not the slot, or its skin is not `default` | place the points on the chest carrier's own slot; pass the `--parts` and `--config` the reviewed rig was built from |
+| <a id="BUST_LANDMARKS_PART_ROWS"></a>`BUST_LANDMARKS_PART_ROWS` | the act has more than one row for one part | keep one chest-landmarks row for the part in review |
+| <a id="BUST_LANDMARKS_ROWS"></a>`BUST_LANDMARKS_ROWS` | the act has rows for more than one part; `propose` drafts one chest carrier | keep the row for the chest carrier only |
+| <a id="BUST_LANDMARKS_FRAME"></a>`BUST_LANDMARKS_FRAME` | the row's `edit.source.frame` is not `parts.json`'s `rig_size` | pass the `--parts` directory of the rig the act was made on |
+| <a id="BUST_LANDMARKS_SHAPE"></a>`BUST_LANDMARKS_SHAPE` | the row's `alpha`, `clearance`, `spacing`, `bone_r` or `bone_l` differs from the config's declared `meshes.<part>.contour.bust` after defaults (with no `contour.bust`, a difference is recorded pending instead) | run again with `--write-config` to take the act's value into the config, or put the config's value back in review and emit the act again |
+| <a id="BUST_LANDMARKS_OUT"></a>`BUST_LANDMARKS_OUT` | `--out` or `<out>.provenance.json` lies inside `--parts`, is the act, the config or `parts.json` (by path or as a hard link), is a directory or a read-only file, or cannot be staged or replaced | choose a path outside the parts directory that is no input, in an existing writable directory; remove a leftover `.<name>.rig-parts.tmp` the detail names |
 
 Drafted torso bytes change from lattice (or a figure trunk's region) to contour.
 Non-torso meshes retain their modes. A contour torso whose segments name a chain
@@ -3747,6 +3871,10 @@ world units. Other proposal modes (`--keypoints`, `--compare`, `--grid-rule`,
 | --- | --- | --- |
 | <a id="PROPOSE_TORSO_ISLAND_LEFT_OUT"></a>`PROPOSE_TORSO_ISLAND_LEFT_OUT` | WARN: a non-dust island smaller than one drafted sampling cell is omitted; names its art px and rig-pixel box | inspect the omitted art; separate it if it needs its own mesh; `contour.stray` records the largest omitted island |
 | <a id="PROPOSE_TORSO_ISLANDS"></a>`PROPOSE_TORSO_ISLANDS` | the chest carrier has no art, equal-largest island ties, or a non-dust extra island with an art-pixel count greater than or equal to the drafted `contour.spacing` squared; the detail includes the threshold | supply art with one uniquely largest island; separate non-dust extra pieces at or above the threshold; dust keeps its existing rule, and smaller non-dust islands are omitted with `PROPOSE_TORSO_ISLAND_LEFT_OUT` |
+| <a id="PROPOSE_BUST_SIDECAR"></a>`PROPOSE_BUST_SIDECAR` | the `<landmarks>.provenance.json` beside `--bust-landmarks` cannot be read, is not JSON, or is not a well-formed `rig-parts-bust-landmarks-provenance/1` record (an unknown key, or a malformed `act`, digest, `slot`, `source` or `shape`) | write the landmarks file and its record again with `bust-landmarks`, or remove the record to use a hand-written landmarks file |
+| <a id="PROPOSE_BUST_SIDECAR_DIGEST"></a>`PROPOSE_BUST_SIDECAR_DIGEST` | the record's `landmarks_sha256` is not the sha256 of the landmarks file beside it: the file was edited after `bust-landmarks` wrote it | write both again with `bust-landmarks` from the act; to use edited points, remove the record (a hand-written file has none) |
+| <a id="PROPOSE_BUST_SIDECAR_PART"></a>`PROPOSE_BUST_SIDECAR_PART` | the record's `slot` is not the chest carrier this draft makes | redraft the parts the act was made on, or place the points on the chest carrier in review |
+| <a id="PROPOSE_BUST_PENDING"></a>`PROPOSE_BUST_PENDING` | the record holds a pending shape and `propose` would not write it: no `--write-config`, or `--cloth` or `--only-missing` | run `propose … --write-config <config.json> --bust-landmarks <landmarks.json>` into the existing config |
 | <a id="PROPOSE_BUST_INPUT"></a>`PROPOSE_BUST_INPUT` | a chest torso has neither a bust declaration nor an omission reason, a bust landmark is missing, malformed or unknown, the omission reason is blank or conflicts with landmarks, the midline has no unique crossing inside the apex segment, or the chest carrier is absent or ambiguous, or its recipe declares an incompatible influence mode | give finite rig-pixel apex_r/apex_l and optional cleavage, or a non-blank omission reason; separate overlapping chest-holding topwear |
 | <a id="PROPOSE_NECK_BODY_TURN"></a>`PROPOSE_NECK_BODY_TURN` | no authored sampled body turn | follow this recipe and supply the named input; the refusal writes no config |
 | <a id="PROPOSE_NECK_PLAN"></a>`PROPOSE_NECK_PLAN` | no unique neck plan row | follow this recipe and supply the named input; the refusal writes no config |
@@ -4506,6 +4634,7 @@ existing hardlinks are refused before artifact output; the ordinary mode names
 | `propose … --keypoints <file> [--person <id>]` | read a posed figure's joints from one explicit file (space, image size, people, each joint observed, occluded or missing, its source): a joint with a position places the neck, hip, chest or a sleeve chain as given, a note says how every joint was used or which rule stood in, and LINT reads the torso and sleeves along the joints instead of by screen y ([AUTHORING §3](AUTHORING.md)) |
 | `propose … --full <run> --head <run> --write-config <config>` | [draft an independent neck](AUTHORING.md#a-neck-that-moves-on-its-own) in an existing sampled body turn and reassemble its full-run source under `<out>/rig` |
 | `propose … --grid-rule figure\|part` | how each drafted lattice's spacing is chosen: `figure` (the default) one spacing for the figure, round(H / 37) rig px, a part already coarser keeping its own, with a note on its calibration and cost; `part` the reference's rule, a tenth of the part's short side (the oracle examples are proposed under it) |
+| `bust-landmarks --from-act <act.json> --parts <dir> --config <config.json> --out <landmarks.json> [--write-config]` | write the file `propose --bust-landmarks` reads from the one chest row of a review `rig-review/act@9` act, with `<out>.provenance.json` beside it; `--write-config` takes the act's shape fields into the config's `contour.bust` ([drafting the chest carrier](#drafting-the-chest-carrier)) |
 | `propose --parts --source --out --from-config <config> [--keypoints <file> [--person <id>]]` | draw and LINT the config's current bones (by the joints too, given `--keypoints`); proposes nothing, so takes only these flags (not `--full`, `--head`, `--cloth`, `--write-config`, `--wrist-snap`, `--grid-rule`, `--only-missing` or `--compare`) |
 | `compare --left <file> --right <file> [--map <bonemap.json>]` | compare two skeletons — a config, a proposal or a `rig.json` — bone by bone: origin, parent, tip, length and direction per pair, the bones neither side pairs, the required ones missing, and each side's roles read off the spec; no frame is guessed, and nothing pairs by resemblance (`propose --compare` reads origins only) |
 | `rig --config --parts --out [--idle-keys ctl\|direct]` | author `rig.json` + `motion.json` (plus `mesh_report.json` and `run.json`, `spec` `rig-run/1`), written only after rig-c's gate is green; each mesh is in the mode its config entry names — `grid` (the lattice, what `propose` writes), `contour` (the traced outline with declared interior points) or `auto` (the contour mesh at alpha 1 and above, reduced and locally refined by rig-c's `reduceMesh` under the author's declared bounds, written only when its motion against the unreduced source on the idle passes the author's `motion` bounds through rig-c's `compareMeshesInMotion`; [AUTHORING §3](AUTHORING.md)); every chain link is turned along its chain and carries its `length`, so a physics constraint added later has a lever, with every offset under it in the turned frame so nothing moves; `--idle-keys` says whether the idle's keys on mesh-driving bones go through `<bone>_ctl` parents (default) or stay on the bones with `invariants.idleDrivesMeshes` declared; the config's `constraints` go to rigc as written, and a two-bone ik over keyed links needs `--idle-keys direct` (on `rig` or `build`) |
@@ -6415,8 +6544,8 @@ outside the consumed inputs pending [#1177](https://github.com/rig-c/parts/issue
 | <a id="CHECK_SETUP_PAINTING_MEASURED"></a>`CHECK_SETUP_PAINTING_MEASURED` | missing native setup/ownership or unsupported clipping | supply observable textured setup geometry; an unavailable instrument never passes |
 | <a id="CHECK_BOUNDARY_COLOUR_STEP"></a>`CHECK_BOUNDARY_COLOUR_STEP` | the requirements file declares `boundary_colour.max_step_excess` and a part boundary's colour step in the rig's render exceeds the same boundary's step in the rig's own pieces by more than it; the part pair, the frame (`setup` or `idle frame <n> (t <s> s)`), the stage pixel, the excess, the declared allowance and both steps are quoted. Unlike [`CHECK_SETUP_MATCHES_PAINTING`](#CHECK_SETUP_MATCHES_PAINTING), which compares the painting per declared region at the setup pose, this compares against the rig's own flat pieces (`parts.json` placement at setup, each piece's rest colour through its art UVs on every idle frame), so a part drawn over its neighbour's line art is not a failure | the pair's rig image or mesh: `rig/images/<part>.png` (a texture stretched into its padded UVs, or a notch cut out of it), or that part's mesh in `config.json` `meshes` when the mesh cuts a corner off the art; see [Boundary colour step](#boundary-colour-step-issue-942) |
 | <a id="CHECK_BOUNDARY_COLOUR_UNMEASURED"></a>`CHECK_BOUNDARY_COLOUR_UNMEASURED` | `boundary_colour` is declared and the step cannot be taken: no `parts.json`, no `idle`, or a default-skin region or mesh image without a sequence, with a parts record, whose rig image is not its parts PNG with one even pad on every side (refused before anything is built); otherwise a drawn slot has no `parts.json` piece, is clipped, or its rig image is not its parts PNG with one even pad on every side (the slot and frame are named). Never a pass | make every drawn slot a `parts.json` piece, or drop `boundary_colour` from the requirements file (the bar then reports SKIP) |
-| <a id="CHECK_BEHIND_PART_SEAMS"></a>`CHECK_BEHIND_PART_SEAMS` | `behind_seams` is declared and a selected pair exceeds its allowance in the independent `motion_opened` reading on an idle frame, in the `standing` reading at setup (compared against the parts' flat recomposite at their painted positions), or in the `motion_opened` reading at an opted-in named turn pose (idle and turn `standing` are not measured); the pair, behind slots, reading, frame, counted seam cells and allowance are named | repair the declared seam in `parts/<part>.png` or `config.json` (`regions`, `meshes`, or `bones`), or author its allowance in `requirements.json` (`behind_seams.allowance` or `behind_seams.pairs[].allowance`); no WARN mode or rest-visible mask; see [Behind-part seams](#behind-part-seams-issue-1314) |
-| <a id="CHECK_BEHIND_PART_SEAMS_UNMEASURED"></a>`CHECK_BEHIND_PART_SEAMS_UNMEASURED` | a pair with an authored effective threshold cannot read a mandatory population: selected pair, eligible behind slots, `--parts` manifest (`parts.json` and `parts/*.png`) for setup standing's flat recomposite, idle, readable setup, motion support, boundary population, or verified render/grid/material evidence; mandatory unread evidence makes the combined line FAIL. A missing threshold alone is a nonrequired SKIP and HOLE without this refusal code | for the detail `no --parts manifest was supplied; setup standing compares the setup render with the parts' flat recomposite`, supply `parts.json` and `parts/<part>.png` (or pass `--parts <dir>` on the `rig-parts check` command line). For the detail `standing endpoints include ambiguous half-alpha owners` (measured at setup only), the line names the case and, for each case, the first endpoint in scan order with both members' alpha: *neither* member reaches 128/255 there (both members' soft edges paint the same cell, each below 128/255) or *both* do (the members' overlap reaches the gap's edge). Edit `parts/<part>.png` of one member, or its source layer, so that exactly one member reaches 128/255 at that endpoint and the other is below it or does not paint it; the corridor is then read and may fail [`CHECK_BEHIND_PART_SEAMS`](#CHECK_BEHIND_PART_SEAMS) on a real gap. A threshold at or above the cell's distance to the recomposite removes the cell from the reading altogether; the threshold decides what could count; it does not clear a cell that could. `requirements.json` `behind_seams.allowance` never clears an unread cell; removing `behind_seams.threshold` (or `behind_seams.pairs[].threshold`), or the pair from `behind_seams.pairs[]` in `requirements.json`, only silences the reading (issues #1405, #1408). When a turn pose (or idle frame) reads the `motion_opened` `HOLE` (`stock transported setup-overlap support is unavailable on every named turn pose; motion-opened is not measured`, or `stock transported setup-overlap support is unavailable on every idle frame; motion-opened is not measured`, or `both named front slots must draw on this frame`, or `no eligible slot is drawn strictly behind both pair members (including every fragment)`), give the pair's two front members a setup overlap band in `parts/<part>.png` or `config.json` (`regions`, `meshes`, or `bones`) and ensure both members and at least one rear slot in `behind_slots` draw in consistent order at setup and on every turn pose (or idle frame) so `motion_opened` can transport setup-overlap cells, or — when the pair is not a turn-tracked overlap seam — omit `behind_seams.turn` (or the pair's threshold in `requirements.json` `behind_seams`; issue #1412). For any other detail, supply the named measurement evidence in `parts/<part>.png`, `config.json` or `requirements.json` `behind_seams`; an invalid selected-pair override in `requirements.json` `behind_seams.pairs[]` also refuses by name, and existing renderer or sidecar refusals remain refusals |
+| <a id="CHECK_BEHIND_PART_SEAMS"></a>`CHECK_BEHIND_PART_SEAMS` | `behind_seams` is declared and a selected pair exceeds its allowance in the independent `motion_opened` reading on an idle frame, in the `standing` reading at setup (compared against the parts' flat recomposite at their painted positions), or in the `motion_opened` reading at an opted-in named turn pose (idle and turn `standing` are not measured); a contact-only pair's `motion_opened` (`motion_support: "setup-contact"`, issue #1409) counts the same way and, where `lower_bound_cells` is present, the count is a lower bound; the pair, behind slots, reading, frame, counted seam cells and allowance are named | repair the declared seam in `parts/<part>.png` or `config.json` (`regions`, `meshes`, or `bones`), or author its allowance in `requirements.json` (`behind_seams.allowance` or `behind_seams.pairs[].allowance`); no WARN mode or rest-visible mask; see [Behind-part seams](#behind-part-seams-issue-1314) |
+| <a id="CHECK_BEHIND_PART_SEAMS_UNMEASURED"></a>`CHECK_BEHIND_PART_SEAMS_UNMEASURED` | a pair with an authored effective threshold cannot read a mandatory population: selected pair, eligible behind slots, `--parts` manifest (`parts.json` and `parts/*.png`) for setup standing's flat recomposite, idle, readable setup, motion support, boundary population, or verified render/grid/material evidence; mandatory unread evidence makes the combined line FAIL. A missing threshold alone is a nonrequired SKIP and HOLE without this refusal code | for the detail `no --parts manifest was supplied; setup standing compares the setup render with the parts' flat recomposite`, supply `parts.json` and `parts/<part>.png` (or pass `--parts <dir>` on the `rig-parts check` command line). For the detail `standing endpoints include ambiguous half-alpha owners` (measured at setup only), the line names the case and, for each case, the first endpoint in scan order with both members' alpha: *neither* member reaches 128/255 there (both members' soft edges paint the same cell, each below 128/255) or *both* do (the members' overlap reaches the gap's edge). Edit `parts/<part>.png` of one member, or its source layer, so that exactly one member reaches 128/255 at that endpoint and the other is below it or does not paint it; the corridor is then read and may fail [`CHECK_BEHIND_PART_SEAMS`](#CHECK_BEHIND_PART_SEAMS) on a real gap. A threshold at or above the cell's distance to the recomposite removes the cell from the reading altogether; the threshold decides what could count; it does not clear a cell that could. `requirements.json` `behind_seams.allowance` never clears an unread cell; removing `behind_seams.threshold` (or `behind_seams.pairs[].threshold`), or the pair from `behind_seams.pairs[]` in `requirements.json`, only silences the reading (issues #1405, #1408). When a turn pose (or idle frame) reads the `motion_opened` `HOLE` (`stock transported setup-overlap support is unavailable on every named turn pose; motion-opened is not measured`, or `stock transported setup-overlap support is unavailable on every idle frame; motion-opened is not measured`, or `both named front slots must draw on this frame`, or `no eligible slot is drawn strictly behind both pair members (including every fragment)`, or a contact-only pair's `has no overlap band and no setup contact edge` or `setup contact support requires one drawn fragment per pair member` or `setup contact support requires unclipped pair members` detail), give the pair's two front members a setup overlap band or a setup contact edge (issue #1409) in `parts/<part>.png` or `config.json` (`regions`, `meshes`, or `bones`) and ensure both members and at least one rear slot in `behind_slots` draw in consistent order at setup and on every turn pose (or idle frame) so `motion_opened` can transport setup-overlap cells, or — when the pair is not a turn-tracked overlap seam — omit `behind_seams.turn` (or the pair's threshold in `requirements.json` `behind_seams`; issue #1412). For any other detail, supply the named measurement evidence in `parts/<part>.png`, `config.json` or `requirements.json` `behind_seams`; an invalid selected-pair override in `requirements.json` `behind_seams.pairs[]` also refuses by name, and existing renderer or sidecar refusals remain refusals |
 | <a id="SETUP_PAINTING_REQUIRED_LIMIT"></a>`SETUP_PAINTING_REQUIRED_LIMIT` | `setup_painting.required` is `true` and a limit the check needs is absent: `rgb_tolerance`, `regions`, or a region's `max_pixels` (the object names the region). Refused when the requirements file is read, before anything is built (issue #943) | author the named limit; none is derived from the art. Without `required` the same region reports SKIP |
 | <a id="SETUP_PAINTING_MOSTLY_UNCOVERED"></a>`SETUP_PAINTING_MOSTLY_UNCOVERED` | WARN only, never a refusal and never a bar (issue #1421): with neither `setup_painting.figure_mask` nor `setup_painting.backdrop` declared, more than half of a region's counted pixels are uncovered (`2 × uncovered > counted`, read off the region's `(uncovered)` slot row and its `pixel_count`; exactly half, or a region that counts nothing, does not warn). The line names the region and both figures. Without either declaration the count cannot tell painted background from missing figure, so on a scene painting the region's limit mostly measures background the rig does not draw | declare `setup_painting.figure_mask` (a figure-only rig on a scene painting) or `setup_painting.backdrop` (a full-frame painting over an opaque plate) to make the limit bind the figure; the verdict, `problems` and `check.json` do not change, and the summary line names the warning |
 | <a id="CHECK_SOURCE_GRID"></a>`CHECK_SOURCE_GRID` | the setup-pose still and its black-tinted twin (the coverage `SETUP_POSE_VS_SOURCE` reads) did not come back on one grid over one opaque background | a rigc problem; report it |
@@ -7217,7 +7346,7 @@ Under `--source <painting.png>`, a second reported line, also never a FAIL
 | <a id="CHECK_SUPPORT_GRID"></a>`CHECK_SUPPORT_GRID` | a support sidecar, part PNG or painting cannot be registered to the declared native canvas | use the same parts.json dimensions and source scale, and regenerate assemble output; no resized or guessed domain is substituted |
 | <a id="SETUP_MATCHES_PAINTING"></a>`SETUP_MATCHES_PAINTING` | declared region count, native box, limit and actual top contributor rows; observations source-over white unless `setup_painting.backdrop` declares the opaque plate behind a full-frame painting | PASS/FAIL against authored limits; no limit is SKIP, or the refusal `SETUP_PAINTING_REQUIRED_LIMIT` under `setup_painting.required: true`; with `--source`, no declaration is SKIP with its reason and declaration remedy; undeclared regions are not judged |
 | <a id="BOUNDARY_COLOUR_STEP"></a>`BOUNDARY_COLOUR_STEP` | the worst colour-step excess over the rig's own pieces at any part boundary of the setup and every idle frame, its part pair, frame and stage pixel, and the declared `max_step_excess` | PASS/FAIL against the declared allowance (FAIL is [`CHECK_BOUNDARY_COLOUR_STEP`](#CHECK_BOUNDARY_COLOUR_STEP), an unreadable piece [`CHECK_BOUNDARY_COLOUR_UNMEASURED`](#CHECK_BOUNDARY_COLOUR_UNMEASURED)); no `boundary_colour` in the requirements file is SKIP with its reason and the declaration to add, never a pass |
-| <a id="BEHIND_PART_SEAMS"></a>`BEHIND_PART_SEAMS` | selected front pair and declaration provenance, per-frame `behind_slots`, core seam grid, separate `setup`, `motion_opened` and `standing` readings, sampled/read/unmeasured counts, per-frame hits, worst frame, temporal spans and spatial runs | required for pairs with an authored effective threshold: PASS/FAIL against the effective allowance, default 0; missing T is a nonrequired SKIP and HOLE, while mandatory unread evidence causes `CHECK_BEHIND_PART_SEAMS_UNMEASURED` and combined FAIL; no declaration is SKIP, and curved or diagonal openings are not certified |
+| <a id="BEHIND_PART_SEAMS"></a>`BEHIND_PART_SEAMS` | selected front pair and declaration provenance, per-frame `behind_slots`, core seam grid, separate `setup`, `motion_opened` and `standing` readings, sampled/read/unmeasured counts, per-frame hits, worst frame, temporal spans and spatial runs | required for pairs with an authored effective threshold: PASS/FAIL against the effective allowance, default 0; a contact-only pair's motion line ends `; support setup-contact` (and the frame count with `lower_bound_cells`) when it is read from setup contact edges; missing T is a nonrequired SKIP and HOLE, while mandatory unread evidence causes `CHECK_BEHIND_PART_SEAMS_UNMEASURED` and combined FAIL; no declaration is SKIP, and curved or diagonal openings are not certified |
 
 `assemble` writes optional `part_support_domains.json` beside `parts.json`, with
 spec `rig-parts-support-domains/1`. It binds the exact parts.json and named PNG
@@ -8388,10 +8517,11 @@ pair on that pose, or
 when `motion_opened` cannot read that pose), while `motion_opened` is the turn
 reading. When a turn pose reads the `motion_opened` `HOLE`
 (`stock transported setup-overlap support is unavailable on every named turn pose; motion-opened is not measured`),
-give the pair a setup overlap band in `parts/<part>.png` or `config.json`
-(`regions`, `meshes`, or `bones`) and keep both members and at least one rear
+give the pair a setup overlap band or a setup contact edge (a cell drawn only
+by one member beside a cell drawn only by the other) in `parts/<part>.png` or
+`config.json` (`regions`, `meshes`, or `bones`) and keep both members and at least one rear
 slot drawn in front/behind order across the turn poses so `motion_opened` can
-transport setup-overlap support, or omit `behind_seams.turn` (or the pair's
+transport setup-overlap or setup-contact support, or omit `behind_seams.turn` (or the pair's
 threshold in `requirements.json`). No sweep or temporal span is claimed. Its stock transported
 setup-overlap evidence is computed separately with the official seam reader;
 the idle's exact stock binding is unchanged. One throwaway rig-c build appends a
@@ -8434,8 +8564,24 @@ The two readings are independent:
   turn poses). Its ordinary all-behind-hidden counterfactual must be
   transparent at the exact seam-cell centre, and setup attribution must show A
   or B covering that material. It uses no one-cell floor. A rigidly translated
-  closed pair stays closed; no setup overlap band means this half is unmeasured
-  on idle and turn.
+  closed pair stays closed. A contact-only pair (issue #1409) has no setup
+  overlap band: no cell drawn at 128/255 or more by both members at setup.
+  When its stock transported support is otherwise complete (every idle frame or
+  turn pose drawn), `motion_opened` reads it from its setup contact edges
+  instead: each edge between a cell drawn only by A and a cell drawn only by B
+  at setup is carried to the frame by both members' meshes, and the cells that
+  the carried edge sweeps, drawn by neither member there, are the frame's
+  candidates; a candidate counts under the same hidden/full/rear tests as a
+  band cell when either member's map carries it back onto that member's setup
+  material. Such a frame, pose and pair carry `motion_support: "setup-contact"`.
+  A swept cell that passes those tests but that neither map carries back onto
+  setup material is not counted; the frame or pose then records the number in
+  `lower_bound_cells` and its count is a lower bound (the pair's
+  `lower_bound_frames` or `lower_bound_poses` counts such rows). Each member must
+  draw one fragment at setup and on the frame, and no clip may cut either
+  member there (a clipped drawing is not its attachment's, so it cannot be
+  carried through the attachment map); otherwise the frame is a named `HOLE`. A pair with neither an overlap band nor a contact edge stays
+  unmeasured on idle and turn.
 - `standing` is measured at `setup` against the parts' flat recomposite at their
   painted positions (issues #1408, #1412); it is not measured on idle frames or
   turn poses. At `setup`, it
@@ -8555,8 +8701,9 @@ evidence does not remove a measured hit.
 | `unread_corridors[].endpoints[][2]` | World-space x coordinate of the endpoint cell centre. |
 | `unread_corridors[].endpoints[][3]` | World-space y coordinate of the endpoint cell centre, y up. |
 | `unread_corridors[].endpoints[][4]` | Observed half-alpha owner code: 0 means neither A nor B reaches 128/255; 1 means only A does; 2 means only B does; 3 means both do. A and B are the selected pair's named members; 0 and 3 are not resolved by guessing. |
-| `unread_corridors[].cells` | Interior native-cell centres as numeric `[world_x, world_y]` tuples, y up, left-to-right or top-to-bottom along the run, leaving out cells within T of the parts' recomposite at setup. A centre may occur in multiple corridors. |
-| `unread_corridors[].cell_count` | The number of reported interior cells in this corridor (at setup, leaving out cells within T of the recomposite), exactly `cells.length`. |
+| `unread_corridors[].cells` | Interior native-cell centres as numeric `[world_x, world_y]` tuples, y up, left-to-right or top-to-bottom along the run, leaving out cells within T of the parts' recomposite at setup, capped at 64 evenly spaced entries (`floor(j · cell_count / 64)`, `j = 0 … 63`, when `cell_count > 64`; all `cell_count` entries when `cell_count <= 64`). A centre may occur in multiple corridors. |
+| `unread_corridors[].cell_count` | The corridor's full count of unread interior cells (at setup, leaving out cells within T of the recomposite), equal to `cells.length + (cells_omitted ?? 0)`. |
+| `unread_corridors[].cells_omitted` | Optional positive integer, present only when `cell_count > 64`: the unread interior cells left out of `cells` (`cell_count - cells.length`). |
 | `unread_corridors[].row_scope` | `pair`; the corridor observes the selected front pair, not an individual rear slot. |
 | `unread_corridors[].row_kind` | `evidence`, including when the required check fails. |
 | `unread_corridors[].row_subjects` | The two selected part names in producer A/B order. |
@@ -9666,18 +9813,18 @@ Internal `SeamSupport.drawings` never enters check JSON. Named requirement
 | `ANIMATIONS_DO_NOT_FOLD.declared_not_folding` | `ANIMATIONS_DO_NOT_FOLD.declared_not_folding` | part when the supplied mapping resolves a piece; otherwise rig | finding | resolved piece for e.slot; otherwise [] | [check.ts:3706](../src/check.ts#L3706) |
 | `ANIMATIONS_DO_NOT_FOLD.folding` | `ANIMATIONS_DO_NOT_FOLD.folding` | part when the supplied mapping resolves a piece; otherwise rig | finding when entry === undefined; otherwise evidence | resolved piece for slot; otherwise [] | [check.ts:3668](../src/check.ts#L3668) |
 | `ART_JOINT_DISTANCE.joints` | `ART_JOINT_DISTANCE.joints` | 'rig' | finding when status === 'FAIL'; otherwise evidence | [] | [artjoints.ts:86](../src/artjoints.ts#L86) |
-| `BEHIND_PART_SEAMS.contributors` | `BEHIND_PART_SEAMS.turn.pairs[].frames[].standing.samples[].contributors`; `BEHIND_PART_SEAMS.turn.pairs[].frames[].motion_opened.samples[].contributors`; `BEHIND_PART_SEAMS.pairs[].setup.motion_opened.samples[].contributors`; `BEHIND_PART_SEAMS.pairs[].setup.standing.samples[].contributors`; `BEHIND_PART_SEAMS.pairs[].frames[].motion_opened.samples[].contributors`; `BEHIND_PART_SEAMS.pairs[].frames[].standing.samples[].contributors` | 'pair' | evidence | [pair.a, pair.b] | [behindseams.ts:526](../src/behindseams.ts#L526) |
-| `BEHIND_PART_SEAMS.hits` | `BEHIND_PART_SEAMS.pairs[].motion_opened.frames`; `BEHIND_PART_SEAMS.pairs[].standing.frames`; `BEHIND_PART_SEAMS.pairs[].motion_opened.worst`; `BEHIND_PART_SEAMS.pairs[].standing.worst` | 'pair' | finding when r.px > allowance; otherwise evidence | parts | [behindseams.ts:608](../src/behindseams.ts#L608) |
-| `BEHIND_PART_SEAMS.pairs` | `BEHIND_PART_SEAMS.pairs` | 'pair' | finding when failed; otherwise evidence | parts | [behindseams.ts:693](../src/behindseams.ts#L693) |
+| `BEHIND_PART_SEAMS.contributors` | `BEHIND_PART_SEAMS.turn.pairs[].frames[].standing.samples[].contributors`; `BEHIND_PART_SEAMS.turn.pairs[].frames[].motion_opened.samples[].contributors`; `BEHIND_PART_SEAMS.pairs[].setup.motion_opened.samples[].contributors`; `BEHIND_PART_SEAMS.pairs[].setup.standing.samples[].contributors`; `BEHIND_PART_SEAMS.pairs[].frames[].motion_opened.samples[].contributors`; `BEHIND_PART_SEAMS.pairs[].frames[].standing.samples[].contributors` | 'pair' | evidence | [pair.a, pair.b] | [behindseams.ts:664](../src/behindseams.ts#L664) |
+| `BEHIND_PART_SEAMS.hits` | `BEHIND_PART_SEAMS.pairs[].motion_opened.frames`; `BEHIND_PART_SEAMS.pairs[].standing.frames`; `BEHIND_PART_SEAMS.pairs[].motion_opened.worst`; `BEHIND_PART_SEAMS.pairs[].standing.worst` | 'pair' | finding when r.px > allowance; otherwise evidence | parts | [behindseams.ts:750](../src/behindseams.ts#L750) |
+| `BEHIND_PART_SEAMS.pairs` | `BEHIND_PART_SEAMS.pairs` | 'pair' | finding when failed; otherwise evidence | parts | [behindseams.ts:838](../src/behindseams.ts#L838) |
 | `BEHIND_PART_SEAMS.pairs[].frames` | `BEHIND_PART_SEAMS.pairs[].frames` |  |  |  |  |
 | `BEHIND_PART_SEAMS.pairs[].setup` | `BEHIND_PART_SEAMS.pairs[].setup` |  |  |  |  |
-| `BEHIND_PART_SEAMS.samples` | `BEHIND_PART_SEAMS.turn.pairs[].frames[].standing.samples`; `BEHIND_PART_SEAMS.turn.pairs[].frames[].motion_opened.samples`; `BEHIND_PART_SEAMS.pairs[].setup.motion_opened.samples`; `BEHIND_PART_SEAMS.pairs[].setup.standing.samples`; `BEHIND_PART_SEAMS.pairs[].frames[].motion_opened.samples`; `BEHIND_PART_SEAMS.pairs[].frames[].standing.samples` | 'pair' | evidence | [pair.a, pair.b] | [behindseams.ts:525](../src/behindseams.ts#L525) |
-| `BEHIND_PART_SEAMS.spans` | `BEHIND_PART_SEAMS.pairs[].motion_opened.spans`; `BEHIND_PART_SEAMS.pairs[].standing.spans` | 'pair' | evidence | parts | [behindseams.ts:616](../src/behindseams.ts#L616) |
-| `BEHIND_PART_SEAMS.turn.pairs` | `BEHIND_PART_SEAMS.turn.pairs` | 'pair' | finding when required; otherwise evidence; finding when motion.status === 'FAIL' &#124;&#124; standing.status === 'FAIL' &#124;&#124; threshold !== null && read !== turn.poses.length; otherwise evidence | [pair.a, pair.b]; parts | [behindseams.ts:723](../src/behindseams.ts#L723), [behindseams.ts:773](../src/behindseams.ts#L773) |
+| `BEHIND_PART_SEAMS.samples` | `BEHIND_PART_SEAMS.turn.pairs[].frames[].standing.samples`; `BEHIND_PART_SEAMS.turn.pairs[].frames[].motion_opened.samples`; `BEHIND_PART_SEAMS.pairs[].setup.motion_opened.samples`; `BEHIND_PART_SEAMS.pairs[].setup.standing.samples`; `BEHIND_PART_SEAMS.pairs[].frames[].motion_opened.samples`; `BEHIND_PART_SEAMS.pairs[].frames[].standing.samples` | 'pair' | evidence | [pair.a, pair.b] | [behindseams.ts:663](../src/behindseams.ts#L663) |
+| `BEHIND_PART_SEAMS.spans` | `BEHIND_PART_SEAMS.pairs[].motion_opened.spans`; `BEHIND_PART_SEAMS.pairs[].standing.spans` | 'pair' | evidence | parts | [behindseams.ts:758](../src/behindseams.ts#L758) |
+| `BEHIND_PART_SEAMS.turn.pairs` | `BEHIND_PART_SEAMS.turn.pairs` | 'pair' | finding when required; otherwise evidence; finding when motion.status === 'FAIL' &#124;&#124; standing.status === 'FAIL' &#124;&#124; threshold !== null && read !== turn.poses.length; otherwise evidence | [pair.a, pair.b]; parts | [behindseams.ts:870](../src/behindseams.ts#L870), [behindseams.ts:923](../src/behindseams.ts#L923) |
 | `BEHIND_PART_SEAMS.turn.pairs[].frames` | `BEHIND_PART_SEAMS.turn.pairs[].frames` |  |  |  |  |
-| `BEHIND_PART_SEAMS.turn.unmeasured` | `BEHIND_PART_SEAMS.turn.unmeasured` | pair === null ? 'rig' : 'pair' | finding when mandatory; otherwise evidence | pair === null ? [] : [pair.a, pair.b] | [behindseams.ts:715](../src/behindseams.ts#L715) |
-| `BEHIND_PART_SEAMS.unmeasured` | `BEHIND_PART_SEAMS.unmeasured` | pair === null ? 'rig' : 'pair'; 'rig' | finding when required; otherwise evidence; finding | pair === null ? [] : [pair.a, pair.b]; [] | [behindseams.ts:629](../src/behindseams.ts#L629), [behindseams.ts:974](../src/behindseams.ts#L974), [behindseams.ts:1022](../src/behindseams.ts#L1022) |
-| `BEHIND_PART_SEAMS.unread_corridors` | `BEHIND_PART_SEAMS.turn.pairs[].frames[].standing.unread_corridors`; `BEHIND_PART_SEAMS.pairs[].setup.standing.unread_corridors`; `BEHIND_PART_SEAMS.pairs[].frames[].standing.unread_corridors` | 'pair' | evidence | [pair.a, pair.b] | [behindseams.ts:459](../src/behindseams.ts#L459) |
+| `BEHIND_PART_SEAMS.turn.unmeasured` | `BEHIND_PART_SEAMS.turn.unmeasured` | pair === null ? 'rig' : 'pair' | finding when mandatory; otherwise evidence | pair === null ? [] : [pair.a, pair.b] | [behindseams.ts:862](../src/behindseams.ts#L862) |
+| `BEHIND_PART_SEAMS.unmeasured` | `BEHIND_PART_SEAMS.unmeasured` | pair === null ? 'rig' : 'pair'; 'rig' | finding when required; otherwise evidence; finding | pair === null ? [] : [pair.a, pair.b]; [] | [behindseams.ts:771](../src/behindseams.ts#L771), [behindseams.ts:1125](../src/behindseams.ts#L1125), [behindseams.ts:1173](../src/behindseams.ts#L1173) |
+| `BEHIND_PART_SEAMS.unread_corridors` | `BEHIND_PART_SEAMS.turn.pairs[].frames[].standing.unread_corridors`; `BEHIND_PART_SEAMS.pairs[].setup.standing.unread_corridors`; `BEHIND_PART_SEAMS.pairs[].frames[].standing.unread_corridors` | 'pair' | evidence | [pair.a, pair.b] | [behindseams.ts:585](../src/behindseams.ts#L585) |
 | `BOUNDARY_COLOUR_STEP.over` | `BOUNDARY_COLOUR_STEP.over` | 'pair' | finding | r.parts | [boundarycolour.ts:221](../src/boundarycolour.ts#L221) |
 | `BOUNDARY_COLOUR_STEP.unmeasured` | `BOUNDARY_COLOUR_STEP.unmeasured` | part when the supplied mapping resolves a piece; otherwise rig | evidence | resolved piece for r.slot; otherwise [] | [boundarycolour.ts:222](../src/boundarycolour.ts#L222) |
 | `CLOTH_SETTLES.rows` | `CLOTH_SETTLES.rows` | 'rig' | finding when speeds.length > 0 && s < speeds.length; otherwise evidence | [] | [check.ts:6153](../src/check.ts#L6153) |
