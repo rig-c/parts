@@ -53189,7 +53189,7 @@ function runRetuneSuite(): number {
     const order9 = 'pass,measured,not_met,skipped,physics,line,status';
     // The mutants, on the WARN revision: a side that leaves the warning lines out of its statuses, and one whose line is
     // composed a second way, off the five fields the hold reads.
-    const warningLines: string[] = [MOTION_SEAM_LINE, CLOTH_LINE];
+    const warningLines: string[] = [MOTION_SEAM_LINE, CLOTH_LINE, PHYSICS_CONTRIBUTES_LINE];
     const dropped9 = warnSide9 === undefined ? [] : checkSideDrift({ ...warnSide9, status: Object.fromEntries(Object.entries(warnSide9.status).filter(([k]) => !warningLines.includes(k))) }, warnRun9.out, warnRun9.fig);
     const twice9 = warnSide9 === undefined ? [] : checkSideDrift({ ...warnSide9, line: `check: ${warnSide9.pass ? 'PASS' : 'FAIL'}; ${warnSide9.measured.length} of ${warnSide9.measured.length + warnSide9.skipped.length} bar(s) measured, ${warnSide9.skipped.length} skipped` }, warnRun9.out, warnRun9.fig);
     const statusText9 = (side: CheckSide | undefined): string => (side === undefined ? 'none' : Object.entries(side.status).map(([k, st]) => `${k} ${st}`).join(', '));
@@ -53200,18 +53200,19 @@ function runRetuneSuite(): number {
         driftRev9.length === 0 &&
         driftIn9.length === 0 &&
         side9?.status[CLOTH_LINE] === 'CLEAR' &&
+        side9.status[PHYSICS_CONTRIBUTES_LINE] === 'CLEAR' &&
         side9.status.RECOMPOSITE_HOLES === 'SKIP' &&
         warn9.e === null &&
         warnRun9.status === 0 &&
         driftWarn9.length === 0 &&
         warnProv9?.check.input.status[CLOTH_LINE] === 'CLEAR' &&
         warnSide9?.status[CLOTH_LINE] === 'WARN' &&
-        warnSide9.line.endsWith(`warning(s) (${CLOTH_LINE}, not a bar)`) &&
+        warnSide9.status[PHYSICS_CONTRIBUTES_LINE] === 'WARN' &&
+        warnSide9.line.endsWith(`warning(s) (${CLOTH_LINE}, ${PHYSICS_CONTRIBUTES_LINE}, not a bar)`) &&
         !warnSide9.line.includes('; 0 warning(s)') &&
         Object.keys(keys9?.input ?? {}).join() === order9 &&
         Object.keys(keys9?.revision ?? {}).join() === order9 &&
-        dropped9.length === 1 &&
-        dropped9[0] === `status ${CLOTH_LINE}: carried absent, check.json WARN` &&
+        JSON.stringify(dropped9) === JSON.stringify([`status ${CLOTH_LINE}: carried absent, check.json WARN`, `status ${PHYSICS_CONTRIBUTES_LINE}: carried absent, check.json WARN`]) &&
         twice9.length === 1 &&
         twice9[0].startsWith('line: first difference at character '),
       `RN01's revision: check exit ${rev9.status}, carried ${JSON.stringify(side9?.line ?? null)}, ${driftRev9.length} difference(s)${driftRev9.length === 0 ? '' : `: ${driftRev9.join(' | ')}`}; statuses ${statusText9(side9)}; its input: check exit ${in9.status}, ${driftIn9.length} difference(s)${driftIn9.length === 0 ? '' : `: ${driftIn9.join(' | ')}`}; key order ${Object.keys(keys9?.revision ?? {}).join(',')}; physics moved to body: retune ${codes(warn9.e)} (input ${warnProv9?.check.input.status[CLOTH_LINE] ?? 'none'}, revision ${warnSide9?.status[CLOTH_LINE] ?? 'none'}), check exit ${warnRun9.status}, carried ${JSON.stringify(warnSide9?.line ?? null)}, ${driftWarn9.length} difference(s)${driftWarn9.length === 0 ? '' : `: ${driftWarn9.join(' | ')}`}; warning statuses dropped: ${dropped9.join(' | ') || 'not caught'}; line composed off the five fields: ${twice9.join(' | ') || 'not caught'}`,
