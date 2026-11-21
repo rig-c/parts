@@ -5,7 +5,7 @@ import { DIFF_DRAFTS_SPEC, diffDraftsCommand } from './src/diffdrafts.ts';
 import { applyTakenLayers } from './src/takelayers.ts';
 import { applyDepth, bindDepthMap, prepareDepth } from './src/depthworkflow.ts';
 import { externalReceipt } from './src/externalreceipt.ts';
-import { BUST_LANDMARKS_ACT_SCHEMA, BUST_LANDMARKS_PROVENANCE_SPEC, BUST_LANDMARKS_PROVENANCE_SUFFIX, type BustSidecar, planBustLandmarks, readBustSidecar, stageBustLandmarks, stageReplacements, type StagedBustLandmarks } from './src/bustlandmarks.ts';
+import { BUST_LANDMARKS_ACT_SCHEMA, BUST_LANDMARKS_PROVENANCE_SPEC, BUST_LANDMARKS_PROVENANCE_SUFFIX, BUST_POINT_SHAPE_FIELDS, bustShapeClause, type BustSidecar, effectiveBustShape, planBustLandmarks, readBustSidecar, stageBustLandmarks, stageReplacements, type StagedBustLandmarks } from './src/bustlandmarks.ts';
 import { writeEditedPart } from './tools/edited-part-cli.ts';
 /**
  * rig-parts — one painting and its See-through layers in, Spine-ready parts
@@ -1932,7 +1932,8 @@ function cmdPropose(args: string[]): number {
         ? drafted
         : withTurn(drafted, draftTurn(P, { ...(fullRun === undefined ? {} : { full: readLayers(fullRun) }), ...(headRun === undefined ? {} : { head: readLayers(headRun) }) }, drafted));
     // Emit only after green: a proposal the config loader would refuse is not written, nor a basis record that does not hold to it.
-    checkProposal(P, prop);
+    // Issue #1441: the chest carrier's points are checked with the shape the config write will hold.
+    checkProposalWithBustShape(P, prop, target, sidecar);
     if (sidecar !== null) {
       // The record's part must be the chest carrier this draft makes: points placed on another part are not these.
       const carriers = Object.entries(prop.meshes).filter(([, mesh]) => 'contour' in mesh && mesh.contour.bust !== undefined).map(([part]) => part);
@@ -2778,6 +2779,37 @@ function pendingFields(fields: Readonly<Record<string, number | string | undefin
  * `contour.bust` points (none with --no-bust) and the `boob_r` / `boob_l` bones, as one `bust` patch, and the line
  * that says what it writes and where the cleavage came from. The config's carrier must already be a contour mesh.
  */
+/**
+ * Issue #1441: `checkProposal`, with the chest carrier's `contour.bust` checked against the effective shape
+ * (`effectiveBustShape`): the config's declared shape fields on that part, a pending record's over them, the
+ * defaults for the rest, which is what the config write keeps. The proposal written is the draft as it was. With
+ * no declared or pending alpha or clearance the check is the draft's own, so its refusals read as before; otherwise a
+ * clearance refusal names the shape it used and where each value came from.
+ */
+function checkProposalWithBustShape(P: PartSet, prop: Proposal, target: ConfigWriteTarget | null, sidecar: BustSidecar | null): void {
+  const carrier = Object.entries(prop.meshes).find(([, mesh]) => 'contour' in mesh && mesh.contour.bust !== undefined);
+  if (carrier === undefined || !('contour' in carrier[1]) || carrier[1].contour.bust === undefined) { checkProposal(P, prop); return; }
+  const [part, mesh] = carrier;
+  const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+  const raw = target === null ? undefined : target.raw;
+  const meshes = isObject(raw) && isObject(raw.meshes) ? raw.meshes : undefined;
+  const declaredMesh = meshes !== undefined && Object.hasOwn(meshes, part) ? meshes[part] : undefined;
+  const declared = isObject(declaredMesh) && isObject(declaredMesh.contour) && isObject(declaredMesh.contour.bust) ? declaredMesh.contour.bust : undefined;
+  const pending = sidecar?.pending?.part === part ? sidecar.pending.fields : undefined;
+  const shape = effectiveBustShape(declared, pending);
+  const used = BUST_POINT_SHAPE_FIELDS.filter((key) => shape[key].source !== 'the default');
+  if (used.length === 0) { checkProposal(P, prop); return; }
+  const bust = { ...mesh.contour.bust, ...Object.fromEntries(used.map((key) => [key, shape[key].value])) };
+  // checkProposal's own reader (proposalAsConfig), given the shape values as read: the loader types them.
+  const meshesChecked: Record<string, unknown> = { ...prop.meshes, [part]: { ...mesh, contour: { ...mesh.contour, bust } } };
+  try { proposalAsConfig(P, { ...prop, meshes: meshesChecked }); }
+  catch (error) {
+    if (!(error instanceof PartsError)) throw error;
+    const at = `config.meshes.${part}.contour.bust.clearance`;
+    throw new PartsError(error.problems.map((p) => p.code === 'CONFIG_BUST_CLEARANCE' && p.object === at ? { ...p, detail: `${p.detail}; ${bustShapeClause(shape)}` } : p));
+  }
+}
+
 function chestOnlyPatch(target: ConfigWriteTarget, prop: Proposal, bust: BustDraft, cleavageSource: string | null): { patch: Extract<ConfigWritePatch, { kind: 'bust' }>; line: string } {
   const omitted = (part: string): boolean => prop.notes.some((n) => n.startsWith(`${part}: contour bust omitted for the declared reason: `));
   const carrier = Object.entries(prop.meshes).find(([part, mesh]) => 'contour' in mesh && (mesh.contour.bust !== undefined || omitted(part)));

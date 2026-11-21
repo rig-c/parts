@@ -3793,6 +3793,54 @@ function checkRibs(c: Check, at: string, m: Record<string, Json>, chains: Map<st
 }
 
 /**
+ * The `CONFIG_BUST_CLEARANCE` rule over three landmarks and the shape's `alpha` and `clearance` (issue #475): the
+ * refusal's detail, or null when the points pass. The loader reads it for a config's `contour.bust`, and issue #1441's
+ * callers read it with the effective shape (`effectiveBustShape`, src/bustlandmarks.ts) before that shape is written.
+ */
+export function bustClearanceDetail(points: { apex_r: Point; apex_l: Point; cleavage: Point }, alpha: number, clearance: number): string | null {
+  const [rx, ry] = points.apex_r;
+  const [lx, ly] = points.apex_l;
+  const [kx, ky] = points.cleavage;
+  const D = edgeLength(lx - rx, ly - ry);
+  const dR = edgeLength(kx - rx, ky - ry);
+  const dL = edgeLength(kx - lx, ky - ly);
+  const RR = Math.round(dR - clearance);
+  const RL = Math.round(dL - clearance);
+  const rR = Math.round(alpha * RR);
+  const rL = Math.round(alpha * RL);
+  const bandR = RR - rR;
+  const bandL = RL - rL;
+  if (clearance <= 0 || RR + RL >= D || rR <= 0 || rL <= 0 || bandR < 0 || bandL < 0) {
+    // Invalid coordinates already have named problems, but c.point accepts any finite pair.
+    // Restrict only this diagnostic search to onGrid's existing domain, not the refusal rule.
+    let remedy = `clearance hint unavailable: correct the CONFIG_FIELD_TYPE landmark coordinates to the 1/${GRID} px grid within ±${MAX_SIDE} px first`;
+    if ([rx, ry, lx, ly, kx, ky].every((n) => Number.isInteger(n * GRID) && Math.abs(n) <= MAX_SIDE)) {
+      let low = 1;
+      let high = Math.ceil(Math.max(dR, dL) * 100) + 100;
+      // The coordinate domain bounds high below 2^24; binary search needs at most 24 steps.
+      const maxSteps = Math.ceil(Math.log2(high));
+      for (let step = 0; low < high && step < maxSteps; step++) {
+        const mid = low + Math.floor((high - low) / 2);
+        if (Math.round(dR - mid / 100) + Math.round(dL - mid / 100) < D) high = mid;
+        else low = mid + 1;
+      }
+      if (low === high) {
+        const candidate = low / 100;
+        const nextRR = Math.round(dR - candidate);
+        const nextRL = Math.round(dL - candidate);
+        const nextR = Math.round(alpha * nextRR);
+        const nextL = Math.round(alpha * nextRL);
+        remedy = nextRR + nextRL < D && nextR > 0 && nextL > 0 && nextRR - nextR >= 0 && nextRL - nextL >= 0
+          ? `the first passing clearance in 0.01 px steps is ${candidate} px for these landmarks and alpha; set clearance to that value`
+          : 'no clearance in 0.01 px steps meets all these rounded-radius checks; move cleavage or the apices, or change alpha, and retry';
+      }
+    }
+    return `is ${clearance} (giving R_r = ${RR}, R_l = ${RL}, R_r + R_l = ${RR + RL} px against apex distance D = ${pyRound(D, 2)} px, r_r = ${rR}, band_r = ${bandR}, r_l = ${rL}, band_l = ${bandL}); a clearance > 0 with R_r + R_l < D and positive core radii and non-negative bands is required; ${remedy}`;
+  }
+  return null;
+}
+
+/**
  * `meshes.<part>.contour` (issue #84). `tolerance`, `margin` and `spacing` are
  * required — nothing is defaulted; `maxEdge`, `budget`, `stray` and `regions` are
  * optional, and an absent one is "none", not a guessed value. What the outline
@@ -3902,49 +3950,8 @@ function checkContour(c: Check, at: string, v: Json, bones: Set<string>): void {
       }
     }
     if (ptsOk && alphaOk && clearanceOk) {
-      const [rx, ry] = b.apex_r as Point;
-      const [lx, ly] = b.apex_l as Point;
-      const [kx, ky] = b.cleavage as Point;
-      const D = edgeLength(lx - rx, ly - ry);
-      const dR = edgeLength(kx - rx, ky - ry);
-      const dL = edgeLength(kx - lx, ky - ly);
-      const RR = Math.round(dR - clearance);
-      const RL = Math.round(dL - clearance);
-      const rR = Math.round(alpha * RR);
-      const rL = Math.round(alpha * RL);
-      const bandR = RR - rR;
-      const bandL = RL - rL;
-      if (clearance <= 0 || RR + RL >= D || rR <= 0 || rL <= 0 || bandR < 0 || bandL < 0) {
-        // Invalid coordinates already have named problems, but c.point accepts any finite pair.
-        // Restrict only this diagnostic search to onGrid's existing domain, not the refusal rule.
-        let remedy = `clearance hint unavailable: correct the CONFIG_FIELD_TYPE landmark coordinates to the 1/${GRID} px grid within ±${MAX_SIDE} px first`;
-        if ([rx, ry, lx, ly, kx, ky].every((n) => Number.isInteger(n * GRID) && Math.abs(n) <= MAX_SIDE)) {
-          let low = 1;
-          let high = Math.ceil(Math.max(dR, dL) * 100) + 100;
-          // The coordinate domain bounds high below 2^24; binary search needs at most 24 steps.
-          const maxSteps = Math.ceil(Math.log2(high));
-          for (let step = 0; low < high && step < maxSteps; step++) {
-            const mid = low + Math.floor((high - low) / 2);
-            if (Math.round(dR - mid / 100) + Math.round(dL - mid / 100) < D) high = mid;
-            else low = mid + 1;
-          }
-          if (low === high) {
-            const candidate = low / 100;
-            const nextRR = Math.round(dR - candidate);
-            const nextRL = Math.round(dL - candidate);
-            const nextR = Math.round(alpha * nextRR);
-            const nextL = Math.round(alpha * nextRL);
-            remedy = nextRR + nextRL < D && nextR > 0 && nextL > 0 && nextRR - nextR >= 0 && nextRL - nextL >= 0
-              ? `the first passing clearance in 0.01 px steps is ${candidate} px for these landmarks and alpha; set clearance to that value`
-              : 'no clearance in 0.01 px steps meets all these rounded-radius checks; move cleavage or the apices, or change alpha, and retry';
-          }
-        }
-        c.fail(
-          'CONFIG_BUST_CLEARANCE',
-          `${bat}.clearance`,
-          `is ${clearance} (giving R_r = ${RR}, R_l = ${RL}, R_r + R_l = ${RR + RL} px against apex distance D = ${pyRound(D, 2)} px, r_r = ${rR}, band_r = ${bandR}, r_l = ${rL}, band_l = ${bandL}); a clearance > 0 with R_r + R_l < D and positive core radii and non-negative bands is required; ${remedy}`,
-        );
-      }
+      const detail = bustClearanceDetail({ apex_r: b.apex_r as Point, apex_l: b.apex_l as Point, cleavage: b.cleavage as Point }, alpha, clearance);
+      if (detail !== null) c.fail('CONFIG_BUST_CLEARANCE', `${bat}.clearance`, detail);
     }
   }
 }
