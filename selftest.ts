@@ -44822,7 +44822,7 @@ function expectedFormCases(text: ReadonlyArray<readonly [string, string]>, say: 
   const respacedCheck = JSON.stringify(JSON.parse(demoBody), null, 2) + '\n';
   const indentLinux = compareExpected(demoCheck, respacedCheck, demoBody, 'linux', true, serialize);
   const indentMac = compareExpected(demoCheck, respacedCheck, demoBody, 'darwin', true, serialize);
-  const partsRespaced = compareExpected(plantFile, JSON.stringify(JSON.parse(partsBody), null, 2) + '\n', partsBody, 'linux', true);
+  const partsRespaced = compareExpected(plantFile, JSON.stringify(JSON.parse(partsBody), null, '\t') + '\n', partsBody, 'linux', true);
   // A build the serializer does not reproduce (the writer changed its indent) with a machine-class difference.
   const posedWide = JSON.stringify(poseDoc, null, 2) + '\n';
   const otherWriter = compareExpected(demoCheck, demoBody, posedWide, 'darwin', true, serialize);
