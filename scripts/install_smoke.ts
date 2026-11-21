@@ -39,6 +39,8 @@
  * reads the resulting revision and act binding from disk.
  * A Bun consumer reads and compares assembly config digests through the named
  * `assembly-reading` subpath (issue #1385).
+ * A consumer reads the data-only `cloth-targets.json` export from the install
+ * (issue #1433).
  *
  * 🔒 **Nothing under this repository is on the fixture's path at run time.** The
  * fixture generator below is authored as text into the install directory and
@@ -105,6 +107,8 @@ const ROOT_PKG = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as
 const PACKAGE = ROOT_PKG.name;
 const ASSEMBLY_READING_SUBPATH = './assembly-reading';
 const ASSEMBLY_READING_PATH = 'src/assembly-reading.ts';
+const CLOTH_TARGETS_SUBPATH = './cloth-targets.json';
+const CLOTH_TARGETS_PATH = 'src/cloth-targets.json';
 const REMESH_API_PATH = 'src/remesh-api.ts';
 const REMESH_API_IMPORT = `${PACKAGE}/${REMESH_API_PATH}`;
 const BUILD_PROCESS_PATH = 'tools/build-process.ts';
@@ -640,6 +644,19 @@ writeFileSync(path, JSON.stringify(config));
 assert.deepEqual(assemblyConfigChanges(path, recorded), ['assemble.rig_scale']);
 assert.deepEqual(assemblyConfigChanges(path, parts), []);
 console.log('RESOLVED ' + import.meta.resolve('${PACKAGE}/assembly-reading'));
+`;
+
+const CLOTH_TARGETS_PROBE = `import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import clothTargets from '${PACKAGE}/cloth-targets.json' with { type: 'json' };
+
+const resolved = import.meta.resolve('${PACKAGE}/cloth-targets.json');
+const raw = JSON.parse(readFileSync(fileURLToPath(resolved), 'utf8'));
+assert.deepEqual(clothTargets, raw);
+assert.equal(clothTargets.schema, 'rig-parts/cloth-targets@1');
+assert.ok(Array.isArray(clothTargets.targets) && clothTargets.targets.length > 0 && clothTargets.targets.every((t: unknown) => typeof t === 'string' && t.length > 0));
+console.log('RESOLVED ' + resolved);
 `;
 
 // The installed `build --all-sets` output loaded through `@rig-c/play` (issue #741): an 80x80 painting scaled 0.5 to a
@@ -1250,6 +1267,24 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, fetchedTgz?: strin
       fault('assembly-reading', `SMOKE_ASSEMBLY_READING_FROM_THE_INSTALL: ${PACKAGE}/assembly-reading must resolve to ${assemblyReadingPath} and pass the digest probe; export ${JSON.stringify(assemblyReadingTarget)}, exit ${probe.status}. ${probe.out.trim().slice(0, 1500)}`);
     } else {
       notes.push(`${PACKAGE}/assembly-reading matched its recorded digest, named the changed assemble.rig_scale field, and accepted a legacy manifest`);
+    }
+  }
+
+  const clothTargetsPath = join(pkgRoot, CLOTH_TARGETS_PATH);
+  const clothTargetsTarget = installedPkg.exports?.[CLOTH_TARGETS_SUBPATH];
+  if (spec.plant === 'none' && (spec.source.kind === 'tree' || clothTargetsTarget !== undefined || existsSync(clothTargetsPath))) {
+    const probeFile = join(home, 'cloth_targets_probe.ts');
+    writeFileSync(probeFile, CLOTH_TARGETS_PROBE);
+    const probe = run('bun', [probeFile], home);
+    output += probe.out;
+    const resolved = probe.out.split(/\r?\n/).find(line => line.startsWith('RESOLVED '))?.slice('RESOLVED '.length);
+    const resolvedPath = resolved?.startsWith('file://') ? fileURLToPath(resolved) : resolved;
+    const matchesInstalledEntry = resolvedPath !== undefined && isSmokePathInside(pkgRoot, resolvedPath) &&
+      existsSync(clothTargetsPath) && relative(realpathSync.native(clothTargetsPath), realpathSync.native(resolvedPath)) === '';
+    if (clothTargetsTarget !== `./${CLOTH_TARGETS_PATH}` || probe.status !== 0 || !matchesInstalledEntry) {
+      fault('cloth-targets', `SMOKE_CLOTH_TARGETS_FROM_THE_INSTALL: ${PACKAGE}/cloth-targets.json must resolve to ${clothTargetsPath} and carry schema "rig-parts/cloth-targets@1" with a non-empty string targets list; export ${JSON.stringify(clothTargetsTarget)}, exit ${probe.status}. ${probe.out.trim().slice(0, 1500)}`);
+    } else {
+      notes.push(`${PACKAGE}/cloth-targets.json resolved to ${CLOTH_TARGETS_PATH} with schema rig-parts/cloth-targets@1`);
     }
   }
 
