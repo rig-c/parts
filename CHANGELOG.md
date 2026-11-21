@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.49.1 (2026-11-21)
+
+`check` now says when a `setup_painting` limit mostly measures pixels the rig does not draw, and `assemble --emit-fill-masks` works with a region take.
+
+**Read before upgrading:**
+
+* **A rig with `setup_painting` regions and neither `figure_mask` nor `backdrop` may start printing a warning.** `SETUP_MATCHES_PAINTING` prints `SETUP_PAINTING_MOSTLY_UNCOVERED` for each region where more than half of the counted pixels are uncovered, meaning no setup piece draws them. On a scene painting with a figure-only rig that is usually painted background, and a limit taken from that count barely binds the figure. The line gives both figures and names the two declarations that make the limit bind the figure. Verdicts, problems and `check.json` bytes do not move; the summary line names the warning only when it fired.
+* **`assemble --emit-fill-masks` reads requirements as `--out` mode does.** A `--requirements` file it is given is read and held to the same rules, so a flag naming a missing or malformed file is refused in this mode too. Before, the flag was ignored there.
+
+### Bug Fixes
+
+* **check:** print a named warning, `SETUP_PAINTING_MOSTLY_UNCOVERED`, for a `SETUP_MATCHES_PAINTING` region where a strict majority of the counted pixels are uncovered and neither `setup_painting.figure_mask` nor `setup_painting.backdrop` is declared. Exactly half does not warn, and a region that counts no pixel does not warn (`#1421`, `#1425`, `a184e32`).
+* **assemble:** `--emit-fill-masks` reads the requirements for assembly through the same path as `--out`, so a config with a region take and a declared `setup_painting.rgb_tolerance` writes its fill masks; it refused with `ASSEMBLE_REGION_TAKE_TOLERANCE` before (`#1419`, `#1424`, `e20a53a`).
+
 ## 2.49.0 (2026-11-21)
 
 The assembly reading now covers the tolerance a region take reads, and `assemble` and `build` read one requirements file: the one `config.requirements` names. `BEHIND_PART_SEAMS` stops measuring standing on turn poses, as 2.48.0 did for idle frames.
