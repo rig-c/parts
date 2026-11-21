@@ -457,6 +457,33 @@ invalid fields with the same named rules as `readParts`. It never opens,
 hashes or decodes PNGs and preserves the manifest reader's named refusals.
 Legacy manifests may omit alternates, depth and painting declarations.
 
+## Cloth targets data export
+
+The stable named export `./cloth-targets.json` (`@rig-c/parts/cloth-targets.json`)
+ships the cloth-recipe target tags as a data-only JSON file (issue #1433):
+
+```json
+{
+  "schema": "rig-parts/cloth-targets@1",
+  "targets": [
+    "bottomwear",
+    "back hair",
+    "front hair",
+    "handwear-r",
+    "handwear-l"
+  ]
+}
+```
+
+The object carries fixed key order (`schema`, then `targets`), two-space
+indentation, and one trailing newline. `targets` lists the tags in
+`CLOTH_TARGETS`' order, held equal to `src/cloth.ts` by a tree control
+(`bun tools/check_cloth_targets.ts --write` regenerates the file). Consumers
+read or resolve the file by its package exports key
+(`@rig-c/parts/cloth-targets.json`), not by its internal path inside the
+package. Adding a tag to `targets` is a minor change; removing or renaming a
+tag, or changing `schema`, is a major change.
+
 ## Commands and flags
 
 Exit codes are part of the interface: **0** the command did what it says, **1** it
@@ -808,7 +835,8 @@ literally, but cannot be siblings. `diagnosticSiblings` checks the entire siblin
 scope before its writes, using the mapped folders' ASCII lowercase spellings.
 A collision raises `DIAGNOSTIC_PATH_SEGMENT` naming both original inputs,
 both folder spellings and their shared case-folded folder. Scopes are extremes
-animations, retained render sets, selected alternate-set folders, and each of
+animations, retained render sets (a preflight on the animation names before
+any render), selected alternate-set folders, and each of
 `requirements/as-declared`, `requirements/released` and `requirements/full`.
 Check preflights all known scopes before creating or clearing its output;
 requirement measurement also preflights before cleanup, and retained copies
@@ -823,14 +851,22 @@ applied. The suffix is appended after unit mapping and included in that length
 check; it does not change the name's encoding.
 
 `extremes/<segment>/` uses the original animation name. Retained render sets
-use its mapped animation name plus `@<fps>fps` only outside the protocol
-12 fps, with `frames.json`'s `sets[].dir` updated to the actual directory.
-A setup-only set maps its renderer directory instead. The original animation
-fields, including `extremes.json`, and the public `<id>:<name>` animation
-names stay unchanged. Readers follow `sets[].dir` rather than reconstructing
-a folder from `animation`. Safe unchanged indexes retain their original bytes.
-Fixed root sidecar names and bytes are copied verbatim; only the frame index
-may change its set directory references.
+are named by rig-c's render, not by this package (issue #1367): from
+rig-c/core#1744 on, `rigc render` writes each frame-set folder with this same
+mapping plus `@<fps>fps` outside the protocol 12 fps, and records it under
+`frames.json`'s `sets[].dir`. The retained copy takes every `sets[].dir` as it
+is and copies `frames.json` byte for byte; it maps no name a second time. A
+`sets[].dir` that is absent, not a string, empty, absolute, a dot segment,
+holds a path separator or a unit outside `[A-Za-z0-9_@+.~-]`, ends in `.`, is
+a Windows device basename, or is longer than 255 characters is refused as
+`FRAMES_SIDECAR` naming the set and the value, as are two recorded folders
+that share an ASCII-case-folded spelling; every set is validated before a
+destination is created. A render from a core before rig-c/core#1744 records
+an unsafe animation name raw, so its copy is refused rather than renamed. The
+original animation fields, including `extremes.json`, and the public
+`<id>:<name>` animation names stay unchanged. Readers follow `sets[].dir`
+rather than reconstructing a folder from `animation`. Fixed root sidecar names
+and bytes are copied verbatim.
 
 The same mapping applies to alternate-set folders in `setup_still/`,
 `setup_still_auto/` and `seam/`, the complete ranked seam-picture filename stem,

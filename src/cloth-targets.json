@@ -1,0 +1,10 @@
+{
+  "schema": "rig-parts/cloth-targets@1",
+  "targets": [
+    "bottomwear",
+    "back hair",
+    "front hair",
+    "handwear-r",
+    "handwear-l"
+  ]
+}
