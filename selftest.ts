@@ -25,6 +25,7 @@ import { runSeamCellChecks } from './tools/check_seam_cells.ts';
 import { motionSeamFinding } from './src/check.ts';
 import { checkRowFaults, checkRowSchemaFaults, checkRowCombinations, runCheckRowSchemaChecks, runCheckRowGuardChecks } from './tools/check_row_scope.ts';
 import { rowTableFaults, checkRowTypeInventory } from './tools/check_row_reference.ts';
+import { runClothTargetsChecks } from './tools/check_cloth_targets.ts';
 import { validationRebuildProbe } from './fixtures/validation_rebuild.ts';
 import { validationHoleProbe } from './fixtures/validation_hole.ts';
 import { validationContractControls } from './fixtures/validation_contract.ts';
@@ -45342,6 +45343,7 @@ function runTreeSuite(_corpus: string | null = null, pre = false): number {
   const rowDocPlant1089 = rowDoc1089.replace('<!-- check-row-table:begin -->', '<!-- removed row table -->');
   say('TY823_CHECK_ROW_TABLE_IS_DERIVED_FROM_PRODUCERS', rowDocFaults1089.length === 0 && rowTableFaults(import.meta.dir, rowDocPlant1089).length > 0,
     rowDocFaults1089.join('; ') || 'producer calls match; planted missing table caught', 'the table records the scope, finding predicate, subjects and source locations of every producing call');
+  runClothTargetsChecks(ROOT, say);
   runVerifyNovaChecks(ROOT, (name, ok, detail) => say(name, ok, detail, 'issue #1327: verify:nova sets RIG_PARTS_VALIDATION_HEAD from a clean HEAD, refuses missing/dirty/invalid inputs, and maps inner exit codes'));
 
   return bad();

@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./assembly-reading": "./src/assembly-reading.ts",
+    "./cloth-targets.json": "./src/cloth-targets.json",
     "./*": "./*"
   },
   "bin": {

@@ -457,6 +457,33 @@ invalid fields with the same named rules as `readParts`. It never opens,
 hashes or decodes PNGs and preserves the manifest reader's named refusals.
 Legacy manifests may omit alternates, depth and painting declarations.
 
+## Cloth targets data export
+
+The stable named export `./cloth-targets.json` (`@rig-c/parts/cloth-targets.json`)
+ships the cloth-recipe target tags as a data-only JSON file (issue #1433):
+
+```json
+{
+  "schema": "rig-parts/cloth-targets@1",
+  "targets": [
+    "bottomwear",
+    "back hair",
+    "front hair",
+    "handwear-r",
+    "handwear-l"
+  ]
+}
+```
+
+The object carries fixed key order (`schema`, then `targets`), two-space
+indentation, and one trailing newline. `targets` lists the tags in
+`CLOTH_TARGETS`' order, held equal to `src/cloth.ts` by a tree control
+(`bun tools/check_cloth_targets.ts --write` regenerates the file). Consumers
+read or resolve the file by its package exports key
+(`@rig-c/parts/cloth-targets.json`), not by its internal path inside the
+package. Adding a tag to `targets` is a minor change; removing or renaming a
+tag, or changing `schema`, is a major change.
+
 ## Commands and flags
 
 Exit codes are part of the interface: **0** the command did what it says, **1** it
