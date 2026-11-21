@@ -10,7 +10,8 @@ import type { PlanEntry } from '../src/config.ts';
 import { armSplitConfigText } from './arm_split_upgrade.ts';
 import { MERGED_ARM_KEY_SKELETON, MERGED_ARM_SLEEVE_RGB, MERGED_ARM_HAND_RGB, MERGED_ARM_DISTINCT_DRAPE_RGB } from './assemble_fixture.ts';
 
-export function neckDraftFixture(strip = true) {
+/** `chest` (issue #1436) raises the topwear block to y26 so it covers the drafted chest bone: a chest carrier. */
+export function neckDraftFixture(strip = true, chest = false) {
   const N = 64;
   const block = (x: number, y: number, w: number, h: number, rgb: number[]): Raster => {
     const p = newRaster(N, N);
@@ -21,7 +22,7 @@ export function neckDraftFixture(strip = true) {
   const clean = block(28, 24, 8, 14, skin), dirty = { ...clean, data: clean.data.slice() };
   if (strip) for (let y = 38; y < 40; y++) for (let x = 24; x < 32; x++) dirty.data.set([...ink, 255], (y * N + x) * 4);
   const makeLayer = (name: string, pixels: Raster, depth: number, drawOrder: number): Layer => ({ name, tag: readLayerTag(name)!, pixels, file: null, left: 0, top: 0, right: N, bottom: N, depth, drawOrder, opaquePx: pixels.data.filter((v, i) => i % 4 === 3 && v > 8).length });
-  const full: LayerSet = { source: 'public-full', form: 'wrapper', canvas: { w: N, h: N }, hidden: [], layers: [makeLayer('topwear', block(16, 38, 32, 22, [70, 100, 160]), 0.7, 0), makeLayer('neck', clean, 0.5, 1), makeLayer('face', block(24, 8, 16, 16, skin), 0.3, 2)] };
+  const full: LayerSet = { source: 'public-full', form: 'wrapper', canvas: { w: N, h: N }, hidden: [], layers: [makeLayer('topwear', chest ? block(16, 26, 32, 34, [70, 100, 160]) : block(16, 38, 32, 22, [70, 100, 160]), 0.7, 0), makeLayer('neck', clean, 0.5, 1), makeLayer('face', block(24, 8, 16, 16, skin), 0.3, 2)] };
   const head: LayerSet = { ...full, source: 'public-head', layers: [makeLayer('neck', dirty, 0.5, 0), makeLayer('face', block(24, 8, 16, 16, skin), 0.3, 1)] };
   const geometry: Geometry = { sourceW: N, sourceH: N, resolution: N, headBox: [0, 0, N, N], rigScale: 1 };
   const plan: PlanEntry[] = [['shirt', 'full', 'topwear'], ['throat', 'head', 'neck'], ['portrait', 'head', 'face']];
@@ -29,8 +30,8 @@ export function neckDraftFixture(strip = true) {
 }
 
 /** Actual wrapper files for CLI/readers; scalar levels are constant and hand-computable. */
-export function writeNeckDraftFixture(dir: string, strip = true) {
-  const f = neckDraftFixture(strip);
+export function writeNeckDraftFixture(dir: string, strip = true, chest = false) {
+  const f = neckDraftFixture(strip, chest);
   const fullDir = join(dir, 'full'), headDir = join(dir, 'head');
   for (const [home, set] of [[fullDir, f.full], [headDir, f.head]] as const) {
     mkdirSync(home, { recursive: true });

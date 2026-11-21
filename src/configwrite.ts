@@ -33,7 +33,11 @@ export type ConfigWritePatch =
   | { kind: 'proposal-missing'; proposal: Proposal; parts: ReadonlyArray<{ name: string; from: string }> }
   /** `bust-landmarks --write-config` (issue #1382): set or remove named shape fields of one part's existing
    * `meshes.<part>.contour.bust`; a field with no value is removed, every other key is kept where it is. */
-  | { kind: 'bust-shape'; part: string; fields: ReadonlyArray<{ key: BustShapeKey; value?: number | string }> };
+  | { kind: 'bust-shape'; part: string; fields: ReadonlyArray<{ key: BustShapeKey; value?: number | string }> }
+  /** The chest-only write on a sampled body-turn neck config (issue #1436): one carrier's `contour.bust` points (null
+   * removes the bust) and the `boob_r` / `boob_l` bones, every other entry kept where it is. The carrier's previous
+   * shape fields stay, and a pending reviewed shape takes their place, in the shorthand's key order. */
+  | { kind: 'bust'; part: string; bust: { apex_r: readonly number[]; apex_l: readonly number[]; cleavage: readonly number[] } | null; bones: ReadonlyArray<{ name: string; parent: string; at: readonly number[] }>; bustShape?: PendingBustShape };
 /** The `contour.bust` fields the landmarks file does not carry, the only ones a `bust-shape` patch writes. */
 export type BustShapeKey = (typeof BUST_SHAPE_FIELDS)[number];
 /** A reviewed shape `bust-landmarks` left pending in its sidecar (issue #1382): `propose --write-config` writes it
@@ -292,7 +296,46 @@ export function mergeConfigProposal(raw: unknown, patch: ConfigWritePatch, recei
       if (!equal(bust as ConfigObject, next)) edits.push({ path: ['meshes', patch.part, 'contour', 'bust'], value: next });
       break;
     }
-    default: return refuse('write-config', 'has no supported operation; edited-part-receipt, neck-unit, head-box, assemble-plan, proposal, proposal-missing or bust-shape is required');
+    case 'bust': {
+      const at = `${field('config.meshes', patch.part)}.contour`;
+      const meshes = config.meshes;
+      const mesh = object(meshes) && own(meshes, patch.part) ? meshes[patch.part] : undefined;
+      const contour = object(mesh) ? mesh.contour : undefined;
+      if (!object(contour)) return refuse(at, 'is absent or not an object; the chest carrier must already be a contour mesh before its contour.bust is written');
+      if (!Array.isArray(config.bones)) return refuse('config.bones', 'is not an array; the bones list is required before the bust bones are written');
+      const prevBust = object(contour.bust) ? contour.bust : null;
+      if (patch.bust === null) delete contour.bust;
+      else {
+        const merged: ConfigObject = {};
+        for (const k of BUST_LANDMARK_FIELDS) merged[k] = clone(patch.bust[k], `bust.${k}`);
+        const pending = patch.bustShape?.part === patch.part ? patch.bustShape.fields : undefined;
+        for (const k of BUST_SHAPE_FIELDS) {
+          const value = pending?.[k];
+          if (value !== undefined) merged[k] = value;
+          else if (prevBust !== null && own(prevBust, k)) merged[k] = prevBust[k];
+        }
+        contour.bust = merged;
+      }
+      // The bust bones: replaced where they stand, appended where new (the proposer's order), removed with the bust.
+      const bones = config.bones;
+      const index = (name: string): number => bones.findIndex((b) => object(b) && b.name === name);
+      for (const name of ['boob_r', 'boob_l']) {
+        if (patch.bones.some((b) => b.name === name)) continue;
+        const i = index(name);
+        if (i >= 0) bones.splice(i, 1);
+      }
+      for (const bone of patch.bones) {
+        const value = clone(bone, `bust.bones.${bone.name}`);
+        const i = index(bone.name);
+        if (i >= 0) bones[i] = value;
+        else bones.push(value);
+      }
+      // This patch owns the bones list's two entries and the carrier's contour.bust, never another section.
+      if (!equal(before.bones, config.bones)) edits.push({ path: ['bones'], value: config.bones });
+      if (!equal(((before.meshes as ConfigObject)[patch.part] as ConfigObject).contour, contour)) edits.push({ path: ['meshes', patch.part, 'contour'], value: contour });
+      break;
+    }
+    default: return refuse('write-config', 'has no supported operation; edited-part-receipt, neck-unit, head-box, assemble-plan, proposal, proposal-missing, bust-shape or bust is required');
   }
   return { config, changes: changes(before, config), edits };
 }

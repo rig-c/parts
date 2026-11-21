@@ -69,6 +69,7 @@ import { runEditorReceiptChecks } from './tools/check_editor_receipts.ts';
 import { runEditedPartChecks, runEditedReferenceCwdChecks } from './tools/check_edited_parts.ts';
 import { runExternalReceiptChecks } from './tools/check_external_receipt.ts';
 import { runBustLandmarkChecks } from './tools/check_bust_landmarks.ts';
+import { runNeckBustChecks } from './tools/check_neck_bust.ts';
 import { runEditedPartWriterChecks } from './tools/check_edited_part_writer.ts';
 import { runPartSourceChecks } from './tools/check_part_sources.ts';
 import { runReadmePolicyChecks } from './scripts/readme_policy.ts';
@@ -12771,6 +12772,8 @@ function runProposeSuite(): number {
     let landmarkIndex = 0;
     runBustLandmarkChecks(join(dir, 'bust-landmarks'), (name, pass, detail) => say(`LMK${String(++landmarkIndex).padStart(2, '0')}_${name}`, pass, detail,
       'issue #1382: a synthetic chest-landmarks act over the propose fixture, through the shipped command and propose --bust-landmarks unchanged'));
+    runNeckBustChecks(join(dir, 'neck-bust'), (name, pass, detail) => say(name, pass, detail,
+      'issue #1436: the chest-only write on a sampled body-turn neck config, over the neck-draft blocks with a chest carrier, through both shipped commands'));
 
     const asymmetricBust = propose(bustSet, undefined, null, DEFAULT_GRID_RULE, null, true, {
       landmarks: { apex_r: [70, 115], apex_l: [125, 135] },
