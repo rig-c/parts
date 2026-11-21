@@ -1701,11 +1701,95 @@ function runBehindRecompositeChecks(dir: string, say: Say, rigc: RigcRunner): vo
     }));
 }
 
+/** Issue #1415: a 4-column x 4-row gap (world x 4..8, y 0..4 = 16 gap cells) between a (x 0..4) and b (x 8..12)
+ * over rear (-1..-1, 16x6, REAR [224,232,240]), with an optional later part drawn in front of both pair members
+ * over the right half of the gap (world x 6..8, y 0..4 = 2 columns x 4 rows = 8 covered cells; left half x 4..6,
+ * y 0..4 = 8 uncovered cells). The occluder uses REAR [224,232,240] so over covered cells the full render's
+ * white-flattened RGB remains [224,232,240], differing from the closed-gap recomposite FRONT [24,48,72] by
+ * max(|224-24|,|232-48|,|240-72|) = 200 > T = 0, and straight rear RGB differs from both endpoints A/B FRONT by
+ * 200 > T = 0. Thus only `surviving.delete(k)` at alpha === 255 excludes the 8 covered cells from `geometric_px`,
+ * `raw_px` and `px`. */
+export function behindPartialLaterOccluderFixture(occluderAlpha?: number): BehindSeamFixture {
+  const rear = rectangle('rear', -1, -1, 16, 6);
+  const a = rectangle('a', 0, 0, 4, 4), b = rectangle('b', 8, 0, 4, 4);
+  const pages = new Map([['rear', plate(16, 6, REAR)], ['a', plate(4, 4, FRONT)], ['b', plate(4, 4, FRONT)]]);
+  const later: Piece[] = [];
+  if (occluderAlpha !== undefined) {
+    later.push(rectangle('occluder', 6, 0, 2, 4));
+    pages.set('occluder', plate(2, 4, REAR, occluderAlpha));
+  }
+  const setup = [rear, a, b, ...later];
+  return fixture(pages, setup, [setup, setup, setup]);
+}
+
+export function runBehindLaterOpaqueArtChecks(say: Say): void {
+  // Hand derivation from behindPartialLaterOccluderFixture:
+  // - Gap between a (x 0..4, y 0..4) and b (x 8..12, y 0..4): 4 columns (x = 4..8, centres 4.5, 5.5, 6.5, 7.5)
+  //   x 4 rows (y = 0..4, centres 3.5, 2.5, 1.5, 0.5) = 16 gap cells; boundary_cells = 8 (x = 3.5 and x = 8.5 x 4 rows).
+  // - Later occluder covers the right 2 gap columns (x = 6..8, centres 6.5, 7.5) x 4 rows = 8 covered cells,
+  //   leaving the left 2 gap columns (x = 4..6, centres 4.5, 5.5) x 4 rows = 8 uncovered cells.
+  // - Without the occluder: all 4 x 4 = 16 gap cells survive with rear_weight = 1 -> geometric_px = 16, raw_px = 16,
+  //   px = 16, box = [4, 0, 8, 4], max_spatial_run_cells = 4 (4 columns per row and 4 rows per column), 16 samples.
+  // - With the opaque occluder (alpha = 255, keep = 0): `if (alpha === 255) surviving.delete(k)` removes the 8 covered
+  //   cells from `surviving` before the standing loop increments `geometric_px`, so the rule changes `geometric_px`
+  //   (16 -> 8) and consequently `raw_px` (16 -> 8), `px` (16 -> 8) and `samples.length` (16 -> 8), with box [4, 0, 6, 4],
+  //   max_spatial_run_cells = 4 (vertical run of 4 rows on each uncovered column), and no setup `unmeasured[]` underflow row.
+  const withoutOccluder = measured(behindPartialLaterOccluderFixture());
+  const withOpaqueOccluder = measured(behindPartialLaterOccluderFixture(255));
+  const sWithout = withoutOccluder.pair.setup!.standing;
+  const sOpaque = withOpaqueOccluder.pair.setup!.standing;
+  say('BHO01_LATER_OPAQUE_PART_OVER_PARTIAL_GAP_REMOVES_COVERED_CELLS_FROM_GEOMETRIC_AND_COUNTED_PX',
+    sWithout.status === 'FAIL' && sWithout.boundary_cells === 8 &&
+      sWithout.geometric_px === 16 && sWithout.raw_px === 16 && sWithout.px === 16 &&
+      equal(sWithout.box, [4, 0, 8, 4]) && sWithout.max_spatial_run_cells === 4 &&
+      sWithout.samples.length === 16 &&
+      sWithout.samples.every(sample => sample.rear_weight === 1 && equal(sample.rear_rgb, REAR) &&
+        equal(sample.distances, [200, 200]) && sample.counted) &&
+      !withoutOccluder.reading.unmeasured.some(u => u.frame === 'setup') &&
+      sOpaque.status === 'FAIL' && sOpaque.boundary_cells === 8 &&
+      sOpaque.geometric_px === 8 && sOpaque.raw_px === 8 && sOpaque.px === 8 &&
+      equal(sOpaque.box, [4, 0, 6, 4]) && sOpaque.max_spatial_run_cells === 4 &&
+      sOpaque.samples.length === 8 &&
+      sOpaque.samples.every(sample => (sample.x === 4.5 || sample.x === 5.5) &&
+        sample.rear_weight === 1 && equal(sample.rear_rgb, REAR) &&
+        equal(sample.distances, [200, 200]) && sample.counted) &&
+      !withOpaqueOccluder.reading.unmeasured.some(u => u.frame === 'setup') &&
+      withOpaqueOccluder.problems.some(p => p.code === BEHIND_SEAM_CODE && p.object === 'pair "a|b" setup standing' && p.detail.includes('setup (8 cells)')),
+    brief(withoutOccluder, withOpaqueOccluder));
+
+  // Half-alpha variant (alpha = 128, a = 128/255, keep = 1 - 128/255 = 127/255):
+  // - Alpha 128 !== 255 so none of the 8 covered cells (x = 6.5, 7.5 x 4 rows) is removed from `surviving`.
+  // - On the 8 covered cells, `rear.alpha[k]` and `weights.get(k).get('rear')` are scaled by `keep = 127/255`,
+  //   leaving `rear_weight = 127/255` and straight `rear_rgb = [224, 232, 240]` (distance 200 to both endpoints and
+  //   to the closed-gap recomposite). On the 8 uncovered cells (x = 4.5, 5.5 x 4 rows), `rear_weight = 1`.
+  // - All 16 gap cells remain in `surviving` and count: geometric_px = 16, raw_px = 16, px = 16, box = [4, 0, 8, 4].
+  const withHalfOccluder = measured(behindPartialLaterOccluderFixture(128));
+  const sHalf = withHalfOccluder.pair.setup!.standing;
+  const uncoveredSamples = sHalf.samples.filter(sample => sample.x === 4.5 || sample.x === 5.5);
+  const coveredSamples = sHalf.samples.filter(sample => sample.x === 6.5 || sample.x === 7.5);
+  say('BHO02_LATER_HALF_ALPHA_PART_OVER_PARTIAL_GAP_KEEPS_ALL_CELLS_AND_SCALES_COVERED_REAR_WEIGHT',
+    sHalf.status === 'FAIL' && sHalf.boundary_cells === 8 &&
+      sHalf.geometric_px === 16 && sHalf.raw_px === 16 && sHalf.px === 16 &&
+      equal(sHalf.box, [4, 0, 8, 4]) && sHalf.max_spatial_run_cells === 4 &&
+      sHalf.samples.length === 16 && uncoveredSamples.length === 8 && coveredSamples.length === 8 &&
+      uncoveredSamples.every(sample => sample.rear_weight === 1 && equal(sample.rear_rgb, REAR) &&
+        equal(sample.distances, [200, 200]) && sample.counted &&
+        sample.contributors.length === 1 && sample.contributors[0].slot === 'rear' && sample.contributors[0].weight === 1) &&
+      coveredSamples.every(sample => Math.abs(sample.rear_weight - 127 / 255) <= Number.EPSILON &&
+        equal(sample.rear_rgb, REAR) && equal(sample.distances, [200, 200]) && sample.counted &&
+        sample.contributors.length === 1 && sample.contributors[0].slot === 'rear' &&
+        Math.abs(sample.contributors[0].weight - 127 / 255) <= Number.EPSILON) &&
+      !withHalfOccluder.reading.unmeasured.some(u => u.frame === 'setup') &&
+      withHalfOccluder.problems.some(p => p.code === BEHIND_SEAM_CODE && p.object === 'pair "a|b" setup standing' && p.detail.includes('setup (16 cells)')),
+    brief(withHalfOccluder));
+}
+
 export function runBehindSeamChecks(dir: string, say: Say, rigc: RigcRunner): void {
   mkdirSync(dir, { recursive: true });
   runBehindSeamFixtureChecks(say);
   runBehindSampleCapChecks(say);
   runBehindSeamPrimitiveChecks(say);
+  runBehindLaterOpaqueArtChecks(say);
   runBehindTurnPrimitiveChecks(say);
   runBehindUnreadRemedyChecks(say);
   runBehindRecompositeChecks(join(dir, 'recomposite'), say, rigc);
