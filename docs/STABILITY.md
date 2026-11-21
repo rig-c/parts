@@ -590,7 +590,8 @@ command in the table. This page does not separate provisional commands. The
 promise covers its command line and flags, and its refusal codes:
 `BUST_LANDMARKS_ACT`, `BUST_LANDMARKS_ROW`, `BUST_LANDMARKS_SLOT`,
 `BUST_LANDMARKS_PART_ROWS`, `BUST_LANDMARKS_ROWS`, `BUST_LANDMARKS_FRAME`,
-`BUST_LANDMARKS_SHAPE` and `BUST_LANDMARKS_OUT`. It also covers the landmarks
+`BUST_LANDMARKS_SHAPE` and `BUST_LANDMARKS_OUT`, and `CONFIG_BUST_CLEARANCE` for points the
+shape `propose` will check them with does not fit (issue #1441). It also covers the landmarks
 file it writes, which holds the three keys `propose` reads, in rig px. And it
 covers the provenance record: its spec id `rig-parts-bust-landmarks-provenance/1`,
 its keys and their order: `spec`, `act` (`schema`, `act_id`, `file_sha256`),

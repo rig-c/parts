@@ -274,13 +274,23 @@ on a drafted rig, and the act review emits carries them. The order is:
    way the command ends by printing the one that applies the file:
    `next, to apply it: rig-parts propose … --write-config <config.json> --bust-landmarks <landmarks.json>`,
    with the config it read. Without `--write-config`, `propose` writes only
-   `proposal.json`.
+   `proposal.json`. Before it writes, the command checks the three points
+   against the shape step 4 will check them with, and refuses the same points
+   (`CONFIG_BUST_CLEARANCE`). A cleavage the act leaves out is checked in step 4,
+   where it is derived.
 4. Redraft with `propose … --write-config <config.json> --bust-landmarks <landmarks.json>`.
    On a sampled body-turn neck config the same command, without `--full` and
    `--head`, writes the chest alone and keeps the neck draft
    ([A neck that moves on its own](#a-neck-that-moves-on-its-own)). Such a config
    gets its contour carrier in this order: step 1 before `turn.body` is written,
    then `turn.body` and the neck draft, then steps 2 to 4.
+   On either route the points are checked with the **effective shape**, the one
+   the config write keeps (issue #1441). Each of `alpha`, `clearance`, `bone_r`,
+   `bone_l` and `spacing` is the pending record's value where it names one, else
+   the config's declared `contour.bust` field, else the default. Points that fit
+   only the tuned shape are written. Points that fit neither are refused, and the
+   refusal ends with the alpha and clearance it used and where each came from:
+   `the shape checked: alpha 0.22 (the default), clearance 8 (the pending record)`.
    It writes `contour.bust` with the three points, and with a pending shape it
    writes those fields too, in the same staged write, and marks the record
    applied. The redraft keeps the config's declared shape fields (#1428).
@@ -5790,7 +5800,7 @@ See-through with another seed.
 | <a id="CONFIG_TURN_REQUIRED"></a>`CONFIG_TURN_REQUIRED` | `motion.animations_from` carries `turn` or `tilt` `derive` keys while `config.turn` is absent, or an attached head part (`face`, `hair_front`, `hair_back`) is missing from `config.turn.depths` (issue #478): without `turn.depths` the head pivot and back-of-head counter-parallax cannot be derived | run `propose --full` (or `--head`) to draft `config.turn`, or declare `config.turn` with `pivot` and `depths` covering `face`, `hair_front` and `hair_back` |
 | <a id="CONFIG_FACE_BAND_EXCEEDED"></a>`CONFIG_FACE_BAND_EXCEEDED` | `turn.band` or a `motion.animations_from` `turn`/`tilt` `derive.degrees` exceeds the single-plate rated band (`FACE_RATED_BAND`: `yaw <= 15°`, `pitch <= 12°`, issue #472) while no `assemble.alternates` entry replaces `face`; the detail gives the requested angle, the rated limit and both remedies | clamp the angle to `±15°` yaw / `±12°` pitch, or declare an `assemble.alternates` entry covering `face` for the 3/4 or profile plate |
 | <a id="CONFIG_PROPOSED_RIG_SCALE"></a>`CONFIG_PROPOSED_RIG_SCALE` | `proposed_rig_scale` (the `scale_rig_per_source` `propose` drafted the rig sections at, issue #354) differs from `assemble.rig_scale`: the coordinates in `bones`, `meshes`, `limbs` and `motion` are in that rig canvas's pixels and do not scale when `assemble.rig_scale` changes | re-run `assemble` and `propose` at the new `assemble.rig_scale`, or restore `assemble.rig_scale` to `proposed_rig_scale` |
-| <a id="CONFIG_BUST_CLEARANCE"></a>`CONFIG_BUST_CLEARANCE` | `meshes.<part>.contour.bust`: `clearance <= 0`, `R_r + R_l >= D` where `R_s = round(d_s - clearance)` and `D = \|apex_r − apex_l\|`, a non-positive core `r_s = round(alpha × R_s)`, or a negative band `R_s − r_s`; the detail names the rounded values found | use the detail's first passing clearance on 0.01 px steps, checked against the same rounded rules (not the unrounded distance bound); if no such value exists, move `cleavage` or the apices, or change `alpha`, then retry. A larger clearance can also erase a core, so do not keep increasing it blindly |
+| <a id="CONFIG_BUST_CLEARANCE"></a>`CONFIG_BUST_CLEARANCE` | `meshes.<part>.contour.bust`: `clearance <= 0`, `R_r + R_l >= D` where `R_s = round(d_s - clearance)` and `D = \|apex_r − apex_l\|`, a non-positive core `r_s = round(alpha × R_s)`, or a negative band `R_s − r_s`; the detail names the rounded values found. From `propose --bust-landmarks` with a declared or pending `alpha` or `clearance`, and from `bust-landmarks`, it ends with the shape checked, each value with its source (`the config`, `the pending record` or `the default`) | use the detail's first passing clearance on 0.01 px steps, checked against the same rounded rules (not the unrounded distance bound); if no such value exists, move `cleavage` or the apices, or change `alpha`, then retry. A larger clearance can also erase a core, so do not keep increasing it blindly |
 | <a id="CONFIG_SET_COVERS_SLOT"></a>`CONFIG_SET_COVERS_SLOT` | `motion.animations_from` (issue #473): a track key carries `"set": "<name>" \| null` on a track other than `property: "attachment"`, names an alternate set not declared in `assemble.alternates`, or names an alternate set that does not cover the track's `slot` (neither in `slots` nor in `hides`); the detail names the set, the slot and the slots that set covers | declare the set in `assemble.alternates`, add the slot to that set's `parts` (or `hides`), or key `"set"` on a slot the set covers |
 | <a id="CONFIG_SET_COVERS_BONE"></a>`CONFIG_SET_COVERS_BONE` | `assemble.alternates[i].drawn.<bone>` (issue #476): a subset set (`parts` present) states a `drawn` world angle for a bone none of its covered parts ride; the detail names the bone, the set, and the bones its covered parts ride | remove the uncovered bone from that set's `drawn`, or add the part that rides it to `parts` |
 | <a id="CONFIG_LIMB_SET_JOINTS"></a>`CONFIG_LIMB_SET_JOINTS` | `assemble.alternates[i]` (issue #476): a gesture set over a limb chain declared in `config.limbs.<limb>` names the unsplit `from` layer instead of the limb's segment `part`s, covers (or hides) only a subset of the limb chain's segments, or declares custom polygon `cuts` on the limb; the detail names the limb and its segment parts | cover all segment `part`s of `config.limbs.<limb>` in `parts` with no custom `cuts`, so `assemble` cuts the set at the base's joints |

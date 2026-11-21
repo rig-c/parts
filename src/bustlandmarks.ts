@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { accessSync, constants, existsSync, lstatSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve, sep } from 'node:path';
-import { type CharacterConfig, DEFAULT_BUST_ALPHA, DEFAULT_BUST_BONE_L, DEFAULT_BUST_BONE_R, DEFAULT_BUST_CLEARANCE, DEFAULT_BUST_SPACING, loadConfig } from './config.ts';
+import { bustClearanceDetail, type CharacterConfig, DEFAULT_BUST_ALPHA, DEFAULT_BUST_BONE_L, DEFAULT_BUST_BONE_R, DEFAULT_BUST_CLEARANCE, DEFAULT_BUST_SPACING, loadConfig } from './config.ts';
 import { BUST_SHAPE_FIELDS, type BustShapeKey, type ConfigWritePatch, type PendingBustShape } from './configwrite.ts';
 import { SHA256_PATTERN } from './editreceipt.ts';
 import { PartsError, type Problem } from './errors.ts';
@@ -228,6 +228,32 @@ function oneRow(rows: readonly ChestRow[], problems: Problem[]): ChestRow | null
   return null;
 }
 
+/** Where one field of the shape the points are checked with came from (issue #1441). */
+export type BustShapeSource = 'the config' | 'the pending record' | 'the default';
+/** The shape the three points are checked with: each field's value and where it came from. */
+export type EffectiveBustShape = { readonly [K in BustShapeKey]: { readonly value: unknown; readonly source: BustShapeSource } };
+
+/**
+ * Issue #1441: the shape the points are checked with, the one the config write will hold. Each field is the pending
+ * record's where it names one, else the config's declared `contour.bust` field, else the default. The one rule, read
+ * by `propose --bust-landmarks` on both routes and by `bust-landmarks` before it writes the landmarks file.
+ */
+export function effectiveBustShape(declared: Readonly<Record<string, unknown>> | undefined, pending: Readonly<Partial<Record<BustShapeKey, unknown>>> | undefined): EffectiveBustShape {
+  const pick = (key: BustShapeKey): { value: unknown; source: BustShapeSource } =>
+    pending !== undefined && Object.hasOwn(pending, key) && pending[key] !== undefined ? { value: pending[key], source: 'the pending record' }
+      : declared !== undefined && Object.hasOwn(declared, key) && declared[key] !== undefined ? { value: declared[key], source: 'the config' }
+        : { value: SHAPE_DEFAULTS[key], source: 'the default' };
+  return { alpha: pick('alpha'), clearance: pick('clearance'), bone_r: pick('bone_r'), bone_l: pick('bone_l'), spacing: pick('spacing') };
+}
+
+/** The two fields the clearance rule reads (`bustClearanceDetail`): the ones a refusal of the points names. */
+export const BUST_POINT_SHAPE_FIELDS = ['alpha', 'clearance'] as const;
+
+/** The clause a refusal of the points carries: the two fields the clearance rule reads, each with its source. */
+export function bustShapeClause(shape: EffectiveBustShape): string {
+  return `the shape checked: alpha ${show(shape.alpha.value)} (${shape.alpha.source}), clearance ${show(shape.clearance.value)} (${shape.clearance.source})`;
+}
+
 /** The five shape fields after defaults, from a partial spec. */
 const effective = (spec: Partial<Shape>): Shape => ({ ...SHAPE_DEFAULTS, ...spec });
 
@@ -295,6 +321,16 @@ function checkRow(row: ChestRow, parts: PartsFile | null, config: CharacterConfi
       code: 'BUST_LANDMARKS_SHAPE', object: `${at}.edit.bust.${key}`,
       detail: `is ${show(actShape[key])}${spelled === undefined ? ' (absent, the default)' : ''}; meshes.${row.slot}.contour.bust.${key} ${show(configShape[key])}, ${from}, is required: the landmarks file carries no such field; run again with --write-config to take the act's value into the config; propose --write-config keeps the config's shape fields on the redraft (#1428)`,
     });
+  }
+  // Issue #1441: the points against the shape propose will check them with, so this command refuses what propose
+  // refuses. The config after this command: the act's fields with --write-config, else the declared ones. A cleavage
+  // the act leaves out is derived by propose from a midline this command does not have, so it is checked there.
+  const after = declared === undefined ? undefined : writeConfig ? { ...row.shape } : { ...declared };
+  const shape = effectiveBustShape(after, pending);
+  const { apex_r, apex_l, cleavage } = row.landmarks;
+  if (cleavage !== undefined && typeof shape.alpha.value === 'number' && typeof shape.clearance.value === 'number') {
+    const detail = bustClearanceDetail({ apex_r, apex_l, cleavage }, shape.alpha.value, shape.clearance.value);
+    if (detail !== null) problems.push({ code: 'CONFIG_BUST_CLEARANCE', object: `${at}.edit.bust`, detail: `${detail}; ${bustShapeClause(shape)}` });
   }
   return { fields, pending };
 }
