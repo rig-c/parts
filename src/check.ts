@@ -1230,10 +1230,11 @@ function withoutSliders(rig: Record<string, unknown>, animations: Record<string,
  * `constraints` entry of `type` `"physics"` and every entry of motion.json's
  * `physics` table are dropped, with what names them only to activate or key
  * them — a skin's `physics` list, and an animation track whose target is a
- * `physics` constraint. Nothing else is touched, and nothing here judges the
- * constraints: the line that names them reports.
+ * `physics` constraint. A named animation beside the idle is dropped if this
+ * removes its last timeline. The idle still has to pass the keyed build's
+ * gate. The line naming what was left out reports it.
  */
-export function withoutPhysics(rig: Record<string, unknown>, motion: Record<string, unknown>): { rig: Record<string, unknown>; motion: Record<string, unknown>; physics: LoopPhysics[] } | null {
+export function withoutPhysics(rig: Record<string, unknown>, motion: Record<string, unknown>): { rig: Record<string, unknown>; motion: Record<string, unknown>; physics: LoopPhysics[]; droppedAnimations: string[] } | null {
   const physics: LoopPhysics[] = [];
   const constraints = Array.isArray(rig.constraints) ? rig.constraints : null;
   if (constraints !== null) {
@@ -1258,18 +1259,29 @@ export function withoutPhysics(rig: Record<string, unknown>, motion: Record<stri
   }
   const m: Record<string, unknown> = { ...motion };
   delete m.physics;
+  const droppedAnimations: string[] = [];
   if (isRecord(motion.animations)) {
-    m.animations = Object.fromEntries(Object.entries(motion.animations).map(([name, a]) => {
-      if (!isRecord(a) || !Array.isArray(a.tracks)) return [name, a];
-      return [name, { ...a, tracks: a.tracks.filter((t) => !(isRecord(t) && 'physics' in t)) }];
+    m.animations = Object.fromEntries(Object.entries(motion.animations).flatMap(([name, a]): Array<[string, unknown]> => {
+      if (!isRecord(a) || !Array.isArray(a.tracks)) return [[name, a]];
+      const tracks = a.tracks.filter((t) => !(isRecord(t) && 'physics' in t));
+      if (tracks.length === a.tracks.length) return [[name, a]];
+      const hasOtherTimeline = [a.ik, a.transform, a.deform, a.sequence, a.drawOrder, a.events]
+        .some(timeline => Array.isArray(timeline) && timeline.length > 0);
+      if (name !== 'idle' && tracks.length === 0 && !hasOtherTimeline) {
+        droppedAnimations.push(name);
+        return [];
+      }
+      return [[name, { ...a, tracks }]];
     }));
   }
-  return { rig: r, motion: m, physics };
+  return { rig: r, motion: m, physics, droppedAnimations };
 }
 
 /** The one line naming what {@link withoutPhysics} left out of the loop's frames: reported, not judged. */
-export function loopPhysicsLine(physics: readonly LoopPhysics[]): string {
-  return `loop physics: ${physics.length} physics constraint(s) left out of the loop's frames, reported, not judged — ${physics.map((p) => `"${p.name}" on bone "${p.bone}" (${p.in})`).join(', ')}`;
+export function loopPhysicsLine(physics: readonly LoopPhysics[], droppedAnimations: readonly string[] = []): string {
+  const dropped = droppedAnimations.length === 0 ? ''
+    : `; physics-only animation(s) omitted from the keyed build: ${droppedAnimations.map(name => JSON.stringify(name)).join(', ')}`;
+  return `loop physics: ${physics.length} physics constraint(s) left out of the loop's frames, reported, not judged — ${physics.map((p) => `"${p.name}" on bone "${p.bone}" (${p.in})`).join(', ')}${dropped}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -3352,9 +3364,9 @@ export function checkStatuses(fig: Omit<CheckFigures, 'spec' | 'bar_outcomes' | 
  * idle (issue #183), or null when it holds none, so a rig of the idle alone
  * prints what it printed before.
  */
-export function besideIdleLine(names: readonly string[], level = false): string | null {
+export function besideIdleLine(names: readonly string[], level = false, skipsKeyedAnimations = false): string | null {
   if (names.length === 0) return null;
-  const readers = level ? `${FOLD_LINE} reads each for folds and ${LEVEL_LINE} for how far the feet turn` : `${FOLD_LINE} reads each for folds`;
+  const readers = level ? `${FOLD_LINE} reads each for folds and ${LEVEL_LINE} for how far the feet turn${skipsKeyedAnimations ? ' in the remaining keyed animations' : ''}` : `${FOLD_LINE} reads each for folds`;
   return `beside the idle: ${names.length} animation(s), ${names.join(', ')} — built and gated by rigc with the rig; ${readers}, every other bar here reads the idle`;
 }
 
@@ -3401,9 +3413,9 @@ export interface FoldRow {
   triangles: number;
   /** The reading with physics on, or null when the mesh folds only with physics off. */
   physics_on: FoldSide | null;
-  /** The reading with physics off, or null when the mesh folds only with physics on. */
+  /** The reading with physics off, or null when that side found no fold or skipped this animation. */
   physics_off: FoldSide | null;
-  /** When the mesh folds only with physics on (`physics_on !== null && physics_off === null`), the physics constraints on its bones (`<name> on <bone>`); empty otherwise. */
+  /** When physics on found a fold and physics off measured none, the physics constraints on the mesh's bones (`<name> on <bone>`); empty otherwise. */
   physics_constraints: string[];
   /** The `may_fold` entry's why when the requirements file declares this slot and animation; null when nothing does. */
   declared: string | null;
@@ -3414,11 +3426,13 @@ export interface FoldRow {
 /** `check.json`'s `ANIMATIONS_DO_NOT_FOLD`: written whenever the motion holds an animation, the idle included. */
 export interface FoldsLine {
   status: 'PASS' | 'FAIL';
-  /** Every animation, the idle included, in motion.json's order: each one read. */
+  /** Every animation read on the original build, the idle included, in motion.json's order. */
   animations: string[];
   fps: number;
   /** How many physics constraints the rig declares ({@link withoutPhysics}) — stepped in `physics_on` and left out in `physics_off`; 0 when the rig has none. */
   physics_left_out: number;
+  /** Animations omitted from the keyed build when stripping physics removed their last timeline. */
+  physics_off_skipped?: string[];
   /** Every mesh that folds in an animation read, in that animation's order and rigc's mesh order. */
   folding: FoldRow[];
   /** The rows no `may_fold` entry takes: the bar's figure. */
@@ -3644,7 +3658,9 @@ export function foldsLine(
   motion: Record<string, unknown> = {},
   context?: WeightStepContext,
   slotParts?: ReadonlyMap<string, string>,
+  physicsOffSkipped: readonly string[] = [],
 ): FoldsLine {
+  const offSkipped = new Set(physicsOffSkipped);
   const toSide = (m: FoldingMesh | undefined): FoldSide | null =>
     m === undefined ? null : { frames: m.frames, worst_frame: m.worstFrame, worst_triangles: m.worstTriangles, line: m.line };
   const folding: FoldRow[] = [];
@@ -3667,7 +3683,7 @@ export function foldsLine(
       const off = offList.find((m) => m.slot === slot && m.attachment === attachment);
       const primary = (on ?? off) as FoldingMesh;
       const entry = mayFold.find((e) => e.slot === slot && e.animation === name);
-      const onlyPhysicsOn = on !== undefined && off === undefined;
+      const onlyPhysicsOn = on !== undefined && off === undefined && !offSkipped.has(name);
       const constraints = onlyPhysicsOn ? meshPhysicsConstraints(rig, slot, attachment, physicsList) : [];
       const row: FoldRow = {
         ...checkSlotRow('ANIMATIONS_DO_NOT_FOLD.folding', entry === undefined, slot, slotParts),
@@ -3688,14 +3704,16 @@ export function foldsLine(
       worstOf.set(row, primary.worstTriangleList);
     }
   }
-  const physics =
+  const physics = (name: string): string =>
     physicsLeftOut === 0
       ? ''
-      : `, with its ${physicsLeftOut} physics constraint(s) on and off`;
+      : `, with its ${physicsLeftOut} physics constraint(s) ${offSkipped.has(name) ? 'on' : 'on and off'}`;
   for (const r of folding) {
     if (r.declared !== null) continue;
     const sideClause =
-      r.physics_on !== null && r.physics_off === null && physicsLeftOut > 0
+      offSkipped.has(r.animation)
+        ? ' (physics off: SKIP — removing physics leaves no timeline)'
+        : r.physics_on !== null && r.physics_off === null && physicsLeftOut > 0
         ? ` (physics on: ${r.physics_on.frames} frame(s), worst frame ${r.physics_on.worst_frame} (${r.physics_on.worst_triangles}/${r.triangles} triangle(s)); physics off: 0 frame(s); physics constraint(s) on mesh "${r.attachment}": ${r.physics_constraints.join(', ')})`
         : r.physics_on !== null && r.physics_off !== null && physicsLeftOut > 0
           ? ` (physics on: ${r.physics_on.frames} frame(s), worst frame ${r.physics_on.worst_frame}; physics off: ${r.physics_off.frames} frame(s), worst frame ${r.physics_off.worst_frame})`
@@ -3705,7 +3723,7 @@ export function foldsLine(
     problems.push({
       code: `CHECK_${FOLD_LINE}`,
       object: `animation "${r.animation}", mesh "${r.attachment}" (slot "${r.slot}")`,
-      detail: `rigc render --folds at ${fps} fps${physics}${sideClause}: ${r.line}; ${foldBonesText(rig, motion, r.slot, r.attachment, r.worst_frame, worstOf.get(r) ?? [], context)}; no triangle turned over against the setup pose is required — a fold the art means is declared in the --requirements file's may_fold, { "slot": "${r.slot}", "animation": "${r.animation}", "why": … }`,
+      detail: `rigc render --folds at ${fps} fps${physics(r.animation)}${sideClause}: ${r.line}; ${foldBonesText(rig, motion, r.slot, r.attachment, r.worst_frame, worstOf.get(r) ?? [], context)}; no triangle turned over against the setup pose is required — a fold the art means is declared in the --requirements file's may_fold, { "slot": "${r.slot}", "animation": "${r.animation}", "why": … }`,
     });
   }
   const declaredNotFolding = mayFold.filter((e) => !folding.some((r) => r.slot === e.slot && r.animation === e.animation)).map((e) => ({ ...checkSlotRow('ANIMATIONS_DO_NOT_FOLD.declared_not_folding', true, e.slot, slotParts), slot: e.slot, animation: e.animation }));
@@ -3713,7 +3731,7 @@ export function foldsLine(
     problems.push({
       code: `CHECK_${FOLD_LINE}`,
       object: `${requirementsPath ?? 'the requirements file'} may_fold (slot "${e.slot}", animation "${e.animation}")`,
-      detail: `declares a fold, and rigc render --folds at ${fps} fps${physics} reads no folded triangle on slot "${e.slot}" in animation "${e.animation}"; an exception that excepts nothing is taken out of the file`,
+      detail: `declares a fold, and rigc render --folds at ${fps} fps${physics(e.animation)} reads no folded triangle on slot "${e.slot}" in animation "${e.animation}"; an exception that excepts nothing is taken out of the file`,
     });
   }
   const undeclared = folding.filter((r) => r.declared === null).length;
@@ -3722,6 +3740,7 @@ export function foldsLine(
     animations: [...named],
     fps,
     physics_left_out: physicsLeftOut,
+    ...(physicsOffSkipped.length === 0 ? {} : { physics_off_skipped: [...physicsOffSkipped] }),
     folding,
     folding_undeclared: undeclared,
     declared_not_folding: declaredNotFolding,
@@ -3911,7 +3930,8 @@ export function levelLine(feet: readonly LevelFoot[], rig: Record<string, unknow
   const names = readings.map((r) => r.animation);
   const line: LevelLine = { status, animations: names, fps, physics_left_out: physicsLeftOut, bar_degrees: LEVEL_BAR_DEGREES, bar: LEVEL_BAR_SOURCE, feet: rows.map(row => ({ ...row, ...checkRow('FEET_STAY_LEVEL.feet', 'part', row.status === 'FAIL', [row.part]) })) };
   if (status === 'SKIP') {
-    line.reason = `no frame of ${names.map((n) => `"${n}"`).join(', ')} turns a bone above ${rows.map((r) => `"${r.bone}" (which "${r.part}" rides)`).join(', ')}, so no foot was seen while its leg was posed`;
+    line.reason = names.length === 0 ? 'no animation remains in the physics-off build'
+      : `no frame of ${names.map((n) => `"${n}"`).join(', ')} turns a bone above ${rows.map((r) => `"${r.bone}" (which "${r.part}" rides)`).join(', ')}, so no foot was seen while its leg was posed`;
   }
   return line;
 }
@@ -6961,7 +6981,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   let loopSet: FrameSet | null = null;
   let loopPhysics: LoopPhysics[] | null = null;
   // The keyed build (issues #183, #320): with a physics constraint, the same rig and motion with every one left out,
-  // built once the same way, which the loop and the folds of every animation are both read from.
+  // built once the same way for the loop and the physics-off reading of the remaining animations.
   const stripped = withoutPhysics(inp.rig, inp.motion);
   let keyed: string | null = null;
   const keyedBuild = (what: string): string => {
@@ -7116,17 +7136,21 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
           const offDir = join(foldDir, 'off');
           const frOn = measured(['render', '--candidate', buildDir, '--folds', '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), '--out', onDir]);
           if (frOn.status !== 0) refuseIfAny(rigcFailed(`render --folds --fps ${fps}`, frOn, frOn.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
-          // The physics-off half takes no schedule (issue #538): its candidate declares no physics constraint, so no
-          // world moves it, and rigc render refuses a schedule on it by name.
-          const frOff = rigc(['render', '--candidate', keyedBuild('the animations with their physics constraint(s) left out'), '--folds', ...geometry, '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), '--out', offDir]);
-          if (frOff.status !== 0) refuseIfAny(rigcFailed(`render --folds${geometry.map((g) => ` ${g}`).join('')} --fps ${fps} (physics constraint(s) left out)`, frOff, frOff.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
           const readingsOn = filterFolds(readFoldSets(onDir, animationNames, fps, frOn.out));
-          const readingsOff = filterFolds(readFoldSets(offDir, animationNames, fps, frOff.out));
-          folds = foldsLine(animationNames, fps, stripped.physics.length, readingsOn, mayFoldForRun, reqFile === null ? null : reqFile.path, foldProblems, readingsOff, inp.rig, stripped.physics, inp.motion, { config, stage: inp.stage }, checkSlotParts(inp.rig, inp.parts?.parts.map(p => p.name) ?? [], inp.parts?.alternates?.map(set => set.name) ?? []));
+          const keyedNames = isRecord(stripped.motion.animations) ? Object.keys(stripped.motion.animations) : [];
+          let readingsOff = new Map<string, FoldingMesh[]>();
+          if (keyedNames.length > 0) {
+            // The physics-off half takes no schedule (issue #538): its candidate declares no physics constraint, so no
+            // world moves it, and rigc render refuses a schedule on it by name.
+            const frOff = rigc(['render', '--candidate', keyedBuild('the animations with their physics constraint(s) left out'), '--folds', ...geometry, '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), '--out', offDir]);
+            if (frOff.status !== 0) refuseIfAny(rigcFailed(`render --folds${geometry.map((g) => ` ${g}`).join('')} --fps ${fps} (physics constraint(s) left out)`, frOff, frOff.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
+            readingsOff = filterFolds(readFoldSets(offDir, keyedNames, fps, frOff.out));
+          }
+          folds = foldsLine(animationNames, fps, stripped.physics.length, readingsOn, mayFoldForRun, reqFile === null ? null : reqFile.path, foldProblems, readingsOff, inp.rig, stripped.physics, inp.motion, { config, stage: inp.stage }, checkSlotParts(inp.rig, inp.parts?.parts.map(p => p.name) ?? [], inp.parts?.alternates?.map(set => set.name) ?? []), stripped.droppedAnimations);
           if (feet.length > 0) {
-            const sets = readJson(join(offDir, 'frames.json'), []);
+            const sets = keyedNames.length === 0 ? null : readJson(join(offDir, 'frames.json'), []);
             const listed = sets !== null && Array.isArray(sets.sets) ? sets.sets.filter(isRecord) : [];
-            const levelReadings = animationNames.map((name) => {
+            const levelReadings = keyedNames.map((name) => {
               const dir = join(offDir, String((listed.find((x) => x.animation === name) as Record<string, unknown>).dir));
               return { animation: name, set: readFrameSet(dir), geometryPath: join(dir, GEOMETRY_FILE) };
             });
@@ -7857,7 +7881,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     pack,
     packOpaque,
     idle: idle === null || loop === null ? null : { frames: idle.frames.length, fps: idle.fps, duration: idle.duration, lastIndex: idle.frames[idle.frames.length - 1].index, loopAt: { x: loop.x, y: loop.y } },
-    loopPhysics: loopPhysics === null ? null : loopPhysicsLine(loopPhysics),
+    loopPhysics: loopPhysics === null ? null : loopPhysicsLine(loopPhysics, stripped?.droppedAnimations),
     seamViewport,
     bars,
     problems,

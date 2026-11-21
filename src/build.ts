@@ -2243,18 +2243,22 @@ export function judgementLine(name: string, line: JudgementLine | ReportedLine):
  * where `may_fold` takes it.
  */
 export function foldsLines(line: FoldsLine): string[] {
-  const physics = line.physics_left_out === 0 ? '' : `, with its ${line.physics_left_out} physics constraint(s) on and off`;
+  const skipped = new Set(line.physics_off_skipped);
+  const sides = skipped.size === 0 ? 'on and off' : skipped.size === line.animations.length ? 'on' : 'on and off where a keyed animation remains';
+  const physics = line.physics_left_out === 0 ? '' : `, with its ${line.physics_left_out} physics constraint(s) ${sides}`;
   const head =
     `${FOLD_LINE}: ${line.status} — ${line.animations.length} animation(s) read by rigc render --folds at ${line.fps} fps${physics} (${line.animations.join(', ')}): ` +
     `${line.folding.length} folding mesh(es), ${line.folding_undeclared} not declared in may_fold (<= ${line.bar})` +
     (line.declared_not_folding.length === 0 ? '' : `; may_fold declares ${line.declared_not_folding.map((d) => `slot "${d.slot}" in "${d.animation}"`).join(', ')}, which do(es) not fold`);
   return [
     head,
+    ...[...skipped].map(name => `  folds physics off: SKIP — ${JSON.stringify(name)} has no timeline after removing physics tracks`),
     ...line.folding.map((r) => {
+      const off = skipped.has(r.animation) ? 'SKIP' : r.physics_off === null ? '0 frame(s)' : `${r.physics_off.frames} frame(s), worst frame ${r.physics_off.worst_frame} (${r.physics_off.worst_triangles}/${r.triangles} triangle(s))`;
       const side =
         line.physics_left_out === 0
           ? ''
-          : ` — physics on: ${r.physics_on === null ? '0 frame(s)' : `${r.physics_on.frames} frame(s), worst frame ${r.physics_on.worst_frame} (${r.physics_on.worst_triangles}/${r.triangles} triangle(s))`}; physics off: ${r.physics_off === null ? '0 frame(s)' : `${r.physics_off.frames} frame(s), worst frame ${r.physics_off.worst_frame} (${r.physics_off.worst_triangles}/${r.triangles} triangle(s))`}` +
+          : ` — physics on: ${r.physics_on === null ? '0 frame(s)' : `${r.physics_on.frames} frame(s), worst frame ${r.physics_on.worst_frame} (${r.physics_on.worst_triangles}/${r.triangles} triangle(s))`}; physics off: ${off}` +
             (r.physics_constraints.length === 0 ? '' : `; physics constraint(s): ${r.physics_constraints.join(', ')}`);
       return `  folds  ${r.line}${side}${r.declared === null ? '' : ` — declared in may_fold: ${r.declared}`}`;
     }),
@@ -2405,7 +2409,7 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
   if (r.idle === null) log(`  loop: SKIP — ${fig.skipped?.loop ?? ''}`);
   else log(`  ${loopCheckLine(r.idle, fig.loop_max_diff, fig.loop_physics?.length ?? 0)}`);
   if (r.loopPhysics !== null) log(`  ${r.loopPhysics}`);
-  const beside = besideIdleLine(r.besideIdle, r.figures[LEVEL_LINE] !== undefined);
+  const beside = besideIdleLine(r.besideIdle, fig[LEVEL_LINE] !== undefined, (fig[FOLD_LINE]?.physics_off_skipped?.length ?? 0) > 0);
   if (beside !== null) log(`  ${beside}`);
   if (r.seamViewport === null || fig.seam_mean === null) log(`  seam: SKIP — ${fig.skipped?.seam ?? ''}`);
   else {
