@@ -50,6 +50,12 @@
             "shard": "4"
           },
           "apiName": "selftest shard 4"
+        },
+        {
+          "matrix": {
+            "shard": "5"
+          },
+          "apiName": "selftest shard 5"
         }
       ]
     },

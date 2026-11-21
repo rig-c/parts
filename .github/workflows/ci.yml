@@ -52,7 +52,7 @@ jobs:
           TREE_VERDICT_TOOLS: ${{ steps.reuse.outputs.tooling-path }}
         run: bun "$TREE_VERDICT_TOOLS/../../../scripts/lint_workflows.ts" scripts/lint_workflows.declarations.json .
 
-  # The selftest runs in four shards (issues #395, #849, #1021). SHARDS in
+  # The selftest runs in five shards (issues #395, #849, #1021, #1456). SHARDS in
   # selftest.ts assigns every unit exactly once; test below merges the records.
   # Issue #1021 uses PR CI unit clocks and capped case-timing samples to split
   # check's fixture helpers into separately scheduled units. SHARDS documents
@@ -73,7 +73,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ['1', '2', '3', '4']
+        shard: ['1', '2', '3', '4', '5']
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
