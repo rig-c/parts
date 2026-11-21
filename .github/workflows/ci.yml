@@ -57,8 +57,7 @@ jobs:
   # Issue #1021 uses PR CI unit clocks and capped case-timing samples to split
   # check's fixture helpers into separately scheduled units. SHARDS documents
   # the measured inputs and the estimates the next PR CI run must confirm.
-  # The two-worker default remains unchanged. The job timeout is 40 minutes:
-  # 25 for the units, plus the 15 shard 3's expected-file check may take (#1439).
+  # The two-worker default and 25-minute timeout remain unchanged.
   # A shard judges nothing: its record holds every line its units printed, and
   # the merge prints and counts them as one whole run would.
   #
@@ -70,7 +69,7 @@ jobs:
     if: needs.tree-verdict.outputs.reused != 'true'
     name: selftest shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -88,8 +87,15 @@ jobs:
         run: bun selftest.ts --shard ${{ matrix.shard }} --record shards/shard-${{ matrix.shard }}.json
       # The ordinary sample suite uses generated fixtures. These five pinned
       # public assemblies separately hold owner-allocation error membership.
-      - name: Fetch pinned painting allocation examples
+      - name: Restore the pinned examples
         if: matrix.shard == '3'
+        id: examples
+        uses: actions/cache@v4
+        with:
+          path: examples/*/inputs
+          key: examples-inputs-${{ hashFiles('scripts/fetch-examples.sh') }}
+      - name: Fetch pinned painting allocation examples
+        if: matrix.shard == '3' && steps.examples.outputs.cache-hit != 'true'
         run: bun run fetch-examples
       - name: Check public painting allocation membership
         if: matrix.shard == '3'
@@ -98,17 +104,6 @@ jobs:
           for example in demo reference-demo reference-sample scarf wind; do
             bun tools/check_painting_public.ts "$example" || exit "$?"
           done
-      # Issue #1439: the five examples' expected/ and wind's expected-wave/ are
-      # this package's own builds, written on Linux by the tool. Here they are
-      # rebuilt and compared whole, byte for byte, machine-class fields included
-      # (this runner is Linux). It is a step, not a selftest suite: #1113 took
-      # fetched-art builds out of the suites so the suites read no network and
-      # no fetched painting, and that still holds. Measured on the Linux pool:
-      # 381 s for the six builds and the comparison; 15 min is that and margin.
-      - name: Check the public examples' expected files against a build
-        if: matrix.shard == '3'
-        timeout-minutes: 15
-        run: bun tools/regenerate_examples.ts --check --set examples
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -116,6 +111,38 @@ jobs:
           path: shards/shard-${{ matrix.shard }}.json
           if-no-files-found: error
           retention-days: 7
+
+  # Issue #1439: the five examples' expected/ and wind's expected-wave/ are this
+  # package's own builds, written on Linux by tools/regenerate_examples.ts. Here
+  # they are rebuilt and compared whole, byte for byte, machine-class fields
+  # included (this runner is Linux). It is a job, not a selftest suite: #1113
+  # took fetched-art builds out of the suites so the suites read no network and
+  # no fetched painting, and that still holds. It runs beside the shards so it
+  # adds no wall time: on the Linux pool the six builds and the comparison took
+  # 381 s, and shard 3 plus that would outlast the longest shard. The fetched
+  # inputs come from the cache shard 3 uses, keyed by the fetch script (its
+  # pinned commit); the tool refuses inputs that are not the pinned blobs.
+  expected-files:
+    needs: tree-verdict
+    if: needs.tree-verdict.outputs.reused != 'true'
+    name: expected files
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: Restore the pinned examples
+        id: examples
+        uses: actions/cache@v4
+        with:
+          path: examples/*/inputs
+          key: examples-inputs-${{ hashFiles('scripts/fetch-examples.sh') }}
+      - name: Fetch pinned painting allocation examples
+        if: steps.examples.outputs.cache-hit != 'true'
+        run: bun run fetch-examples
+      - name: Check the public examples' expected files against a build
+        run: bun tools/regenerate_examples.ts --check --set examples
 
   # Fresh runs replay every available shard even after a shard failure, so
   # the original tally names missing or crashed units. The required test-status
@@ -156,7 +183,7 @@ jobs:
 
   # Fresh receipts attest the successful shard matrix and semantic merge.
   tree-verdict-receipt:
-    needs: [shard, test]
+    needs: [shard, test, expected-files]
     if: ${{ success() }}
     runs-on: ubuntu-latest
     steps:
@@ -180,7 +207,7 @@ jobs:
   # Keep the required check successful only for fresh green work or reuse.
   test-status:
     name: test
-    needs: [tree-verdict, shard, test]
+    needs: [tree-verdict, shard, test, expected-files]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -194,6 +221,7 @@ jobs:
           SOURCE_RUN: ${{ needs.tree-verdict.outputs.run-id }}
           SHARD_RESULT: ${{ needs.shard.result }}
           TEST_RESULT: ${{ needs.test.result }}
+          EXPECTED_FILES_RESULT: ${{ needs.expected-files.result }}
         run: |
           test "$LOOKUP_RESULT" = success
           if [ "$REUSED" = true ]; then
@@ -201,6 +229,7 @@ jobs:
           else
             test "$SHARD_RESULT" = success
             test "$TEST_RESULT" = success
+            test "$EXPECTED_FILES_RESULT" = success
           fi
 
   # Whether the PACKAGE runs, which nothing else here asks. `prepublishOnly`
