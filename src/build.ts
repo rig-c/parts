@@ -97,6 +97,7 @@ import {
   splitSchedule,
   untestedIntervals,
 } from './autoreplay.ts';
+import { physicsLines } from './physicscontrib.ts';
 import { besideIdleLine, checkSummaryLine, inputFileRecord, type InputFileRecord, CLOTH_LINE, type ClothLine, clothWarnText, figureOpeningLines, frameRuns, MOTION_SEAM_LINE, type MotionSeamLine, type MotionSeamPlant, motionSeamRequiredLine, motionSeamWarnText, motionJointContactLines, FOLD_LINE, type FoldsLine, LEVEL_LINE, type LevelLine, LIMB_LINE, type LimbLine, STRESS_LINE, SWEEP_LINE, type SweepLine, buildGateLines, causeLines, environmentLine, IDLE_FPS, IDLE_MAX_PX, maxRgbDiff, REQUIREMENTS_DIR, type CheckReport, type PackLine, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, GATE_PROFILE, JUDGEMENT_LINES, type JudgementLine, packedBuildArgs, packedBuildLabel, type PackMode, parsePageSize, readCheckEnvironment, readWindBand, type PackShape, type PageEdges, readFrameSet, rigcFailed, rigcIdentity, rigcRanClause, REPORTED_LINES, type ReportedLine, type RigcRunner, runCheck, SEAM_DIR, SEAM_MEAN_BAR, seamPairText, seamRigPxText, SOURCE_LINE, SEAM_PX_BAR, SEAM_PX_LEVEL, SEAM_PX_LEVEL_HIGH, SPINEBOY_YARDSTICK, STILL_DIR, WIND_BAND_LINE, windBandLines } from './check.ts';
 import { type CharacterConfig, type Cut, type Extend, loadConfigAndAnimations, loadConfigWithBytes, loadEarlyConfig, type Patch, type PlanEntry } from './config.ts';
 import { coreCompileGuideLine, failLine, foldName, PartsError, type Problem, refuseIfAny } from './errors.ts';
@@ -2446,6 +2447,7 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
   if (r.motionSeam.required !== undefined) log(`  ${motionSeamRequiredLine(r.motionSeam.required)}`);
   for (const [i, l] of figureOpeningLines(r.figureOpenings).entries()) log(`  ${i === 0 ? '' : '  '}${l}`);
   for (const [i, l] of clothLines(r.cloth).entries()) log(`  ${i === 0 ? '' : '  '}${l}`);
+  if (r.physics !== undefined) for (const [i, l] of physicsLines(r.physics).entries()) log(`  ${i === 0 ? '' : '  '}${l}`);
   for (const name of REPORTED_LINES) log(`  ${judgementLine(name, fig[name])}`);
   if (fig.sets !== undefined) {
     for (const [setName, setFig] of Object.entries(fig.sets)) {
