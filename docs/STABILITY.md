@@ -1539,7 +1539,12 @@ Busy-ground visible assembly validates config.requirements and its flag correspo
 The optional `setup_painting` key in `spine-parts-requirements/1` adds a
 `SETUP_MATCHES_PAINTING` measurement when declared. It requires authored
 `rgb_tolerance` and named native-stage boxes. Each optional `max_pixels` is
-that whole region's limit; omission is SKIP, never PASS. The optional boolean
+that whole region's limit; omission is SKIP, never PASS. With neither
+`figure_mask` nor `backdrop` declared, a region whose `(uncovered)` slot row is
+more than half its `pixel_count` adds one console line,
+`SETUP_PAINTING_MOSTLY_UNCOVERED` (issue #1421, a warning and not a bar), and
+the summary line names it; no exit code, problem or `check.json` byte moves.
+The optional boolean
 `setup_painting.required` (issue #943, additive) is the author's declaration
 that the check may not SKIP: with `true`, an absent `rgb_tolerance`, `regions`
 or region `max_pixels` is refused by name as `SETUP_PAINTING_REQUIRED_LIMIT`

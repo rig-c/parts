@@ -184,13 +184,56 @@ export function setupPaintingLine(
     ...(noLimit ? { reason: 'a region has no declared max_pixels; it is measured as SKIP, never PASS' } : {}) };
 }
 
+/** Issue #1421: the named warning for a region whose count is mostly pixels no setup piece draws. A warning, never a bar. */
+export const SETUP_PAINTING_UNCOVERED_WARNING = 'SETUP_PAINTING_MOSTLY_UNCOVERED';
+export interface SetupPaintingUncovered {
+  region: string;
+  /** The region's `(uncovered)` slot row: counted pixels no setup piece draws (0 when the row is absent). */
+  uncovered: number;
+  /** The region's `pixel_count`: every counted pixel, owned or uncovered. */
+  counted: number;
+}
+
+/**
+ * Issue #1421: the regions whose counted pixels are mostly uncovered, read off
+ * the line alone, so every figure it names is already in check.json
+ * (`regions[].pixel_count` and the `(uncovered)` row of `regions[].slots`).
+ * "Mostly" is a strict majority, `2 * uncovered > counted`: exactly half does
+ * not warn, and a region that counts no pixel does not warn. It applies only
+ * when neither `figure_mask` nor `backdrop` is declared. With a figure mask a
+ * region counts mask pixels only, so its uncovered pixels are missing figure;
+ * with a backdrop a painted background within `rgb_tolerance` of the plate is
+ * not counted, so its uncovered pixels are painting that differs from the
+ * plate. Without either the count cannot tell painted background from missing
+ * figure, and that is what the warning says. The verdict never reads it.
+ */
+export function setupPaintingUncovered(line: SetupPaintingLine): SetupPaintingUncovered[] {
+  if (line.figure_mask !== undefined || line.backdrop !== undefined) return [];
+  return line.regions.flatMap(r => {
+    const uncovered = r.slots.find(s => s.slot === '(uncovered)')?.pixel_count ?? 0;
+    return 2 * uncovered > r.pixel_count ? [{ region: r.name, uncovered, counted: r.pixel_count }] : [];
+  });
+}
+
+/** How many regions {@link setupPaintingUncovered} warns about; 0 for an observation without regions. */
+export function setupPaintingWarningCount(line: SetupPaintingObservation | undefined): number {
+  return line === undefined || !('regions' in line) ? 0 : setupPaintingUncovered(line).length;
+}
+
+/** The console line for one {@link SetupPaintingUncovered}: the rule, the region, uncovered of counted, and the two declarations that make the limit bind the figure. */
+export function setupPaintingUncoveredText(w: SetupPaintingUncovered): string {
+  return `${SETUP_PAINTING_LINE}: WARN ${SETUP_PAINTING_UNCOVERED_WARNING} region "${w.region}" — ${w.uncovered} of ${w.counted} counted pixels are uncovered (no setup piece draws them), more than half; without a figure mask or a backdrop this count cannot tell painted background from missing figure, so the region's limit mostly measures pixels the rig does not draw. To make it bind the figure, declare setup_painting.figure_mask (the figure's support on the painting grid) or setup_painting.backdrop (the opaque plate behind the figure); a warning, not a bar`;
+}
+
 export function setupPaintingLines(line: SetupPaintingObservation): string[] {
   if (!('regions' in line)) return [`${SETUP_PAINTING_LINE}: SKIP — ${line.reason}`];
+  const warned = setupPaintingUncovered(line);
   return [`${SETUP_PAINTING_LINE}: ${line.status}${line.reason === undefined ? '' : ` — ${line.reason}`}; ${line.registration}; ${line.compositing}`,
     ...(line.outside_figure === undefined ? [] : [`${SETUP_PAINTING_LINE}: slot "(uncovered)" outside figure mask — pixelcount ${line.outside_figure.pixel_count}; UNBARRED, outside every region limit`]),
     ...(line.outside_figure_owned === undefined ? [] : [`${SETUP_PAINTING_LINE}: owned pixels outside figure mask — pixelcount ${line.outside_figure_owned.pixel_count}; UNBARRED, outside every region limit`]),
     ...line.regions.flatMap(r => [`${SETUP_PAINTING_LINE}: region "${r.name}" ${r.status} — box [${r.box.join(', ')}], pixelcount ${r.pixel_count}, limit ${r.limit ?? 'undeclared (SKIP)'}, RGB tolerance ${line.rgb_tolerance}`,
-      ...r.slots.map(s => `${SETUP_PAINTING_LINE}: slot "${s.slot}" region "${r.name}" — box [${s.box.join(', ')}], pixelcount ${s.pixel_count}; region total ${r.pixel_count}, limit ${r.limit ?? 'undeclared (SKIP)'}`)])];
+      ...r.slots.map(s => `${SETUP_PAINTING_LINE}: slot "${s.slot}" region "${r.name}" — box [${s.box.join(', ')}], pixelcount ${s.pixel_count}; region total ${r.pixel_count}, limit ${r.limit ?? 'undeclared (SKIP)'}`),
+      ...warned.filter(w => w.region === r.name).map(setupPaintingUncoveredText)])];
 }
 
 /** Resolve an authored setup image against the requirements file that names it. */

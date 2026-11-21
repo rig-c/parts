@@ -10,13 +10,13 @@ import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { writeCheckRig, CHECK_PARTS, checkPartRaster } from '../fixtures/checkrig.ts';
 import { checkStage, readSource } from '../src/build.ts';
-import { checkStatuses, readCheckInputs, type RigcRunner } from '../src/check.ts';
+import { checkStatuses, checkSummaryLine, readCheckInputs, type RigcRunner } from '../src/check.ts';
 import { PartsError, type Problem } from '../src/errors.ts';
 import { readRequirements } from '../src/requirements.ts';
 import { alphaComposite } from '../src/raster/composite.ts';
 import { newRaster } from '../src/raster/types.ts';
 import { readPng, writePng } from '../src/raster/png.ts';
-import { SETUP_PAINTING_LINE, SETUP_PAINTING_REQUIRED_CODE, setupPaintingLine, setupPaintingLines, setupPaintingProblems, type SetupPainting } from '../src/setuppainting.ts';
+import { SETUP_PAINTING_LINE, SETUP_PAINTING_REQUIRED_CODE, SETUP_PAINTING_UNCOVERED_WARNING, setupPaintingLine, setupPaintingLines, setupPaintingProblems, setupPaintingUncovered, type SetupPainting, type SetupPaintingLine } from '../src/setuppainting.ts';
 
 type Say = (name: string, pass: boolean, detail: string) => void;
 export function runSetupPaintingChecks(dir: string, say: Say, rigc: RigcRunner): void {
@@ -88,6 +88,9 @@ export function runSetupPaintingChecks(dir: string, say: Say, rigc: RigcRunner):
   const clean = run('clean', req('clean-req', real));
   const cleanLine = clean.figures[SETUP_PAINTING_LINE];
   say('ZO12_REAL_SETUP_CLEAN_CONTROL', cleanLine?.status === 'PASS' && 'regions' in cleanLine && cleanLine.regions[0].pixel_count === 0 && checkStatuses(clean.figures)[SETUP_PAINTING_LINE] === 'PASS' && logs.get('clean')?.some(line => line.includes(SETUP_PAINTING_LINE + ': PASS')) === true, JSON.stringify(cleanLine));
+  // Issue #1421: a full-coverage rig counts no uncovered pixel, so it prints no new line and its summary names no warning.
+  const cleanLog = logs.get('clean') ?? [];
+  say('ZO57_FULL_COVERAGE_RIG_PRINTS_NO_UNCOVERED_WARNING', cleanLine !== undefined && 'regions' in cleanLine && setupPaintingUncovered(cleanLine).length === 0 && cleanLog.length > 0 && !cleanLog.some(l => l.includes(SETUP_PAINTING_UNCOVERED_WARNING)) && cleanLog[cleanLog.length - 1] === checkSummaryLine(clean) && !checkSummaryLine(clean).includes(SETUP_PAINTING_UNCOVERED_WARNING), JSON.stringify({ summary: cleanLog[cleanLog.length - 1] ?? null, lines: cleanLog.filter(l => l.includes(SETUP_PAINTING_LINE)) }));
   // Change the independent painting, never its rig or parts. The front region
   // is opaque at this centre, RGB [40,120,200] versus [0,0,0].
   source.data.set([0, 0, 0, 255], (40 * 48 + 30) * 4); writePng(sourcePath, source);
@@ -137,6 +140,7 @@ export function runSetupPaintingChecks(dir: string, say: Say, rigc: RigcRunner):
   const outside = early('outside-stage', { ...real, regions: [{ name: 'outside', box: [47, 0, 2, 1], max_pixels: 0 }] }, true);
   say('ZO18_REGION_OUTSIDE_STAGE_REFUSED_BEFORE_BUILD', outside.code.includes('REQUIREMENTS_FIELD') && outside.calls === 0, JSON.stringify(outside));
   runSetupFigureChecks(join(dir, 'figure-mask'), say, rigc);
+  runSetupUncoveredChecks(join(dir, 'uncovered'), say, rigc);
   runSetupBackdropChecks(join(dir, 'backdrop'), say, rigc);
   runSetupPaintingTransparencyChecks(join(dir, 'source-alpha'), say, rigc);
 }
@@ -208,6 +212,10 @@ function runSetupBackdropChecks(dir: string, say: Say, rigc: RigcRunner): void {
   for (const folder of ['images', 'parts']) writePng(join(input, folder, 'front.png'), part);
   const hole = run('hole');
   say('ZO35_BACKDROP_HOLE_COUNTS_UNCOVERED', hole?.status === 'FAIL' && count(hole) === 9 && 'regions' in hole && hole.regions[0].slots.some(s => s.slot === '(uncovered)' && s.pixel_count === 9), JSON.stringify(hole));
+  // Issue #1421: with the plate declared, the hole is 9 of 9 uncovered and that is missing figure, so it does not warn. Without the plate the parts' soft edges count owned, and the uncovered row is a minority, so it does not warn either.
+  const plateWarn = without !== undefined && 'regions' in without ? setupPaintingUncovered(without) : [];
+  const plateRow = without !== undefined && 'regions' in without ? without.regions[0] : undefined;
+  say('ZO58_BACKDROP_DECLARED_HOLE_DOES_NOT_WARN', hole !== undefined && 'regions' in hole && setupPaintingUncovered(hole).length === 0 && !setupPaintingLines(hole).some(l => l.includes(SETUP_PAINTING_UNCOVERED_WARNING)) && plateRow !== undefined && plateWarn.length === 0 && 2 * (plateRow.slots.find(r => r.slot === '(uncovered)')?.pixel_count ?? 0) <= plateRow.pixel_count && (plateRow.slots.find(r => r.slot === '(uncovered)')?.pixel_count ?? 0) > 0, JSON.stringify({ hole: hole !== undefined && 'regions' in hole ? hole.regions[0].slots.map(r => [r.slot, r.pixel_count]) : null, withoutPlate: plateRow?.slots.map(r => [r.slot, r.pixel_count]) ?? null, counted: plateRow?.pixel_count ?? null }));
   const painting = readPng(source), plate = readPng(join(dir, 'backdrop.png'));
   const empty = newRaster(48, 80), noFigure = new Uint8Array(48 * 80), noOwners = new Int32Array(48 * 80).fill(-1);
   const seen = setupPaintingLine(declaration, painting, empty, noFigure, noOwners, [], [], plate);
@@ -315,4 +323,68 @@ export function runSetupFigureChecks(dir: string, say: Say, rigc: RigcRunner): v
   const nearest = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1];
   say('ZO51_NONINTEGER_SCALE_NEAREST_CENTRES', sampled !== undefined && JSON.stringify([...sampled]) === JSON.stringify(nearest), `7x5 to 4x3 samples source columns [0,2,4,6], rows [0,2,4]; expected ${JSON.stringify(nearest)}, found ${JSON.stringify(sampled === undefined ? null : [...sampled])}`);
 
+}
+
+/**
+ * Issue #1421: a region whose counted pixels are mostly uncovered prints the
+ * named WARN; the verdict never reads it. The 12x1 unit fixture is computed by
+ * hand: tolerance 60, painting black at x 0..9 and white at x 10..11, the one
+ * setup piece "figure" red [200, 0, 0] at x 0..3 and transparent elsewhere,
+ * the legacy figure domain all ones. x 0..3 count owned (difference 200),
+ * x 4..9 count uncovered (black against white, 255), x 10..11 do not count (0).
+ */
+export function runSetupUncoveredChecks(dir: string, say: Say, rigc: RigcRunner): void {
+  mkdirSync(dir, { recursive: true });
+  const W = 12, source = newRaster(W, 1), setup = newRaster(W, 1), owners = new Int32Array(W).fill(-1);
+  for (let x = 0; x < W; x++) source.data.set(x < 10 ? [0, 0, 0, 255] : [255, 255, 255, 255], x * 4);
+  for (let x = 0; x < 4; x++) { setup.data.set([200, 0, 0, 255], x * 4); owners[x] = 0; }
+  const region = (name: string, x: number, w: number, max: number) => ({ name, box: [x, 0, w, 1] as [number, number, number, number], max_pixels: max });
+  const declared: SetupPainting = { rgb_tolerance: 60, regions: [region('stage', 0, 12, 10), region('figure', 0, 4, 4), region('over', 0, 9, 9), region('half', 0, 8, 8), region('under', 0, 7, 7), region('blank', 10, 2, 0), region('failing', 2, 8, 5)] };
+  const measure = (value: SetupPainting, mask?: Uint8Array, plate?: ReturnType<typeof newRaster>): { line: SetupPaintingLine; problems: Problem[] } => {
+    const problems: Problem[] = [];
+    return { line: setupPaintingLine(value, source, setup, new Uint8Array(W).fill(1), owners, ['figure'], problems, plate, mask), problems };
+  };
+  const legacy = measure(declared);
+  const warned = setupPaintingUncovered(legacy.line), printed = setupPaintingLines(legacy.line);
+  const warnLines = printed.filter(l => l.includes(SETUP_PAINTING_UNCOVERED_WARNING));
+  const stageText = 'SETUP_MATCHES_PAINTING: WARN SETUP_PAINTING_MOSTLY_UNCOVERED region "stage" — 6 of 10 counted pixels are uncovered (no setup piece draws them), more than half; without a figure mask or a backdrop this count cannot tell painted background from missing figure, so the region\'s limit mostly measures pixels the rig does not draw. To make it bind the figure, declare setup_painting.figure_mask (the figure\'s support on the painting grid) or setup_painting.backdrop (the opaque plate behind the figure); a warning, not a bar';
+  const stageAt = printed.indexOf(stageText);
+  say('ZO52_MOSTLY_UNCOVERED_REGION_WARNS_WITH_ITS_FIGURES', JSON.stringify(warned) === JSON.stringify([{ region: 'stage', uncovered: 6, counted: 10 }, { region: 'over', uncovered: 5, counted: 9 }, { region: 'failing', uncovered: 6, counted: 8 }]) && warnLines.length === 3 && stageAt > 0 && printed[stageAt - 1].startsWith('SETUP_MATCHES_PAINTING: slot "(uncovered)" region "stage"') && warnLines[2].includes('region "failing" — 6 of 8 counted pixels') && !warnLines.some(l => l.includes('region "figure"')), JSON.stringify({ warned, figure: legacy.line.regions[1].pixel_count }));
+  say('ZO53_STRICT_MAJORITY_BOUNDARY_HALF_AND_ZERO_DO_NOT_WARN', legacy.line.regions.map(r => r.pixel_count).join(',') === '10,4,9,8,7,0,8' && ['half', 'under', 'blank', 'figure'].every(n => !warned.some(w => w.region === n)) && warned.some(w => w.region === 'over'), 'over 5 of 9 warns (10 > 9); half 4 of 8 does not (8 > 8 is false); under 3 of 7 does not; blank counts 0 and does not; figure 0 of 4 does not');
+  const statuses = legacy.line.regions.map(r => r.status).join(',');
+  const kept = printed.filter(l => !l.includes(SETUP_PAINTING_UNCOVERED_WARNING));
+  say('ZO54_WARNING_LEAVES_THE_VERDICT_AND_PROBLEMS', statuses === 'PASS,PASS,PASS,PASS,PASS,PASS,FAIL' && legacy.line.status === 'FAIL' && legacy.problems.length === 2 && legacy.problems.every(p => p.code === 'CHECK_SETUP_MATCHES_PAINTING' && p.object.startsWith('region "failing"')) && !JSON.stringify(legacy.line).includes(SETUP_PAINTING_UNCOVERED_WARNING) && kept.length === 1 + legacy.line.regions.reduce((n, r) => n + 1 + r.slots.length, 0), JSON.stringify({ statuses, problems: legacy.problems.map(p => p.object) }));
+  // A figure mask over x 0..3 counts the figure alone: the six black pixels move to outside_figure. A mask over x 0..9 counts 6 uncovered of 10, missing figure, and does not warn either.
+  const maskOf = (n: number): Uint8Array => Uint8Array.from({ length: W }, (_, x) => x < n ? 1 : 0);
+  const withMask = { ...declared, figure_mask: { path: 'figure.png', sha256: '0'.repeat(64) } };
+  const figureOnly = measure(withMask, maskOf(4)), missing = measure(withMask, maskOf(10));
+  say('ZO55_FIGURE_MASK_COUNTS_FIGURE_AND_DOES_NOT_WARN', figureOnly.line.regions[0].pixel_count === 4 && figureOnly.line.outside_figure?.pixel_count === 6 && setupPaintingUncovered(figureOnly.line).length === 0 && missing.line.regions[0].pixel_count === 10 && missing.line.regions[0].slots.find(r => r.slot === '(uncovered)')?.pixel_count === 6 && setupPaintingUncovered(missing.line).length === 0 && !setupPaintingLines(missing.line).some(l => l.includes(SETUP_PAINTING_UNCOVERED_WARNING)), JSON.stringify({ figureOnly: figureOnly.line.regions[0].pixel_count, outside: figureOnly.line.outside_figure, missing: missing.line.regions[0].slots }));
+  // A black plate leaves the painted black background out of the count (difference 0); the white x 10..11 differ from it and count uncovered, 2 of 2 in "blank", without a warning.
+  const plate = newRaster(W, 1);
+  for (let x = 0; x < W; x++) plate.data.set([0, 0, 0, 255], x * 4);
+  const plated = measure({ ...declared, backdrop: { path: 'backdrop.png', sha256: '0'.repeat(64) } }, undefined, plate);
+  const blank = plated.line.regions[5];
+  say('ZO56_BACKDROP_LEAVES_MATCHED_BACKGROUND_OUT_AND_DOES_NOT_WARN', plated.line.regions[0].pixel_count === 6 && plated.line.regions[0].slots.find(r => r.slot === '(uncovered)')?.pixel_count === 2 && blank.pixel_count === 2 && blank.slots[0]?.slot === '(uncovered)' && blank.slots[0].pixel_count === 2 && setupPaintingUncovered(plated.line).length === 0, JSON.stringify({ stage: plated.line.regions[0].slots, blank: blank.slots }));
+  // The actual pipeline on the public procedural room: a figure-only rig, no mask, limits taken from the build's own counts (PASS).
+  const fixture = writeSetupFigureFixture(dir);
+  const { figure_mask: _mask, ...room } = fixture;
+  const requirements = join(dir, 'requirements.json'), regions = [...room.regions, { name: 'inside', box: [28, 36, 6, 8] as [number, number, number, number], max_pixels: 0 }];
+  const runRoom = (name: string, value: SetupPainting) => {
+    writeFileSync(requirements, JSON.stringify({ spec: 'spine-parts-requirements/1', fps: 12, requirements: [], setup_painting: value }));
+    const lines: string[] = [];
+    const report = checkStage({ rig: join(dir, 'rig'), source: join(dir, 'painting.png'), requirements, out: join(dir, name), noExtremes: true }, rigc, 'fixture-rigc', l => lines.push(l));
+    return { report, lines, json: readFileSync(join(dir, name, 'check.json'), 'utf8') };
+  };
+  const first = runRoom('room-first', { ...room, regions });
+  const firstLine = first.report.figures[SETUP_PAINTING_LINE];
+  const budgets = { ...room, regions: firstLine !== undefined && 'regions' in firstLine ? firstLine.regions.map(r => ({ name: r.name, box: r.box, max_pixels: r.pixel_count })) : regions };
+  const passed = runRoom('room-budgets', budgets);
+  const line = passed.report.figures[SETUP_PAINTING_LINE];
+  const rows = line !== undefined && 'regions' in line ? line.regions : [];
+  const expected = rows.filter(r => 2 * (r.slots.find(s => s.slot === '(uncovered)')?.pixel_count ?? 0) > r.pixel_count);
+  const roomWarn = passed.lines.filter(l => l.includes(SETUP_PAINTING_UNCOVERED_WARNING) && l.includes(': WARN '));
+  const summary = passed.lines[passed.lines.length - 1] ?? '';
+  say('ZO59_SCENE_ROOM_WARNS_ON_CONSOLE_AND_SUMMARY_AND_STAYS_PASS', line?.status === 'PASS' && passed.report.figures.PASS && passed.report.problems.length === 0 && checkStatuses(passed.report.figures)[SETUP_PAINTING_LINE] === 'PASS' && expected.map(r => r.name).join(',') === 'figure,upper' && roomWarn.length === 2 && expected.every((r, i) => roomWarn[i].includes(`region "${r.name}" — ${r.slots.find(s => s.slot === '(uncovered)')?.pixel_count} of ${r.pixel_count} counted pixels`)) && rows[2]?.name === 'inside' && rows[2].pixel_count === 0 && summary === checkSummaryLine(passed.report) && summary.endsWith(`; 2 warning(s) (${SETUP_PAINTING_UNCOVERED_WARNING}, not a bar)`) && !passed.json.includes(SETUP_PAINTING_UNCOVERED_WARNING), JSON.stringify({ rows: rows.map(r => [r.name, r.pixel_count, r.slots.find(s => s.slot === '(uncovered)')?.pixel_count ?? 0]), summary }));
+  const masked = runRoom('room-masked', fixture);
+  say('ZO60_SCENE_ROOM_WITH_FIGURE_MASK_PRINTS_NO_WARNING', masked.report.figures[SETUP_PAINTING_LINE]?.status === 'PASS' && !masked.lines.some(l => l.includes(SETUP_PAINTING_UNCOVERED_WARNING)), JSON.stringify(masked.lines.filter(l => l.includes(SETUP_PAINTING_LINE))));
 }

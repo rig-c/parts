@@ -4,7 +4,7 @@ import { readSetupFigureMask } from './setupfiguremask.ts';
 import { readSetupBackdrop } from './setupbackdrop.ts';
 import { COINCIDE_LINE, type SupportReport } from './coincide.ts';
 import { observeSupport } from './coincideio.ts';
-import { SETUP_PAINTING_LINE, UNDECLARED_SETUP_PAINTING_REASON, setupPaintingBounds, setupPaintingLine, type SetupPainting, type SetupPaintingLine, type SetupPaintingObservation } from './setuppainting.ts';
+import { SETUP_PAINTING_LINE, SETUP_PAINTING_UNCOVERED_WARNING, UNDECLARED_SETUP_PAINTING_REASON, setupPaintingBounds, setupPaintingLine, setupPaintingWarningCount, type SetupPainting, type SetupPaintingLine, type SetupPaintingObservation } from './setuppainting.ts';
 import { readMaterialSources } from './cutmaterialio.ts';
 import { CUT_MATERIAL_LINE, checkJointMaterial, type MaterialLine } from './cutmaterial.ts';
 import { ART_JOINT_LINE, artJointLine, type ArtJointLine } from './artjoints.ts';
@@ -3289,9 +3289,9 @@ export function barsSummary(r: Pick<CheckReport, 'bars'>): string {
   return `${measured.length} of ${measured.length + skipped.length} bar(s) measured, ${skipped.length} skipped${skipped.length === 0 ? '' : ` (${skipped.map((s) => s.bar).join(', ')})`}`;
 }
 
-/** The summary's warning clause: each warning line that read something, named, with the warnings they printed together; empty when none read. */
-export function warningsClause(r: Pick<CheckReport, 'motionSeam' | 'cloth'>): string {
-  const read = [...(r.motionSeam.status === 'SKIP' || (r.motionSeam.roots !== undefined && r.motionSeam.pairs.every(p => p.root !== undefined)) ? [] : [{ name: MOTION_SEAM_LINE, n: r.motionSeam.warnings }]), ...(r.cloth.status === 'SKIP' ? [] : [{ name: CLOTH_LINE, n: r.cloth.warnings }])];
+/** The summary's warning clause: each warning line that read something, named, with the warnings they printed together, and `SETUP_PAINTING_MOSTLY_UNCOVERED` only when it printed one (issue #1421); empty when none read. */
+export function warningsClause(r: Pick<CheckReport, 'motionSeam' | 'cloth' | 'figures'>): string {
+  const read = [...(r.motionSeam.status === 'SKIP' || (r.motionSeam.roots !== undefined && r.motionSeam.pairs.every(p => p.root !== undefined)) ? [] : [{ name: MOTION_SEAM_LINE, n: r.motionSeam.warnings }]), ...(r.cloth.status === 'SKIP' ? [] : [{ name: CLOTH_LINE, n: r.cloth.warnings }]), ...(setupPaintingWarningCount(r.figures[SETUP_PAINTING_LINE]) === 0 ? [] : [{ name: SETUP_PAINTING_UNCOVERED_WARNING, n: setupPaintingWarningCount(r.figures[SETUP_PAINTING_LINE]) }])];
   if (read.length === 0) return '';
   return `; ${read.reduce((a, x) => a + x.n, 0)} warning(s) (${read.map((x) => x.name).join(', ')}, not a bar)`;
 }
