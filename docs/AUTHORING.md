@@ -270,9 +270,17 @@ on a drafted rig, and the act review emits carries them. The order is:
    config already declares `contour.bust`, add `--write-config`: it takes the
    act's five values into that `contour.bust` and then writes the landmarks
    file. When the config declares no `contour.bust` yet (the first draft), the
-   changed fields are recorded as a **pending** shape in the record, and the
-   command prints the one that applies them.
+   changed fields are recorded as a **pending** shape in the record. Either
+   way the command ends by printing the one that applies the file:
+   `next, to apply it: rig-parts propose … --write-config <config.json> --bust-landmarks <landmarks.json>`,
+   with the config it read. Without `--write-config`, `propose` writes only
+   `proposal.json`.
 4. Redraft with `propose … --write-config <config.json> --bust-landmarks <landmarks.json>`.
+   On a sampled body-turn neck config the same command, without `--full` and
+   `--head`, writes the chest alone and keeps the neck draft
+   ([A neck that moves on its own](#a-neck-that-moves-on-its-own)). Such a config
+   gets its contour carrier in this order: step 1 before `turn.body` is written,
+   then `turn.body` and the neck draft, then steps 2 to 4.
    It writes `contour.bust` with the three points, and with a pending shape it
    writes those fields too, in the same staged write, and marks the record
    applied. The redraft keeps the config's declared shape fields (#1428).
@@ -3867,6 +3875,27 @@ missing pivot is refused by name; legacy `depth_median` is never converted to
 world units. Other proposal modes (`--keypoints`, `--compare`, `--grid-rule`,
 `--only-missing`) must run separately and are refused in this mode.
 
+**The chest on such a config (issue #1436).** With `--bust-landmarks <file>` or
+`--no-bust "<reason>"` and without `--full` and `--head`, `propose --write-config`
+on this config is the chest-only write:
+
+```sh
+rig-parts propose --parts neck-draft/rig --source painting.png --out chest/ --write-config config.json --bust-landmarks landmarks.json
+```
+
+It writes the chest carrier's `meshes.<part>.contour.bust` (the three points,
+the shape fields the config declares, and a pending shape from the record) and
+the bones `boob_r` / `boob_l` under `chest` at the apices, and no other entry:
+the neck draft, `turn`, `assemble`, `regions` and `motion` keep their bytes.
+`--no-bust` removes the two where present. The record beside the landmarks file
+is checked and marked applied as on the ordinary route. A file without
+`cleavage` has it derived at the crossing of the apex segment and the config's
+own `neck` -> `hip` midline (the config is the record; a fresh draft's midline
+is not read), and the printed `propose: chest-only write …` line and the
+proposal's torso note say which source it came from. The carrier must already
+be a contour mesh (`PROPOSE_BUST_CARRIER_MESH`); the chest flags with `--full` or
+`--head` are refused as `PROPOSE_NECK_MODE`, naming this command.
+
 | rule | means | change |
 | --- | --- | --- |
 | <a id="PROPOSE_TORSO_ISLAND_LEFT_OUT"></a>`PROPOSE_TORSO_ISLAND_LEFT_OUT` | WARN: a non-dust island smaller than one drafted sampling cell is omitted; names its art px and rig-pixel box | inspect the omitted art; separate it if it needs its own mesh; `contour.stray` records the largest omitted island |
@@ -3885,7 +3914,8 @@ world units. Other proposal modes (`--keypoints`, `--compare`, `--grid-rule`,
 | <a id="PROPOSE_NECK_REASSEMBLY"></a>`PROPOSE_NECK_REASSEMBLY` | neck structural operations or alternate sets require separate assembly | follow this recipe and supply the named input; the refusal writes no config |
 | <a id="PROPOSE_NECK_RUNS"></a>`PROPOSE_NECK_RUNS` | full/head runs not both supplied | follow this recipe and supply the named input; the refusal writes no config |
 | <a id="PROPOSE_NECK_OUT_FRESH"></a>`PROPOSE_NECK_OUT_FRESH` | output rig directory already exists or aliases input parts | choose a fresh output directory |
-| <a id="PROPOSE_NECK_MODE"></a>`PROPOSE_NECK_MODE` | incompatible proposal mode requested | follow this recipe and supply the named input; the refusal writes no config |
+| <a id="PROPOSE_NECK_MODE"></a>`PROPOSE_NECK_MODE` | incompatible proposal mode requested, or the chest flags given with `--full` / `--head` | follow this recipe and supply the named input; write the chest with the chest-only command the detail names, without `--full` and `--head`; the refusal writes no config |
+| <a id="PROPOSE_BUST_CARRIER_MESH"></a>`PROPOSE_BUST_CARRIER_MESH` | the chest-only write on a sampled body-turn neck config found the chest carrier's config mesh is not a contour (names the mesh mode found) | draft the torso with `propose … --write-config <config> --no-bust "<reason>"` before `turn.body` is written, then write `turn.body` and draft the neck; the refusal writes nothing |
 
 Build through the normal gate, then use `rigc render --extremes` (requires
 `@rig-c/core` 2.81.0 or later) on `body_turn`, `turn` and `tilt`. Read setup, min,
