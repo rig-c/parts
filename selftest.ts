@@ -68,6 +68,7 @@ import { runEditorReceiptChecks } from './tools/check_editor_receipts.ts';
 import { runEditedPartChecks, runEditedReferenceCwdChecks } from './tools/check_edited_parts.ts';
 import { runExternalReceiptChecks } from './tools/check_external_receipt.ts';
 import { runBustLandmarkChecks } from './tools/check_bust_landmarks.ts';
+import { runBustMovedChecks } from './tools/check_bust_moved.ts';
 import { runBustShapeChecks } from './tools/check_bust_shape.ts';
 import { runNeckBustChecks } from './tools/check_neck_bust.ts';
 import { runEditedPartWriterChecks } from './tools/check_edited_part_writer.ts';
@@ -12776,6 +12777,8 @@ function runProposeSuite(): number {
       'issue #1436: the chest-only write on a sampled body-turn neck config, over the neck-draft blocks with a chest carrier, through both shipped commands'));
     runBustShapeChecks(join(dir, 'bust-shape'), (name, pass, detail) => say(name, pass, detail,
       'issue #1441: the bust points checked with the effective shape (declared, then pending, then default) on both routes and by bust-landmarks, over the neck-draft blocks with a chest carrier'));
+    runBustMovedChecks(join(dir, 'bust-moved'), (name, pass, detail) => say(name, pass, detail,
+      'issue #1443: a second correction that moves the points leaves the shape pending, and propose writes points and shape in one staged write, on both routes'));
 
     const asymmetricBust = propose(bustSet, undefined, null, DEFAULT_GRID_RULE, null, true, {
       landmarks: { apex_r: [70, 115], apex_l: [125, 135] },

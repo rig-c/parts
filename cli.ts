@@ -2883,7 +2883,9 @@ function cmdBustLandmarks(args: string[]): number {
     if (shape === undefined) console.log(next);
     else {
       // Issue #1382: the config declares no contour.bust, so the reviewed shape waits in the record for propose.
-      console.log(`bust-landmarks: pending shape for "${provenance.slot}": ${pendingFields(shape.fields)}; the config declares no contour.bust yet, so ${plan.provenancePath} carries it until propose writes it with the three points`);
+      // Issue #1443: or the act moved the declared points, and the shape is not written against the old ones.
+      const why = plan.moved ? `the act moves the points of meshes.${provenance.slot}.contour.bust, so the config is not written and` : 'the config declares no contour.bust yet, so';
+      console.log(`bust-landmarks: pending shape for "${provenance.slot}": ${pendingFields(shape.fields)}; ${why} ${plan.provenancePath} carries it until propose writes it with the three points`);
       console.log(next);
     }
     return EXIT_OK;
