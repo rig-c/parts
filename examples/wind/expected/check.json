@@ -3774,6 +3774,183 @@
    }
   ]
  },
+ "PHYSICS_CONTRIBUTES": {
+  "status": "CLEAR",
+  "off": "the same compiled build posed with the poser's physics off (spine-core Physics.none, rig-c physicsMode 'off') over the same frames — not the rig spec with its physics constraints stripped and built again",
+  "points": "every vertex of a rest triangle that holds a pixel centre of the part's art (alpha above the mesh threshold); per frame the largest residual over them, frames 1..N-1",
+  "world": "rig-c's default environment",
+  "poser": "core",
+  "fps": 12,
+  "frames": 41,
+  "warnings": 0,
+  "rows": [
+   {
+    "row_scope": "part",
+    "row_kind": "evidence",
+    "row_subjects": [
+     "hair_back"
+    ],
+    "part": "hair_back",
+    "constraints": [
+     "hairback_r0_0_physics",
+     "hairback_r0a_0_physics",
+     "hairback_r0a_1_physics",
+     "hairback_r0b_0_physics",
+     "hairback_r0b_1_physics",
+     "hairback_l0_0_physics",
+     "hairback_l0a_0_physics",
+     "hairback_l0a_1_physics",
+     "hairback_l0b_0_physics",
+     "hairback_l0b_1_physics"
+    ],
+    "external_force": [
+     "hairback_r0_0_physics",
+     "hairback_r0a_0_physics",
+     "hairback_r0a_1_physics",
+     "hairback_r0b_0_physics",
+     "hairback_r0b_1_physics",
+     "hairback_l0_0_physics",
+     "hairback_l0a_0_physics",
+     "hairback_l0a_1_physics",
+     "hairback_l0b_0_physics",
+     "hairback_l0b_1_physics"
+    ],
+    "vertices": 190,
+    "frames_read": 40,
+    "max_rig_px": 105.557,
+    "p95_rig_px": 100.985,
+    "mean_rig_px": 90.942,
+    "max_of_diagonal": 0.116,
+    "moves": true
+   },
+   {
+    "row_scope": "part",
+    "row_kind": "evidence",
+    "row_subjects": [
+     "hairpin"
+    ],
+    "part": "hairpin",
+    "constraints": [
+     "hairback_r0_0_physics",
+     "hairback_r0a_0_physics",
+     "hairback_r0b_0_physics",
+     "hairback_l0_0_physics",
+     "hairback_l0a_0_physics",
+     "hairback_l0b_0_physics"
+    ],
+    "external_force": [
+     "hairback_r0_0_physics",
+     "hairback_r0a_0_physics",
+     "hairback_r0b_0_physics",
+     "hairback_l0_0_physics",
+     "hairback_l0a_0_physics",
+     "hairback_l0b_0_physics"
+    ],
+    "vertices": 132,
+    "frames_read": 40,
+    "max_rig_px": 37.107,
+    "p95_rig_px": 34.1,
+    "mean_rig_px": 30.732,
+    "max_of_diagonal": 0.05028,
+    "moves": true
+   },
+   {
+    "row_scope": "part",
+    "row_kind": "evidence",
+    "row_subjects": [
+     "bottomwear"
+    ],
+    "part": "bottomwear",
+    "constraints": [
+     "skirt_swing_physics",
+     "skirt0a_0_physics",
+     "skirt0a_1_physics",
+     "skirt0a_1_translate",
+     "skirt0b_0_physics",
+     "skirt0b_1_physics",
+     "skirt0b_1_translate",
+     "skirt1a_0_physics",
+     "skirt1a_1_physics",
+     "skirt1a_1_translate",
+     "skirt1b_0_physics",
+     "skirt1b_1_physics",
+     "skirt1b_1_translate",
+     "skirt2a_0_physics",
+     "skirt2a_1_physics",
+     "skirt2a_1_translate",
+     "skirt2b_0_physics",
+     "skirt2b_1_physics",
+     "skirt2b_1_translate",
+     "skirt3a_0_physics",
+     "skirt3a_1_physics",
+     "skirt3a_1_translate",
+     "skirt3b_0_physics",
+     "skirt3b_1_physics",
+     "skirt3b_1_translate"
+    ],
+    "external_force": [
+     "skirt_swing_physics",
+     "skirt0a_0_physics",
+     "skirt0a_1_physics",
+     "skirt0b_0_physics",
+     "skirt0b_1_physics",
+     "skirt1a_0_physics",
+     "skirt1a_1_physics",
+     "skirt1b_0_physics",
+     "skirt1b_1_physics",
+     "skirt2a_0_physics",
+     "skirt2a_1_physics",
+     "skirt2b_0_physics",
+     "skirt2b_1_physics",
+     "skirt3a_0_physics",
+     "skirt3a_1_physics",
+     "skirt3b_0_physics",
+     "skirt3b_1_physics"
+    ],
+    "vertices": 124,
+    "frames_read": 40,
+    "max_rig_px": 30.95,
+    "p95_rig_px": 30.949,
+    "mean_rig_px": 27.956,
+    "max_of_diagonal": 0.04991,
+    "moves": true
+   },
+   {
+    "row_scope": "part",
+    "row_kind": "evidence",
+    "row_subjects": [
+     "hair_front"
+    ],
+    "part": "hair_front",
+    "constraints": [
+     "bang_r0_physics",
+     "bang_r1_physics",
+     "bang_r1_translate",
+     "bang_c0_physics",
+     "bang_c1_physics",
+     "bang_c1_translate",
+     "bang_l0_physics",
+     "bang_l1_physics",
+     "bang_l1_translate"
+    ],
+    "external_force": [
+     "bang_r0_physics",
+     "bang_r1_physics",
+     "bang_c0_physics",
+     "bang_c1_physics",
+     "bang_l0_physics",
+     "bang_l1_physics"
+    ],
+    "vertices": 35,
+    "frames_read": 40,
+    "max_rig_px": 6.512,
+    "p95_rig_px": 6.376,
+    "mean_rig_px": 4.043,
+    "max_of_diagonal": 0.02828,
+    "moves": true
+   }
+  ]
+ },
  "RECOMPOSITE_HOLES": {
   "status": "REPORTED",
   "error_px": 15129,
