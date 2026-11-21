@@ -2067,7 +2067,7 @@ function cmdAssemble(args: string[]): number {
       const cfg = loadEarlyConfig(config, 'assemble', project as ProjectRule | undefined);
       if ((cfg.assemble.cuts ?? []).length === 0) return usage('assemble --emit-fill-masks requires at least one entry in config.assemble.cuts');
       emitFillMasksStage(
-        { source, full, head, config, outDir: flags.get('--emit-fill-masks') as string, ...(seam === undefined ? {} : { seam: seam as SeamRule }), ...(project === undefined ? {} : { project: project as ProjectRule }) },
+        { source, full, head, config, outDir: flags.get('--emit-fill-masks') as string, ...(flags.has('--requirements') ? { requirements: flags.get('--requirements') as string } : {}), ...(seam === undefined ? {} : { seam: seam as SeamRule }), ...(project === undefined ? {} : { project: project as ProjectRule }) },
         console.log,
       );
       return EXIT_OK;

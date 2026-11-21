@@ -382,6 +382,7 @@ function verifyUnderPlateMasks(
 }
 
 export interface EmitFillMasksInput {
+  requirements?: string;
   source: string;
   full: string;
   head: string | null;
@@ -391,15 +392,39 @@ export interface EmitFillMasksInput {
   project?: ProjectRule;
 }
 
+function resolveAssemblyRequirements(
+  input: { requirements?: string; config: string },
+  cfg: Pick<ReturnType<typeof loadEarlyConfig>, 'requirements' | 'assemble'>,
+  project: ProjectRule,
+  requirementsFile: ReturnType<typeof readRequirements> | null = input.requirements === undefined ? null : readRequirements(input.requirements),
+): { requirements: BuildRequirements | null; effectiveSetup: ReturnType<typeof readRequirements>['setup_painting'] } {
+  const busyVisible = cfg.assemble.ground === 'busy' && project === 'visible';
+  const regionTake = (cfg.assemble.take ?? []).some(take => 'seed' in take);
+  // Issue #1418: a requirements file whose content reaches assembly must be the one config.requirements names,
+  // because assembly_config reads only config.requirements.
+  refuseUnnamedAssemblyRequirements(input.requirements, cfg.requirements, input.config, [
+    ...(regionTake ? ['setup_painting.rgb_tolerance (a region take)'] : []),
+    ...(busyVisible && requirementsFile?.setup_painting?.figure_mask !== undefined ? ['setup_painting.figure_mask (busy-visible)'] : []),
+  ]);
+  // Where requirements reach assembly, assemble reads them as build does: config.requirements, or the flag when the
+  // config declares none, the two being one file when both are given (buildRequirements). Elsewhere nothing here reads them.
+  const requirements = busyVisible || regionTake
+    ? buildRequirements(input.requirements, cfg.requirements, input.config) : null;
+  const effectiveSetup = requirements === null ? undefined : readRequirements(requirements.read).setup_painting;
+  return { requirements, effectiveSetup };
+}
+
 export function emitFillMasksStage(input: EmitFillMasksInput, log: Log): Array<{ into: string; path: string; sha256: string; opaquePx: number }> {
+  const requirementsFile = input.requirements === undefined ? null : readRequirements(input.requirements);
   const cfg = loadEarlyConfig(input.config, 'assemble', input.project);
   const { seam, project } = effectiveAssemblyRules(cfg.assemble, input);
+  const { requirements, effectiveSetup } = resolveAssemblyRequirements(input, cfg, project, requirementsFile);
   const src = readSource(input.source);
   const read = readRuns(input.full, input.head);
   const takenRuns = applyTakenLayers(read, src, cfg, input.config);
   const receipts = readEditorReceipts(cfg.assemble.editor_receipts, input.config);
   const editedParts = readEditedParts(cfg.assemble.edited_parts, input.config, cfg.assemble.plan ?? []);
-  const runs = applyTakenRegions(takenRuns, src, cfg, input.config, undefined, receipts, input.source);
+  const runs = applyTakenRegions(takenRuns, src, cfg, input.config, effectiveSetup, receipts, input.source, requirements?.read);
   const fields = stageFields(cfg, runs.single ? { w: src.width, h: src.height } : null);
   const strippedCuts = fields.cuts.map((q) => ({ from: q.from, into: q.into, polygon: q.polygon, draw: q.draw, overlap: q.overlap }));
   const caps = fields.limbs === undefined ? undefined : readCaps(input.config, fields.limbs);
@@ -517,19 +542,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   const cfg = { ...projection.config, seethrough: projection.config.seethrough! };
   const supportDeclarations = JSON.stringify(cfg.assemble.cuts ?? []);
   const { seam, project } = effectiveAssemblyRules(cfg.assemble, input);
-  const busyVisible = cfg.assemble.ground === 'busy' && project === 'visible';
-  const regionTake = (cfg.assemble.take ?? []).some(take => 'seed' in take);
-  // Issue #1418: a requirements file whose content reaches assembly must be the one config.requirements names,
-  // because assembly_config reads only config.requirements.
-  refuseUnnamedAssemblyRequirements(input.requirements, cfg.requirements, input.config, [
-    ...(regionTake ? ['setup_painting.rgb_tolerance (a region take)'] : []),
-    ...(busyVisible && requirementsFile?.setup_painting?.figure_mask !== undefined ? ['setup_painting.figure_mask (busy-visible)'] : []),
-  ]);
-  // Where requirements reach assembly, assemble reads them as build does: config.requirements, or the flag when the
-  // config declares none, the two being one file when both are given (buildRequirements). Elsewhere nothing here reads them.
-  const requirements = busyVisible || regionTake
-    ? buildRequirements(input.requirements, cfg.requirements, input.config) : null;
-  const effectiveSetup = requirements === null ? undefined : readRequirements(requirements.read).setup_painting;
+  const { requirements, effectiveSetup } = resolveAssemblyRequirements(input, cfg, project, requirementsFile);
   const src = readSource(input.source);
   const read = readRuns(input.full, input.head);
   // Issue #946: every declared receipt is held to its file, and under `required` every edited image needs one, before anything is assembled.

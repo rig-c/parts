@@ -1,14 +1,20 @@
-/** Issue #1418: a --requirements file whose content reaches assembly must be the one config.requirements names. */
+/** Issue #1418 / #1419: a --requirements file whose content reaches assembly must be the one config.requirements names, in both --out and --emit-fill-masks modes. */
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
+import { assembleConfig } from '../fixtures/assemble_fixture.ts';
 import { writeTakeRegionFixture } from '../fixtures/take_region.ts';
 import { writeTakeFixture } from '../fixtures/take_layers.ts';
+import type { AssembleResult } from '../src/assemble.ts';
 import { assembleStage } from '../src/build.ts';
 import { PartsError } from '../src/errors.ts';
 import { REGION_TOLERANCE_FIELD } from '../src/assembly-reading.ts';
+import { exportLayers } from '../src/layers.ts';
+import { readParts } from '../src/parts.ts';
 import { newRaster } from '../src/raster/types.ts';
-import { encodePngBytes } from '../src/raster/png.ts';
+import { decodePngBytes, encodePngBytes } from '../src/raster/png.ts';
+import { readLayerTag } from '../src/tags.ts';
 
 type Say = (name: string, pass: boolean, detail: string) => void;
 
@@ -134,4 +140,187 @@ export function runRequirementsNamedChecks(dir: string, say: Say): void {
   say('URQ09_A_FLAG_ONLY_FILE_BESIDE_A_WHOLE_LAYER_TAKE_IS_ACCEPTED_BYTE_IDENTICAL',
     wholeWithout === 'accepted' && wholeWith === 'accepted' && tree(join(whole, 'without')) === tree(join(whole, 'flag')),
     `without flag ${wholeWithout}; flag-only ${wholeWith}; outputs identical: ${tree(join(whole, 'without')) === tree(join(whole, 'flag'))}`);
+
+  // Issue #1419: `assemble --emit-fill-masks` reads requirements for a region take by the same rule as `--out`.
+  const fillHome = join(dir, 'fill-masks');
+  const fillCfgBase = writeTakeRegionFixture(fillHome);
+  const cliPath = join(import.meta.dir, '..', 'cli.ts');
+  // Cut polygon [4, 24) x [36, 44) (160 rig px) spans three zones on y in [36, 44):
+  // - x in [4, 8) (32 px): wrong-colour donor protrusion (Z), rejected at rgb_tolerance 0;
+  // - x in [8, 20) (96 px): hole in base full/parts/topwear.png, opaque only because the region take filled it from donor;
+  // - x in [20, 24) (32 px): base body pixels already opaque before the region take.
+  const cutEntry = { from: 'body', into: 'patch_cut', polygon: [[4, 36], [24, 36], [24, 44], [4, 44]], draw: 'front', overlap: 2 };
+  const fillCfg: Record<string, unknown> = { ...fillCfgBase, assemble: { ...(fillCfgBase.assemble as Record<string, unknown>), cuts: [cutEntry] } };
+  const fillWriteJson = (name: string, value: unknown): string => {
+    const path = join(fillHome, name);
+    mkdirSync(join(path, '..'), { recursive: true });
+    writeFileSync(path, JSON.stringify(value));
+    return path;
+  };
+  const fillCfgPath = fillWriteJson('config.json', fillCfg);
+  const fillReqsPath = join(fillHome, 'requirements.json');
+  const runEmitCli = (name: string, configPath: string, flag?: string): { status: number; out: string; masksDir: string } => {
+    const masksDir = join(fillHome, `masks-${name}`);
+    const args = [cliPath, 'assemble', '--source', join(fillHome, 'painting.png'), '--full', join(fillHome, 'full'), '--config', configPath,
+      ...(flag === undefined ? [] : ['--requirements', flag]), '--emit-fill-masks', masksDir];
+    const proc = spawnSync('bun', args, { encoding: 'utf8' });
+    return { status: proc.status ?? -1, out: `${proc.stdout ?? ''}${proc.stderr ?? ''}`.trim().replaceAll('\n', ' '), masksDir };
+  };
+  const runOutStage = (name: string, configPath: string, flag?: string): { ok: boolean; res?: AssembleResult; code: string; text: string; outDir: string } => {
+    const outDir = join(fillHome, `out-${name}`);
+    try {
+      const res = assembleStage(
+        { source: join(fillHome, 'painting.png'), full: join(fillHome, 'full'), head: null, config: configPath, ...(flag === undefined ? {} : { requirements: flag }) },
+        { partsJson: join(outDir, 'parts.json'), partsDir: join(outDir, 'parts'), recomposite: join(outDir, 'recomposite.png'), errorMap: join(outDir, 'error.png') },
+        () => {},
+      );
+      return { ok: true, res, code: '', text: '', outDir };
+    } catch (error) {
+      if (!(error instanceof PartsError)) throw error;
+      return { ok: false, code: error.problems.map(p => p.code).join(','), text: error.message, outDir };
+    }
+  };
+
+  // EFM01: region take + tolerance in config.requirements + one cut: --emit-fill-masks exits 0 and matches --out's taken-region cut piece and cutFillMasks bytes.
+  const emitCfgOnly = runEmitCli('config-only', fillCfgPath, undefined);
+  const outCfgOnly = runOutStage('config-only', fillCfgPath, undefined);
+  const maskPngPath = join(emitCfgOnly.masksDir, 'patch_cut.png');
+  const maskBytes = existsSync(maskPngPath) ? readFileSync(maskPngPath) : null;
+  const outMaskBytes = outCfgOnly.res?.cutFillMasks?.[0] === undefined ? null : encodePngBytes(outCfgOnly.res.cutFillMasks[0].mask);
+  const maskDecoded = maskBytes === null ? null : decodePngBytes(maskBytes, maskPngPath);
+  const outParts = outCfgOnly.ok ? readParts(join(outCfgOnly.outDir, 'parts.json')) : null;
+  const outCutRec = outParts?.parts.find(p => p.name === 'patch_cut') ?? null;
+  const outCutImg = outCutRec === null ? null : decodePngBytes(readFileSync(join(outCfgOnly.outDir, 'parts', 'patch_cut.png')), 'patch_cut.png');
+  const baseTopwear = decodePngBytes(readFileSync(join(fillHome, 'full', 'parts', 'topwear.png')), 'topwear.png');
+  let whiteTotal = 0, whiteInTakenHole = 0, whiteInBase = 0, whiteInProtrusion = 0, baseOpaqueInHole = 0, gridMatchesOutPiece = maskDecoded !== null && outCutRec !== null && outCutImg !== null;
+  if (maskDecoded !== null && outCutRec !== null && outCutImg !== null) {
+    for (let y = 0; y < 64; y++) {
+      for (let x = 0; x < 64; x++) {
+        const mi = (y * 64 + x) * 4;
+        const isWhite = maskDecoded.data[mi] === 255 && maskDecoded.data[mi + 1] === 255 && maskDecoded.data[mi + 2] === 255 && maskDecoded.data[mi + 3] === 255;
+        const isZero = maskDecoded.data[mi] === 0 && maskDecoded.data[mi + 1] === 0 && maskDecoded.data[mi + 2] === 0 && maskDecoded.data[mi + 3] === 0;
+        if (!isWhite && !isZero) gridMatchesOutPiece = false;
+        const inPieceBox = x >= outCutRec.x && x < outCutRec.x + outCutRec.w && y >= outCutRec.y && y < outCutRec.y + outCutRec.h;
+        const pieceAlpha = inPieceBox ? outCutImg.data[((y - outCutRec.y) * outCutRec.w + (x - outCutRec.x)) * 4 + 3] : 0;
+        if (isWhite !== (pieceAlpha > 0)) gridMatchesOutPiece = false;
+        if (isWhite) {
+          whiteTotal++;
+          if (x >= 4 && x < 8 && y >= 36 && y < 44) whiteInProtrusion++;
+          else if (x >= 8 && x < 20 && y >= 36 && y < 44) whiteInTakenHole++;
+          else if (x >= 20 && x < 24 && y >= 36 && y < 44) whiteInBase++;
+        }
+        if (x >= 8 && x < 20 && y >= 36 && y < 44) {
+          const bi = ((y - 32) * baseTopwear.width + (x - 8)) * 4 + 3;
+          if (baseTopwear.data[bi] > 0) baseOpaqueInHole++;
+        }
+      }
+    }
+  }
+  const maskHashMatchesOut = maskBytes !== null && outMaskBytes !== null && sha(maskBytes) === sha(outMaskBytes);
+  say('EFM01_REGION_TAKE_CONFIG_REQUIREMENTS_EMITS_FILL_MASK_MATCHING_OUT_TAKEN_REGION',
+    emitCfgOnly.status === 0 && outCfgOnly.ok && maskHashMatchesOut && gridMatchesOutPiece &&
+      whiteTotal === 128 && whiteInTakenHole === 96 && whiteInBase === 32 && whiteInProtrusion === 0 && baseOpaqueInHole === 0 &&
+      outCutRec?.x === 8 && outCutRec.y === 36 && outCutRec.w === 16 && outCutRec.h === 8 && outCutRec.opaque_px === 128,
+    `emit exit ${emitCfgOnly.status}${emitCfgOnly.status === 0 ? '' : ` (${emitCfgOnly.out})`}, sha=${maskBytes === null ? 'absent' : sha(maskBytes).slice(0, 12)} matches --out cutFillMasks=${maskHashMatchesOut} and --out parts/patch_cut.png (${outCutRec?.w}x${outCutRec?.h} @ ${outCutRec?.x},${outCutRec?.y})=${gridMatchesOutPiece}; white=${whiteTotal} (taken hole [8,20)x[36,44)=${whiteInTakenHole} where base opaque=${baseOpaqueInHole}, base [20,24)x[36,44)=${whiteInBase}, wrong-colour donor protrusion [4,8)x[36,44)=${whiteInProtrusion})`);
+
+  // EFM02: passing --requirements naming the config's file (or a copy of the same bytes) is accepted and byte-identical to the config-only run.
+  const emitWithFlag = runEmitCli('with-flag', fillCfgPath, relative(process.cwd(), fillReqsPath));
+  const fillCopyReqs = join(fillHome, 'copies', 'requirements.json');
+  mkdirSync(join(fillHome, 'copies'), { recursive: true });
+  cpSync(fillReqsPath, fillCopyReqs);
+  const emitWithCopy = runEmitCli('with-copy', fillCfgPath, fillCopyReqs);
+  const flagIdentical = maskBytes !== null && tree(emitCfgOnly.masksDir) === tree(emitWithFlag.masksDir);
+  const copyIdentical = maskBytes !== null && tree(emitCfgOnly.masksDir) === tree(emitWithCopy.masksDir);
+  say('EFM02_REGION_TAKE_FLAG_NAMING_CONFIG_REQUIREMENTS_IS_ACCEPTED_BYTE_IDENTICAL',
+    emitWithFlag.status === 0 && emitWithCopy.status === 0 && flagIdentical && copyIdentical,
+    `flag exit ${emitWithFlag.status}, copy exit ${emitWithCopy.status}; masks identical to config-only: flag=${flagIdentical}, copy=${copyIdentical}`);
+
+  // EFM03: a flag-only requirements file with a region take is refused as ASSEMBLE_REQUIREMENTS_UNDECLARED (and a conflicting file as BUILD_REQUIREMENTS_CONFLICT), as in --out mode.
+  const fillUndeclaredCfg = { ...fillCfg };
+  delete fillUndeclaredCfg.requirements;
+  const fillUndeclaredPath = fillWriteJson('undeclared.json', fillUndeclaredCfg);
+  const emitFlagOnly = runEmitCli('flag-only', fillUndeclaredPath, fillReqsPath);
+  const outFlagOnly = runOutStage('flag-only', fillUndeclaredPath, fillReqsPath);
+  const fillOtherReqs = fillWriteJson('other/requirements.json', { ...requirements, setup_painting: { ...requirements.setup_painting, rgb_tolerance: 8 } });
+  const emitConflict = runEmitCli('conflict', fillCfgPath, fillOtherReqs);
+  const outConflict = runOutStage('conflict', fillCfgPath, fillOtherReqs);
+  say('EFM03_REGION_TAKE_FLAG_ONLY_OR_CONFLICTING_REQUIREMENTS_IS_REFUSED_AS_IN_OUT',
+    emitFlagOnly.status === 1 && !outFlagOnly.ok && outFlagOnly.code === 'ASSEMBLE_REQUIREMENTS_UNDECLARED' &&
+      emitFlagOnly.out.includes(`FAIL  ${outFlagOnly.text}`) && !existsSync(emitFlagOnly.masksDir) &&
+      emitConflict.status === 1 && !outConflict.ok && outConflict.code === 'BUILD_REQUIREMENTS_CONFLICT' &&
+      emitConflict.out.includes(`FAIL  ${outConflict.text}`) && !existsSync(emitConflict.masksDir),
+    `flag-only exit ${emitFlagOnly.status} (${outFlagOnly.code}, matches --out=${emitFlagOnly.out.includes(`FAIL  ${outFlagOnly.text}`)}, dir absent=${!existsSync(emitFlagOnly.masksDir)}); conflict exit ${emitConflict.status} (${outConflict.code}, matches --out=${emitConflict.out.includes(`FAIL  ${outConflict.text}`)}, dir absent=${!existsSync(emitConflict.masksDir)})`);
+
+  // EFM04: no tolerance anywhere (neither config.requirements nor --requirements, or a requirements file without setup_painting.rgb_tolerance) is refused as ASSEMBLE_REGION_TAKE_TOLERANCE, as in --out mode.
+  const emitNoFile = runEmitCli('no-file', fillUndeclaredPath, undefined);
+  const outNoFile = runOutStage('no-file', fillUndeclaredPath, undefined);
+  const noTolReqs = fillWriteJson('no-tolerance-reqs.json', { spec: 'spine-parts-requirements/1', fps: 1, targets: [], requirements: [] });
+  const noTolCfgPath = fillWriteJson('no-tolerance-cfg.json', { ...fillCfg, requirements: 'no-tolerance-reqs.json' });
+  const emitNoTol = runEmitCli('no-tol', noTolCfgPath, undefined);
+  const outNoTol = runOutStage('no-tol', noTolCfgPath, undefined);
+  say('EFM04_REGION_TAKE_WITHOUT_TOLERANCE_IS_REFUSED_AS_IN_OUT',
+    emitNoFile.status === 1 && !outNoFile.ok && outNoFile.code === 'ASSEMBLE_REGION_TAKE_TOLERANCE' &&
+      emitNoFile.out.includes(`FAIL  ${outNoFile.text}`) && !existsSync(emitNoFile.masksDir) &&
+      emitNoTol.status === 1 && !outNoTol.ok && outNoTol.code === 'ASSEMBLE_REGION_TAKE_TOLERANCE' &&
+      emitNoTol.out.includes(`FAIL  ${outNoTol.text}`) && !existsSync(emitNoTol.masksDir),
+    `no-file exit ${emitNoFile.status} (matches --out=${emitNoFile.out.includes(`FAIL  ${outNoFile.text}`)}, dir absent=${!existsSync(emitNoFile.masksDir)}); no-tolerance exit ${emitNoTol.status} (matches --out=${emitNoTol.out.includes(`FAIL  ${outNoTol.text}`)}, dir absent=${!existsSync(emitNoTol.masksDir)})`);
+
+  // EFM05: a config with no region take writes the exact main bytes on the #1230 cut fixture, and a flag-only requirements file beside it moves no byte.
+  const noRegionHome = join(fillHome, 'no-region-1230');
+  mkdirSync(noRegionHome, { recursive: true });
+  const W = 64, H = 64;
+  const sourceRaster = newRaster(W, H);
+  const layerRaster = newRaster(W, H);
+  const faceLayers = (['face', 'eyewhite-r', 'eyewhite-l'] as const).map((name, k) => {
+    const px = newRaster(W, H);
+    for (let y = 2; y < 10; y++) for (let x = 2 + k * 10; x < 10 + k * 10; x++) px.data.set([90, 90, 90, 255], (y * W + x) * 4);
+    return { name, tag: readLayerTag(name)!, pixels: px, file: null, left: 0, top: 0, right: W, bottom: H, depth: 0.4 - k * 0.01, drawOrder: k, opaquePx: 64 };
+  });
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const idx = (y * W + x) * 4;
+    if (x >= 24 && x < 40 && y >= 20 && y < 44) {
+      sourceRaster.data.set([210, 60, 70, 255], idx);
+      layerRaster.data.set([210, 60, 70, 255], idx);
+    } else if (x >= 16 && x < 48 && y >= 12 && y < 52) {
+      sourceRaster.data.set([70, 90, 160, 255], idx);
+      layerRaster.data.set([70, 90, 160, 255], idx);
+    } else {
+      sourceRaster.data.set([245, 245, 245, 255], idx);
+    }
+  }
+  for (const fl of faceLayers) for (let i = 0; i < W * H; i++) if (fl.pixels.data[i * 4 + 3] > 0) sourceRaster.data.set([90, 90, 90, 255], i * 4);
+  const noRegionSource = join(noRegionHome, 'source.png');
+  writeFileSync(noRegionSource, encodePngBytes(sourceRaster));
+  const noRegionFull = join(noRegionHome, 'full');
+  exportLayers({
+    form: 'wrapper',
+    source: 'synthetic-cut',
+    canvas: { w: W, h: H },
+    layers: [...faceLayers, { name: 'bottomwear', tag: readLayerTag('bottomwear')!, pixels: layerRaster, file: null, left: 0, top: 0, right: W, bottom: H, depth: 0.5, drawOrder: 3, opaquePx: 1280 }],
+    hidden: [],
+  }, noRegionFull);
+  const noRegionBaseCfg = assembleConfig({
+    plan: [['face', 'full', 'face'], ['eye_r', 'full', 'eyewhite-r'], ['eye_l', 'full', 'eyewhite-l'], ['skirt', 'full', 'bottomwear']],
+    extend: [],
+    resolution: W,
+    rigScale: 1,
+  });
+  delete (noRegionBaseCfg.seethrough as Record<string, unknown>).head_box;
+  const noRegionCfgPath = join(noRegionHome, 'config.json');
+  writeFileSync(noRegionCfgPath, JSON.stringify({
+    ...noRegionBaseCfg,
+    assemble: { ...(noRegionBaseCfg.assemble as Record<string, unknown>), cuts: [{ from: 'skirt', into: 'sash', polygon: [[24, 20], [40, 20], [40, 44], [24, 44]], draw: 'front', overlap: 2 }] },
+    regions: { face: 'root', eye_r: 'root', eye_l: 'root', skirt: 'root', sash: 'root' },
+    meshes: {},
+  }, null, 2));
+  const noRegionMasksPlain = join(noRegionHome, 'masks-plain');
+  const noRegionMasksFlag = join(noRegionHome, 'masks-flag');
+  const noRegionRunPlain = spawnSync('bun', [cliPath, 'assemble', '--source', noRegionSource, '--full', noRegionFull, '--config', noRegionCfgPath, '--emit-fill-masks', noRegionMasksPlain], { encoding: 'utf8' });
+  const noRegionRunFlag = spawnSync('bun', [cliPath, 'assemble', '--source', noRegionSource, '--full', noRegionFull, '--config', noRegionCfgPath, '--requirements', fillReqsPath, '--emit-fill-masks', noRegionMasksFlag], { encoding: 'utf8' });
+  const expectedMainSashSha = 'bf5c61dcd07516f89cb850e66418d6dae4545f2e39ede207dce54e1a2508a310';
+  const sashPlainSha = existsSync(join(noRegionMasksPlain, 'sash.png')) ? sha(readFileSync(join(noRegionMasksPlain, 'sash.png'))) : 'absent';
+  say('EFM05_NO_REGION_TAKE_EMIT_FILL_MASKS_IS_BYTE_IDENTICAL_TO_MAIN',
+    noRegionRunPlain.status === 0 && noRegionRunFlag.status === 0 &&
+      sashPlainSha === expectedMainSashSha && tree(noRegionMasksPlain) === tree(noRegionMasksFlag),
+    `plain exit ${noRegionRunPlain.status}, sash.png sha256=${sashPlainSha} (want ${expectedMainSashSha}); flag-only exit ${noRegionRunFlag.status}, identical=${tree(noRegionMasksPlain) === tree(noRegionMasksFlag)}`);
 }
