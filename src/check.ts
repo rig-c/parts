@@ -11,6 +11,7 @@ import { ART_JOINT_LINE, artJointLine, type ArtJointLine } from './artjoints.ts'
 import { BOUNDARY_COLOUR_LINE, BOUNDARY_COLOUR_UNMEASURED_CODE, BOUNDARY_COLOUR_UNMEASURED_SUFFIX, measureBoundaryColour, type BoundaryColourMeasured } from './boundarycolour.ts';
 import { BEHIND_SEAM_LINE, behindTurnAnimations, measureBehindSeams, type BehindSeamsMeasured } from './behindseams.ts';
 import { baseAnchorMoves, type AnchorRegion } from './baseanchor.ts';
+import { PHYSICS_CONTRIBUTES_LINE, measurePhysicsContribution, physicsLine, type PhysicsContributionLine } from './physicscontrib.ts';
 /**
  * The check stage: build a rig through rig-c, gate it under both
  * profiles, render its idle, and measure the two things the gate cannot see —
@@ -2843,6 +2844,8 @@ export interface CheckFigures {
   [MOTION_SEAM_LINE]?: MotionSeamLine;
   /** Written only when the rig declares a physics constraint and has an idle (issue #501): {@link ClothLine}, a warning, never a bar. */
   [CLOTH_LINE]?: ClothLine;
+  /** Written only when it reads a part under physics (issue #1320): {@link PhysicsContributionLine}, a warning, never a bar. */
+  [PHYSICS_CONTRIBUTES_LINE]?: PhysicsContributionLine;
   [COINCIDE_LINE]?: SupportReport;
   RECOMPOSITE_HOLES: ReportedLine;
   /** Issue #933: openings inside the figure over motion across undeclared setup-overlapping layer pairs; omitted when SKIP. */
@@ -3277,6 +3280,8 @@ export interface CheckReport {
   behindSeams: BehindSeamsMeasured | null;
   /** `CLOTH_SETTLES` (issue #501): a warning, never a bar — in `check.json` only when the rig declares a physics constraint and has an idle; its SKIP is printed either way. */
   cloth: ClothLine;
+  /** `PHYSICS_CONTRIBUTES` (issue #1320): a warning, never a bar — in `check.json` only when it reads a part under physics; its SKIP is printed either way. */
+  physics?: PhysicsContributionLine;
   /** `WIND_BAND` (issue #590): the steady-wind band each declared seam pair holds, written under `--wind-band` only. */
   windBand?: WindBandLine;
   /**
@@ -3298,9 +3303,9 @@ export function barsSummary(r: Pick<CheckReport, 'bars'>): string {
   return `${measured.length} of ${measured.length + skipped.length} bar(s) measured, ${skipped.length} skipped${skipped.length === 0 ? '' : ` (${skipped.map((s) => s.bar).join(', ')})`}`;
 }
 
-/** The summary's warning clause: each warning line that read something, named, with the warnings they printed together, and `SETUP_PAINTING_MOSTLY_UNCOVERED` only when it printed one (issue #1421); empty when none read. */
+/** The summary's warning clause: each warning line that read something, named, with the warnings they printed together, and `PHYSICS_CONTRIBUTES` (issue #1320) and `SETUP_PAINTING_MOSTLY_UNCOVERED` only when they printed one (issue #1421); empty when none read. */
 export function warningsClause(r: Pick<CheckReport, 'motionSeam' | 'cloth' | 'figures'>): string {
-  const read = [...(r.motionSeam.status === 'SKIP' || (r.motionSeam.roots !== undefined && r.motionSeam.pairs.every(p => p.root !== undefined)) ? [] : [{ name: MOTION_SEAM_LINE, n: r.motionSeam.warnings }]), ...(r.cloth.status === 'SKIP' ? [] : [{ name: CLOTH_LINE, n: r.cloth.warnings }]), ...(setupPaintingWarningCount(r.figures[SETUP_PAINTING_LINE]) === 0 ? [] : [{ name: SETUP_PAINTING_UNCOVERED_WARNING, n: setupPaintingWarningCount(r.figures[SETUP_PAINTING_LINE]) }])];
+  const read = [...(r.motionSeam.status === 'SKIP' || (r.motionSeam.roots !== undefined && r.motionSeam.pairs.every(p => p.root !== undefined)) ? [] : [{ name: MOTION_SEAM_LINE, n: r.motionSeam.warnings }]), ...(r.cloth.status === 'SKIP' ? [] : [{ name: CLOTH_LINE, n: r.cloth.warnings }]), ...((r.figures[PHYSICS_CONTRIBUTES_LINE]?.warnings ?? 0) === 0 ? [] : [{ name: PHYSICS_CONTRIBUTES_LINE, n: r.figures[PHYSICS_CONTRIBUTES_LINE]?.warnings ?? 0 }]), ...(setupPaintingWarningCount(r.figures[SETUP_PAINTING_LINE]) === 0 ? [] : [{ name: SETUP_PAINTING_UNCOVERED_WARNING, n: setupPaintingWarningCount(r.figures[SETUP_PAINTING_LINE]) }])];
   if (read.length === 0) return '';
   return `; ${read.reduce((a, x) => a + x.n, 0)} warning(s) (${read.map((x) => x.name).join(', ')}, not a bar)`;
 }
@@ -3327,7 +3332,7 @@ export type CheckStatus = 'PASS' | 'FAIL' | 'SKIP' | 'WARN' | 'CLEAR' | 'REPORTE
  * never skipped); `loop` SKIP when `loop_max_diff` is null, `seam` SKIP when `seam_mean` is null, otherwise FAIL when
  * {@link barsNotMet} names it and PASS when it does not. Every other block carries its own `status` key and is copied:
  * the judgement lines, then {@link FOLD_LINE}, {@link LEVEL_LINE}, {@link STRESS_LINE}, {@link LIMB_LINE},
- * {@link SWEEP_LINE}, {@link MOTION_SEAM_LINE}, {@link CLOTH_LINE}, the reported lines, {@link SOURCE_LINE} and
+ * {@link SWEEP_LINE}, {@link MOTION_SEAM_LINE}, {@link CLOTH_LINE}, {@link PHYSICS_CONTRIBUTES_LINE}, the reported lines, {@link SOURCE_LINE} and
  * {@link WIND_BAND_LINE}, each where the file writes it. The `requirements` block's lines are not bars and are not read here.
  */
 export function checkStatuses(fig: Omit<CheckFigures, 'spec' | 'bar_outcomes' | 'build'>): Record<string, CheckStatus> {
@@ -3335,7 +3340,7 @@ export function checkStatuses(fig: Omit<CheckFigures, 'spec' | 'bar_outcomes' | 
   const bar = (id: 'gate' | 'loop' | 'seam', measured: boolean): CheckStatus => (!measured ? 'SKIP' : checkBarStatus(raw, id) === 'FAIL' ? 'FAIL' : 'PASS');
   const out: Record<string, CheckStatus> = { gate: bar('gate', true), loop: bar('loop', fig.loop_max_diff !== null), seam: bar('seam', fig.seam_mean !== null) };
   for (const n of JUDGEMENT_LINES) out[n] = fig[n].status;
-  for (const n of [FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, MOTION_SEAM_LINE, CLOTH_LINE, ...REPORTED_LINES, 'figure_openings', SOURCE_LINE, WIND_BAND_LINE, ART_JOINT_LINE, CUT_MATERIAL_LINE, SETUP_PAINTING_LINE, BOUNDARY_COLOUR_LINE, BEHIND_SEAM_LINE, COINCIDE_LINE] as const) {
+  for (const n of [FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, MOTION_SEAM_LINE, CLOTH_LINE, PHYSICS_CONTRIBUTES_LINE, ...REPORTED_LINES, 'figure_openings', SOURCE_LINE, WIND_BAND_LINE, ART_JOINT_LINE, CUT_MATERIAL_LINE, SETUP_PAINTING_LINE, BOUNDARY_COLOUR_LINE, BEHIND_SEAM_LINE, COINCIDE_LINE] as const) {
     const l = fig[n];
     if (l !== undefined) out[n] = l.status;
   }
@@ -7435,6 +7440,19 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     cloth = unread === undefined ? clothLine(rows, idle.fps, idle.frames.length, idle.duration) : clothLine([], idle.fps, idle.frames.length, idle.duration, unread);
   }
 
+  // 3g. every part under physics, the same compile posed with physics on and off over the idle (issue #1320): a
+  // warning, never a bar; SKIP, named, with no idle, no parts or no physics constraint
+  let physics: PhysicsContributionLine;
+  if (idle === null) physics = physicsLine([], IDLE_FPS, 0, 'none', "rig-c's default environment", inp.noIdle ?? 'no idle');
+  else if (full === null) physics = physicsLine([], IDLE_FPS, 0, 'none', "rig-c's default environment", inp.noParts ?? 'no parts.json');
+  else {
+    const rest = attachmentPoses(join(idle.dir, GEOMETRY_FILE), idle.written)[0] ?? new Map<string, PosedAttachment>();
+    physics = measurePhysicsContribution(officialRenderer(), buildDir, inp.rig, inp.motion, full.parts.parts.map((p) => ({
+      name: p.name, w: p.w, h: p.h, bound: boundBones(inp.rig, p.name), rest: rest.get(p.name) === undefined ? undefined : { vertices: (rest.get(p.name) as PosedAttachment).rest, triangles: (rest.get(p.name) as PosedAttachment).triangles },
+      art: () => placedArt(p.x, p.y, readPng(join(dirname(inp.partsDir), partImageReference(p).path))),
+    })), inp.stage, idle.fps);
+  }
+
   // 4. the setup pose as a one-key throwaway animation — the seam reads it against the parts, the source line against
   // the painting — and, beside it, the same pose with the eyes shut
   let seam: SeamFigures | null = null;
@@ -7731,6 +7749,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     ...(sweep === null ? {} : { [SWEEP_LINE]: sweep }),
     ...(motionSeam.pairs.length === 0 && motionSeam.roots === undefined && motionSeam.required === undefined ? {} : { [MOTION_SEAM_LINE]: motionSeam }),
     ...(stripped === null || idle === null ? {} : { [CLOTH_LINE]: cloth }),
+    ...(physics.status === 'SKIP' ? {} : { [PHYSICS_CONTRIBUTES_LINE]: physics }),
     RECOMPOSITE_HOLES: inp.parts === null ? { status: 'SKIP', reason: inp.noParts ?? '' } : holesLine(inp.parts),
     ...(figureOpenings.status === 'SKIP' ? {} : { figure_openings: figureOpenings }),
     ...(sourceRead === null ? {} : { [SOURCE_LINE]: sourceRead }),
@@ -7848,6 +7867,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     motionSeam,
     figureOpenings,
     cloth,
+    physics,
     boundaryColour,
     behindSeams,
     ...(sweepSteps.size === 0 ? {} : { sweepSteps }),

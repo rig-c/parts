@@ -11,6 +11,7 @@ import { compile as compileBoundaryRig } from '@rig-c/core/compile';
 import { modelDocument as boundaryModelDocument } from '@rig-c/core/model';
 import { readModel as readBoundaryModel, poseRawSetup as boundarySetup, poseRawAnimation as boundaryAnimation } from '@rig-c/core/core';
 import { stretchLine as boundaryStretchLine } from './src/check.ts';
+import { PHYSICS_CONTRIBUTES_LINE, PHYSICS_LEVERS_TEXT, PHYSICS_OFF_TEXT, physicsDecls, physicsReach, type PhysicsContributionLine, type PhysicsContributionRow } from './src/physicscontrib.ts';
 import { blankRigcRunClock } from './fixtures/rigc_run_clock.ts';
 import { CONTOUR_TURN_STAGE_A_HASHES, writeContourTurnFixture } from './fixtures/contour-turn.ts';
 import { runRigcRunClockChecks } from './fixtures/rigc_run_clock_checks.ts';
@@ -23852,7 +23853,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
         JSON.stringify(cpf.loop_physics) === '[{"name":"bob_phys","bone":"bob","in":"rig.json","row_scope":"rig","row_kind":"evidence","row_subjects":[]}]' &&
         Object.keys(cpf).join(',') === CHECK_KEYS.flatMap(key => {
           if (key === 'loop_max_diff') return [key, 'loop_physics'];
-          if (key === 'RECOMPOSITE_HOLES') return [CLOTH_LINE, key];
+          if (key === 'RECOMPOSITE_HOLES') return [CLOTH_LINE, PHYSICS_CONTRIBUTES_LINE, key];
           return [key];
         }).join(',') &&
         cp.out.split('\n').filter((l) => l.startsWith('  loop physics: ')).length === 1 &&
@@ -23886,6 +23887,92 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
         JSON.stringify(plantedPhys.motion) === '{"animations":{"idle":{"duration":1,"tracks":[{"bone":"a","property":"rotate","keys":[]}]}}}',
       `CK01's rig: withoutPhysics ${plain === null ? 'null' : 'NOT NULL'}; check.json loop_physics ${fig !== null && 'loop_physics' in fig ? 'WRITTEN' : 'absent'}; loop_max_diff ${String(fig?.loop_max_diff)} against its own idle_frames/ ends ${ownEnds ?? 'not read'}; planted (a physics constraint in rig.json listed by a skin, one in motion.json keyed by a track, beside an ik): left out ${JSON.stringify(plantedPhys?.physics ?? null)}; rig ${JSON.stringify(plantedPhys?.rig ?? null)}; motion ${JSON.stringify(plantedPhys?.motion ?? null)}`,
       'a rig with no physics constraint is measured as it always was — no second build, the figure the idle render\'s own ends, no key added to check.json, no line — and a rig with one has every declaration rig-c reads left out (rig.json constraints, motion.json\'s table) with what only activates or keys them (a skin\'s list, a physics track), and nothing else: the ik stays',
+    );
+
+    // Issue #1320: PHYSICS_CONTRIBUTES — what physics adds to a part, read against the same compiled build posed with
+    // the poser's physics off. CK512's rig: the idle slides the root and `bob` (the front part's bone) lags it under
+    // `bob_phys`. The back part rides `root` and no physics reaches it. The same rig with `inertia: 0` (bob takes up
+    // none of its carrier's motion) is the exact zero; with `wind: 1` beside it, the world pushes bob.
+    const physRun = (label: string, extra: Record<string, unknown>) => {
+      const d = join(dir, `phc-${label}`);
+      writeCheckRig(d);
+      const r = JSON.parse(readFileSync(join(d, 'rig.json'), 'utf8')) as { bones: unknown[]; slots: Array<{ bone: string }>; constraints?: unknown[] };
+      r.bones.push({ name: 'bob', parent: 'root', x: 0, y: 0 });
+      r.slots[1].bone = 'bob';
+      r.constraints = [{ ...BOB_PHYSICS, ...extra }];
+      writeFileSync(join(d, 'rig.json'), `${JSON.stringify(r, null, 2)}\n`);
+      const res = runCli(['check', '--rig', d, '--out', join(dir, `phc-${label}-out`)]);
+      const f = readJsonFile(join(dir, `phc-${label}-out`, 'check.json'));
+      const line = f?.[PHYSICS_CONTRIBUTES_LINE] as PhysicsContributionLine | undefined;
+      return { ...res, fig: f, line, rows: line?.status === 'SKIP' || line === undefined ? [] : line.rows };
+    };
+    const head = (out: string): string | null => out.split('\n').map((l) => l.trim()).find((l) => l.startsWith(`${PHYSICS_CONTRIBUTES_LINE}: `)) ?? null;
+    const warns = (out: string): string[] => out.split('\n').map((l) => l.trim()).filter((l) => l.startsWith(`WARN ${PHYSICS_CONTRIBUTES_LINE}: `));
+    const measuredRow = (r: PhysicsContributionRow | undefined): Extract<PhysicsContributionRow, { moves: boolean }> | null => r !== undefined && 'moves' in r ? r : null;
+    const active = physRun('active', {});
+    const activeRow = measuredRow(active.rows[0]);
+    say(
+      'PHC01_A_PART_ON_A_PHYSICS_BONE_READS_ABOVE_0_AND_A_PART_NO_PHYSICS_REACHES_IS_NO_ROW',
+      active.status === 0 && active.line?.status === 'CLEAR' && active.rows.length === 1 && activeRow !== null &&
+        activeRow.part === CHECK_PARTS[1].name && JSON.stringify(activeRow.constraints) === '["bob_phys"]' && activeRow.moves &&
+        activeRow.max_rig_px > 0 && activeRow.max_rig_px >= activeRow.p95_rig_px && activeRow.p95_rig_px >= activeRow.mean_rig_px &&
+        active.line.off === PHYSICS_OFF_TEXT && warns(active.out).length === 0 && head(active.out)?.startsWith(`${PHYSICS_CONTRIBUTES_LINE}: CLEAR — 1 part(s) under physics`) === true,
+      `exit ${active.status}; ${head(active.out) ?? 'no line'}; rows ${JSON.stringify(active.rows)}`,
+      'the part on the lagging bone moves by physics over the same build posed with physics off; the back part rides root, which no constraint reaches, and is no row (the public examples\' figures are held exactly by CH04 against expected/check.json)',
+    );
+    const still = physRun('inertia0', { inertia: 0 });
+    const stillRow = measuredRow(still.rows[0]);
+    const stillWarn = stillRow === null ? '' : `WARN ${PHYSICS_CONTRIBUTES_LINE}: part "${CHECK_PARTS[1].name}" is under physics constraint(s) "bob_phys" and reads 0 over ${stillRow.frames_read} frame(s): none of its ${stillRow.vertices} art vertices is moved by physics on the idle; ${PHYSICS_LEVERS_TEXT}`;
+    say(
+      'PHC02_INERTIA_0_READS_EXACTLY_0_AND_WARNS_BY_NAME',
+      still.line?.status === 'WARN' && still.line.warnings === 1 && stillRow !== null && !stillRow.moves &&
+        stillRow.max_rig_px === 0 && stillRow.p95_rig_px === 0 && stillRow.mean_rig_px === 0 && stillRow.max_of_diagonal === 0 &&
+        JSON.stringify(warns(still.out)) === JSON.stringify([stillWarn]),
+      `exit ${still.status}; ${head(still.out) ?? 'no line'}; ${JSON.stringify(warns(still.out))}; row ${JSON.stringify(stillRow)}`,
+      'a constraint that takes up none of its carrier\'s motion, with no wind and no gravity, adds nothing: the residual is exactly 0 and the warning names the rule, the part, its constraint, the value and the fields that would move it, with no value prescribed',
+    );
+    const verdict = (f: Record<string, unknown> | null): string => JSON.stringify({ PASS: f?.PASS, bar_outcomes: f?.bar_outcomes });
+    say(
+      'PHC03_THE_WARNING_MOVES_NO_VERDICT',
+      still.status === active.status && verdict(still.fig) === verdict(active.fig) && still.out.includes('check: PASS') &&
+        still.out.split('\n').some((l) => l.startsWith('check: PASS') && l.endsWith(`1 warning(s) (CLOTH_SETTLES, ${PHYSICS_CONTRIBUTES_LINE}, not a bar)`)) &&
+        !active.out.split('\n').some((l) => l.startsWith('check: ') && l.includes(PHYSICS_CONTRIBUTES_LINE)),
+      `exit ${active.status} / ${still.status}; ${active.out.split('\n').find((l) => l.startsWith('check: ')) ?? 'no summary'} / ${still.out.split('\n').find((l) => l.startsWith('check: ')) ?? 'no summary'}`,
+      'with and without the warning the exit status, PASS, and the bar outcomes are the same; the summary names the line only when it printed a warning',
+    );
+    const noPhysicsHead = head(ok.out);
+    say(
+      'PHC04_A_RIG_WITH_NO_PHYSICS_IS_A_NAMED_SKIP_AND_NO_KEY',
+      fig !== null && !(PHYSICS_CONTRIBUTES_LINE in fig) &&
+        noPhysicsHead === `${PHYSICS_CONTRIBUTES_LINE}: SKIP — the rig declares no physics constraint (rig.json's constraints, motion.json's physics), so no part is under physics`,
+      `${noPhysicsHead ?? 'no line'}; check.json ${fig !== null && PHYSICS_CONTRIBUTES_LINE in fig ? 'HAS the key' : 'has no key'}`,
+      'nothing is measured on a rig no physics constraint is declared in, and that is said by name, never a pass',
+    );
+    const pushed = physRun('wind', { inertia: 0, wind: 1 });
+    const pushedRow = measuredRow(pushed.rows[0]);
+    say(
+      'PHC05_WIND_OR_GRAVITY_ON_A_CONSTRAINT_IS_STATED_ON_THE_ROW_AND_THE_LINE',
+      pushed.line !== undefined && pushed.line.status !== 'SKIP' && pushedRow !== null && JSON.stringify(pushedRow.external_force) === '["bob_phys"]' &&
+        JSON.stringify(activeRow?.external_force) === '[]' &&
+        head(pushed.out)?.includes(', 1 of them under a constraint that declares wind or gravity') === true &&
+        head(active.out)?.includes('declares wind or gravity') === false,
+      `${head(pushed.out) ?? 'no line'}; row ${JSON.stringify(pushedRow)}`,
+      'a constraint that declares wind or gravity is named on its part\'s row and counted on the line, since what physics adds there is the world\'s push as well as the carrier\'s motion',
+    );
+    // A part is under physics through a transform constraint too: `examples/wind`'s skirt trees hang from `hip` and are
+    // turned from `skirt_swing`, the bone its physics constraint names. The inline rig: `swing` under physics, `tree`
+    // under root driven from it, `leaf` under `tree`; `aside` under root, driven by nothing.
+    const reachRig = {
+      bones: [{ name: 'root' }, { name: 'swing', parent: 'root' }, { name: 'tree', parent: 'root' }, { name: 'leaf', parent: 'tree' }, { name: 'aside', parent: 'root' }],
+      constraints: [{ type: 'physics', name: 'swing_phys', bone: 'swing' }, { type: 'transform', name: 'turn', source: 'swing', bones: ['tree'] }],
+    };
+    const reach = physicsReach(reachRig, physicsDecls(reachRig, {}));
+    const reachText = JSON.stringify([...reach].map(([b, s]) => [b, [...s]]).sort());
+    say(
+      'PHC06_A_BONE_A_TRANSFORM_CONSTRAINT_DRIVES_FROM_A_PHYSICS_BONE_IS_UNDER_PHYSICS_WITH_ITS_CHILDREN',
+      reachText === '[["leaf",["swing_phys"]],["swing",["swing_phys"]],["tree",["swing_phys"]]]',
+      reachText,
+      'the transform target and the bone under it are reached through the transform\'s source; a bone no physics bone parents or drives is not',
     );
 
     const seamRig = join(dir, 'seam');
@@ -53108,7 +53195,7 @@ function runRetuneSuite(): number {
     const order9 = 'pass,measured,not_met,skipped,physics,line,status';
     // The mutants, on the WARN revision: a side that leaves the warning lines out of its statuses, and one whose line is
     // composed a second way, off the five fields the hold reads.
-    const warningLines: string[] = [MOTION_SEAM_LINE, CLOTH_LINE];
+    const warningLines: string[] = [MOTION_SEAM_LINE, CLOTH_LINE, PHYSICS_CONTRIBUTES_LINE];
     const dropped9 = warnSide9 === undefined ? [] : checkSideDrift({ ...warnSide9, status: Object.fromEntries(Object.entries(warnSide9.status).filter(([k]) => !warningLines.includes(k))) }, warnRun9.out, warnRun9.fig);
     const twice9 = warnSide9 === undefined ? [] : checkSideDrift({ ...warnSide9, line: `check: ${warnSide9.pass ? 'PASS' : 'FAIL'}; ${warnSide9.measured.length} of ${warnSide9.measured.length + warnSide9.skipped.length} bar(s) measured, ${warnSide9.skipped.length} skipped` }, warnRun9.out, warnRun9.fig);
     const statusText9 = (side: CheckSide | undefined): string => (side === undefined ? 'none' : Object.entries(side.status).map(([k, st]) => `${k} ${st}`).join(', '));
@@ -53119,18 +53206,19 @@ function runRetuneSuite(): number {
         driftRev9.length === 0 &&
         driftIn9.length === 0 &&
         side9?.status[CLOTH_LINE] === 'CLEAR' &&
+        side9.status[PHYSICS_CONTRIBUTES_LINE] === 'CLEAR' &&
         side9.status.RECOMPOSITE_HOLES === 'SKIP' &&
         warn9.e === null &&
         warnRun9.status === 0 &&
         driftWarn9.length === 0 &&
         warnProv9?.check.input.status[CLOTH_LINE] === 'CLEAR' &&
         warnSide9?.status[CLOTH_LINE] === 'WARN' &&
-        warnSide9.line.endsWith(`warning(s) (${CLOTH_LINE}, not a bar)`) &&
+        warnSide9.status[PHYSICS_CONTRIBUTES_LINE] === 'WARN' &&
+        warnSide9.line.endsWith(`warning(s) (${CLOTH_LINE}, ${PHYSICS_CONTRIBUTES_LINE}, not a bar)`) &&
         !warnSide9.line.includes('; 0 warning(s)') &&
         Object.keys(keys9?.input ?? {}).join() === order9 &&
         Object.keys(keys9?.revision ?? {}).join() === order9 &&
-        dropped9.length === 1 &&
-        dropped9[0] === `status ${CLOTH_LINE}: carried absent, check.json WARN` &&
+        JSON.stringify(dropped9) === JSON.stringify([`status ${CLOTH_LINE}: carried absent, check.json WARN`, `status ${PHYSICS_CONTRIBUTES_LINE}: carried absent, check.json WARN`]) &&
         twice9.length === 1 &&
         twice9[0].startsWith('line: first difference at character '),
       `RN01's revision: check exit ${rev9.status}, carried ${JSON.stringify(side9?.line ?? null)}, ${driftRev9.length} difference(s)${driftRev9.length === 0 ? '' : `: ${driftRev9.join(' | ')}`}; statuses ${statusText9(side9)}; its input: check exit ${in9.status}, ${driftIn9.length} difference(s)${driftIn9.length === 0 ? '' : `: ${driftIn9.join(' | ')}`}; key order ${Object.keys(keys9?.revision ?? {}).join(',')}; physics moved to body: retune ${codes(warn9.e)} (input ${warnProv9?.check.input.status[CLOTH_LINE] ?? 'none'}, revision ${warnSide9?.status[CLOTH_LINE] ?? 'none'}), check exit ${warnRun9.status}, carried ${JSON.stringify(warnSide9?.line ?? null)}, ${driftWarn9.length} difference(s)${driftWarn9.length === 0 ? '' : `: ${driftWarn9.join(' | ')}`}; warning statuses dropped: ${dropped9.join(' | ') || 'not caught'}; line composed off the five fields: ${twice9.join(' | ') || 'not caught'}`,
