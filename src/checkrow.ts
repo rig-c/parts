@@ -46,6 +46,7 @@ export const CHECK_ROW_PATHS = {
   'PART_SUPPORT_REPORT.pairs': ['PART_SUPPORT_REPORT.pairs'],
   'PART_SUPPORT_REPORT.raw_pairs': ['PART_SUPPORT_REPORT.raw_pairs'],
   'PART_SUPPORT_REPORT.unowned.regions': ['PART_SUPPORT_REPORT.unowned.regions'],
+  'PHYSICS_CONTRIBUTES.rows': ['PHYSICS_CONTRIBUTES.rows'],
   'SEAM_OVER_MOTION.pairs': ['SEAM_OVER_MOTION.pairs'],
   'SEAM_OVER_MOTION.required.pairs': ['SEAM_OVER_MOTION.required.pairs'],
   'SEAM_OVER_MOTION.required.pairs[].open_frames': ['SEAM_OVER_MOTION.required.pairs[].open_frames'],
