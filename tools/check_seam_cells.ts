@@ -98,6 +98,39 @@ export function runSeamCellChecks(home: string, say: Say, base: Record<string, u
     JSON.stringify({ plants: plants.length, refused: plants.filter(p => p.refused).length, restored: readFileSync(path, 'utf8') === original }),
     'Missing and unequal cells refuse for frame/worst in open/covered hits. Original sidecar bytes are restored.');
 
+  const emptyCellsFrame: MotionCellFrame = {
+    ...checkRow('seam_cells.frames', 'pair', false, ['left', 'right']),
+    pair: 'left|right', animation: 'idle', index: 0, time: 0, px: 0, cell: 1, box: [0, 0, 10, 6], cells: [],
+  };
+  const secondPairFrame: MotionCellFrame = {
+    ...checkRow('seam_cells.frames', 'pair', false, ['upper', 'lower']),
+    pair: 'upper|lower', animation: 'idle', index: 3, time: 0.25, px: 2, cell: 0.5, box: [-4, -2, 8, 6],
+    cells: [
+      { ...checkRow('seam_cells.frames[].cells', 'part', false, ['upper']), x: 0.25, y: 1.75, setupTop: 'upper', setupUnder: 'lower', class: 'figure' },
+      { ...checkRow('seam_cells.frames[].cells', 'rig', false, []), x: 0.75, y: 1.75, setupTop: 'unmapped', setupUnder: null, class: 'other' },
+    ],
+  };
+  const identityDocs: ReadonlyArray<readonly [string, MotionCellSidecar]> = [
+    ['empty_frames', { spec: 'rig-parts-seam-cells/1', frames: [] }],
+    ['empty_cells_frame', { spec: 'rig-parts-seam-cells/1', frames: [emptyCellsFrame] }],
+    ['one_frame', { spec: 'rig-parts-seam-cells/1', frames: [frames[0]] }],
+    ['multi_frame_pairs', { spec: 'rig-parts-seam-cells/1', frames: [...frames, secondPairFrame] }],
+  ];
+  const identityResults = identityDocs.map(([label, doc]) => {
+    const whole = serializeCheckRows(doc);
+    const wholeSha = createHash('sha256').update(whole).digest('hex');
+    const chunks: string[] = [];
+    streamMotionSeamCellSidecar(doc, c => chunks.push(c));
+    const streamed = chunks.join('');
+    const streamedSha = hashMotionSeamCellSidecar(doc);
+    const droppedSha = createHash('sha256').update(chunks.slice(1).join('')).digest('hex');
+    return { label, bytesEqual: streamed === whole, shaEqual: streamedSha === wholeSha, droppedDiffers: droppedSha !== wholeSha, bytes: Buffer.byteLength(whole), sha256: streamedSha };
+  });
+  say('SCS01_STREAMED_SIDECAR_MATCHES_SERIALIZE_CHECK_ROWS_BYTES_AND_SHA256',
+    identityResults.every(r => r.bytesEqual && r.shaEqual && r.droppedDiffers),
+    JSON.stringify(identityResults.map(({ label, bytesEqual, shaEqual, bytes }) => ({ label, bytesEqual, shaEqual, bytes }))),
+    'Streamed sidecar chunks and SHA-256 equal whole-string serializeCheckRows across empty-frames, empty-cells, single-frame and multi-pair documents.');
+
   const published = join(home, 'published');
   mkdirSync(published, { recursive: true });
   const check = join(published, 'check.json'), cellPath = join(published, MOTION_CELLS_FILE);
@@ -151,39 +184,6 @@ export function runSeamCellChecks(home: string, say: Say, base: Record<string, u
   const sizes = { single500: sizeFor(1), sustained49x500: sizeFor(49) };
   say('SO37_SUSTAINED_CELL_ARRAYS_STAY_OUT_OF_CHECK_JSON', sizes.sustained49x500.check - sizes.sustained49x500.without < 1_000_000 && sizes.sustained49x500.sidecar > 1_000_000,
     JSON.stringify(sizes), 'Actual writer/reader publication measures 49 frames of 500 cells. Counts stay inline and the full arrays are in the digest-bound sidecar.');
-
-  const emptyCellsFrame: MotionCellFrame = {
-    ...checkRow('seam_cells.frames', 'pair', false, ['left', 'right']),
-    pair: 'left|right', animation: 'idle', index: 0, time: 0, px: 0, cell: 1, box: [0, 0, 10, 6], cells: [],
-  };
-  const secondPairFrame: MotionCellFrame = {
-    ...checkRow('seam_cells.frames', 'pair', false, ['upper', 'lower']),
-    pair: 'upper|lower', animation: 'idle', index: 3, time: 0.25, px: 2, cell: 0.5, box: [-4, -2, 8, 6],
-    cells: [
-      { ...checkRow('seam_cells.frames[].cells', 'part', false, ['upper']), x: 0.25, y: 1.75, setupTop: 'upper', setupUnder: 'lower', class: 'figure' },
-      { ...checkRow('seam_cells.frames[].cells', 'rig', false, []), x: 0.75, y: 1.75, setupTop: 'unmapped', setupUnder: null, class: 'other' },
-    ],
-  };
-  const identityDocs: ReadonlyArray<readonly [string, MotionCellSidecar]> = [
-    ['empty_frames', { spec: 'rig-parts-seam-cells/1', frames: [] }],
-    ['empty_cells_frame', { spec: 'rig-parts-seam-cells/1', frames: [emptyCellsFrame] }],
-    ['one_frame', { spec: 'rig-parts-seam-cells/1', frames: [frames[0]] }],
-    ['multi_frame_pairs', { spec: 'rig-parts-seam-cells/1', frames: [...frames, secondPairFrame] }],
-  ];
-  const identityResults = identityDocs.map(([label, doc]) => {
-    const whole = serializeCheckRows(doc);
-    const wholeSha = createHash('sha256').update(whole).digest('hex');
-    const chunks: string[] = [];
-    streamMotionSeamCellSidecar(doc, c => chunks.push(c));
-    const streamed = chunks.join('');
-    const streamedSha = hashMotionSeamCellSidecar(doc);
-    const droppedSha = createHash('sha256').update(chunks.slice(1).join('')).digest('hex');
-    return { label, bytesEqual: streamed === whole, shaEqual: streamedSha === wholeSha, droppedDiffers: droppedSha !== wholeSha, bytes: Buffer.byteLength(whole), sha256: streamedSha };
-  });
-  say('SCS01_STREAMED_SIDECAR_MATCHES_SERIALIZE_CHECK_ROWS_BYTES_AND_SHA256',
-    identityResults.every(r => r.bytesEqual && r.shaEqual && r.droppedDiffers),
-    JSON.stringify(identityResults.map(({ label, bytesEqual, shaEqual, bytes }) => ({ label, bytesEqual, shaEqual, bytes }))),
-    'Streamed sidecar chunks and SHA-256 equal whole-string serializeCheckRows across empty-frames, empty-cells, single-frame and multi-pair documents.');
 
   const boundedPairs: MotionSeamPair[] = [
     { pair: 'left|right', a: 'left', b: 'right', declared: ['synthetic split'] },
