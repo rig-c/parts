@@ -124,10 +124,10 @@ paintings, their See-through runs, the parts and configs the reference produced
   characters generated to be published — a public checkpoint, no identity
   LoRA, no private character text; the generation record and the licence are
   in the [rig-c/examples](https://github.com/rig-c/examples)
-  repository. Their config, proposal, contact sheets and the reference's
-  outputs (`expected/`) are tracked here — for `scarf`, which no reference
-  ever ran, `expected/` is this port's own build at the commit that added
-  it, so its chain suite holds the tree to itself; the painting and the See-through
+  repository. Their config, proposal, contact sheets and expected outputs
+  (`expected/`) are tracked here. The examples' expected files are this
+  package's own snapshots, regenerated on Linux and held to a build by CI;
+  reference parity is measured against the private corpus only. The painting and the See-through
   layers are fetched by `bun run fetch-examples`, at the commit that script
   pins, into the gitignored `examples/*/inputs`. The rules above are about
   where a file came from, not what it is called: a `config.json` or
