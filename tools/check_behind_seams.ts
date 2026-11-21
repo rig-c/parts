@@ -2014,12 +2014,242 @@ export function runBehindContactChecks(dir: string, say: Say, rigc: RigcRunner):
     JSON.stringify({ sha256: bandDigest, bytes: bandBytes.length }));
 }
 
+/** Issue #1406: four horizontal rows, each with an owner-3 left endpoint at x = 3 (world x = 3.5),
+ * `gap` low-alpha interior cells at x = 4 .. 3 + gap (world x = 4.5 .. 3.5 + gap), and an owner-2
+ * right endpoint at x = 4 + gap (world x = 4.5 + gap), with a closed-gap FRONT recomposite over the
+ * full width so every interior cell has dRecomposite = 200 > T. */
+export function behindWideAmbiguousFixture(gap: number): BehindSeamFixture {
+  const width = 8 + gap;
+  const rear = rectangle('rear', -1, -1, width + 4, 6);
+  const a = rectangle('a', 0, 0, width, 4), b = rectangle('b', 0, 0, width, 4);
+  const pa = new Plate(width, 4), pb = new Plate(width, 4);
+  for (let y = 0; y < 4; y++) {
+    for (let x = 0; x < 4; x++) pa.set(x, y, [...FRONT, 255]);
+    for (let x = 4 + gap; x < width; x++) pb.set(x, y, [...FRONT, 255]);
+    pb.set(3, y, [...FRONT, 255]);
+  }
+  const setup = [rear, a, b];
+  const recomposite = frame([{ ...rectangle('recomposite', -1, -1, width + 4, 6), page: 'recomposite' }], 0);
+  return {
+    ...fixture(new Map([['rear', plate(width + 4, 6, REAR)], ['a', pa], ['b', pb], ['recomposite', plate(width + 4, 6, FRONT)]]), setup, [setup]),
+    recomposite,
+  };
+}
+
+/** Issue #1406: four horizontal rows with distinct gap lengths (row 0 = 1, row 1 = 64, row 2 = 65, row 3 = 510),
+ * so one setup frame exercises below-cap, exact-cap, cap+1 and 510-cell corridors together. */
+export function behindMixedLengthAmbiguousFixture(gaps: readonly [number, number, number, number] = [1, 64, 65, 510]): BehindSeamFixture {
+  const maxGap = Math.max(...gaps), width = 8 + maxGap;
+  const rear = rectangle('rear', -1, -1, width + 4, 6);
+  const a = rectangle('a', 0, 0, width, 4), b = rectangle('b', 0, 0, width, 4);
+  const pa = new Plate(width, 4), pb = new Plate(width, 4);
+  for (let y = 0; y < 4; y++) {
+    const g = gaps[y];
+    for (let x = 0; x < 4; x++) pa.set(x, y, [...FRONT, 255]);
+    for (let x = 4 + g; x < width; x++) pb.set(x, y, [...FRONT, 255]);
+    pb.set(3, y, [...FRONT, 255]);
+  }
+  const setup = [rear, a, b];
+  const recomposite = frame([{ ...rectangle('recomposite', -1, -1, width + 4, 6), page: 'recomposite' }], 0);
+  return {
+    ...fixture(new Map([['rear', plate(width + 4, 6, REAR)], ['a', pa], ['b', pb], ['recomposite', plate(width + 4, 6, FRONT)]]), setup, [setup]),
+    recomposite,
+  };
+}
+
+/** Issue #1406: synthetic SxS one-pair rig that maximises unread corridors at setup:
+ * p0 and p1 both paint a 1-px opaque perimeter [24,48,72,255] with a transparent (S-2)x(S-2) interior
+ * (owner = 3 on all 4*(S-1) perimeter cells, low() = true on all (S-2)^2 interior cells), while
+ * images/rear.png is REAR [224,232,240,255] and parts/rear.png is FRONT [24,48,72,255] (pixel (0,0)
+ * transparent for A19), giving dRecomposite = 200 > T on all (S-2)^2 interior cells and producing
+ * 2*(S-2) unread corridors (S-2 horizontal + S-2 vertical) of cell_count = S-2 each. */
+export function writeMaxUnreadBehindSeamCheckRig(dir: string, S = 512): { rigDir: string; reqPath: string } {
+  const rigDir = join(dir, 'rig');
+  rmSync(rigDir, { recursive: true, force: true });
+  mkdirSync(join(rigDir, 'images'), { recursive: true });
+  mkdirSync(join(rigDir, 'parts'), { recursive: true });
+  const rearImg = newRaster(S, S), rearPart = newRaster(S, S);
+  for (let i = 1; i < S * S; i++) {
+    rearImg.data.set([...REAR, 255], i * 4);
+    rearPart.data.set([...FRONT, 255], i * 4);
+  }
+  writePng(join(rigDir, 'images', 'rear.png'), rearImg);
+  writePng(join(rigDir, 'parts', 'rear.png'), rearPart);
+  const frontRaster = newRaster(S, S);
+  for (let x = 0; x < S; x++) {
+    frontRaster.data.set([...FRONT, 255], x * 4);
+    frontRaster.data.set([...FRONT, 255], ((S - 1) * S + x) * 4);
+  }
+  for (let y = 1; y < S - 1; y++) {
+    frontRaster.data.set([...FRONT, 255], (y * S) * 4);
+    frontRaster.data.set([...FRONT, 255], (y * S + (S - 1)) * 4);
+  }
+  for (const name of ['p0', 'p1']) {
+    writePng(join(rigDir, 'images', `${name}.png`), frontRaster);
+    writePng(join(rigDir, 'parts', `${name}.png`), frontRaster);
+  }
+  const stage = { x: -S / 2, y: 0, width: S, height: S };
+  const center = { x: stage.x + S / 2, y: stage.y + cropToSpineY(S / 2, S) };
+  const partOrder = ['rear', 'p0', 'p1'];
+  writeFileSync(join(rigDir, 'rig.json'), JSON.stringify({
+    spec: 'rigc-rig/1',
+    name: 'unread_probe',
+    images: 'images',
+    skeleton: stage,
+    bones: [{ name: 'root', x: 0, y: 0 }],
+    slots: partOrder.map(name => ({ name, bone: 'root', attachment: name })),
+    skins: { default: Object.fromEntries(partOrder.map(name => [name, { [name]: { image: `${name}.png`, x: center.x, y: center.y } }])) },
+  }) + '\n');
+  writeFileSync(join(rigDir, 'motion.json'), JSON.stringify({
+    spec: 'rigc-motion/1',
+    archetype: 'unread_probe',
+    cut: 'unread_probe',
+    easings: {},
+    groups: {},
+    animations: { idle: { duration: 1 / 12, loop: true, tracks: [{ bone: 'root', property: 'translatex', keys: [{ t: 0, v: [0] }, { t: 1 / 12, v: [0] }] }] } },
+  }) + '\n');
+  writeFileSync(join(rigDir, 'parts.json'), serializeParts({
+    rig_size: [S, S],
+    scale_rig_per_source: 1,
+    parts: partOrder.map(name => ({
+      name,
+      from: 'full:topwear',
+      x: 0,
+      y: 0,
+      w: S,
+      h: S,
+      opaque_px: name === 'rear' ? S * S - 1 : 4 * (S - 1),
+      projected_core_px: 0,
+      source_px_taken: 0,
+      refused_drift_px: 0,
+      merged_px: 0,
+      seam_override_px: 0,
+    })),
+    motion_seams: [{ part: 'p0', neighbour: 'p1' }],
+    ghost_px: {},
+  }));
+  const reqPath = join(dir, 'requirements.json');
+  writeFileSync(reqPath, JSON.stringify({ spec: 'spine-parts-requirements/1', fps: 12, requirements: [], behind_seams: { threshold: 12 } }) + '\n');
+  return { rigDir, reqPath };
+}
+
+const withoutCorridorCells = (reading: BehindSeamsMeasured): string =>
+  JSON.stringify(reading, (key, value) => key === 'cells' || key === 'cells_omitted' ? undefined : value);
+
+function runBehindUnreadCorridorCapChecks(dir: string, say: Say, rigc: RigcRunner): void {
+  const rowYs = [3.5, 2.5, 1.5, 0.5];
+  // 1. Exactly 64 cells per corridor: 64 entries, no cells_omitted, bytes identical to uncapped/fixed expectation.
+  const fx64 = behindWideAmbiguousFixture(64);
+  const capped64 = measured(fx64, { threshold: 12 }), open64 = measured(fx64, { threshold: 12 }, { sampleCap: Infinity });
+  const c64 = capped64.pair.setup!.standing.unread_corridors ?? [];
+  const expected64 = rowYs.map((y, r) => ({
+    [CHECK_ROW_FAMILY]: 'BEHIND_PART_SEAMS.unread_corridors',
+    row_scope: 'pair',
+    row_kind: 'evidence',
+    row_subjects: ['a', 'b'],
+    axis: 'horizontal',
+    endpoints: [[4, r + 1, 3.5, y, 3], [69, r + 1, 68.5, y, 2]],
+    cells: Array.from({ length: 64 }, (_, i) => [4.5 + i, y]),
+    cell_count: 64,
+  }));
+  const bytes64 = serializeCheckRows({ [BEHIND_SEAM_LINE]: capped64.reading });
+  const openBytes64 = serializeCheckRows({ [BEHIND_SEAM_LINE]: open64.reading });
+  say('BHK01_CORRIDOR_OF_64_CELLS_HAS_NO_CELLS_OMITTED_AND_SERIALIZES_IDENTICALLY',
+    c64.length === 4 &&
+      c64.every(c => c.cells.length === 64 && c.cell_count === 64 && c.cells_omitted === undefined && !Object.hasOwn(c, 'cells_omitted')) &&
+      capped64.pair.setup!.standing.unread_cells === 256 && open64.pair.setup!.standing.unread_cells === 256 &&
+      serializeCheckRows(c64) === serializeCheckRows(expected64) &&
+      bytes64 === openBytes64 && !bytes64.includes('cells_omitted'),
+    JSON.stringify({ corridors: c64.length, cell_count: c64[0]?.cell_count, kept: c64[0]?.cells.length,
+      unread_cells: capped64.pair.setup!.standing.unread_cells, bytes: bytes64.length, identical: bytes64 === openBytes64 }));
+
+  // 2. Corridors of 65 and 510 cells: 64 entries kept, cells_omitted 1 and 446, cell_count 65 and 510,
+  // evenlySpaced first (index 0) and last (index floor(63*n/64): 63 for 65, 502 for 510) cells present, order kept, unread_cells unchanged.
+  const fx65 = behindWideAmbiguousFixture(65), fx510 = behindWideAmbiguousFixture(510);
+  const capped65 = measured(fx65, { threshold: 12 }), open65 = measured(fx65, { threshold: 12 }, { sampleCap: Infinity });
+  const capped510 = measured(fx510, { threshold: 12 }), open510 = measured(fx510, { threshold: 12 }, { sampleCap: Infinity });
+  const c65 = capped65.pair.setup!.standing.unread_corridors ?? [], o65 = open65.pair.setup!.standing.unread_corridors ?? [];
+  const c510 = capped510.pair.setup!.standing.unread_corridors ?? [], o510 = open510.pair.setup!.standing.unread_corridors ?? [];
+  const idx65 = evenlySpaced(65, BEHIND_SAMPLE_CAP), idx510 = evenlySpaced(510, BEHIND_SAMPLE_CAP);
+  const checkOverCap = (corridors: typeof c65, uncapped: typeof o65, n: number, idx: number[]): boolean =>
+    corridors.length === 4 && uncapped.length === 4 &&
+    corridors.every((c, r) => {
+      const y = rowYs[r];
+      const full = Array.from({ length: n }, (_, i) => [4.5 + i, y] as [number, number]);
+      return c.cells.length === BEHIND_SAMPLE_CAP && c.cell_count === n && c.cells_omitted === n - BEHIND_SAMPLE_CAP &&
+        uncapped[r].cells.length === n && uncapped[r].cell_count === n && uncapped[r].cells_omitted === undefined &&
+        equal(uncapped[r].cells, full) && equal(c.cells, idx.map(i => full[i])) &&
+        equal(c.cells[0], full[idx[0]]) && equal(c.cells[BEHIND_SAMPLE_CAP - 1], full[idx[BEHIND_SAMPLE_CAP - 1]]) &&
+        c.cells.every((pt, i) => pt[1] === y && (i === 0 || pt[0] > c.cells[i - 1][0]));
+    });
+  say('BHK02_CORRIDORS_OF_65_AND_510_KEEP_64_EVENLY_SPACED_CELLS_IN_ORDER_AND_PRESERVE_COUNTS',
+    idx65[0] === 0 && idx65[63] === 63 && idx510[0] === 0 && idx510[63] === 502 &&
+      checkOverCap(c65, o65, 65, idx65) && checkOverCap(c510, o510, 510, idx510) &&
+      capped65.pair.setup!.standing.unread_cells === 4 * 65 && open65.pair.setup!.standing.unread_cells === 4 * 65 &&
+      capped510.pair.setup!.standing.unread_cells === 4 * 510 && open510.pair.setup!.standing.unread_cells === 4 * 510 &&
+      withoutCorridorCells(capped65.reading) === withoutCorridorCells(open65.reading) &&
+      withoutCorridorCells(capped510.reading) === withoutCorridorCells(open510.reading),
+    JSON.stringify({
+      c65: { count: c65[0]?.cell_count, kept: c65[0]?.cells.length, omitted: c65[0]?.cells_omitted, first: c65[0]?.cells[0], last: c65[0]?.cells[63], unread_cells: capped65.pair.setup!.standing.unread_cells },
+      c510: { count: c510[0]?.cell_count, kept: c510[0]?.cells.length, omitted: c510[0]?.cells_omitted, first: c510[0]?.cells[0], last: c510[0]?.cells[63], unread_cells: capped510.pair.setup!.standing.unread_cells },
+    }));
+
+  // 3. Multi-corridor invariant: cells.length + (cells_omitted ?? 0) === cell_count across mixed lengths [1, 64, 65, 510].
+  const mixedFx = behindMixedLengthAmbiguousFixture([1, 64, 65, 510]);
+  const mixedCapped = measured(mixedFx, { threshold: 12 }), mixedOpen = measured(mixedFx, { threshold: 12 }, { sampleCap: Infinity });
+  const mc = mixedCapped.pair.setup!.standing.unread_corridors ?? [], mo = mixedOpen.pair.setup!.standing.unread_corridors ?? [];
+  const invariantHolds = (corridors: typeof mc): boolean =>
+    corridors.every(c => c.cells.length <= BEHIND_SAMPLE_CAP &&
+      c.cells.length + (c.cells_omitted ?? 0) === c.cell_count &&
+      (c.cell_count <= BEHIND_SAMPLE_CAP ? !Object.hasOwn(c, 'cells_omitted') : c.cells_omitted === c.cell_count - BEHIND_SAMPLE_CAP));
+  say('BHK03_MULTI_CORRIDOR_INVARIANT_AND_CELL_CEILING_HOLD_AND_FAIL_WHEN_UNCAPPED',
+    mc.length === 4 && equal(mc.map(c => c.cell_count), [1, 64, 65, 510]) &&
+      equal(mc.map(c => c.cells.length), [1, 64, 64, 64]) &&
+      equal(mc.map(c => c.cells_omitted ?? null), [null, null, 1, 446]) &&
+      mixedCapped.pair.setup!.standing.unread_cells === 1 + 64 + 65 + 510 &&
+      mixedOpen.pair.setup!.standing.unread_cells === 1 + 64 + 65 + 510 &&
+      invariantHolds(mc) && invariantHolds(c64) && invariantHolds(c65) && invariantHolds(c510) &&
+      !invariantHolds(mo) && !invariantHolds(o65) && !invariantHolds(o510),
+    JSON.stringify({ counts: mc.map(c => c.cell_count), kept: mc.map(c => c.cells.length), omitted: mc.map(c => c.cells_omitted ?? null),
+      unread_cells: mixedCapped.pair.setup!.standing.unread_cells, uncapped_max: Math.max(...mo.map(c => c.cells.length)) }));
+
+  // 4. Size control on the 512x512 one-pair hollow-perimeter rig through checkStage:
+  // Hand derivation:
+  // - 512x512 stage with a 1-px perimeter of owner 3 and a 510x510 low-alpha interior where dRecomposite = 200 > 12:
+  //   510 horizontal + 510 vertical = 1,020 unread corridors, each of cell_count = 510, unread_cells = 510^2 = 260,100.
+  // - With BEHIND_SAMPLE_CAP = 64: each corridor keeps 64 cells and omits 510 - 64 = 446 cells (65,280 kept cells total).
+  // - Byte upper bound for check.json: 1,020 corridors * 64 cells * 90 B/cell = 5,875,200 B, plus 1,020 * 600 B corridor
+  //   headers = 612,000 B, plus 112,800 B for the rest of check.json = 6,600,000 B ceiling (uncapped 520,200 cells is ~42.89 MB).
+  const sizeHome = join(dir, 'unread-512');
+  const { rigDir, reqPath } = writeMaxUnreadBehindSeamCheckRig(sizeHome, 512);
+  const checkOut = join(sizeHome, 'check');
+  const report = checkStage({ rig: rigDir, out: checkOut, requirements: reqPath, noExtremes: true }, rigc, 'fixture-rigc', () => {});
+  const checkBytes = Buffer.byteLength(readFileSync(join(checkOut, 'check.json')));
+  const behind = report.figures[BEHIND_SEAM_LINE] as BehindSeamsMeasured;
+  const setupStanding = behind.pairs[0]?.setup?.standing;
+  const setupCorridors = setupStanding?.unread_corridors ?? [];
+  const BYTE_CEILING = 6_600_000;
+  say('BHK04_512_SQUARE_MAX_UNREAD_RIG_KEEPS_EXACT_COUNTS_AND_WRITES_CHECK_JSON_UNDER_BOUND',
+    setupStanding !== undefined && setupStanding.unread_cells === 260_100 &&
+      setupCorridors.length === 1_020 &&
+      setupCorridors.filter(c => c.axis === 'horizontal').length === 510 &&
+      setupCorridors.filter(c => c.axis === 'vertical').length === 510 &&
+      setupCorridors.every(c => c.cell_count === 510 && c.cells.length === 64 && c.cells_omitted === 446 &&
+        c.cells.length + (c.cells_omitted ?? 0) === c.cell_count) &&
+      checkBytes < BYTE_CEILING,
+    JSON.stringify({ corridors: setupCorridors.length, unread_cells: setupStanding?.unread_cells,
+      kept_cells: setupCorridors.reduce((s, c) => s + c.cells.length, 0),
+      omitted_cells: setupCorridors.reduce((s, c) => s + (c.cells_omitted ?? 0), 0),
+      check_json_bytes: checkBytes, ceiling_bytes: BYTE_CEILING }));
+}
+
 export function runBehindSeamChecks(dir: string, say: Say, rigc: RigcRunner): void {
   mkdirSync(dir, { recursive: true });
   runBehindSeamFixtureChecks(say);
   runBehindSampleCapChecks(say);
   runBehindSeamPrimitiveChecks(say);
   runBehindLaterOpaqueArtChecks(say);
+  runBehindUnreadCorridorCapChecks(dir, say, rigc);
   runBehindTurnPrimitiveChecks(say);
   runBehindUnreadRemedyChecks(say);
   runBehindRecompositeChecks(join(dir, 'recomposite'), say, rigc);
