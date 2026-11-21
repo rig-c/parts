@@ -19,7 +19,7 @@ import type { ConfigEdit } from './meshdraft.ts';
 
 /** Required point fields and optional shape fields of `meshes.<part>.contour.bust`, in the shorthand order `src/config.ts` validates (issues #475, #1428). */
 const BUST_LANDMARK_FIELDS = ['apex_r', 'apex_l', 'cleavage'] as const;
-const BUST_SHAPE_FIELDS = ['alpha', 'clearance', 'bone_r', 'bone_l', 'spacing'] as const;
+export const BUST_SHAPE_FIELDS = ['alpha', 'clearance', 'bone_r', 'bone_l', 'spacing'] as const;
 
 export type ConfigJson = null | boolean | number | string | ConfigJson[] | ConfigObject;
 export interface ConfigObject { [key: string]: ConfigJson }
@@ -28,9 +28,17 @@ export type ConfigWritePatch =
   | { kind: 'neck-unit'; config: CharacterConfig }
   | { kind: 'head-box'; head_box: HeadBoxProposal['head_box'] }
   | { kind: 'assemble-plan'; plan: PlanProposal['plan']; extend_below_crop: PlanProposal['extend_below_crop'] }
-  | { kind: 'proposal'; proposal: Proposal; sections: typeof PROPOSAL_CONFIG_SECTIONS }
+  | { kind: 'proposal'; proposal: Proposal; sections: typeof PROPOSAL_CONFIG_SECTIONS; bustShape?: PendingBustShape }
   /** Issues #671/#679: add unattached, resolvable entries; append skip explanations to the proposal's notes for the caller to print. */
-  | { kind: 'proposal-missing'; proposal: Proposal; parts: ReadonlyArray<{ name: string; from: string }> };
+  | { kind: 'proposal-missing'; proposal: Proposal; parts: ReadonlyArray<{ name: string; from: string }> }
+  /** `bust-landmarks --write-config` (issue #1382): set or remove named shape fields of one part's existing
+   * `meshes.<part>.contour.bust`; a field with no value is removed, every other key is kept where it is. */
+  | { kind: 'bust-shape'; part: string; fields: ReadonlyArray<{ key: BustShapeKey; value?: number | string }> };
+/** The `contour.bust` fields the landmarks file does not carry, the only ones a `bust-shape` patch writes. */
+export type BustShapeKey = (typeof BUST_SHAPE_FIELDS)[number];
+/** A reviewed shape `bust-landmarks` left pending in its sidecar (issue #1382): `propose --write-config` writes it
+ * onto the drafted chest carrier's `contour.bust`, after the three points, in the shorthand's key order. */
+export interface PendingBustShape { part: string; fields: Partial<Record<BustShapeKey, number | string>> }
 export interface ConfigWriteChange {
   path: string;
   kind: 'added' | 'replaced' | 'removed';
@@ -152,22 +160,26 @@ export function mergeConfigProposal(raw: unknown, patch: ConfigWritePatch, recei
         if (patch.proposal[key] !== undefined) {
           const previous = config[key];
           config[key] = clone(patch.proposal[key], `proposal.${key}`);
-          if (key === 'meshes' && object(previous) && object(config.meshes)) {
+          if (key === 'meshes' && (object(previous) || patch.bustShape !== undefined) && object(config.meshes)) {
             const carriers: string[] = [];
             for (const [part, mesh] of Object.entries(config.meshes)) {
               if (!object(mesh) || !object(mesh.contour) || !object(mesh.contour.bust)) continue;
               carriers.push(part);
               const draftedBust = mesh.contour.bust;
-              const prevMesh = own(previous, part) ? previous[part] : undefined;
+              const prevMesh = object(previous) && own(previous, part) ? previous[part] : undefined;
               const prevBust = object(prevMesh) && object(prevMesh.contour) && object(prevMesh.contour.bust) ? prevMesh.contour.bust : null;
               const mergedBust: ConfigObject = {};
               for (const k of BUST_LANDMARK_FIELDS) if (own(draftedBust, k)) mergedBust[k] = draftedBust[k];
-              if (prevBust !== null) {
-                for (const k of BUST_SHAPE_FIELDS) if (own(prevBust, k)) mergedBust[k] = prevBust[k];
+              // A pending reviewed shape (issue #1382) is the act's value for its fields; the rest keep what the config declares.
+              const pending = patch.bustShape?.part === part ? patch.bustShape.fields : undefined;
+              for (const k of BUST_SHAPE_FIELDS) {
+                const value = pending?.[k];
+                if (value !== undefined) mergedBust[k] = value;
+                else if (prevBust !== null && own(prevBust, k)) mergedBust[k] = prevBust[k];
               }
               mesh.contour.bust = mergedBust;
             }
-            for (const [oldPart, prevMesh] of Object.entries(previous)) {
+            for (const [oldPart, prevMesh] of Object.entries(object(previous) ? previous : {})) {
               if (carriers.includes(oldPart) || !object(prevMesh) || !object(prevMesh.contour) || !object(prevMesh.contour.bust)) continue;
               const prevBust = prevMesh.contour.bust;
               const dropped = BUST_SHAPE_FIELDS.filter((k) => own(prevBust, k));
@@ -263,7 +275,24 @@ export function mergeConfigProposal(raw: unknown, patch: ConfigWritePatch, recei
       }
       return { config, changes: added, edits };
     }
-    default: return refuse('write-config', 'has no supported operation; edited-part-receipt, neck-unit, head-box, assemble-plan, proposal or proposal-missing is required');
+    case 'bust-shape': {
+      const at = `${field('config.meshes', patch.part)}.contour.bust`;
+      const meshes = config.meshes;
+      const mesh = object(meshes) && own(meshes, patch.part) ? meshes[patch.part] : undefined;
+      const contour = object(mesh) ? mesh.contour : undefined;
+      const bust = object(contour) ? contour.bust : undefined;
+      if (!object(contour) || !object(bust)) return refuse(at, 'is absent or not an object; an existing contour.bust is required before its shape fields are written');
+      const next = clone(bust, at) as ConfigObject;
+      for (const { key, value } of patch.fields) {
+        if (value === undefined) delete next[key];
+        else next[key] = value;
+      }
+      contour.bust = next;
+      // This patch owns the one bust object, never the mesh or its other contour fields.
+      if (!equal(bust as ConfigObject, next)) edits.push({ path: ['meshes', patch.part, 'contour', 'bust'], value: next });
+      break;
+    }
+    default: return refuse('write-config', 'has no supported operation; edited-part-receipt, neck-unit, head-box, assemble-plan, proposal, proposal-missing or bust-shape is required');
   }
   return { config, changes: changes(before, config), edits };
 }
