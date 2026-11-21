@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.52.0 (2026-11-22)
+
+An edit that removes opaque pixels now records where it removed them, `rig` refuses a part PNG overwritten outside that route, and `depth-apply` can apply a subset of a recipe's groups.
+
+**Read before upgrading:**
+
+* **`parts.json` gains `provenance.edited_part.removed_opaque_regions` when a receipted edit removes opaque pixels.** It holds one `{box: [x, y, w, h], px}` per 8-connected region of removed positions, in part pixels, sorted by y, x, h, w, px, with `px` summing to `removed_opaque_px`. Parts 2.51.0 and earlier refuse a manifest that carries it (`PARTS_FIELD_TYPE`), so upgrade every reader of that `parts.json` before you write one. An edit that removes nothing, and a build without edited parts, keep their bytes.
+* **`rig` refuses a part PNG whose opaque pixel count differs from `parts.json`'s `opaque_px`** as `RIG_PNG_MATCHES_OPAQUE_PX`, naming the part, the count on disk and the count recorded. A pixel counts as opaque at alpha above 8, as `assemble` counts it. A `parts/<name>.png` rewritten in place after `assemble` used to pass; edit a part through `edited-part`, which records the new count.
+* **`depth-apply --groups <name>[,<name>…]` applies only the named groups.** A left-out group's parts get no new sheet and lose any depth reference they carried, and a rig config that still declares a left-out group's turn is refused as `DEPTH_GROUP_LEFT_OUT`. `depth-report.json` records `selection: {groups, leftOut}` after `cleared` when the flag is given; without it the report keeps its bytes.
+
+### Features
+
+* **edited-parts:** record `removed_opaque_regions`, one box and pixel count per connected removed region, beside `removed_opaque_px`, in `parts.json` and the stage map (`#1383`, `#1453`, `44fe323`).
+* **depth:** `depth-apply --groups` applies a recorded subset of the recipe's groups, with `DEPTH_GROUP_SELECTION` for an empty, undeclared or repeated group and `DEPTH_GROUP_LEFT_OUT` for a config that turns a group left out (`#1449`, `#1450`, `49b2a78`).
+
+### Bug Fixes
+
+* **rig:** refuse a part PNG whose opaque pixel count differs from `parts.json` (`RIG_PNG_MATCHES_OPAQUE_PX`), so an in-place overwrite cannot bypass the edit receipt (`#1454`, `#1457`, `d9490f5`).
+* **examples:** the public examples' expected files are this package's own snapshots again, written on Linux by `tools/regenerate_examples.ts` and compared whole in CI; STABILITY says so (`#1439`, `#1448`, `24073ee`).
+
 ## 2.51.0 (2026-11-21)
 
 `check` now reports what physics adds to each part, the cloth targets ship as data, and the `bust-landmarks` chain runs to the end on a sampled-neck config and on a second correction that moves the points.
