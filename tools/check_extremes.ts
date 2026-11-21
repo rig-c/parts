@@ -114,7 +114,6 @@ export function runDiagnosticPathChecks(root: string, say: Say): void {
   const source = join(root, 'source'), target = join(root, 'kept');
   mkdirSync(source, { recursive: true });
   const names = ['idle', 'a:turn', 'A', 'b', '\u00e9', 'e\u0301', '~0041'];
-  const wanted = ['idle', 'a~003aturn', 'A', 'b', '~00e9', 'e~0301', '~007e0041'];
   const sets = names.map((animation, i) => {
     const dir = 'source-' + i;
     mkdirSync(join(source, dir));
@@ -133,9 +132,9 @@ export function runDiagnosticPathChecks(root: string, say: Say): void {
   const kept = json(join(target, 'frames.json')).sets as typeof sets;
   say('CK1362_RETAINED_INDEX_AND_READERS_KEEP_DISTINCT_PUBLIC_NAMES', unique(kept.map(set => set.dir)) && kept.every((set, i) => {
     const reading = readFrameSet(join(target, set.dir));
-    return set.dir === wanted[i] && set.animation === names[i] && reading.animation === names[i] && reading.frames[0].image.data[0] === i &&
+    return set.dir === sets[i].dir && set.animation === names[i] && reading.animation === names[i] && reading.frames[0].image.data[0] === i &&
       ['extremes.json', 'seam.json', 'folds.json', 'geometry.json'].every(file => readFileSync(join(source, sets[i].dir, file), 'utf8') === readFileSync(join(target, set.dir, file), 'utf8'));
-  }), JSON.stringify(kept.map(({ animation, dir }) => ({ animation, dir }))));
+  }), 'issue #1367: each set keeps the folder its index records, never one rebuilt from its animation: ' + JSON.stringify(kept.map(({ animation, dir }) => ({ animation, dir }))));
 
   const safe = join(root, 'safe'), safeKept = join(root, 'safe-kept');
   mkdirSync(join(safe, 'idle@24fps'), { recursive: true });
@@ -149,7 +148,7 @@ export function runDiagnosticPathChecks(root: string, say: Say): void {
   const invalid = [
     { ...manifest, sets: null },
     { ...manifest, sets: [{ ...sets[0], dir: '../outside' }] },
-    { ...manifest, sets: [sets[0], { ...sets[1], animation: 'idle' }] },
+    { ...manifest, sets: [sets[0], { ...sets[1], dir: sets[0].dir }] },
   ];
   const refused = invalid.map((value, i) => {
     const home = join(root, 'bad-' + i), kept = join(root, 'bad-kept-' + i);
@@ -160,7 +159,7 @@ export function runDiagnosticPathChecks(root: string, say: Say): void {
     return false;
   });
   say('CK1362_UNREADABLE_OR_ALIASED_RETAINED_INDEX_IS_REFUSED_BEFORE_COPY', refused.every(Boolean),
-    'missing sets, escaping source dir and duplicate retained dir: ' + refused.join(', '));
+    'missing sets, escaping source dir and a set directory recorded twice: ' + refused.join(', '));
   const pixel = { width: 1, height: 1, data: new Uint8ClampedArray([0, 0, 0, 255]) };
   const viewport = { x: 0, y: 0, width: 1, height: 1, scale: 1, pixelWidth: 1, pixelHeight: 1 };
   const seam = { mean: 50, over40: 1, over80: 0, border: null, counted: [0], countedDiff: [50], map: { sx: 1, sy: 1, tx: 0, ty: 0 } };
@@ -200,9 +199,18 @@ export function runDiagnosticPathChecks(root: string, say: Say): void {
   const retainedAlias = join(root, 'retained-alias'), retainedAliasOut = join(root, 'retained-alias-out');
   mkdirSync(retainedAlias);
   writeFileSync(join(retainedAlias, 'frames.json'), JSON.stringify({ ...manifest, sets: [
-    { ...sets[0], animation: 'Idle' }, { ...sets[1], animation: 'idle' },
+    { ...sets[0], animation: 'Idle', dir: 'Idle' }, { ...sets[1], animation: 'idle', dir: 'idle' },
   ] }));
-  const retainedRefused = collision(() => retainCheckRender(retainedAlias, retainedAliasOut), 'retained render sets');
+  // Issue #1367: the render names these folders, so the copy refuses the
+  // recorded pair as a frames.json problem rather than mapping the names.
+  const retainedRefused = ((): boolean => {
+    try { retainCheckRender(retainedAlias, retainedAliasOut); }
+    catch (error) {
+      return error instanceof PartsError && error.problems.length === 1 && error.problems[0].code === 'FRAMES_SIDECAR' &&
+        error.problems[0].object.endsWith('sets[1] (animation "idle")') && error.problems[0].detail.includes('"idle" and sets[0] "dir" "Idle" are one folder "idle"');
+    }
+    return false;
+  })();
   say('CK1362_EXTREMES_AND_RETAINED_CASE_ALIASES_REFUSE_BEFORE_ANY_OUTPUT',
     aliasRefused && aliasCalls === 0 && !existsSync(aliasOut) && retainedRefused && !existsSync(retainedAliasOut),
     'runCheck: zero core calls and no output; retainCheckRender: no destination created or copied before refusal');
@@ -235,6 +243,7 @@ export function runDiagnosticPathChecks(root: string, say: Say): void {
 
 export function runExtremesChecks(root: string, say: Say, rigc: RigcRunner): void {
   runDiagnosticPathChecks(join(root, 'portable-paths'), say);
+  runFrameSetDirChecks(join(root, 'frame-set-dirs'), say, rigc);
   const input = join(root, 'input');
   writeCheckRig(input);
   const motionPath = join(input, 'motion.json');
@@ -352,4 +361,125 @@ export function runExtremesChecks(root: string, say: Say, rigc: RigcRunner): voi
   writeMergedCheckRig(staticHome, { idle: false, plate: true });
   const none = run(join(root, 'no-animations-out'), false, rigc, staticHome);
   say('CK835_NO_ANIMATION_IS_NAMED_WITH_NO_EXTRA_RENDER', !none.calls.some(args => isExtremes(args)) && none.lines.some(l => l.includes('EXTREMES') && l.includes('SKIP') && l.includes('no animation')), none.lines.filter(l => l.includes('EXTREMES')).join(' | '));
+}
+
+/**
+ * Issue #1367: a retained render keeps the folder rig-c's render recorded under
+ * `frames.json` `sets[].dir` (rig-c/core#1744), byte for byte, and refuses by
+ * name a value that is not one safe path segment. FSD01 and FSD02 render with
+ * the suite's own rigc, so FSD01 holds only once the pinned core names
+ * frame-set folders itself; every expected folder is spelled by hand.
+ */
+export function runFrameSetDirChecks(root: string, say: Say, rigc: RigcRunner): void {
+  const home = join(root, 'input');
+  writeCheckRig(home);
+  const motion = json(join(home, 'motion.json'));
+  const anims = motion.animations as Record<string, unknown>;
+  anims['a:turn'] = anims.idle;
+  writeFileSync(join(home, 'motion.json'), JSON.stringify(motion));
+  const build = join(root, 'build');
+  const built = rigc(['build', '--rig', join(home, 'rig.json'), '--motion', join(home, 'motion.json'), '--out', build]);
+  const files = (dir: string, prefix = ''): string[] => readdirSync(dir, { withFileTypes: true })
+    .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+    .flatMap(e => e.isDirectory() ? files(join(dir, e.name), prefix + e.name + '/') : [prefix + e.name + ':' + createHash('sha256').update(readFileSync(join(dir, e.name))).digest('hex')]);
+  const folders = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name).sort();
+  const render = (out: string, args: string[]): { status: number; dirs: string[] } => {
+    const call = rigc(['render', '--candidate', build, '--max', '64', ...args, '--out', out]);
+    const sets = call.status === 0 ? (json(join(out, 'frames.json')).sets as Array<{ dir: unknown }>) : [];
+    return { status: call.status, dirs: sets.map(set => String(set.dir)) };
+  };
+  const copied = (source: string, target: string): string => {
+    try { retainCheckRender(source, target); return 'copied'; }
+    catch (error) { return error instanceof PartsError ? error.problems.map(p => `${p.code} ${p.object}: ${p.detail}`).join(' | ') : String(error); }
+  };
+
+  // FSD01: the folder on disk, the source index and the copy agree with what
+  // the render recorded; a second mapping of the name or of the folder shows.
+  const colon = [12, 24].map(fps => {
+    const source = join(root, 'colon-' + fps), target = join(root, 'colon-kept-' + fps);
+    const want = fps === 12 ? ['a~003aturn', 'idle'] : ['a~003aturn@24fps', 'idle@24fps'];
+    const r = built.status === 0 ? render(source, ['--fps', String(fps)]) : { status: -1, dirs: [] };
+    const result = r.status === 0 ? copied(source, target) : 'render exited ' + r.status;
+    const ok = result === 'copied' && [...r.dirs].sort().join(',') === want.join(',') && folders(source).join(',') === want.join(',') &&
+      folders(target).join(',') === want.join(',') && readFileSync(join(target, 'frames.json')).equals(readFileSync(join(source, 'frames.json'))) &&
+      files(target).join('|') === files(source).join('|') && readFrameSet(join(target, want[0])).animation === 'a:turn';
+    return { fps, ok, recorded: r.dirs, result };
+  });
+  // The same render with its folder renamed and the index following it: the
+  // copy keeps the recorded name, not the one the animation would map to.
+  const renamed = join(root, 'renamed'), renamedKept = join(root, 'renamed-kept');
+  let renamedOk = false, renamedResult = 'not run';
+  if (colon[0].ok) {
+    copied(join(root, 'colon-12'), renamed);
+    renameSync(join(renamed, 'a~003aturn'), join(renamed, 'turn-a'));
+    const index = json(join(renamed, 'frames.json'));
+    for (const set of index.sets as Array<{ animation: unknown; dir: string }>) if (set.animation === 'a:turn') set.dir = 'turn-a';
+    writeFileSync(join(renamed, 'frames.json'), JSON.stringify(index));
+    renamedResult = copied(renamed, renamedKept);
+    if (renamedResult === 'copied') renamedResult += ' to ' + folders(renamedKept).join(',');
+    renamedOk = renamedResult === 'copied to idle,turn-a' && folders(renamedKept).join(',') === 'idle,turn-a' && readFrameSet(join(renamedKept, 'turn-a')).animation === 'a:turn';
+  }
+  say('FSD01_COLON_RENDER_IS_COPIED_AS_RECORDED_WITHOUT_A_SECOND_MAPPING', built.status === 0 && colon.every(c => c.ok) && renamedOk,
+    JSON.stringify({ build: built.status, colon, renamed: renamedResult }));
+
+  // FSD02: a render of names that are already safe copies byte for byte.
+  const safe = join(root, 'safe'), safeKept = join(root, 'safe-kept');
+  const safeRender = built.status === 0 ? render(safe, ['--animation', 'idle', '--fps', '24']) : { status: -1, dirs: [] };
+  const safeResult = safeRender.status === 0 ? copied(safe, safeKept) : 'render exited ' + safeRender.status;
+  say('FSD02_SAFE_NAME_RENDER_COPIES_EVERY_BYTE', safeResult === 'copied' && safeRender.dirs.join(',') === 'idle@24fps' && files(safeKept).join('|') === files(safe).join('|'),
+    JSON.stringify({ recorded: safeRender.dirs, result: safeResult, files: existsSync(safeKept) ? files(safeKept).length : 0 }));
+
+  // FSD03: every value that is not one safe segment is refused by name, with
+  // nothing created; reasons spelled by hand from the rule.
+  const manifest = (sets: unknown[]) => ({ spec: 'rigc-frames/1', viewport: { x: 0, y: 0, width: 1, height: 1, scale: 1, pixelWidth: 1, pixelHeight: 1 }, background: [0, 0, 0, 0], sets });
+  const row = (dir: unknown) => ({ animation: 'a', ...(dir === undefined ? {} : { dir }), fps: 12, sampled: 1, written: 1, stride: 1, duration: 0 });
+  const bad: Array<[unknown, string]> = [
+    [undefined, '"dir" is absent'], [7, '"dir" 7 is number, not a string'], [null, '"dir" null is null, not a string'],
+    ['', '"dir" "" is empty'], ['..', '"dir" ".." holds a dot segment'], ['.', '"dir" "." holds a dot segment'],
+    ['../outside', '"dir" "../outside" holds a dot segment'], ['/abs', '"dir" "/abs" is an absolute path'],
+    ['C:x', '"dir" "C:x" holds ":" (U+003a) outside [A-Za-z0-9_@+.~-]'], ['\\\\server', '"dir" "\\\\\\\\server" is an absolute path'],
+    ['a/b', '"dir" "a/b" holds a path separator'], ['a\\b', '"dir" "a\\\\b" holds a path separator'],
+    ['a:turn', '"dir" "a:turn" holds ":" (U+003a) outside [A-Za-z0-9_@+.~-]'], ['é', '"dir" "é" holds "é" (U+00e9) outside [A-Za-z0-9_@+.~-]'],
+    ['tail ', '"dir" "tail " holds " " (U+0020) outside [A-Za-z0-9_@+.~-]'], ['tail.', '"dir" "tail." ends with "."'],
+    ['con', '"dir" "con" is a Windows device name before its first dot'], ['LPT1.log', '"dir" "LPT1.log" is a Windows device name before its first dot'],
+    ['x'.repeat(256), `"dir" "${'x'.repeat(256)}" is 256 characters`],
+  ];
+  const refusals = bad.map(([dir, want], i) => {
+    const source = join(root, 'bad-' + i), target = join(root, 'bad-kept-' + i);
+    mkdirSync(source, { recursive: true });
+    writeFileSync(join(source, 'frames.json'), JSON.stringify(manifest([row(dir)])));
+    let ok = false;
+    try { retainCheckRender(source, target); }
+    catch (error) {
+      ok = error instanceof PartsError && error.problems.length === 1 && error.problems[0].code === 'FRAMES_SIDECAR' &&
+        error.problems[0].object === join(source, 'frames.json') + ' sets[0] (animation "a")' &&
+        error.problems[0].detail.startsWith(want + '; one path segment of [A-Za-z0-9_@+.~-]') && error.problems[0].detail.includes('is required to retain a render');
+    }
+    return ok && !existsSync(target);
+  });
+  const good = ['a~003aturn', 'idle@24fps', '~0063on.txt', 'tail~002e', '.~002e', 'x'.repeat(255)].map((dir, i) => {
+    const source = join(root, 'good-' + i), target = join(root, 'good-kept-' + i);
+    mkdirSync(join(source, dir), { recursive: true });
+    writeFileSync(join(source, dir, 'sentinel'), String(i));
+    writeFileSync(join(source, 'frames.json'), JSON.stringify(manifest([row(dir)])));
+    return copied(source, target) === 'copied' && existsSync(join(target, dir, 'sentinel')) && readFileSync(join(target, dir, 'sentinel'), 'utf8') === String(i);
+  });
+  say('FSD03_A_SET_DIR_THAT_IS_NOT_ONE_SAFE_SEGMENT_IS_REFUSED_BEFORE_COPY', refusals.every(Boolean) && good.every(Boolean),
+    `${refusals.filter(Boolean).length} of ${bad.length} planted values refused by name with no target; ${good.filter(Boolean).length} of ${good.length} safe recorded folders copied: ${refusals.join(',')} / ${good.join(',')}`);
+
+  // FSD04: two recorded folders one case-insensitive filesystem would merge,
+  // and every bad set of one index, are named in one refusal; Idle and idle-2 copy.
+  const pair = join(root, 'pair'), pairKept = join(root, 'pair-kept');
+  mkdirSync(pair, { recursive: true });
+  writeFileSync(join(pair, 'frames.json'), JSON.stringify(manifest([{ ...row('Idle'), animation: 'Idle' }, { ...row('a:turn'), animation: 'a:turn' }, { ...row('idle'), animation: 'idle' }])));
+  let named: string[] = [];
+  try { retainCheckRender(pair, pairKept); } catch (error) { if (error instanceof PartsError) named = error.problems.map(p => `${p.code} ${p.object.slice(join(pair, 'frames.json').length)}: ${p.detail.split(';')[0]}`); }
+  const distinct = join(root, 'distinct'), distinctKept = join(root, 'distinct-kept');
+  for (const dir of ['Idle', 'idle-2']) mkdirSync(join(distinct, dir), { recursive: true });
+  writeFileSync(join(distinct, 'frames.json'), JSON.stringify(manifest([{ ...row('Idle'), animation: 'Idle' }, { ...row('idle-2'), animation: 'idle-2' }])));
+  say('FSD04_CASE_FOLDED_RECORDED_FOLDERS_AND_EVERY_BAD_SET_ARE_NAMED_IN_ONE_REFUSAL',
+    named.join(' | ') === 'FRAMES_SIDECAR  sets[1] (animation "a:turn"): "dir" "a:turn" holds ":" (U+003a) outside [A-Za-z0-9_@+.~-] | ' +
+      'FRAMES_SIDECAR  sets[2] (animation "idle"): "dir" "idle" and sets[0] "dir" "Idle" are one folder "idle" on a case-insensitive filesystem' &&
+      !existsSync(pairKept) && copied(distinct, distinctKept) === 'copied' && folders(distinctKept).join(',') === 'Idle,idle-2',
+    named.join(' | '));
 }

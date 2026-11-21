@@ -97,7 +97,7 @@ import { createRequire } from 'node:module';
 import type { Candidate, Piece, Viewport as RootCoverageViewport } from '@rig-c/core/render-shared';
 import { fillHoles } from './raster/morph.ts';
 import { closeSync, copyFileSync, cpSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
-import { diagnosticSegment, diagnosticSiblings } from './outputpaths.ts';
+import { diagnosticSegment, diagnosticSiblings, unsafeSegmentReason } from './outputpaths.ts';
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { measureRecomposite, type RecompositeFigures, recompositeRecord, scenePhrase, sourceInRig, figureSilhouette } from './assemble.ts';
 import { type BoneTransform, computeExactFrameTransforms, cropToSpineY, normaliseDegrees, toBoneLocal } from './coords.ts';
@@ -1070,36 +1070,45 @@ function retainedCheckRenderPlan(source: string) {
   const bytes = readFileSync(index, 'utf8');
   const raw: unknown = JSON.parse(bytes);
   if (!isRecord(raw) || !Array.isArray(raw.sets)) return sidecarProblem(index, 'requires a frames.json sets array to retain a render');
-  const seen = new Set<string>();
-  const sourceDirs: string[] = [];
-  const names: Array<{ name: string; suffix?: string }> = [];
-  const sets = raw.sets.map((set: unknown) => {
-    if (!isRecord(set) || typeof set.dir !== 'string' || set.dir.length === 0 || isAbsolute(set.dir) || set.dir.split(/[\\/]/).includes('..')) return sidecarProblem(index, 'requires local set directories to retain a render');
-    // One render samples every set at the same rate. Preserve the rate suffix
-    // on ordinary safe names, but never infer a public name from that suffix.
-    const suffix = typeof set.fps === 'number' && set.fps !== IDLE_FPS ? `@${set.fps}fps` : '';
-    const dir = typeof set.animation === 'string' ? diagnosticSegment(set.animation, suffix) : diagnosticSegment(set.dir);
-    if (seen.has(dir)) return sidecarProblem(index, `retained set directory ${JSON.stringify(dir)} is repeated`);
-    seen.add(dir);
-    sourceDirs.push(set.dir);
-    names.push(typeof set.animation === 'string' ? { name: set.animation, suffix } : { name: set.dir });
-    return { ...set, dir };
+  // Issue #1367: rig-c's render names each frame-set folder (rig-c/core#1744)
+  // and records it under sets[].dir. That value is copied as it is, never
+  // rebuilt from the animation's name; it is joined under the output only once
+  // it is one safe path segment, and two that one case-insensitive
+  // filesystem would make one folder are refused before anything is copied.
+  const problems: Problem[] = [];
+  const folded = new Map<string, { at: number; dir: string }>();
+  const dirs = raw.sets.map((set: unknown, i: number): string => {
+    const which = `${index} sets[${i}]` + (isRecord(set) && typeof set.animation === 'string' ? ` (animation ${JSON.stringify(set.animation)})` : '');
+    if (!isRecord(set)) {
+      problems.push({ code: 'FRAMES_SIDECAR', object: which, detail: 'is not an object; a set record with a "dir" is required to retain a render' });
+      return '';
+    }
+    const why = unsafeSegmentReason(set.dir);
+    if (why !== null) {
+      problems.push({ code: 'FRAMES_SIDECAR', object: which, detail: `"dir" ${set.dir === undefined ? '' : JSON.stringify(set.dir) + ' '}${why}; one path segment of [A-Za-z0-9_@+.~-], not ending in ".", not a Windows device name and at most 255 characters is required to retain a render, as rigc render records it from rig-c/core#1744 on — Parts copies "dir" as it is and maps nothing` });
+      return '';
+    }
+    const dir = set.dir as string;
+    const previous = folded.get(dir.toLowerCase());
+    if (previous !== undefined) {
+      problems.push({ code: 'FRAMES_SIDECAR', object: which, detail: `"dir" ${JSON.stringify(dir)} and sets[${previous.at}] "dir" ${JSON.stringify(previous.dir)} are one folder ${JSON.stringify(dir.toLowerCase())} on a case-insensitive filesystem; distinct case-folded set directories are required to retain a render` });
+    } else folded.set(dir.toLowerCase(), { at: i, dir });
+    return dir;
   });
-  diagnosticSiblings(names, 'retained render sets');
-  return { bytes, raw, sets, sourceDirs };
+  refuseIfAny(problems);
+  return { bytes, dirs };
 }
 
-/** Copy a retained render and bind its index to portable set directories. */
+/** Copy a retained render: each set's folder and `frames.json` as rigc wrote them (issue #1367). */
 export function retainCheckRender(source: string, target: string): void {
-  const { bytes, raw, sets, sourceDirs } = retainedCheckRenderPlan(source);
+  const { bytes, dirs } = retainedCheckRenderPlan(source);
   mkdirSync(target, { recursive: true });
   // Root sidecars and set-local filenames are fixed renderer protocol names.
   for (const entry of readdirSync(source, { withFileTypes: true })) {
     if (entry.isFile() && entry.name !== 'frames.json') copyFileSync(join(source, entry.name), join(target, entry.name));
   }
-  sourceDirs.forEach((dir, i) => cpSync(join(source, dir), join(target, sets[i].dir), { recursive: true }));
-  const changed = sets.some((set, i) => set.dir !== sourceDirs[i]);
-  writeFileSync(join(target, 'frames.json'), changed ? JSON.stringify({ ...raw, sets }, null, 2) + '\n' : bytes);
+  for (const dir of dirs) cpSync(join(source, dir), join(target, dir), { recursive: true });
+  writeFileSync(join(target, 'frames.json'), bytes);
 }
 
 /**
