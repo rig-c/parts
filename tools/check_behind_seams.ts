@@ -1924,7 +1924,7 @@ function runBehindUnreadCorridorCapChecks(dir: string, say: Say, rigc: RigcRunne
   }));
   const bytes64 = serializeCheckRows({ [BEHIND_SEAM_LINE]: capped64.reading });
   const openBytes64 = serializeCheckRows({ [BEHIND_SEAM_LINE]: open64.reading });
-  say('BHC01_CORRIDOR_OF_64_CELLS_HAS_NO_CELLS_OMITTED_AND_SERIALIZES_IDENTICALLY',
+  say('BHK01_CORRIDOR_OF_64_CELLS_HAS_NO_CELLS_OMITTED_AND_SERIALIZES_IDENTICALLY',
     c64.length === 4 &&
       c64.every(c => c.cells.length === 64 && c.cell_count === 64 && c.cells_omitted === undefined && !Object.hasOwn(c, 'cells_omitted')) &&
       capped64.pair.setup!.standing.unread_cells === 256 && open64.pair.setup!.standing.unread_cells === 256 &&
@@ -1952,7 +1952,7 @@ function runBehindUnreadCorridorCapChecks(dir: string, say: Say, rigc: RigcRunne
         equal(c.cells[0], full[idx[0]]) && equal(c.cells[BEHIND_SAMPLE_CAP - 1], full[idx[BEHIND_SAMPLE_CAP - 1]]) &&
         c.cells.every((pt, i) => pt[1] === y && (i === 0 || pt[0] > c.cells[i - 1][0]));
     });
-  say('BHC02_CORRIDORS_OF_65_AND_510_KEEP_64_EVENLY_SPACED_CELLS_IN_ORDER_AND_PRESERVE_COUNTS',
+  say('BHK02_CORRIDORS_OF_65_AND_510_KEEP_64_EVENLY_SPACED_CELLS_IN_ORDER_AND_PRESERVE_COUNTS',
     idx65[0] === 0 && idx65[63] === 63 && idx510[0] === 0 && idx510[63] === 502 &&
       checkOverCap(c65, o65, 65, idx65) && checkOverCap(c510, o510, 510, idx510) &&
       capped65.pair.setup!.standing.unread_cells === 4 * 65 && open65.pair.setup!.standing.unread_cells === 4 * 65 &&
@@ -1972,7 +1972,7 @@ function runBehindUnreadCorridorCapChecks(dir: string, say: Say, rigc: RigcRunne
     corridors.every(c => c.cells.length <= BEHIND_SAMPLE_CAP &&
       c.cells.length + (c.cells_omitted ?? 0) === c.cell_count &&
       (c.cell_count <= BEHIND_SAMPLE_CAP ? !Object.hasOwn(c, 'cells_omitted') : c.cells_omitted === c.cell_count - BEHIND_SAMPLE_CAP));
-  say('BHC03_MULTI_CORRIDOR_INVARIANT_AND_CELL_CEILING_HOLD_AND_FAIL_WHEN_UNCAPPED',
+  say('BHK03_MULTI_CORRIDOR_INVARIANT_AND_CELL_CEILING_HOLD_AND_FAIL_WHEN_UNCAPPED',
     mc.length === 4 && equal(mc.map(c => c.cell_count), [1, 64, 65, 510]) &&
       equal(mc.map(c => c.cells.length), [1, 64, 64, 64]) &&
       equal(mc.map(c => c.cells_omitted ?? null), [null, null, 1, 446]) &&
@@ -1999,7 +1999,7 @@ function runBehindUnreadCorridorCapChecks(dir: string, say: Say, rigc: RigcRunne
   const setupStanding = behind.pairs[0]?.setup?.standing;
   const setupCorridors = setupStanding?.unread_corridors ?? [];
   const BYTE_CEILING = 6_600_000;
-  say('BHC04_512_SQUARE_MAX_UNREAD_RIG_KEEPS_EXACT_COUNTS_AND_WRITES_CHECK_JSON_UNDER_BOUND',
+  say('BHK04_512_SQUARE_MAX_UNREAD_RIG_KEEPS_EXACT_COUNTS_AND_WRITES_CHECK_JSON_UNDER_BOUND',
     setupStanding !== undefined && setupStanding.unread_cells === 260_100 &&
       setupCorridors.length === 1_020 &&
       setupCorridors.filter(c => c.axis === 'horizontal').length === 510 &&
