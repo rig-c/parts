@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeNeckDraftFixture } from '../fixtures/neck_draft.ts';
@@ -20,14 +20,33 @@ type Mesh = { contour?: { bust?: Json } };
  * A declared contour.bust holds other points, apex_r [16, 46], apex_l [48, 46], cleavage [32, 62] (|apex - cleavage| =
  * 22.63, D = 32), valid on their own with clearance 8 (R = 15) and with alpha 0.3, clearance 9 (R = 14, r = 4).
  */
-export function runBustShapeChecks(dir: string, say: (name: string, pass: boolean, detail: string) => void): void {
+/** The two configs #1441's and #1443's controls run on, with the helpers both use. */
+export interface BustRouteFixture {
+  cli: (...args: string[]) => SpawnSyncReturns<string>;
+  read: (p: string) => string;
+  write: (p: string, value: unknown) => string;
+  first: (r: { stdout: string }) => string;
+  /** The ordinary config (no turn.body) drafted with --no-bust, and the sampled-neck config, its neck drafted after. */
+  ordinary: string;
+  neck: string;
+  /** The neck draft's parts, the painting and the directory every control writes into. */
+  parts: string;
+  source: string;
+  /** The See-through runs the neck draft read. */
+  fullDir: string;
+  headDir: string;
+  work: string;
+  /** A rig-review/act@9 file with one chest row on "shirt" whose edit.bust is the given object. */
+  act: (bust: Json) => string;
+}
+
+/** Build {@link BustRouteFixture} under `dir`: the neck-draft blocks with a chest carrier, drafted as #1436's controls draft it. */
+export function bustRouteFixture(dir: string): BustRouteFixture {
   const cliPath = join(import.meta.dir, '../cli.ts');
   const cli = (...args: string[]) => spawnSync(process.execPath, [cliPath, ...args], { cwd: dir, encoding: 'utf8' });
   const read = (p: string): string => existsSync(p) ? readFileSync(p, 'utf8') : '';
   const write = (p: string, value: unknown): string => { writeFileSync(p, JSON.stringify(value, null, 2) + '\n'); return p; };
   const first = (r: { stdout: string }): string => r.stdout.split('\n').find(l => l.includes('FAIL  ')) ?? r.stdout.split('\n')[0];
-  const bustOf = (cfg: string): string => JSON.stringify((JSON.parse(read(cfg)) as { meshes: Record<string, Mesh> }).meshes.shirt.contour?.bust ?? null);
-
   // The two configs: ordinary (no turn.body), drafted with --no-bust; sampled-neck, its neck drafted after.
   const files = writeNeckDraftFixture(join(dir, 'fixture'), true, true);
   const parts0 = join(dir, 'old');
@@ -47,6 +66,24 @@ export function runBustShapeChecks(dir: string, say: (name: string, pass: boolea
   if (draft.status !== 0 || neckRun.status !== 0) throw new Error(`bust-shape fixture: first draft exit ${draft.status}, neck draft exit ${neckRun.status}: ${first(draft)} ${first(neckRun)}`);
   const neck = read(config);
   const parts = join(work, 'neck', 'rig');
+  let k = 0;
+
+  const digest = (edit: unknown): string => {
+    const sorted = (v: unknown): unknown => Array.isArray(v) ? v.map(sorted)
+      : typeof v === 'object' && v !== null ? Object.fromEntries(Object.keys(v).sort().map(k => [k, sorted((v as Json)[k])])) : v;
+    return createHash('sha256').update(JSON.stringify(sorted(edit))).digest('hex');
+  };
+  const act = (bust: Json): string => {
+    const edit = { slot: 'shirt', skin: 'default', attachment: 'shirt', basis: 'setup', source: { hash: 'a'.repeat(64), frame: { width: 64, height: 64 } }, bust };
+    return write(join(work, `act-${++k}.json`), { schema: 'rig-review/act@9', actId: 'act-1441', jobId: 'job-1', askId: 'ask-1', publicationId: 'pub-1', kind: 'review-verdict', value: { stage: 'rig-review', verdict: 'changes-requested', comments: [], chestLandmarks: [{ edit, sha256: digest(edit) }] } });
+  };
+  return { cli, read, write, first, ordinary, neck, parts, source: files.source, fullDir: files.fullDir, headDir: files.headDir, work, act };
+}
+
+export function runBustShapeChecks(dir: string, say: (name: string, pass: boolean, detail: string) => void): void {
+  const { cli, read, write, first, ordinary, neck, parts, source, work, act } = bustRouteFixture(dir);
+  const bustOf = (cfg: string): string => JSON.stringify((JSON.parse(read(cfg)) as { meshes: Record<string, Mesh> }).meshes.shirt.contour?.bust ?? null);
+  const files = { source };
 
   // A config of either route with a declared contour.bust (other points, the given shape fields), or none.
   let n = 0;
@@ -124,15 +161,6 @@ export function runBustShapeChecks(dir: string, say: (name: string, pass: boolea
     plain.map(x => `exit ${x.r.status}; ${x.line === plainLine ? 'text as before' : x.line.trim().slice(0, 140)}`).join(' | '));
 
   // bust-landmarks refuses the points propose would refuse, and writes the ones it would take.
-  const digest = (edit: unknown): string => {
-    const sorted = (v: unknown): unknown => Array.isArray(v) ? v.map(sorted)
-      : typeof v === 'object' && v !== null ? Object.fromEntries(Object.keys(v).sort().map(k => [k, sorted((v as Json)[k])])) : v;
-    return createHash('sha256').update(JSON.stringify(sorted(edit))).digest('hex');
-  };
-  const act = (bust: Json): string => {
-    const edit = { slot: 'shirt', skin: 'default', attachment: 'shirt', basis: 'setup', source: { hash: 'a'.repeat(64), frame: { width: 64, height: 64 } }, bust };
-    return write(join(work, `act-${++n}.json`), { schema: 'rig-review/act@9', actId: 'act-1441', jobId: 'job-1', askId: 'ask-1', publicationId: 'pub-1', kind: 'review-verdict', value: { stage: 'rig-review', verdict: 'changes-requested', comments: [], chestLandmarks: [{ edit, sha256: digest(edit) }] } });
-  };
   const landmarks = (cfg: string, bust: Json) => {
     const out = join(work, `bl-${++n}.json`);
     const r = cli('bust-landmarks', '--from-act', act(bust), '--parts', parts, '--config', cfg, '--out', out);

@@ -32,7 +32,7 @@ import { ACCEPTABLE_BARS, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, findRigc, PACK
 import { ComfyClient, resolveHost, runBackground, runMatte, runPainting, runSeeThrough } from './src/comfy/index.ts';
 import { coreCfg, DEFAULT_GROW_PX, runForeground } from './src/plate.ts';
 import { type CharacterConfig, loadClothConfig, loadConfig, loadEarlyConfig, loadPaintConfig } from './src/config.ts';
-import type { ConfigWritePatch } from './src/configwrite.ts';
+import { type ConfigWritePatch, onlyMissingAttachments } from './src/configwrite.ts';
 import { configWriteLines, type ConfigWriteTarget, readConfigWriteTarget, separateConfigWriteTarget, stageConfigWrite, type StagedConfigWrite } from './tools/configwrite.ts';
 import { failLine, guidePointer, PartsError, type Problem } from './src/errors.ts';
 import { GUIDE_DOC, type GuideAnswer, guideRule, guideSection } from './src/guide.ts';
@@ -1933,7 +1933,7 @@ function cmdPropose(args: string[]): number {
         : withTurn(drafted, draftTurn(P, { ...(fullRun === undefined ? {} : { full: readLayers(fullRun) }), ...(headRun === undefined ? {} : { head: readLayers(headRun) }) }, drafted));
     // Emit only after green: a proposal the config loader would refuse is not written, nor a basis record that does not hold to it.
     // Issue #1441: the chest carrier's points are checked with the shape the config write will hold.
-    checkProposalWithBustShape(P, prop, target, sidecar);
+    checkProposalWithBustShape(P, prop, target, sidecar, onlyMissing);
     if (sidecar !== null) {
       // The record's part must be the chest carrier this draft makes: points placed on another part are not these.
       const carriers = Object.entries(prop.meshes).filter(([, mesh]) => 'contour' in mesh && mesh.contour.bust !== undefined).map(([part]) => part);
@@ -2786,10 +2786,13 @@ function pendingFields(fields: Readonly<Record<string, number | string | undefin
  * no declared or pending alpha or clearance the check is the draft's own, so its refusals read as before; otherwise a
  * clearance refusal names the shape it used and where each value came from.
  */
-function checkProposalWithBustShape(P: PartSet, prop: Proposal, target: ConfigWriteTarget | null, sidecar: BustSidecar | null): void {
+function checkProposalWithBustShape(P: PartSet, prop: Proposal, target: ConfigWriteTarget | null, sidecar: BustSidecar | null, onlyMissing: boolean): void {
   const carrier = Object.entries(prop.meshes).find(([, mesh]) => 'contour' in mesh && mesh.contour.bust !== undefined);
   if (carrier === undefined || !('contour' in carrier[1]) || carrier[1].contour.bust === undefined) { checkProposal(P, prop); return; }
   const [part, mesh] = carrier;
+  // --only-missing skips a part the config attaches (the write's own decision), so the draft's points are not
+  // written and the declared shape is not theirs: the draft is checked as drafted, as before #1441.
+  if (onlyMissing && target !== null && onlyMissingAttachments(target.raw).has(part)) { checkProposal(P, prop); return; }
   const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
   const raw = target === null ? undefined : target.raw;
   const meshes = isObject(raw) && isObject(raw.meshes) ? raw.meshes : undefined;
@@ -2883,7 +2886,9 @@ function cmdBustLandmarks(args: string[]): number {
     if (shape === undefined) console.log(next);
     else {
       // Issue #1382: the config declares no contour.bust, so the reviewed shape waits in the record for propose.
-      console.log(`bust-landmarks: pending shape for "${provenance.slot}": ${pendingFields(shape.fields)}; the config declares no contour.bust yet, so ${plan.provenancePath} carries it until propose writes it with the three points`);
+      // Issue #1443: or the act moved the declared points, and the shape is not written against the old ones.
+      const why = plan.moved ? `the act moves the points of meshes.${provenance.slot}.contour.bust, so the config is not written and` : 'the config declares no contour.bust yet, so';
+      console.log(`bust-landmarks: pending shape for "${provenance.slot}": ${pendingFields(shape.fields)}; ${why} ${plan.provenancePath} carries it until propose writes it with the three points`);
       console.log(next);
     }
     return EXIT_OK;

@@ -267,10 +267,19 @@ on a drafted rig, and the act review emits carries them. The order is:
    writes the landmarks file from that row. It writes
    `<landmarks.json>.provenance.json` beside it. When the person changed a
    shape field (`alpha`, `clearance`, `bone_r`, `bone_l`, `spacing`) and the
-   config already declares `contour.bust`, add `--write-config`: it takes the
-   act's five values into that `contour.bust` and then writes the landmarks
-   file. When the config declares no `contour.bust` yet (the first draft), the
-   changed fields are recorded as a **pending** shape in the record. Either
+   config already declares `contour.bust` at the act's own three points, add
+   `--write-config`: it takes the act's five values into that `contour.bust`
+   and then writes the landmarks file. When the config declares no
+   `contour.bust` yet (the first draft), the changed fields are recorded as a
+   **pending** shape in the record. The same happens on a second correction
+   that moves the points (issue #1443), with or without `--write-config`: the
+   act's apex_r or apex_l differs from the declared one in either coordinate,
+   its cleavage differs, or it has no cleavage. The command writes nothing into
+   the config then. A shape written against the old points could refuse what
+   the new points fit, and `propose` writes the points and the shape together.
+   Each field whose value differs from the config's (after defaults) is
+   pending. A field the config declares and the act leaves out is pending as
+   the default's value. `bust-landmarks` never writes the three points. Either
    way the command ends by printing the one that applies the file:
    `next, to apply it: rig-parts propose … --write-config <config.json> --bust-landmarks <landmarks.json>`,
    with the config it read. Without `--write-config`, `propose` writes only
@@ -318,7 +327,9 @@ rows of `value.chestLandmarks`. From each row it reads `edit.slot`, `edit.skin`,
 - an `edit.source.frame` other than `parts.json`'s `rig_size`, the frame the
   points are rig px in (`BUST_LANDMARKS_FRAME`);
 - an `alpha`, `clearance`, `spacing`, `bone_r` or `bone_l` that differs from the
-  config's `meshes.<part>.contour.bust` after defaults (`BUST_LANDMARKS_SHAPE`).
+  config's `meshes.<part>.contour.bust` after defaults, for an act at the
+  declared points and without `--write-config` (`BUST_LANDMARKS_SHAPE`). An act
+  that moves the points leaves the difference pending instead.
   The landmarks file carries none of the five, so a different value would be
   dropped. A config with no `contour.bust` yet, the first draft made with
   `--no-bust`, compares against the defaults (alpha 0.22, clearance 3.8,
@@ -359,9 +370,11 @@ record sits beside the landmarks file because `propose --bust-landmarks` refuses
 any key but the three points.
 
 A **pending** shape is the record's last key, `shape`, present only when the
-config declared no `contour.bust` and the act's shape differs from the defaults:
+act's shape differs from the config's and the config declared no `contour.bust`
+or the act moves its points (issue #1443):
 `{"status": "pending", "fields": {…}}`, the act's fields whose value differs from
-the default, in the shorthand's key order (`alpha`, `clearance`, `bone_r`,
+the config's after defaults (with no `contour.bust`, from the default), in the
+shorthand's key order (`alpha`, `clearance`, `bone_r`,
 `bone_l`, `spacing`). An all-default act writes no `shape`, so its record is the
 same bytes as before. `propose --bust-landmarks <file>` reads `<file>.provenance.json`
 when it is there; with none it reads the landmarks file as before. A record there
@@ -391,7 +404,7 @@ config hash: the act carries none.
 | <a id="BUST_LANDMARKS_PART_ROWS"></a>`BUST_LANDMARKS_PART_ROWS` | the act has more than one row for one part | keep one chest-landmarks row for the part in review |
 | <a id="BUST_LANDMARKS_ROWS"></a>`BUST_LANDMARKS_ROWS` | the act has rows for more than one part; `propose` drafts one chest carrier | keep the row for the chest carrier only |
 | <a id="BUST_LANDMARKS_FRAME"></a>`BUST_LANDMARKS_FRAME` | the row's `edit.source.frame` is not `parts.json`'s `rig_size` | pass the `--parts` directory of the rig the act was made on |
-| <a id="BUST_LANDMARKS_SHAPE"></a>`BUST_LANDMARKS_SHAPE` | the row's `alpha`, `clearance`, `spacing`, `bone_r` or `bone_l` differs from the config's declared `meshes.<part>.contour.bust` after defaults (with no `contour.bust`, a difference is recorded pending instead) | run again with `--write-config` to take the act's value into the config, or put the config's value back in review and emit the act again |
+| <a id="BUST_LANDMARKS_SHAPE"></a>`BUST_LANDMARKS_SHAPE` | the row's `alpha`, `clearance`, `spacing`, `bone_r` or `bone_l` differs from the config's declared `meshes.<part>.contour.bust` after defaults, for an act at the declared points without `--write-config` (with no `contour.bust`, or with points the act moves, a difference is recorded pending instead) | run again with `--write-config` to take the act's value into the config, or put the config's value back in review and emit the act again |
 | <a id="BUST_LANDMARKS_OUT"></a>`BUST_LANDMARKS_OUT` | `--out` or `<out>.provenance.json` lies inside `--parts`, is the act, the config or `parts.json` (by path or as a hard link), is a directory or a read-only file, or cannot be staged or replaced | choose a path outside the parts directory that is no input, in an existing writable directory; remove a leftover `.<name>.rig-parts.tmp` the detail names |
 
 Drafted torso bytes change from lattice (or a figure trunk's region) to contour.
