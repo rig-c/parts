@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.52.1 (2026-11-22)
+
+`check` passes a rig whose motion has a named animation keyed only on physics properties.
+
+**Read before upgrading:**
+
+* **`check.json`'s `ANIMATIONS_DO_NOT_FOLD` gains an optional `physics_off_skipped` list.** It names, in motion order, each animation the physics-off reading skipped because removing its physics tracks left it no timeline. It is written only when one was skipped; every other `check.json` keeps its bytes. The `loop physics:` line names the same animations.
+
+### Bug Fixes
+
+* **check:** omit an animation beside the idle that is keyed only on physics properties (for example `wind`) from the build with physics left out, instead of handing rigc an animation with no keys that it refuses as `CE_COMPILE_ANIMATION_DURATION_MISMATCH`. Its physics-on fold reading is unchanged; its physics-off fold reading and `FEET_STAY_LEVEL` reading are skipped by name (`#1461`, `#1463`, `41e22cb`).
+
 ## 2.52.0 (2026-11-22)
 
 An edit that removes opaque pixels now records where it removed them, `rig` refuses a part PNG overwritten outside that route, and `depth-apply` can apply a subset of a recipe's groups.
