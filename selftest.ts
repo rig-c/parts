@@ -112,6 +112,7 @@ import { encodeCheckReceipt, readBuildReceipt, readBuildChild, selectedRigcComma
 import { runSetAnchorChecks } from './tools/check_set_anchor.ts';
 import { runSetFocusChecks } from './tools/check_set_focus.ts';
 import { runRemeshGateCopyChecks, runRetuneGateCopyChecks, runRevisionChainChecks } from './tools/check_revision_chain.ts';
+import { compareExpected, firstKeyOutOfOrder, keyOrderDigest, machineClass, MACHINE_CLASS_FILE, machineClassLine, recordedKeyOrder } from './tools/expected_form.ts';
 import { runConfigWriteChecks } from './tools/check_configwrite.ts';
 import { readConfigWriteTarget, stageConfigWrite } from './tools/configwrite.ts';
 import { BLINK_ANIMATION } from './src/check.ts';
@@ -32431,37 +32432,75 @@ function sampleSupportCoverage(support: SupportReport | undefined): boolean {
     support.pairs.every(pair => pair.status === 'unavailable' && pair.boundary_length_px === null && typeof pair.reason === 'string');
 }
 
+/**
+ * CH04's whole-file comparison of a validation variant's check.json (issue #1439): every key, in the
+ * writer's order, under the chain tolerances. `build.model_sha256` is excluded by name: the model file's
+ * path is part of what it hashes, and CH1372's model match holds it to the model file beside the report.
+ * `pose_sha256` and the last place of `bounds` are exact on Linux, where the expected files are written;
+ * on another platform a difference there is reported as machine class and not failed.
+ */
+export function chainCheckWholeFile(expectedText: string, currentText: string, platform: string): { over: string[]; within: string[]; machine: string[] } {
+  const expected = JSON.parse(expectedText) as Record<string, unknown>;
+  const current = JSON.parse(currentText) as Record<string, unknown>;
+  const withoutModel = (v: Record<string, unknown>): Record<string, unknown> => {
+    const build = v.build;
+    if (build === null || typeof build !== 'object' || Array.isArray(build)) return v;
+    const { model_sha256: _model, ...rest } = build as Record<string, unknown>;
+    return { ...v, build: rest };
+  };
+  const diffs = jsonDiffs(withoutModel(expected), withoutModel(current), chainTolerance('check.json', expected));
+  const machine: string[] = [];
+  const over = diffs.over.filter((line) => {
+    const m = /^(\S+): expected (.*), built (.*)$/.exec(line);
+    if (platform === 'linux' || m === null) return true;
+    const value = (text: string): unknown => { try { return JSON.parse(text) as unknown; } catch { return text; } };
+    if (!machineClass(m[1], value(m[2]), value(m[3]))) return true;
+    machine.push(`${m[1]} differs by machine class: held to Linux`);
+    return false;
+  });
+  const orderE = keyOrderDigest(JSON.stringify(withoutModel(expected))), orderC = keyOrderDigest(JSON.stringify(withoutModel(current)));
+  if (orderE !== orderC) over.push(`key order: ${firstKeyOutOfOrder(JSON.stringify(expected), JSON.stringify(current)) ?? 'differs'} is out of the writer's order`);
+  return { over, within: diffs.within, machine };
+}
+
 function chainCheckGoldenCase(ex: string, out: string, key: string, say: ReturnType<typeof counter>['say']) {
       const exp = join(ex, 'expected');
-      const expectedCheck = readJsonAt(join(exp, 'check.json')) as Record<string, unknown>;
-      const current = readJsonAt(join(out, 'check', 'check.json')) as Record<string, unknown>;
-      // Historical field-by-field oracle stays intact. The additive report has
-      // its own controls and coverage assertion, with no new acceptance bar.
+      const expectedText = readFileSync(join(exp, 'check.json'), 'utf8');
+      const currentText = readFileSync(join(out, 'check', 'check.json'), 'utf8');
+      const current = JSON.parse(currentText) as Record<string, unknown>;
       const report = current[COINCIDE_LINE];
       const rowFaults1089 = checkRowFaults(current);
-      const legacySnapshot = !Object.hasOwn(expectedCheck, 'spec') && !Object.hasOwn(expectedCheck, 'bar_outcomes');
-      const comparable = legacySnapshot ? checkLegacyProjection(current) : current;
-      const check = jsonDiffs(expectedCheck, comparable, chainTolerance('check.json', expectedCheck));
+      const check = chainCheckWholeFile(expectedText, currentText, process.platform);
       const outcomeFaults = checkOutcomeFaults(current);
       const modelMatch = checkBuildMatchesModel(join(out, 'check', 'check.json'), join(out, 'check', 'build', 'skeleton.model.json'));
-      const outcomesMatch = legacySnapshot ||
-        (expectedCheck.spec === current.spec &&
-          JSON.stringify(expectedCheck.bar_outcomes) === JSON.stringify(current.bar_outcomes) &&
-          JSON.stringify(expectedCheck.build) === JSON.stringify(current.build));
       const support = report as SupportReport | undefined;
       const droppedPair = support === undefined ? undefined : { ...support, pairs: support.pairs.slice(1) };
       say(`CH943_SUPPORT_COVERAGE_IS_EXPLICIT[${key}]`, sampleSupportCoverage(support) && !sampleSupportCoverage(droppedPair),
         JSON.stringify({ coverage: support?.coverage, droppedPairRefused: !sampleSupportCoverage(droppedPair) }), 'every unavailable pair explicit; deleting one actual pair fails the same coverage predicate');
       say(
-        `CH04_CHECK_JSON_IS_THE_EXPECTED_FIELD_BY_FIELD[${key}]`,
+        `CH04_CHECK_JSON_IS_THE_EXPECTED_WHOLE_FILE[${key}]`,
         check.over.length === 0 && rowFaults1089.length === 0,
-        `${summarise(check)}; row metadata: ${rowFaults1089.join('; ') || 'complete'}`,
-        "The actual check report retains every measured figure and its row metadata under the existing tolerances.",
+        `${summarise(check)}${check.machine.length > 0 ? `; ${check.machine.length} machine-class field(s) held to Linux: ${check.machine.join('; ')}` : ''}; build.model_sha256 excluded (CH1372 holds it to the model file); row metadata: ${rowFaults1089.join('; ') || 'complete'}`,
+        'issue #1439: the whole report, spec, bar_outcomes and build included, in the writer\'s key order, under the existing tolerances; no legacy projection.',
       );
+      if (key === 'standard') {
+        // Planted: the expected file's spec and one bar outcome changed; the legacy projection used to drop both.
+        const planted = JSON.parse(expectedText) as Record<string, unknown>;
+        const outcomes = planted.bar_outcomes as Record<string, unknown> | undefined;
+        const bar = outcomes === undefined ? undefined : Object.keys(outcomes)[0];
+        const specPlant = chainCheckWholeFile(JSON.stringify({ ...planted, spec: 'rig-parts-check/0' }, null, 2), currentText, process.platform);
+        const barPlant = bar === undefined || outcomes === undefined ? null
+          : chainCheckWholeFile(JSON.stringify({ ...planted, bar_outcomes: { ...outcomes, [bar]: 'PLANTED' } }, null, 2), currentText, process.platform);
+        const legacyHid = jsonDiffs(checkLegacyProjection({ ...planted, spec: 'rig-parts-check/0' }), checkLegacyProjection(current), chainTolerance('check.json', planted)).over.length === 0;
+        say('CH1439_A_CHANGED_SPEC_OR_BAR_OUTCOME_IN_THE_EXPECTED_FILE_FAILS_CH04',
+          check.over.length === 0 && specPlant.over.some((l) => l.startsWith('spec: ')) && barPlant !== null && barPlant.over.some((l) => l.startsWith(`bar_outcomes.${bar ?? ''}: `)),
+          JSON.stringify({ spec: specPlant.over, bar: barPlant?.over ?? 'no bar_outcomes in the expected file', legacyProjectionHidSpec: legacyHid }),
+          'issue #1439: CH04 compares the whole file, so the versioned outcome fields the legacy projection stripped are held to the snapshot.');
+      }
       say(`CH1372_COMPLETED_CHAIN_REPORT_HAS_THE_DECLARED_OUTCOMES[${key}]`,
-        outcomeFaults.length === 0 && current.PASS === true && outcomesMatch && modelMatch,
-        JSON.stringify({ faults: outcomeFaults, modelMatch, build: current.build, expected: expectedCheck.bar_outcomes, actual: current.bar_outcomes }),
-        'Compare the outcome map and primary build model digest where the snapshot declares them. Older sample snapshots still hold the legacy fields under CH04.');
+        outcomeFaults.length === 0 && current.PASS === true && modelMatch,
+        JSON.stringify({ faults: outcomeFaults, modelMatch, build: current.build }),
+        'The outcome map is well formed and the build model digest is the hash of the model file beside the report; the values against the snapshot are CH04\'s.');
 
 }
 function chainGateGoldenCase(ex: string, out: string, key: string, partCount: number, say: ReturnType<typeof counter>['say']) {
@@ -44642,14 +44681,10 @@ function remeshApiExportFaults(path: string, source: string | undefined): string
   ];
 }
 
-// SHA-256 of the exact tracked manifests before assembly_config was inserted.
+// SHA-256 of the exact tracked validation manifests before assembly_config was inserted. The public
+// examples' entries were retired by issue #1439: their parts.json is regenerated on Linux by
+// tools/regenerate_examples.ts, held in content by its --check in CI and in form by EXP01.
 const EXPECTED_PARTS_LEGACY_HASHES = new Map([
-  ['examples/demo/expected/parts.json', '504d4eafa353012ece2523d70d1e5df32f60b20523fc0a511c5aa853a8af96a3'],
-  ['examples/reference-demo/expected/parts.json', 'f3b674037cb2733218b6dae03a54c3bacf182c87738b60783f57417be6deafa3'],
-  ['examples/reference-sample/expected/parts.json', '437824193a2a97b98a9f9e139583218985f3df4076bd0beaad6623a4c5330ed0'],
-  ['examples/scarf/expected/parts.json', 'cc22d251c6c1d88a5f6848345e24802d5a52e38806d5be926b3493afee9b56e5'],
-  ['examples/wind/expected-wave/parts.json', '3ac17b60a2098e8439d9b114ff5c7a7b635cedb4aca7a4e7b0aefbab3b41943e'],
-  ['examples/wind/expected/parts.json', '7d90a5f48a8dc5981c08e3008903e2ab0d5a92960b2f71641cf4db9d04af62a3'],
   ['fixtures/validation-inputs/expected/cloth/parts.json', '937707df7c5a1158aeaf3c631b39e5d2cbc6dbcf3acc0a75e15001d48508d727'],
   ['fixtures/validation-inputs/expected/gesture/parts.json', 'a314ce7d8e0cfbd4a6b8a862f9de59a9684a02ca7626400d715a18257215ca7d'],
   ['fixtures/validation-inputs/expected/no-neck/parts.json', '156073edc68e28a673afb477230053b489de717cf4e834b16639f1c535b7e311'],
@@ -44662,9 +44697,7 @@ const EXPECTED_PARTS_LEGACY_HASHES = new Map([
 ]);
 
 function expectedPartsLegacyCase(text: ReadonlyArray<readonly [string, string]>, say: FixtureCaseReporter): void {
-  const files = text.filter(([file]) =>
-    /^examples\/[^/]+\/expected(?:-wave)?\/parts\.json$/.test(file) ||
-    /^fixtures\/validation-inputs\/expected\/[^/]+\/parts\.json$/.test(file));
+  const files = text.filter(([file]) => /^fixtures\/validation-inputs\/expected\/[^/]+\/parts\.json$/.test(file));
   const missing = [...EXPECTED_PARTS_LEGACY_HASHES.keys()].filter(file => !files.some(([path]) => file === path));
   const keepsLegacyBytes = (body: string, sha256: string): boolean => {
     const stripped = withoutAssemblyConfig(body);
@@ -44680,15 +44713,129 @@ function expectedPartsLegacyCase(text: ReadonlyArray<readonly [string, string]>,
       if (parsed !== null) faults.push(`${file}: ${parsed.message}`);
     }
   }
-  const plantPath = 'examples/demo/expected/parts.json';
+  const plantPath = 'fixtures/validation-inputs/expected/standard/parts.json';
   const plant = files.find(([file]) => file === plantPath)?.[1];
   const expected = EXPECTED_PARTS_LEGACY_HASHES.get(plantPath);
   const plantsRefused = plant !== undefined && expected !== undefined &&
     !keepsLegacyBytes(plant + '\n', expected) && !keepsLegacyBytes(withoutAssemblyConfig(plant), expected);
   say('TY1385_EXPECTED_PARTS_KEEP_PRE_MIGRATION_BYTES',
     faults.length === 0 && plantsRefused,
-    `${files.length} expected manifests; ${faults.join(' | ') || 'all legacy hashes match'}; whitespace and missing field refused: ${plantsRefused}`,
+    `${files.length} expected validation manifests; ${faults.join(' | ') || 'all legacy hashes match'}; whitespace and missing field refused: ${plantsRefused}`,
     'Removing the assembly config record recovers the original file bytes. A whitespace change or removal of the record fails the same check.');
+}
+
+/** The expected parts.json and check.json files the regeneration tool writes (issue #1439). */
+const EXPECTED_PARTS_FILE = /^(?:examples\/[^/]+\/expected(?:-wave)?|fixtures\/validation-inputs\/expected\/[^/]+)\/parts\.json$/;
+const EXPECTED_CHECK_FILE = /^(?:examples\/[^/]+\/expected|fixtures\/validation-inputs\/expected\/[^/]+)\/check\.json$/;
+
+/** A parts.json's form fault: null when the bytes are the writer's serialization of their own parse. */
+function expectedPartsFormFault(file: string, body: string, at: string): string | null {
+  let written: string;
+  try { written = serializeParts(readParts(at)); }
+  catch (e) { return `${file}: ${e instanceof Error ? e.message : String(e)}`; }
+  if (written === body) return null;
+  const key = firstKeyOutOfOrder(body, written);
+  if (key !== null) return `${file}: key order is not the writer's; first key out of order ${key}`;
+  const line = body.split('\n').findIndex((l, i) => l !== written.split('\n')[i]);
+  return `${file}: bytes are not the writer's; line ${line + 1}`;
+}
+
+/** A check.json's form fault against its sidecar: null when the key order is the one the regeneration recorded and the indent is its writer's. */
+function expectedCheckFormFault(file: string, body: string, sidecar: string | undefined): string | null {
+  if (sidecar === undefined) return `${file}: no ${MACHINE_CLASS_FILE} beside it`;
+  const recorded = recordedKeyOrder(sidecar);
+  if (recorded === null) return `${file}: ${MACHINE_CLASS_FILE} is not the regeneration's one line`;
+  let parsed: unknown;
+  try { parsed = JSON.parse(body); } catch (e) { return `${file}: ${e instanceof Error ? e.message : String(e)}`; }
+  const indent = file.startsWith('fixtures/') ? 2 : 1;
+  if (`${JSON.stringify(parsed, null, indent)}\n` !== body) return `${file}: bytes are not JSON.stringify(parse, null, ${indent})`;
+  const found = keyOrderDigest(body);
+  return found === recorded ? null : `${file}: key order sha256 ${found} is not the ${recorded} the regeneration recorded (a key added, removed or moved by hand)`;
+}
+
+function expectedFormCases(text: ReadonlyArray<readonly [string, string]>, say: FixtureCaseReporter): void {
+  const byPath = new Map(text);
+  const parts = text.filter(([f]) => EXPECTED_PARTS_FILE.test(f));
+  const partsFaults = parts.flatMap(([f, body]) => { const fault = expectedPartsFormFault(f, body, join(ROOT, f)); return fault === null ? [] : [fault]; });
+  // Plant: demo's parts.json with its first record's first two keys swapped.
+  const plantFile = 'examples/demo/expected/parts.json';
+  const plantBody = byPath.get(plantFile);
+  let plantFault: string | null = null;
+  if (plantBody !== undefined) {
+    const doc = JSON.parse(plantBody) as { parts: Array<Record<string, unknown>> };
+    const [k0, k1, ...rest] = Object.keys(doc.parts[0]);
+    const swapped: Record<string, unknown> = { [k1]: doc.parts[0][k1], [k0]: doc.parts[0][k0] };
+    for (const k of rest) swapped[k] = doc.parts[0][k];
+    doc.parts[0] = swapped;
+    const dir = temp('exp01-plant');
+    try {
+      const at = join(dir, 'parts.json');
+      const planted = JSON.stringify(doc, null, 1) + '\n';
+      writeFileSync(at, planted);
+      // readParts reads the painting the manifest declares beside it.
+      cpSync(join(ROOT, 'examples', 'demo', 'expected', 'painting_in_rig.png'), join(dir, 'painting_in_rig.png'));
+      plantFault = expectedPartsFormFault(plantFile, planted, at);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+  say('EXP01_EXPECTED_PARTS_ARE_THE_WRITERS_SERIALIZATION',
+    parts.length >= 15 && partsFaults.length === 0 && plantFault !== null && plantFault.includes('first key out of order parts[0].'),
+    `${parts.length} expected parts.json: ${partsFaults.join(' | ') || 'each is serializeParts(readParts(file))'}; planted key swap -> ${plantFault ?? 'not caught'}`,
+    'issue #1439: an expected parts.json is the writer\'s bytes, so a hand edit that reorders, respaces or splices it is refused by name without a build; its values are held by the regeneration tool\'s --check');
+
+  const checks = text.filter(([f]) => EXPECTED_CHECK_FILE.test(f));
+  const sidecarOf = (f: string): string | undefined => byPath.get(f.replace(/check\.json$/, MACHINE_CLASS_FILE));
+  const checkFaults = checks.flatMap(([f, body]) => { const fault = expectedCheckFormFault(f, body, sidecarOf(f)); return fault === null ? [] : [fault]; });
+  const demoCheck = 'examples/demo/expected/check.json';
+  const demoBody = byPath.get(demoCheck) ?? '{}';
+  const spliceDoc = JSON.parse(demoBody) as Record<string, unknown>;
+  spliceDoc.SPLICED_BY_HAND = { status: 'PASS' };
+  const spliced = expectedCheckFormFault(demoCheck, JSON.stringify(spliceDoc, null, 1) + '\n', sidecarOf(demoCheck));
+  const respaced = expectedCheckFormFault(demoCheck, JSON.stringify(JSON.parse(demoBody), null, 2) + '\n', sidecarOf(demoCheck));
+  const fresh = expectedCheckFormFault(demoCheck, demoBody, machineClassLine(demoBody));
+  say('EXP02_EXPECTED_CHECK_JSON_HOLDS_THE_WRITERS_KEY_ORDER',
+    checks.length >= 14 && checkFaults.length === 0 && spliced !== null && spliced.includes('key order sha256') && respaced !== null && fresh === null,
+    `${checks.length} expected check.json: ${checkFaults.join(' | ') || `each holds the key order its ${MACHINE_CLASS_FILE} records`}; planted top-level key -> ${spliced ?? 'not caught'}; respaced -> ${respaced ?? 'not caught'}`,
+    'issue #1439: the sidecar records the sha256 of check.json\'s key paths as the regeneration wrote it, so a key spliced, dropped or moved by hand is refused without a build');
+
+  // The --check comparison itself, on demo's tracked files against planted builds.
+  const partsBody = byPath.get(plantFile) ?? '{"parts":[]}';
+  const self = compareExpected(demoCheck, demoBody, demoBody, 'linux', true);
+  const splice = compareExpected(demoCheck, demoBody, JSON.stringify(spliceDoc, null, 1) + '\n', 'linux', true);
+  const staleDoc = JSON.parse(partsBody) as { parts: Array<{ opaque_px: number }> };
+  const opaque = staleDoc.parts[0]?.opaque_px ?? 0;
+  staleDoc.parts[0].opaque_px = opaque + 1;
+  const stale = compareExpected(plantFile, JSON.stringify(staleDoc, null, 1) + '\n', partsBody, 'linux', true);
+  const poseDoc = JSON.parse(demoBody) as { seam_scope: { domain: { states: Array<{ pose_sha256: string }> } } };
+  poseDoc.seam_scope.domain.states[0].pose_sha256 = '0'.repeat(64);
+  const posed = JSON.stringify(poseDoc, null, 1) + '\n';
+  const serialize = (v: unknown): string => JSON.stringify(v, null, 1) + '\n';
+  const poseLinux = compareExpected(demoCheck, demoBody, posed, 'linux', true, serialize);
+  const poseMac = compareExpected(demoCheck, demoBody, posed, 'darwin', true, serialize);
+  const ok = self.faults.length === 0 &&
+    splice.faults.length === 1 && splice.faults[0].includes('SPLICED_BY_HAND: expected absent') &&
+    stale.faults.length === 1 && stale.faults[0].includes(`parts[0].opaque_px: expected ${opaque + 1}, built ${opaque}`) &&
+    poseLinux.faults.length === 1 && poseLinux.faults[0].includes('seam_scope.domain.states[0].pose_sha256') &&
+    poseMac.faults.length === 0 && poseMac.machine.length === 1 && poseMac.machine[0].includes('differs by machine class: held to Linux') &&
+    !machineClass('build.model_sha256', 'a', 'b') && !machineClass('parts[0].opaque_px', 1, 2);
+  say('EXP03_THE_REGENERATION_CHECK_NAMES_A_SPLICE_A_STALE_VALUE_AND_A_MACHINE_CLASS_FIELD', ok,
+    JSON.stringify({ self: self.faults.length, splice: splice.faults, stale: stale.faults, poseLinux: poseLinux.faults, poseMac: poseMac.machine }),
+    'issue #1439: tools/regenerate_examples.ts --check fails a spliced key and a stale value by path with both values, fails a changed pose_sha256 on Linux and reports it as machine class, exit 0, on another platform');
+
+  // Same values, other bytes: an expected file is held to the build's bytes, not to the tool's serializer (#1439 review).
+  const respacedCheck = JSON.stringify(JSON.parse(demoBody), null, 2) + '\n';
+  const indentLinux = compareExpected(demoCheck, respacedCheck, demoBody, 'linux', true, serialize);
+  const indentMac = compareExpected(demoCheck, respacedCheck, demoBody, 'darwin', true, serialize);
+  const partsRespaced = compareExpected(plantFile, JSON.stringify(JSON.parse(partsBody), null, '\t') + '\n', partsBody, 'linux', true);
+  // A build the serializer does not reproduce (the writer changed its indent) with a machine-class difference.
+  const posedWide = JSON.stringify(poseDoc, null, 2) + '\n';
+  const otherWriter = compareExpected(demoCheck, demoBody, posedWide, 'darwin', true, serialize);
+  const okBytes = indentLinux.faults.length === 1 && indentLinux.faults[0].includes('same values, other bytes than the build: line 2') &&
+    indentMac.faults.length === 1 && indentMac.machine.length === 0 && indentMac.faults[0].includes('other bytes than the build') &&
+    partsRespaced.faults.length === 1 && partsRespaced.faults[0].includes('other bytes than the build') &&
+    otherWriter.faults.length === 1 && otherWriter.faults[0].includes('the serializer is not the writer on this build');
+  say('EXP04_SAME_VALUES_IN_OTHER_BYTES_ARE_NOT_THE_BUILD', okBytes,
+    JSON.stringify({ indentLinux: indentLinux.faults, indentMac: indentMac.faults, partsRespaced: partsRespaced.faults, otherWriter: otherWriter.faults }),
+    'issue #1439 review: with no value difference the bytes are compared with the build\'s, on every platform; with machine-class differences only, the serializer must first reproduce the built bytes');
 }
 
 function runTreeSuite(_corpus: string | null = null, pre = false): number {
@@ -44709,6 +44856,7 @@ function runTreeSuite(_corpus: string | null = null, pre = false): number {
   const files = treeFiles();
   const text: Array<readonly [string, string]> = files.filter((f) => TEXT_FILE.test(f)).map((f) => [f, readFileSync(join(ROOT, f), 'utf8')] as const);
   expectedPartsLegacyCase(text, say);
+  expectedFormCases(text, say);
   const unclassified = files.filter((f) => !TEXT_FILE.test(f) && !IMAGE_FILE.test(f));
   say(
     'TY00_THE_TREE_WALK_READS_EVERY_FILE_A_COMMIT_WOULD_CARRY',

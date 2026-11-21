@@ -9,6 +9,7 @@
       "path": ".github/workflows/ci.yml",
       "heavyJobs": [
         "shard",
+        "expected-files",
         "test",
         "install-platforms",
         "build-platforms"

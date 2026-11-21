@@ -3,13 +3,25 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } f
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { writeValidationSample, prepareValidationCloth } from './validation.ts';
+import { writeValidationSample, prepareValidationCloth, type ValidationVariant } from './validation.ts';
 import { VALIDATION_VARIANTS, validationBuild, validationConfigName, validationFiles, validationHead } from './validation_cache.ts';
 import { choosePerson, loadKeypoints, toRigJoints } from '../src/keypoints.ts';
 import { loadClothConfig } from '../src/config.ts';
 import { propose, readPartSet, serializeProposal } from '../src/propose.ts';
+import { MACHINE_CLASS_FILE, machineClassLine } from '../tools/expected_form.ts';
 
 export const VALIDATION_NO_BUST = 'synthetic fixture has no bust landmarks';
+
+/**
+ * A variant's expected check.json as this regeneration writes it: the build's
+ * report with its config path typed relative to the repository, two spaces of
+ * indent. `tools/regenerate_examples.ts --set validation` writes the same text.
+ */
+export function validationCheckText(buildOut: string, variant: ValidationVariant): string {
+  const check = JSON.parse(readFileSync(join(buildOut, 'check', 'check.json'), 'utf8')) as { config: { path: string } };
+  check.config.path = `fixtures/validation-inputs/${validationConfigName(variant)}`;
+  return JSON.stringify(check, null, 2) + '\n';
+}
 
 export async function regenerateValidation(root: string, output: string): Promise<void> {
   const scratch = mkdtempSync(join(tmpdir(), 'rig-parts-validation-regenerate-'));
@@ -89,9 +101,9 @@ export async function regenerateValidation(root: string, output: string): Promis
         ['rig/motion.json', 'motion.json'], ['rig/mesh_report.json', 'mesh_report.json'],
         ['check/gate_spine-html.txt', 'gate_spine-html.txt']] as const) cpSync(join(build.out, source), join(expected, name));
       if (variant === 'gesture') cpSync(join(build.out, 'rig', 'sets.json'), join(expected, 'sets.json'));
-      const check = JSON.parse(readFileSync(join(build.out, 'check', 'check.json'), 'utf8')) as { config: { path: string } };
-      check.config.path = `fixtures/validation-inputs/${validationConfigName(variant)}`;
-      writeFileSync(join(expected, 'check.json'), JSON.stringify(check, null, 2) + '\n');
+      const checkText = validationCheckText(build.out, variant);
+      writeFileSync(join(expected, 'check.json'), checkText);
+      writeFileSync(join(expected, MACHINE_CLASS_FILE), machineClassLine(checkText));
       const P = readPartSet(build.out);
       const kp = loadKeypoints(join(output, 'keypoints.json'));
       const joints = toRigJoints(kp, choosePerson(kp, undefined, join(output, 'keypoints.json')), P.W, P.H);

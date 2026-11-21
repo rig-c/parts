@@ -2,8 +2,8 @@
 
 **A fixture, not on display.** Published as `sample` until issue #227, which
 renamed it when the display examples became `demo` (repainted) and `scarf`; nothing
-about it changed. Its `expected/` is the reference implementation's own output, and
-its `config.json` keeps `"key": "sample"`, the key the reference named its skeleton
+about it changed. Its `expected/` began as the reference implementation's own output;
+every file in it is now this package's own snapshot, regenerated on Linux by `tools/regenerate_examples.ts` and held by CI's whole-file `--check` of it (issue #1439). Its `config.json` keeps `"key": "sample"`, the key the reference named its skeleton
 after (`sample_painting`, which `expected/` carries).
 
 `expected/rig.json` is the flat form: every bone unturned, which is `flattenRig`
@@ -11,9 +11,9 @@ after (`sample_painting`, which `expected/` carries).
 build's `rig/rig.json` turns each chain link along its chain, so it carries `rotation`
 and `length` on the links, and the offsets under them in the turned frame, where this
 file holds unturned offsets only: a plain diff of the two shows those bones and the
-weights bound to them as changed, and the build is not broken. The chain suite (`CH03`)
-compares this file with `flattenRig(built)`, not with the built file; compare the same
-way.
+weights bound to them as changed, and the build is not broken. The regeneration
+tool writes `flattenRig(built)` here and its `--check` compares with that, not with the
+built file; compare the same way.
 
 
 A generated full-body character — prompted as an adult woman with long wavy

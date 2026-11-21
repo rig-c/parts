@@ -3,8 +3,8 @@
 **A fixture, not on display.** This character was published as `demo` and was the
 README's picture until issue #227, which took it off display: its clasped hands do
 not read as hands at full size. It stays here, under this key, because its
-`expected/` is the reference implementation's own output and the selftest's chain,
-scene and auto-mesh suites hold this port to it. Its `config.json` keeps
+`expected/` began as the reference implementation's own output. Every file in it is now
+this package's own snapshot, regenerated on Linux by `tools/regenerate_examples.ts` and held by CI's whole-file `--check` of it (issue #1439); the moves from the reference's are listed below. Its `config.json` keeps
 `"key": "demo"`: the reference named its skeleton after the key (`demo_painting`), and
 `expected/` carries that name. The display `demo` is a different painting
 (`examples/demo`).
@@ -14,9 +14,9 @@ scene and auto-mesh suites hold this port to it. Its `config.json` keeps
 build's `rig/rig.json` turns each chain link along its chain, so it carries `rotation`
 and `length` on the links, and the offsets under them in the turned frame, where this
 file holds unturned offsets only: a plain diff of the two shows those bones and the
-weights bound to them as changed, and the build is not broken. The chain suite (`CH03`)
-compares this file with `flattenRig(built)`, not with the built file; compare the same
-way.
+weights bound to them as changed, and the build is not broken. The regeneration
+tool writes `flattenRig(built)` here and its `--check` compares with that, not with the
+built file; compare the same way.
 
 
 A generated full-body character — prompted as an adult woman in a white and

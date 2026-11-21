@@ -9,8 +9,8 @@
    "head"
   ],
   "max_influences": 2,
-  "mean_influences": 2.0,
-  "art_coverage": 1.0,
+  "mean_influences": 2,
+  "art_coverage": 1,
   "grid": 21
  },
  {
@@ -24,7 +24,7 @@
   ],
   "max_influences": 2,
   "mean_influences": 1.9,
-  "art_coverage": 1.0,
+  "art_coverage": 1,
   "grid": 6
  },
  {
@@ -130,7 +130,7 @@
   ],
   "max_influences": 4,
   "mean_influences": 3.59,
-  "art_coverage": 1.0,
+  "art_coverage": 1,
   "grid": 28
  },
  {
@@ -217,7 +217,7 @@
   ],
   "max_influences": 4,
   "mean_influences": 3.71,
-  "art_coverage": 1.0,
+  "art_coverage": 1,
   "grid": 10
  }
 ]

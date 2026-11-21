@@ -13,7 +13,12 @@ Authoring and README snapshots retain actual proposer output with limbs and
 cloth constraints. No handwritten polygons or cut artwork are used.
 
 `expected/` is a port regression oracle, never reference-implementation parity.
-Normal tests read it. Explicitly regenerate it on the ordinary remote pool with
+Normal tests read it. Each `expected/<variant>/check.json` is this package's own snapshot,
+written on Linux beside a one-line `machine-class.txt` (the fields that differ
+by machine class, and the key-order digest the tree suite's `EXP02` holds the file
+to); the chain suite's `CH04` compares it whole with the variant's build. Rewrite
+only the nine reports with `bun tools/regenerate_examples.ts --set validation` on
+Linux. Explicitly regenerate the whole sample on the ordinary remote pool with
 `bun fixtures/regenerate_validation.ts`; regeneration uses the actual gated CLI
 and records the producer durations. A changed expected file needs its measured
 reason in the change's report.

@@ -1472,11 +1472,13 @@ from the CLI), `SK04` (the skeleton), `RG03` (two lattice builds), `CW20` and
 loop's replay, every Stage B opt-in, a gradation, the multi-interval selection's
 policy path and the residual veto), `CK02`, `CK33` and `CK79` (`check`, its
 stretch geometry, and `check --requirements`), `DG13` (`basis.json`), `LP08`
-(the indexed APNG) and `ST26` (the `compare` printout). With the public examples
-fetched, the `chain` suite builds each of them and holds `parts.json`
-(`CH02`), `rig.json`, `motion.json` and `mesh_report.json` (`CH03`),
-`check.json` (`CH04`) and the gate file (`CH05`) to its tracked `expected/`,
-field by field, with the tolerances `CH07` plants against.
+(the indexed APNG) and `ST26` (the `compare` printout). The `chain` suite builds
+the synthetic validation variants and holds `parts.json` (`CH02`), `rig.json`,
+`motion.json` and `mesh_report.json` (`CH03`), `check.json` whole (`CH04`) and the
+gate file (`CH05`) to their tracked `expected/`, with the tolerances `CH07` plants
+against. The public examples' `expected/` files are this package's own snapshots:
+`tools/regenerate_examples.ts` writes them on Linux, and CI rebuilds the fetched
+examples and compares the files whole with its `--check` (issue #1439).
 
 ### Opt-in hybrid provenance (issue #399)
 
