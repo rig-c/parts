@@ -1,5 +1,5 @@
 import { assemblyFieldDigest, isSplitTakeMetadataField } from './assembly-reading.ts';
-import { orderedEditedPartReceipt, type EditedPartReceipt } from './editedparts.ts';
+import { compareRemovedRegions, orderedEditedPartReceipt, type EditedPartReceipt, type EditedPartRemovedRegion } from './editedparts.ts';
 import { parseReceiptProducer, receiptText } from './receiptproducer.ts';
 import { takenSourceProblems, type TakenLayerSource } from './takesource.ts';
 import { AUTOMATIC_WRITERS, provenanceAddsUp, type PixelProvenance, type CutOwnership } from './provenance.ts';
@@ -555,6 +555,34 @@ export function tagOf(from: string): string | null {
   return f === null || f.run === 'painting' ? null : f.tag;
 }
 
+/**
+ * Issue #1383: `removed_opaque_regions`, when present, is a non-empty list of
+ * `{box: [x, y, w, h], px}` inside the part box, in the writer's order, whose
+ * `px` sum to `removed_opaque_px`. Absent is a manifest written before the
+ * field existed, or an edit that removed nothing.
+ */
+function editedRemovedRegions(value: unknown, removed: number, w: unknown, h: unknown, object: string, fail: (code: string, object: string, detail: string) => void): void {
+  const int = (n: unknown): n is number => Number.isSafeInteger(n);
+  const rows = Array.isArray(value) ? value as unknown[] : null;
+  const shaped = rows !== null && rows.length > 0 && int(w) && int(h) && rows.every(r => r !== null && typeof r === 'object' && !Array.isArray(r) &&
+    Object.keys(r).sort().join(',') === 'box,px' && Array.isArray((r as EditedPartRemovedRegion).box) && (r as EditedPartRemovedRegion).box.length === 4 &&
+    (r as EditedPartRemovedRegion).box.every(int) && int((r as EditedPartRemovedRegion).px));
+  if (!shaped) {
+    fail('PARTS_FIELD_TYPE', object, `is ${show(value)}; a non-empty list of {box: [x, y, w, h], px} with safe integers is required`);
+    return;
+  }
+  const regions = rows as EditedPartRemovedRegion[];
+  regions.forEach((r, i) => {
+    const [x, y, bw, bh] = r.box;
+    if (x < 0 || y < 0 || bw < 1 || bh < 1 || x + bw > (w as number) || y + bh > (h as number) || r.px < 1 || r.px > bw * bh) {
+      fail('PARTS_COUNTS_ADD_UP', `${object}[${i}]`, `is box [${r.box.join(', ')}] px ${r.px}; a box of at least 1x1 inside the part's ${w as number}x${h as number} pixels and px from 1 to its area ${bw * bh} is required`);
+    }
+    if (i > 0 && compareRemovedRegions(regions[i - 1], r) > 0) fail('PARTS_FIELD_TYPE', `${object}[${i}]`, `box [${r.box.join(', ')}] follows box [${regions[i - 1].box.join(', ')}]; the order y, x, h, w, px is required`);
+  });
+  const sum = regions.reduce((n, r) => n + r.px, 0);
+  if (sum !== removed) fail('PARTS_COUNTS_ADD_UP', object, `px sum to ${sum}; removed_opaque_px ${removed} is required`);
+}
+
 function validEditedPartAuthor(receipt: EditedPartReceipt): boolean {
   const keys = Object.keys(receipt).sort().join(',');
   if (keys === 'editor,file,from_sha256,part,sha256') return receiptText(receipt.editor);
@@ -617,6 +645,9 @@ function orderedProvenance(p: PixelProvenance): PixelProvenance {
       receipt: orderedEditedPartReceipt(p.edited_part.receipt),
       changed_px: p.edited_part.changed_px, changed_counted_px: p.edited_part.changed_counted_px,
       changed_excluded_px: p.edited_part.changed_excluded_px, removed_opaque_px: p.edited_part.removed_opaque_px,
+      ...(p.edited_part.removed_opaque_regions === undefined ? {} : {
+        removed_opaque_regions: p.edited_part.removed_opaque_regions.map(r => ({ box: [r.box[0], r.box[1], r.box[2], r.box[3]] as [number, number, number, number], px: r.px })),
+      }),
     } }) };
 }
 
@@ -835,9 +866,10 @@ function checkProvenance(raw: unknown, opaque: unknown, object: string, fail: (c
   if (v !== null && typeof v === 'object' && 'edited_part' in v) {
     const e = v.edited_part;
     const keys = 'changed_counted_px,changed_excluded_px,changed_px,dir,edit,receipt,removed_opaque_px';
+    const withRegions = 'changed_counted_px,changed_excluded_px,changed_px,dir,edit,receipt,removed_opaque_px,removed_opaque_regions';
     const nonempty = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
     const relativePath = (value: unknown): boolean => nonempty(value) && !/^(?:[\\/]|[A-Za-z]:[\\/])/.test(value);
-    const valid = e !== null && e !== undefined && typeof e === 'object' && !Array.isArray(e) && Object.keys(e).sort().join(',') === keys &&
+    const valid = e !== null && e !== undefined && typeof e === 'object' && !Array.isArray(e) && [keys, withRegions].includes(Object.keys(e).sort().join(',')) &&
       typeof e.edit === 'string' && /^edited_parts\[\d+\]$/.test(e.edit) && relativePath(e.dir) &&
       [e.changed_px, e.changed_counted_px, e.changed_excluded_px, e.removed_opaque_px].every(count) &&
       e.receipt !== null && typeof e.receipt === 'object' && !Array.isArray(e.receipt) &&
@@ -852,6 +884,7 @@ function checkProvenance(raw: unknown, opaque: unknown, object: string, fail: (c
           e.removed_opaque_px > e.changed_excluded_px) {
         fail('PARTS_COUNTS_ADD_UP', object + ' edited_part', `changed_px ${e.changed_px} must equal counted ${e.changed_counted_px} + excluded ${e.changed_excluded_px}; counted must fit opaque_px ${show(opaque)}, excluded must fit the remaining box pixels (area ${area}), and removed_opaque_px ${e.removed_opaque_px} must be at most changed_excluded_px`);
       }
+      if ('removed_opaque_regions' in e) editedRemovedRegions(e.removed_opaque_regions, e.removed_opaque_px, identity?.w, identity?.h, object + ' edited_part.removed_opaque_regions', fail);
     }
   }
   if (v !== null && typeof v === 'object' && 'depth' in v) {

@@ -67,6 +67,7 @@ import { runSeeThroughTransformChecks } from './tools/check_seethrough_transform
 import { runPlateChecks } from './tools/check_plate.ts';
 import { runEditorReceiptChecks } from './tools/check_editor_receipts.ts';
 import { runEditedPartChecks, runEditedReferenceCwdChecks } from './tools/check_edited_parts.ts';
+import { runOutlineSpeckChecks } from './tools/check_outline_specks.ts';
 import { runExternalReceiptChecks } from './tools/check_external_receipt.ts';
 import { runBustLandmarkChecks } from './tools/check_bust_landmarks.ts';
 import { runBustMovedChecks } from './tools/check_bust_moved.ts';
@@ -59749,6 +59750,9 @@ function runEditorReceiptsSuite(): number {
     let writerIndex = 0;
     runEditedPartWriterChecks(join(dir, 'writer'), (name, pass, detail) => say(`EPW${String(++writerIndex).padStart(2, '0')}_${name}`, pass, detail,
       'issue #1328: shipped command, byte-preserving receipt splice, explicit configs, existing receipt readers and build baseline authority'));
+    let speckIndex = 0;
+    runOutlineSpeckChecks(join(dir, 'outline-specks'), (name, pass, detail) => say(`OSR${String(++speckIndex).padStart(2, '0')}_${name}`, pass, detail,
+      'issue #1383: hand-placed outline specks on a part edge, removed by a receipted edit; count and 8-connected boxes computed by hand'));
   }
   finally { rmSync(dir, { recursive: true, force: true }); }
   return bad();
