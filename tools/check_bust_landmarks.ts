@@ -138,8 +138,18 @@ export function runBustLandmarkChecks(dir: string, say: (name: string, pass: boo
   refused('ROWS_FOR_TWO_PARTS', act([row(), row({ slot: 'skirt', attachment: 'skirt' })]), 'BUST_LANDMARKS_ROWS', 'value.chestLandmarks');
   refused('FRAME_NOT_RIG_SIZE', act([row({ source: { hash: hex('a'), frame: { width: 200, height: 301 } } })]), 'BUST_LANDMARKS_FRAME', 'value.chestLandmarks[0].edit.source.frame');
   // Shape fields: against the defaults when the config has no contour.bust, against the config's own when it has one.
-  refused('SHAPE_ALPHA_AGAINST_THE_DEFAULT', act([row({}, { apex_r: [75, 125], apex_l: [125, 125], alpha: 0.3 })]), 'BUST_LANDMARKS_SHAPE', 'value.chestLandmarks[0].edit.bust.alpha');
-  refused('SHAPE_BONE_AGAINST_THE_DEFAULT', act([row({}, { apex_r: [75, 125], apex_l: [125, 125], bone_r: 'chest' })]), 'BUST_LANDMARKS_SHAPE', 'value.chestLandmarks[0].edit.bust.bone_r');
+  // Round 3: with no contour.bust, a shape that differs from the defaults is left pending in the record, not refused.
+  const pendingIn = (name: string, actValue: unknown, fields: Record<string, unknown>): void => {
+    const o = join(dir, 'out', `${name}.json`);
+    let detail = '';
+    try {
+      const plan = bustLandmarksFromAct({ act: writeJson(`act-${name}.json`, actValue), parts: partsDir, config: noBustConfig, out: o });
+      detail = JSON.stringify(plan.provenance.shape);
+    } catch (error) { detail = `refused: ${error instanceof Error ? error.message : String(error)}`; }
+    say(name, detail === JSON.stringify({ status: 'pending', fields }) && existsSync(o), `shape ${detail}`);
+  };
+  pendingIn('A_TUNED_ALPHA_WITHOUT_CONTOUR_BUST_IS_PENDING', act([row({}, { apex_r: [75, 125], apex_l: [125, 125], alpha: 0.3 })]), { alpha: 0.3 });
+  pendingIn('A_TUNED_BONE_WITHOUT_CONTOUR_BUST_IS_PENDING', act([row({}, { apex_r: [75, 125], apex_l: [125, 125], bone_r: 'chest' })]), { bone_r: 'chest' });
   refused('SHAPE_ABSENT_AGAINST_A_DECLARED_ALPHA', act([row()]), 'BUST_LANDMARKS_SHAPE', 'value.chestLandmarks[0].edit.bust.alpha', bustConfig);
   const accepted = (name: string, actValue: unknown, config: string): void => {
     const a = writeJson(`act-${name}.json`, actValue);
@@ -155,9 +165,9 @@ export function runBustLandmarkChecks(dir: string, say: (name: string, pass: boo
   refused('OUT_OVER_THE_ACT', actPath, 'BUST_LANDMARKS_OUT', '--out', noBustConfig, actPath);
   refused('OUT_OVER_THE_CONFIG', act([row()]), 'BUST_LANDMARKS_OUT', '--out', noBustConfig, noBustConfig);
   // Every problem is collected and thrown once.
-  const many = writeJson('act-many.json', act([row({ attachment: 'other', source: { hash: hex('a'), frame: { width: 1, height: 1 } } }, { apex_r: [75, 125], apex_l: [125, 125], spacing: 7 })]));
+  const many = writeJson('act-many.json', act([row({ attachment: 'other', source: { hash: hex('a'), frame: { width: 1, height: 1 } } }, { apex_r: [75, 125], apex_l: [125, 125], alpha: 0.3, spacing: 7 })]));
   let codes: string[] = [];
-  try { bustLandmarksFromAct({ act: many, parts: partsDir, config: noBustConfig, out: join(dir, 'out', 'many.json') }); } catch (error) { if (error instanceof PartsError) codes = error.problems.map(p => p.code); }
+  try { bustLandmarksFromAct({ act: many, parts: partsDir, config: bustConfig, out: join(dir, 'out', 'many.json') }); } catch (error) { if (error instanceof PartsError) codes = error.problems.map(p => p.code); }
   say('EVERY_PROBLEM_IN_ONE_REFUSAL', codes.join(',') === 'BUST_LANDMARKS_FRAME,BUST_LANDMARKS_SLOT,BUST_LANDMARKS_SHAPE', codes.join(',') || 'no refusal');
   const actBefore = readFileSync(actPath, 'utf8'), configBefore = readFileSync(noBustConfig, 'utf8');
   say('INPUTS_KEEP_THEIR_BYTES', actBefore === JSON.stringify(act([row()]), null, 2) + '\n' && configBefore === JSON.stringify(configOf(), null, 2) + '\n',
@@ -308,9 +318,10 @@ export function runBustLandmarkChecks(dir: string, say: (name: string, pass: boo
     const five = { alpha: 0.3, clearance: 3, spacing: 12, bone_r: 'chest', bone_l: 'chest' };
     const run = flagged(writeJson('act-five.json', act([row({}, { ...points, ...five })])), config, join(dir, 'out', 'flag-five.json'));
     const bust = JSON.stringify(bustOf(config));
-    const lines = ['alpha', 'clearance', 'spacing', 'bone_r', 'bone_l'].map(k => `config ${config}: added meshes.bodice.contour.bust.${k}\n`).join('');
+    // Added in the shorthand's key order (the config writer's list, #1428), after the points.
+    const lines = ['alpha', 'clearance', 'bone_r', 'bone_l', 'spacing'].map(k => `config ${config}: added meshes.bodice.contour.bust.${k}\n`).join('');
     say('THE_FLAG_WRITES_ALL_FIVE_FIELDS_AT_ONCE',
-      run.status === 0 && bust === JSON.stringify({ ...points, ...five }) && run.stderr === lines,
+      run.status === 0 && bust === JSON.stringify({ ...points, alpha: 0.3, clearance: 3, bone_r: 'chest', bone_l: 'chest', spacing: 12 }) && run.stderr === lines,
       `exit ${run.status}; contour.bust ${bust}; stderr ${JSON.stringify(run.stderr)}${run.status === 0 ? '' : `; ${run.stdout.split('\n')[0].trim()}`}`);
   }
   {
@@ -337,12 +348,116 @@ export function runBustLandmarkChecks(dir: string, say: (name: string, pass: boo
       `exit ${run.status}; config byte-identical ${readFileSync(config, 'utf8') === before}; landmarks ${existsSync(o) ? 'written' : 'not written'}: ${run.stdout.split('\n')[0].trim()}`);
   }
   {
+    // With the flag and no contour.bust: the config is not written (the shape alone makes no contour.bust); the shape
+    // is pending in the record instead, and the change line reads unchanged.
     const config = configCase('flag-no-bust', undefined);
     const before = readFileSync(config, 'utf8');
-    const run = flagged(alphaAct, config, join(dir, 'out', 'flag-no-bust.json'));
-    say('THE_FLAG_WITHOUT_A_CONTOUR_BUST_IS_REFUSED_AND_SAYS_WHAT_TO_RUN_FIRST',
-      run.status === 1 && run.stdout.includes('FAIL  BUST_LANDMARKS_SHAPE: value.chestLandmarks[0].edit.bust.alpha — is 0.3; meshes.bodice.contour.bust.alpha 0.22, the default (the config declares no contour.bust), is required: the landmarks file carries no such field; the config declares no contour.bust for --write-config to update') &&
-        readFileSync(config, 'utf8') === before,
-      `exit ${run.status}; config byte-identical ${readFileSync(config, 'utf8') === before}: ${run.stdout.split('\n')[0].trim()}`);
+    const o = join(dir, 'out', 'flag-no-bust.json');
+    const run = flagged(alphaAct, config, o);
+    const record = existsSync(o + BUST_LANDMARKS_PROVENANCE_SUFFIX) ? (JSON.parse(readFileSync(o + BUST_LANDMARKS_PROVENANCE_SUFFIX, 'utf8')) as { shape?: unknown }).shape : undefined;
+    say('THE_FLAG_WITHOUT_A_CONTOUR_BUST_LEAVES_THE_CONFIG_AND_RECORDS_THE_SHAPE_PENDING',
+      run.status === 0 && readFileSync(config, 'utf8') === before && run.stderr === `config ${config}: unchanged\n` && JSON.stringify(record) === '{"status":"pending","fields":{"alpha":0.3}}',
+      `exit ${run.status}; config byte-identical ${readFileSync(config, 'utf8') === before}; shape ${JSON.stringify(record)}; stderr ${JSON.stringify(run.stderr)}`);
   }
+
+  // Round 3: the chain for a first correction with a tuned shape. bust-landmarks leaves the shape pending in the
+  // record; propose --write-config --bust-landmarks writes it with the points and marks the record applied.
+  const chainDir = join(dir, 'chain');
+  mkdirSync(chainDir, { recursive: true });
+  const tuned = writeJson('act-tuned.json', act([row({}, { apex_r: [75.5, 125], apex_l: [125.25, 125], cleavage: [100, 126.5], alpha: 0.3, clearance: 3 })]));
+  const tunedSha = createHash('sha256').update(readFileSync(tuned)).digest('hex');
+  const tunedRow = row({}, { apex_r: [75.5, 125], apex_l: [125.25, 125], cleavage: [100, 126.5], alpha: 0.3, clearance: 3 }).sha256;
+  const record = (status: string): string => JSON.stringify({
+    spec: 'rig-parts-bust-landmarks-provenance/1',
+    act: { schema: 'rig-review/act@9', act_id: 'act-1382', file_sha256: tunedSha },
+    row_sha256: tunedRow,
+    slot: 'bodice',
+    source: { hash: hex('a'), frame: { width: 200, height: 300 } },
+    landmarks_sha256: landmarksSha,
+    shape: { status, fields: { alpha: 0.3, clearance: 3 } },
+  }, null, 2) + '\n';
+  const chainConfig = join(chainDir, 'config.json');
+  writeFileSync(chainConfig, readFileSync(noBustConfig));
+  const chainOut = join(chainDir, 'landmarks.json');
+  const chainRecord = chainOut + BUST_LANDMARKS_PROVENANCE_SUFFIX;
+  const first3 = cli(...args(tuned, chainConfig, chainOut));
+  const pendingLine = `bust-landmarks: pending shape for "bodice": alpha 0.3, clearance 3; the config declares no contour.bust yet, so ${chainRecord} carries it until propose writes it with the three points`;
+  const nextLine = `wrote ${chainOut} and ${chainRecord}; next, to apply it: rig-parts propose … --write-config ${chainConfig} --bust-landmarks ${chainOut}`;
+  const readOr = (p: string): string => existsSync(p) ? readFileSync(p, 'utf8') : '';
+  say('THE_FIRST_COMMAND_RECORDS_A_PENDING_SHAPE_AND_PRINTS_THE_COMMAND_THAT_APPLIES_IT',
+    first3.status === 0 && readOr(chainOut) === expectedText && readOr(chainRecord) === record('pending') && first3.stdout.includes(`${pendingLine}\n${nextLine}\n`),
+    `exit ${first3.status}; landmarks ${readOr(chainOut) === expectedText ? 'exact' : 'differ'}; record ${readOr(chainRecord) === record('pending') ? 'exact' : JSON.stringify(readOr(chainRecord))}; ${first3.stdout.trim().split('\n').slice(1).join(' / ')}`);
+  const proposeArgs = (o: string, ...more: string[]): string[] => ['propose', '--parts', partsDir, '--source', painting, '--out', o, ...more];
+  const bustOfChain = (): string => JSON.stringify(bustOf(chainConfig));
+  const appliedBust = '{"apex_r":[75.5,125],"apex_l":[125.25,125],"cleavage":[100,126.5],"alpha":0.3,"clearance":3}';
+  const second = cli(...proposeArgs(join(chainDir, 'p1'), '--write-config', chainConfig, '--bust-landmarks', chainOut));
+  const proposeLine = `propose: wrote the pending shape of act "act-1382" into meshes.bodice.contour.bust (alpha 0.3, clearance 3) with the three points; marked it applied in ${chainRecord}`;
+  say('THE_SECOND_COMMAND_WRITES_POINTS_AND_SHAPE_AND_MARKS_THE_RECORD_APPLIED',
+    second.status === 0 && bustOfChain() === appliedBust && readOr(chainRecord) === record('applied') && second.stdout.includes(`${proposeLine}\n`),
+    `exit ${second.status}; contour.bust ${bustOfChain()}; record ${readOr(chainRecord) === record('applied') ? 'applied, exact' : JSON.stringify(readOr(chainRecord))}${second.status === 0 ? '' : `; ${second.stdout.split('\n')[0].trim()}`}`);
+  const configAfter = readOr(chainConfig), recordAfter = readOr(chainRecord);
+  const third = cli(...proposeArgs(join(chainDir, 'p2'), '--write-config', chainConfig, '--bust-landmarks', chainOut));
+  say('AGAIN_THE_APPLIED_RECORD_CHANGES_NOTHING',
+    third.status === 0 && readOr(chainConfig) === configAfter && readOr(chainRecord) === recordAfter && !third.stdout.includes('propose: wrote the pending shape') && third.stderr.includes(`config ${chainConfig}: unchanged`),
+    `exit ${third.status}; config byte-identical ${readOr(chainConfig) === configAfter}; record byte-identical ${readOr(chainRecord) === recordAfter}; stderr ${JSON.stringify(third.stderr.trim())}`);
+  // A hand edit of the shape after it was applied is kept by a later redraft.
+  const edited = JSON.parse(configAfter) as { meshes: { bodice: { contour: { bust: Record<string, unknown> } } } };
+  edited.meshes.bodice.contour.bust.alpha = 0.25;
+  writeFileSync(chainConfig, JSON.stringify(edited, null, 2) + '\n');
+  const fourth = cli(...proposeArgs(join(chainDir, 'p3'), '--write-config', chainConfig, '--bust-landmarks', chainOut));
+  say('A_HAND_EDIT_AFTER_IT_WAS_APPLIED_IS_KEPT_ON_REDRAFT',
+    fourth.status === 0 && bustOfChain() === appliedBust.replace('"alpha":0.3', '"alpha":0.25'),
+    `exit ${fourth.status}; contour.bust ${bustOfChain()}`);
+  // The paths that would lose or misapply the shape, each refused by name with nothing written.
+  const pendingPair = (name: string): string => {
+    const o = join(chainDir, `${name}.json`);
+    writeFileSync(o, readFileSync(chainOut));
+    writeFileSync(o + BUST_LANDMARKS_PROVENANCE_SUFFIX, record('pending'));
+    return o;
+  };
+  const lostOut = pendingPair('lost');
+  const lost = cli(...proposeArgs(join(chainDir, 'p-lost'), '--bust-landmarks', lostOut));
+  say('A_PENDING_SHAPE_WITHOUT_WRITE_CONFIG_IS_REFUSED',
+    lost.status === 1 && lost.stdout.startsWith(`  FAIL  PROPOSE_BUST_PENDING: --bust-landmarks — ${lostOut + BUST_LANDMARKS_PROVENANCE_SUFFIX} holds a pending shape (alpha 0.3, clearance 3) from act "act-1382", which only a config write keeps; give --write-config <config.json> so propose writes it into contour.bust with the three points, or it is lost — nothing was written`) &&
+      !existsSync(join(chainDir, 'p-lost', 'proposal.json')),
+    `exit ${lost.status}: ${lost.stdout.split('\n')[0].trim()}`);
+  const driftOut = pendingPair('drift');
+  writeFileSync(driftOut, readFileSync(driftOut, 'utf8').replace('75.5', '76.5'));
+  const driftSha = createHash('sha256').update(readFileSync(driftOut)).digest('hex');
+  const drift = cli(...proposeArgs(join(chainDir, 'p-drift'), '--bust-landmarks', driftOut));
+  say('A_RECORD_WHOSE_DIGEST_IS_NOT_THE_FILE_IS_REFUSED_WITH_BOTH_DIGESTS',
+    drift.status === 1 && drift.stdout.startsWith(`  FAIL  PROPOSE_BUST_SIDECAR_DIGEST: ${driftOut + BUST_LANDMARKS_PROVENANCE_SUFFIX} landmarks_sha256 — is "${landmarksSha}"; "${driftSha}" is required, the sha256 of ${driftOut}'s bytes: the landmarks file is not the one this record was written with`) &&
+      !existsSync(join(chainDir, 'p-drift', 'proposal.json')),
+    `exit ${drift.status}: ${drift.stdout.split('\n')[0].trim()}`);
+  const otherOut = pendingPair('other-part');
+  writeFileSync(otherOut + BUST_LANDMARKS_PROVENANCE_SUFFIX, record('pending').replace('"slot": "bodice"', '"slot": "skirt"'));
+  // With --write-config, so the pending check passes and the part check is what refuses; the config stays as it was.
+  const otherConfig = join(chainDir, 'other-config.json');
+  writeFileSync(otherConfig, readFileSync(noBustConfig));
+  const otherPart = cli(...proposeArgs(join(chainDir, 'p-other'), '--write-config', otherConfig, '--bust-landmarks', otherOut));
+  say('A_RECORD_FOR_ANOTHER_PART_IS_REFUSED',
+    otherPart.status === 1 && otherPart.stdout.startsWith(`  FAIL  PROPOSE_BUST_SIDECAR_PART: ${otherOut + BUST_LANDMARKS_PROVENANCE_SUFFIX} slot — is "skirt"; the chest carrier this draft makes ("bodice") is required: the record's points were placed on another part`) &&
+      readFileSync(otherConfig, 'utf8') === readFileSync(noBustConfig, 'utf8') && readOr(otherOut + BUST_LANDMARKS_PROVENANCE_SUFFIX).includes('"status": "pending"'),
+    `exit ${otherPart.status}: ${otherPart.stdout.split('\n')[0].trim()}`);
+  const badOut = pendingPair('malformed');
+  writeFileSync(badOut + BUST_LANDMARKS_PROVENANCE_SUFFIX, record('pending').replace('"status": "pending"', '"status": "later"'));
+  const bad = cli(...proposeArgs(join(chainDir, 'p-bad'), '--bust-landmarks', badOut));
+  say('A_MALFORMED_RECORD_IS_REFUSED',
+    bad.status === 1 && bad.stdout.startsWith(`  FAIL  PROPOSE_BUST_SIDECAR: ${badOut + BUST_LANDMARKS_PROVENANCE_SUFFIX} shape — is {"status":"later","fields":{"alpha":0.3,"clearance":3}}; {status: "pending" or "applied", fields: one or more of alpha, clearance, bone_r, bone_l, spacing} is required`),
+    `exit ${bad.status}: ${bad.stdout.split('\n')[0].trim()}`);
+  // An all-default act: no shape key in the record, the round-2 bytes (the first control's expected record).
+  say('AN_ALL_DEFAULT_ACT_RECORDS_NO_SHAPE', provenanceText === expectedProvenance && !provenanceText.includes('"shape"'), `record ${provenanceText === expectedProvenance ? 'exact, no shape key' : 'differs'}`);
+  // No record beside the file: the hand-written path, its proposal byte-identical to the one drafted beside a record
+  // with nothing pending, and its config write the three points alone.
+  const handDir = join(dir, 'hand');
+  mkdirSync(handDir, { recursive: true });
+  const hand = join(handDir, 'landmarks.json');
+  writeFileSync(hand, expectedText);
+  const handConfig = join(handDir, 'config.json');
+  writeFileSync(handConfig, readFileSync(noBustConfig));
+  const handRun = cli(...proposeArgs(join(handDir, 'p'), '--write-config', handConfig, '--bust-landmarks', hand));
+  const handProposal = readOr(join(handDir, 'p', 'proposal.json'));
+  say('NO_RECORD_IS_THE_HAND_WRITTEN_PATH_UNCHANGED',
+    handRun.status === 0 && handProposal !== '' && handProposal === readOr(proposalPath) && JSON.stringify(bustOf(handConfig)) === '{"apex_r":[75.5,125],"apex_l":[125.25,125],"cleavage":[100,126.5]}' && !handRun.stdout.includes('propose: wrote the pending shape'),
+    `exit ${handRun.status}; proposal.json ${handProposal === readOr(proposalPath) ? 'byte-identical to the redraft beside a record with nothing pending' : 'differs'}; contour.bust ${JSON.stringify(bustOf(handConfig))}`);
 }

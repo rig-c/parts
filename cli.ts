@@ -5,7 +5,7 @@ import { DIFF_DRAFTS_SPEC, diffDraftsCommand } from './src/diffdrafts.ts';
 import { applyTakenLayers } from './src/takelayers.ts';
 import { applyDepth, bindDepthMap, prepareDepth } from './src/depthworkflow.ts';
 import { externalReceipt } from './src/externalreceipt.ts';
-import { BUST_LANDMARKS_ACT_SCHEMA, BUST_LANDMARKS_PROVENANCE_SPEC, BUST_LANDMARKS_PROVENANCE_SUFFIX, planBustLandmarks, stageBustLandmarks, type StagedBustLandmarks } from './src/bustlandmarks.ts';
+import { BUST_LANDMARKS_ACT_SCHEMA, BUST_LANDMARKS_PROVENANCE_SPEC, BUST_LANDMARKS_PROVENANCE_SUFFIX, type BustSidecar, planBustLandmarks, readBustSidecar, stageBustLandmarks, stageReplacements, type StagedBustLandmarks } from './src/bustlandmarks.ts';
 import { writeEditedPart } from './tools/edited-part-cli.ts';
 /**
  * rig-parts — one painting and its See-through layers in, Spine-ready parts
@@ -212,6 +212,10 @@ usage:
       Draft the chest-holding topwear as contour. Landmark JSON declares apex_r,
       apex_l and optional cleavage in rig pixels. Without cleavage, intersect
       their segment with the neck-to-hip midline. --no-bust needs a stated reason.
+      A record <landmarks.json>${BUST_LANDMARKS_PROVENANCE_SUFFIX} beside the file (bust-landmarks
+      writes one) must name the drafted chest carrier and the file's own
+      sha256; a pending shape in it needs --write-config, which writes it with
+      the points and marks the record applied.
   rig-parts propose … [--keypoints <keypoints.json> [--person <id>] [--wrist-snap <px>]]
       Read the figure's pose from one explicit file (spec "${KEYPOINTS_SPEC}"):
       its space (painting-px, origin top-left, y down — another is refused),
@@ -384,12 +388,14 @@ usage:
       slot, the source hash and frame). The row's slot must be a part of
       parts.json whose config mesh is a contour, its frame parts.json's
       rig_size, and its alpha, clearance, spacing, bone_r and bone_l those of
-      the config's contour.bust (the defaults when the config declares none).
-      --write-config instead takes those five into the config's existing
-      contour.bust, a field the act omits removed, through the config loader;
-      the config is untouched when none differs, and with no contour.bust a
-      difference is still refused. Writes nothing on a refusal; the outputs
-      are renamed into place only once both are staged.
+      the config's contour.bust. --write-config instead takes those five into
+      the config's existing contour.bust, a field the act omits removed,
+      through the config loader; the config is untouched when none differs.
+      With no contour.bust yet, fields that differ from the defaults are
+      recorded as a pending shape in the record, and propose --write-config
+      --bust-landmarks writes them with the points and marks them applied.
+      Writes nothing on a refusal; the outputs are renamed into place only
+      once both are staged.
 
   rig-parts head-crop-preflight --full <run> --canvas <W>x<H> --head-box '[left,top,right,bottom]'
       Report full-run drawn pixels beyond the crop: JSON stdout, advice stderr; no head run needed.
@@ -1730,6 +1736,8 @@ function cmdPropose(args: string[]): number {
     if (!flags.has('--write-config')) return usage(`--only-missing belongs to ${mode}; give --write-config <config.json>, the existing config the entries are added to`);
   }
   let staged: StagedConfigWrite | null = null;
+  // Issue #1382: the landmarks file's record, marked applied beside the config write that applies its pending shape.
+  let sidecarStaged: StagedBustLandmarks | null = null;
   try {
     if (headBox) {
       const stray = [...flags.keys()].filter((f) => f !== '--full' && f !== '--canvas' && f !== '--write-config');
@@ -1857,15 +1865,26 @@ function cmdPropose(args: string[]): number {
     if (noBust !== undefined && (noBust.trim().length === 0 || bustPath !== undefined)) return usage('--no-bust requires a non-blank reason and cannot accompany --bust-landmarks');
     const bust: BustDraft = {};
     if (noBust !== undefined) bust.noBust = noBust;
+    let sidecar: BustSidecar | null = null;
     if (bustPath !== undefined) {
+      let bytes: Buffer;
       try {
-        bust.landmarks = readBustLandmarks(JSON.parse(readFileSync(bustPath, 'utf8')) as unknown);
+        bytes = readFileSync(bustPath);
+        bust.landmarks = readBustLandmarks(JSON.parse(bytes.toString('utf8')) as unknown);
       } catch (error) {
         if (error instanceof PartsError) throw error;
         throw new PartsError([{
           code: 'PROPOSE_BUST_INPUT', object: '--bust-landmarks',
           detail: `cannot read the declared JSON file (${error instanceof Error ? error.message : String(error)}). Give an object with apex_r, apex_l and optional cleavage in rig pixels`,
         }]);
+      }
+      // Issue #1382: no record beside the file is the hand-written fallback, read as before.
+      sidecar = readBustSidecar(bustPath, bytes);
+      if (sidecar?.pending != null) {
+        const what = `${sidecar.path} holds a pending shape (${pendingFields(sidecar.pending.fields)}) from act ${JSON.stringify(sidecar.provenance.act.act_id)}`;
+        if (writeArg === undefined) throw new PartsError([{ code: 'PROPOSE_BUST_PENDING', object: '--bust-landmarks', detail: `${what}, which only a config write keeps; give --write-config <config.json> so propose writes it into contour.bust with the three points, or it is lost — nothing was written` }]);
+        if (target === null || onlyMissing) throw new PartsError([{ code: 'PROPOSE_BUST_PENDING', object: onlyMissing ? '--only-missing' : '--cloth', detail: `${what}; propose writes it only through an ordinary --write-config update of an existing config, not with ${onlyMissing ? '--only-missing' : '--cloth'} — nothing was written` }]);
+        separateConfigWriteTarget(target, [sidecar.path]);
       }
     }
     const { proposal: drafted, basis, draftLint } = proposeWithBasis(P, joints, wristSnap, gridRule, cloth, true, bust);
@@ -1877,6 +1896,13 @@ function cmdPropose(args: string[]): number {
         : withTurn(drafted, draftTurn(P, { ...(fullRun === undefined ? {} : { full: readLayers(fullRun) }), ...(headRun === undefined ? {} : { head: readLayers(headRun) }) }, drafted));
     // Emit only after green: a proposal the config loader would refuse is not written, nor a basis record that does not hold to it.
     checkProposal(P, prop);
+    if (sidecar !== null) {
+      // The record's part must be the chest carrier this draft makes: points placed on another part are not these.
+      const carriers = Object.entries(prop.meshes).filter(([, mesh]) => 'contour' in mesh && mesh.contour.bust !== undefined).map(([part]) => part);
+      if (!carriers.includes(sidecar.provenance.slot)) {
+        throw new PartsError([{ code: 'PROPOSE_BUST_SIDECAR_PART', object: `${sidecar.path} slot`, detail: `is "${sidecar.provenance.slot}"; the chest carrier this draft makes (${carriers.length === 0 ? 'none' : carriers.map((c) => `"${c}"`).join(', ')}) is required: the record's points were placed on another part` }]);
+      }
+    }
     // The same parts drafted without the recipe: what --write-config measures its edits against, and what issue #572's chain reading compares with.
     const plain = cloth === null ? null : proposeWithBasis(P, joints, wristSnap, gridRule, null, true, bust).proposal;
     // Issue #537: the sections the recipe moves, measured against the same parts drafted without it, spliced before anything is written.
@@ -1912,16 +1938,33 @@ function cmdPropose(args: string[]): number {
     })();
     const bfile = basisFile(P, prop, basis, cfg === null || cmpPath === undefined ? null : { where: cmpPath, config: cfg });
     const img = drawLandmarks(P, painting, prop.bones, 'PROPOSAL - CORRECT ME');
-    if (target !== null) staged = stageConfigWrite(target, onlyMissing ? { kind: 'proposal-missing', proposal: prop, parts: P.recs } : { kind: 'proposal', proposal: prop, sections: PROPOSAL_CONFIG_SECTIONS });
+    const pending = sidecar?.pending ?? null;
+    if (target !== null) staged = stageConfigWrite(target, onlyMissing ? { kind: 'proposal-missing', proposal: prop, parts: P.recs } : { kind: 'proposal', proposal: prop, sections: PROPOSAL_CONFIG_SECTIONS, ...(pending === null ? {} : { bustShape: pending }) });
     else if (written !== null) staged = stageConfigWrite({ kind: 'fresh', path: written.at, text: written.text });
+    // The record marked applied is staged after the config and renamed in before the config's commit; a failed
+    // config commit puts the record back, so the two change together or not at all.
+    if (sidecar !== null && sidecar.appliedText !== null && staged !== null) sidecarStaged = stageReplacements([[sidecar.path, sidecar.appliedText]]);
     mkdirSync(render, { recursive: true });
     writeFileSync(join(out, 'proposal.json'), serializeProposal(prop));
     writeFileSync(join(out, BASIS_FILE), serializeBasis(bfile));
     writePng(join(render, 'landmarks.png'), img.full);
     if (img.head !== null) writePng(join(render, 'landmarks_head.png'), img.head);
     if (staged !== null) {
-      staged.commit();
+      const marked = sidecarStaged;
+      if (marked !== null) { marked.commit(); sidecarStaged = null; }
+      try { staged.commit(); }
+      catch (error) {
+        if (marked === null) throw error;
+        const problems = error instanceof PartsError ? [...error.problems] : [];
+        try { marked.undo(); } catch (cleanup) { if (cleanup instanceof PartsError) problems.push(...cleanup.problems); }
+        staged = null;
+        if (problems.length === 0) throw error;
+        throw new PartsError(problems);
+      }
       if (target !== null) for (const line of configWriteLines(target, staged.changes)) console.error(line);
+      if (marked !== null && pending !== null && sidecar !== null) {
+        console.log(`propose: wrote the pending shape of act ${JSON.stringify(sidecar.provenance.act.act_id)} into meshes.${pending.part}.contour.bust (${pendingFields(pending.fields)}) with the three points; marked it applied in ${sidecar.path}`);
+      }
       const writtenPath = target?.path ?? written?.at;
       if (writtenPath !== undefined && P.manifest.assembly_config !== undefined) {
         try {
@@ -1953,6 +1996,9 @@ function cmdPropose(args: string[]): number {
     if (cfg !== null) for (const l of compareLines(compare(prop.bones, cfg.bones))) console.log(l);
     return EXIT_OK;
   } catch (err) {
+    if (sidecarStaged !== null) {
+      try { sidecarStaged.cancel(); } catch (cleanup) { if (!(cleanup instanceof PartsError)) throw cleanup; }
+    }
     if (staged !== null) {
       try { staged.abort(err); } catch (combined) { return printRefusal(combined); }
     }
@@ -2680,6 +2726,11 @@ function cmdExternalReceipt(args: string[]): number {
   } catch (error) { return printRefusal(error); }
 }
 
+/** A pending shape's fields, as `alpha 0.3, bone_r "chest"`. */
+function pendingFields(fields: Readonly<Record<string, number | string | undefined>>): string {
+  return Object.entries(fields).filter(([, v]) => v !== undefined).map(([k, v]) => `${k} ${JSON.stringify(v)}`).join(', ');
+}
+
 function cmdBustLandmarks(args: string[]): number {
   // The one switch (issue #1382, round 2): taken out before the valued flags are read.
   const writes = args.filter((a) => a === '--write-config').length;
@@ -2722,7 +2773,13 @@ function cmdBustLandmarks(args: string[]): number {
     const { landmarks, provenance } = plan;
     if (target !== null) for (const line of configWriteLines(target, staged?.changes ?? [])) console.error(line);
     console.log(`bust-landmarks: slot "${provenance.slot}" apex_r ${JSON.stringify(landmarks.apex_r)} apex_l ${JSON.stringify(landmarks.apex_l)} cleavage ${landmarks.cleavage === undefined ? 'absent (propose derives it)' : JSON.stringify(landmarks.cleavage)}; act ${JSON.stringify(provenance.act.act_id)} sha256=${provenance.act.file_sha256} row sha256=${provenance.row_sha256} (verified against the row's edit)`);
-    console.log(`wrote ${plan.out} and ${plan.provenancePath}; next: rig-parts propose … --bust-landmarks ${plan.out}`);
+    const shape = provenance.shape;
+    if (shape === undefined) console.log(`wrote ${plan.out} and ${plan.provenancePath}; next: rig-parts propose … --bust-landmarks ${plan.out}`);
+    else {
+      // Issue #1382: the config declares no contour.bust, so the reviewed shape waits in the record for propose.
+      console.log(`bust-landmarks: pending shape for "${provenance.slot}": ${pendingFields(shape.fields)}; the config declares no contour.bust yet, so ${plan.provenancePath} carries it until propose writes it with the three points`);
+      console.log(`wrote ${plan.out} and ${plan.provenancePath}; next, to apply it: rig-parts propose … --write-config ${resolve(input.config)} --bust-landmarks ${plan.out}`);
+    }
     return EXIT_OK;
   } catch (error) { return printRefusal(error); }
 }

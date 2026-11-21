@@ -240,7 +240,9 @@ The proposal writes `contour.bust` and `boob_r` / `boob_l` under `chest`. When
 `propose --write-config` redrafts the chest carrier, it keeps the `contour.bust`
 shape fields (`alpha`, `clearance`, `bone_r`, `bone_l`, `spacing`) that the config
 being rewritten already declares for that same part, in the shorthand's key order
-after the new `apex_r`, `apex_l` and `cleavage` (issue #1428).
+after the new `apex_r`, `apex_l` and `cleavage` (issue #1428). A pending shape in
+the landmarks file's record (below, issue #1382) is written the same way, and takes
+the place of any declared value for its fields.
 
 A chest-holding torso with neither landmarks nor an explicit omission reason is
 refused with `PROPOSE_BUST_INPUT` before any proposal is written. `--no-bust "rigid breastplate"` omits the bust and records the
@@ -264,13 +266,18 @@ on a drafted rig, and the act review emits carries them. The order is:
 3. `rig-parts bust-landmarks --from-act <act.json> --parts <dir> --config <config.json> --out <landmarks.json>`
    writes the landmarks file from that row. It writes
    `<landmarks.json>.provenance.json` beside it. When the person changed a
-   shape field (`alpha`, `clearance`, `spacing`, `bone_r`, `bone_l`) and the
+   shape field (`alpha`, `clearance`, `bone_r`, `bone_l`, `spacing`) and the
    config already declares `contour.bust`, add `--write-config`: it takes the
    act's five values into that `contour.bust` and then writes the landmarks
-   file.
-4. Redraft with `propose … --bust-landmarks <landmarks.json>`. Through
-   `propose --write-config`, the redraft keeps the config's declared shape
-   fields (#1428).
+   file. When the config declares no `contour.bust` yet (the first draft), the
+   changed fields are recorded as a **pending** shape in the record, and the
+   command prints the one that applies them.
+4. Redraft with `propose … --write-config <config.json> --bust-landmarks <landmarks.json>`.
+   It writes `contour.bust` with the three points, and with a pending shape it
+   writes those fields too, in the same staged write, and marks the record
+   applied. The redraft keeps the config's declared shape fields (#1428).
+   Without `--write-config`, `propose` drafts the points alone and refuses a
+   record with a pending shape, which only a config write keeps.
 
 The hand-written file stays the fallback when no review act exists.
 `bust-landmarks` reads the act's JSON itself. It reads `schema`, `actId` and the
@@ -301,11 +308,10 @@ rows of `value.chestLandmarks`. From each row it reads `edit.slot`, `edit.skin`,
   drafts `contour.bust` with from the three points, so a first correction that
   keeps the defaults passes. The redraft keeps the config's declared shape
   fields (#1428). With `--write-config` and a declared `contour.bust`, a
-  difference is written rather than refused (below). With no `contour.bust` it is
-  still refused: the five fields alone do not make a `contour.bust`, which needs
-  `apex_r`, `apex_l` and `cleavage`, and no point is made up to build one. Draft
-  `contour.bust` first, from an act at the config's values, then run the act with
-  the changed field again;
+  difference is written rather than refused (below). With no `contour.bust`, a
+  difference is not refused either: it is left pending in the record (below),
+  because the five fields alone do not make a `contour.bust`, which needs
+  `apex_r`, `apex_l` and `cleavage`, and no point is made up to build one;
 - an `--out`, or its provenance record, inside the parts directory, over the act,
   the config or `parts.json` by path or as a hard link (the same device and inode,
   compared when the output exists), over a directory, or over an existing file
@@ -332,7 +338,27 @@ of the act file's bytes), `row_sha256`, `slot`, `source` (`hash`, and `frame` as
 `width` and `height`), and `landmarks_sha256`, the sha256 of the landmarks file
 written beside it. It has no clock, so the same act writes the same bytes. The
 record sits beside the landmarks file because `propose --bust-landmarks` refuses
-any key but the three points. The row's `sha256` is recomputed and a mismatch is
+any key but the three points.
+
+A **pending** shape is the record's last key, `shape`, present only when the
+config declared no `contour.bust` and the act's shape differs from the defaults:
+`{"status": "pending", "fields": {…}}`, the act's fields whose value differs from
+the default, in the shorthand's key order (`alpha`, `clearance`, `bone_r`,
+`bone_l`, `spacing`). An all-default act writes no `shape`, so its record is the
+same bytes as before. `propose --bust-landmarks <file>` reads `<file>.provenance.json`
+when it is there; with none it reads the landmarks file as before. A record there
+must be well formed (`PROPOSE_BUST_SIDECAR`), its `landmarks_sha256` must be the
+landmarks file's own digest (`PROPOSE_BUST_SIDECAR_DIGEST`), and its `slot` must
+be the chest carrier the draft makes (`PROPOSE_BUST_SIDECAR_PART`). A pending
+shape needs `--write-config` into an existing config, not `--cloth` or
+`--only-missing` (`PROPOSE_BUST_PENDING`). With it, `propose` writes the fields
+after the three points in the config write it stages, and rewrites the record with
+`"status": "applied"`. The record is staged after the config, renamed in before
+the config's commit, and put back if that commit fails, so both change or
+neither. An applied record writes nothing more: a hand edit of the shape after
+that is kept by every later redraft (#1428).
+
+The row's `sha256` is recomputed and a mismatch is
 refused as `BUST_LANDMARKS_ROW` on `value.chestLandmarks[i].sha256`: it must be
 the sha256 (lowercase hex) of `JSON.stringify` of the row's `edit`, with object
 keys sorted recursively and array order kept. That rule is a copy of review's
@@ -347,7 +373,7 @@ config hash: the act carries none.
 | <a id="BUST_LANDMARKS_PART_ROWS"></a>`BUST_LANDMARKS_PART_ROWS` | the act has more than one row for one part | keep one chest-landmarks row for the part in review |
 | <a id="BUST_LANDMARKS_ROWS"></a>`BUST_LANDMARKS_ROWS` | the act has rows for more than one part; `propose` drafts one chest carrier | keep the row for the chest carrier only |
 | <a id="BUST_LANDMARKS_FRAME"></a>`BUST_LANDMARKS_FRAME` | the row's `edit.source.frame` is not `parts.json`'s `rig_size` | pass the `--parts` directory of the rig the act was made on |
-| <a id="BUST_LANDMARKS_SHAPE"></a>`BUST_LANDMARKS_SHAPE` | the row's `alpha`, `clearance`, `spacing`, `bone_r` or `bone_l` differs from `meshes.<part>.contour.bust` after defaults | put the config's value (the default when the config declares no `contour.bust`) back in review and emit the act again; or, when the config declares `contour.bust`, run again with `--write-config` to take the act's value into the config |
+| <a id="BUST_LANDMARKS_SHAPE"></a>`BUST_LANDMARKS_SHAPE` | the row's `alpha`, `clearance`, `spacing`, `bone_r` or `bone_l` differs from the config's declared `meshes.<part>.contour.bust` after defaults (with no `contour.bust`, a difference is recorded pending instead) | run again with `--write-config` to take the act's value into the config, or put the config's value back in review and emit the act again |
 | <a id="BUST_LANDMARKS_OUT"></a>`BUST_LANDMARKS_OUT` | `--out` or `<out>.provenance.json` lies inside `--parts`, is the act, the config or `parts.json` (by path or as a hard link), is a directory or a read-only file, or cannot be staged or replaced | choose a path outside the parts directory that is no input, in an existing writable directory; remove a leftover `.<name>.rig-parts.tmp` the detail names |
 
 Drafted torso bytes change from lattice (or a figure trunk's region) to contour.
@@ -3845,6 +3871,10 @@ world units. Other proposal modes (`--keypoints`, `--compare`, `--grid-rule`,
 | --- | --- | --- |
 | <a id="PROPOSE_TORSO_ISLAND_LEFT_OUT"></a>`PROPOSE_TORSO_ISLAND_LEFT_OUT` | WARN: a non-dust island smaller than one drafted sampling cell is omitted; names its art px and rig-pixel box | inspect the omitted art; separate it if it needs its own mesh; `contour.stray` records the largest omitted island |
 | <a id="PROPOSE_TORSO_ISLANDS"></a>`PROPOSE_TORSO_ISLANDS` | the chest carrier has no art, equal-largest island ties, or a non-dust extra island with an art-pixel count greater than or equal to the drafted `contour.spacing` squared; the detail includes the threshold | supply art with one uniquely largest island; separate non-dust extra pieces at or above the threshold; dust keeps its existing rule, and smaller non-dust islands are omitted with `PROPOSE_TORSO_ISLAND_LEFT_OUT` |
+| <a id="PROPOSE_BUST_SIDECAR"></a>`PROPOSE_BUST_SIDECAR` | the `<landmarks>.provenance.json` beside `--bust-landmarks` cannot be read, is not JSON, or is not a well-formed `rig-parts-bust-landmarks-provenance/1` record (an unknown key, or a malformed `act`, digest, `slot`, `source` or `shape`) | write the landmarks file and its record again with `bust-landmarks`, or remove the record to use a hand-written landmarks file |
+| <a id="PROPOSE_BUST_SIDECAR_DIGEST"></a>`PROPOSE_BUST_SIDECAR_DIGEST` | the record's `landmarks_sha256` is not the sha256 of the landmarks file beside it: the file was edited after `bust-landmarks` wrote it | write both again with `bust-landmarks` from the act; to use edited points, remove the record (a hand-written file has none) |
+| <a id="PROPOSE_BUST_SIDECAR_PART"></a>`PROPOSE_BUST_SIDECAR_PART` | the record's `slot` is not the chest carrier this draft makes | redraft the parts the act was made on, or place the points on the chest carrier in review |
+| <a id="PROPOSE_BUST_PENDING"></a>`PROPOSE_BUST_PENDING` | the record holds a pending shape and `propose` would not write it: no `--write-config`, or `--cloth` or `--only-missing` | run `propose … --write-config <config.json> --bust-landmarks <landmarks.json>` into the existing config |
 | <a id="PROPOSE_BUST_INPUT"></a>`PROPOSE_BUST_INPUT` | a chest torso has neither a bust declaration nor an omission reason, a bust landmark is missing, malformed or unknown, the omission reason is blank or conflicts with landmarks, the midline has no unique crossing inside the apex segment, or the chest carrier is absent or ambiguous, or its recipe declares an incompatible influence mode | give finite rig-pixel apex_r/apex_l and optional cleavage, or a non-blank omission reason; separate overlapping chest-holding topwear |
 | <a id="PROPOSE_NECK_BODY_TURN"></a>`PROPOSE_NECK_BODY_TURN` | no authored sampled body turn | follow this recipe and supply the named input; the refusal writes no config |
 | <a id="PROPOSE_NECK_PLAN"></a>`PROPOSE_NECK_PLAN` | no unique neck plan row | follow this recipe and supply the named input; the refusal writes no config |

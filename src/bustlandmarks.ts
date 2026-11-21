@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { accessSync, constants, existsSync, lstatSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { type CharacterConfig, DEFAULT_BUST_ALPHA, DEFAULT_BUST_BONE_L, DEFAULT_BUST_BONE_R, DEFAULT_BUST_CLEARANCE, DEFAULT_BUST_SPACING, loadConfig } from './config.ts';
-import type { BustShapeKey, ConfigWritePatch } from './configwrite.ts';
+import { BUST_SHAPE_FIELDS, type BustShapeKey, type ConfigWritePatch, type PendingBustShape } from './configwrite.ts';
 import { SHA256_PATTERN } from './editreceipt.ts';
 import { PartsError, type Problem } from './errors.ts';
 import { type PartsFile, readParts } from './parts.ts';
@@ -27,7 +27,10 @@ import { type PartsFile, readParts } from './parts.ts';
  *
  * The five shape fields the landmarks file does not carry must agree with the
  * config, or, with `--write-config`, are taken into the config's existing
- * `contour.bust` through the CLI's staged config writer. The outputs are
+ * `contour.bust` through the CLI's staged config writer. With no `contour.bust`
+ * yet, the fields that differ from the defaults are recorded in the sidecar as
+ * a pending shape, which `propose --write-config --bust-landmarks` writes with
+ * the points and marks applied ({@link readBustSidecar}). The outputs are
  * written to temporary siblings and renamed into place only once both are
  * staged; a failure removes the temporaries and leaves earlier files as they were.
  */
@@ -41,9 +44,10 @@ export const BUST_LANDMARKS_PROVENANCE_SUFFIX = '.provenance.json';
 
 /** The keys of a row's `edit.bust`: Parts' own `meshes.<part>.contour.bust` shorthand. */
 const BUST_KEYS = ['apex_r', 'apex_l', 'cleavage', 'alpha', 'clearance', 'bone_r', 'bone_l', 'spacing'] as const;
-/** The bust fields the landmarks file does not carry; they must agree with the config so none is dropped. */
-const SHAPE_KEYS = ['alpha', 'clearance', 'spacing', 'bone_r', 'bone_l'] as const;
-type ShapeKey = (typeof SHAPE_KEYS)[number] & BustShapeKey;
+/** The bust fields the landmarks file does not carry, in the shorthand's key order (the config writer's list): they
+ * must agree with the config, be taken into it, or be left pending in the sidecar, so none is dropped. */
+const SHAPE_KEYS = BUST_SHAPE_FIELDS;
+type ShapeKey = BustShapeKey;
 type Shape = { alpha: number; clearance: number; spacing: number; bone_r: string; bone_l: string };
 const SHAPE_DEFAULTS: Shape = {
   alpha: DEFAULT_BUST_ALPHA,
@@ -70,6 +74,12 @@ export interface BustLandmarksProvenance {
   slot: string;
   source: { hash: string; frame: { width: number; height: number } };
   landmarks_sha256: string;
+  /**
+   * Present only when the config declared no `contour.bust` and the act's shape differs from the defaults: the
+   * act's fields whose effective value differs, in the shorthand's key order. `pending` until `propose
+   * --write-config --bust-landmarks` writes them with the points, then `applied`.
+   */
+  shape?: { status: 'pending' | 'applied'; fields: Partial<Record<BustShapeKey, number | string>> };
 }
 
 interface ChestRow {
@@ -225,11 +235,12 @@ const effective = (spec: Partial<Shape>): Shape => ({ ...SHAPE_DEFAULTS, ...spec
 type ShapeField = { key: ShapeKey; value?: number | string };
 
 /**
- * Check the row against parts.json and the config: slot, frame and shape fields. A shape field whose effective
- * value differs from the config's is refused, or, with `writeConfig` and a declared `contour.bust`, returned as a
- * field to write: the act's value where the act spells it out, the key's removal where the act omits it.
+ * Check the row against parts.json and the config: slot, frame and shape fields. Against a declared
+ * `contour.bust`, a shape field whose effective value differs is refused, or, with `writeConfig`, returned as a
+ * field to write: the act's value where the act spells it out, the key's removal where the act omits it. With no
+ * `contour.bust`, a field that differs from the default is returned as pending, for the sidecar.
  */
-function checkRow(row: ChestRow, parts: PartsFile | null, config: CharacterConfig | null, writeConfig: boolean, problems: Problem[]): ShapeField[] {
+function checkRow(row: ChestRow, parts: PartsFile | null, config: CharacterConfig | null, writeConfig: boolean, problems: Problem[]): { fields: ShapeField[]; pending: PendingBustShape['fields'] } {
   const at = `value.chestLandmarks[${row.index}]`;
   if (parts !== null) {
     const [width, height] = parts.rig_size;
@@ -246,12 +257,12 @@ function checkRow(row: ChestRow, parts: PartsFile | null, config: CharacterConfi
   if (row.skin !== 'default') {
     problems.push({ code: 'BUST_LANDMARKS_SLOT', object: `${at}.edit.skin`, detail: `is "${row.skin}"; "default" is required: this package writes every mesh into the default skin` });
   }
-  if (config === null) return [];
+  if (config === null) return { fields: [], pending: {} };
   const mesh = Object.hasOwn(config.meshes, row.slot) ? config.meshes[row.slot] : undefined;
   if (mesh === undefined || !('contour' in mesh)) {
     const found = mesh === undefined ? 'no mesh in config.meshes' : `a ${['grid', 'auto', 'influence', 'explicit'].find(m => m in mesh) ?? 'non-contour'} mesh`;
     problems.push({ code: 'BUST_LANDMARKS_SLOT', object: `${at}.edit.slot`, detail: `"${row.slot}" has ${found}; a part whose config.meshes entry is a contour mesh is required (the chest carrier propose drafts)` });
-    return [];
+    return { fields: [], pending: {} };
   }
   // No contour.bust yet (a first draft made with --no-bust) reads as the defaults: propose drafts contour.bust from the
   // three points alone, so the defaults are the values the redraft builds with.
@@ -265,25 +276,27 @@ function checkRow(row: ChestRow, parts: PartsFile | null, config: CharacterConfi
   });
   const actShape = effective(row.shape);
   const fields: ShapeField[] = [];
-  for (const key of SHAPE_KEYS as readonly ShapeKey[]) {
+  const pending: PendingBustShape['fields'] = {};
+  for (const key of SHAPE_KEYS) {
     if (actShape[key] === configShape[key]) continue;
     const spelled = row.shape[key];
-    if (writeConfig && declared !== undefined) {
+    // No contour.bust yet: the field differs from the default, so the act spells it. It is left pending in the
+    // sidecar for propose --write-config to write with the three points (shape fields alone make no contour.bust).
+    if (declared === undefined) {
+      if (spelled !== undefined) pending[key] = spelled;
+      continue;
+    }
+    if (writeConfig) {
       fields.push(spelled === undefined ? { key } : { key, value: spelled });
       continue;
     }
-    const from = declared === undefined ? 'the default (the config declares no contour.bust)' : declared[key] === undefined ? 'the default' : 'the config';
-    // Shape fields alone do not make a contour.bust (it needs apex_r, apex_l and cleavage), so with none declared
-    // --write-config has nothing to update, and no point is made up here to build one.
-    const remedy = declared === undefined
-      ? 'the config declares no contour.bust for --write-config to update, and shape fields alone do not make one (it needs apex_r, apex_l and cleavage); draft contour.bust first (bust-landmarks from an act at the config\'s value, then rig-parts propose --write-config --bust-landmarks <landmarks.json>), then run bust-landmarks --write-config with this act'
-      : 'run again with --write-config to take the act\'s value into the config; propose --write-config keeps the config\'s shape fields on the redraft (#1428)';
+    const from = declared[key] === undefined ? 'the default' : 'the config';
     problems.push({
       code: 'BUST_LANDMARKS_SHAPE', object: `${at}.edit.bust.${key}`,
-      detail: `is ${show(actShape[key])}${spelled === undefined ? ' (absent, the default)' : ''}; meshes.${row.slot}.contour.bust.${key} ${show(configShape[key])}, ${from}, is required: the landmarks file carries no such field; ${remedy}`,
+      detail: `is ${show(actShape[key])}${spelled === undefined ? ' (absent, the default)' : ''}; meshes.${row.slot}.contour.bust.${key} ${show(configShape[key])}, ${from}, is required: the landmarks file carries no such field; run again with --write-config to take the act's value into the config; propose --write-config keeps the config's shape fields on the redraft (#1428)`,
     });
   }
-  return fields;
+  return { fields, pending };
 }
 
 /** A path's device and inode, or null when nothing is there. */
@@ -385,7 +398,7 @@ export function planBustLandmarks(input: { act: string; parts: string; config: s
   const parts = collect(() => readParts(join(partsDir, 'parts.json')), problems);
   const config = collect(() => loadConfig(configPath), problems);
   const row = act === null ? null : oneRow(act.rows, problems);
-  const fields = row === null ? [] : checkRow(row, parts, config, input.writeConfig === true, problems);
+  const { fields, pending } = row === null ? { fields: [], pending: {} } : checkRow(row, parts, config, input.writeConfig === true, problems);
   if (problems.length > 0 || act === null || row === null || typeof actBytes === 'string') throw new PartsError(problems);
   const text = bustLandmarksText(row.landmarks);
   const provenance: BustLandmarksProvenance = {
@@ -395,6 +408,7 @@ export function planBustLandmarks(input: { act: string; parts: string; config: s
     slot: row.slot,
     source: { hash: row.hash, frame: { width: row.frame.width, height: row.frame.height } },
     landmarks_sha256: sha256(text),
+    ...(Object.keys(pending).length === 0 ? {} : { shape: { status: 'pending' as const, fields: pending } }),
   };
   return {
     landmarks: row.landmarks, provenance, out, provenancePath: out + BUST_LANDMARKS_PROVENANCE_SUFFIX,
@@ -415,10 +429,15 @@ export interface StagedBustLandmarks { commit(): void; cancel(): void; undo(): v
  * mode are kept for `undo`. A failure at any step removes the temporaries and puts back every file it replaced.
  */
 export function stageBustLandmarks(plan: BustLandmarksPlan, files: BustLandmarksFiles = {}): StagedBustLandmarks {
+  return stageReplacements([[plan.out, plan.texts[0]], [plan.provenancePath, plan.texts[1]]], files);
+}
+
+/** {@link stageBustLandmarks} over any files: also the sidecar `propose` marks applied beside its staged config write. */
+export function stageReplacements(writes: ReadonlyArray<readonly [string, string]>, files: BustLandmarksFiles = {}): StagedBustLandmarks {
   const failure = (path: string, action: string, error: unknown): Problem => (
     error instanceof PartsError ? error.problems[0] : { code: 'BUST_LANDMARKS_OUT', object: path, detail: `${action} (${errorCode(error)}); a writable path in an existing directory is required, and the earlier files are kept` });
   // The planner refuses a directory or an unreadable destination by name; one that became so since is refused here, never thrown raw.
-  const slots = ([[plan.out, plan.texts[0]], [plan.provenancePath, plan.texts[1]]] as const).map(([path, text]) => {
+  const slots = writes.map(([path, text]) => {
     try {
       const dest = existsSync(path) ? realpathSync(path) : path;
       let previous: { bytes: Buffer; mode: number } | null = null;
@@ -492,4 +511,90 @@ export function bustLandmarksFromAct(input: { act: string; parts: string; config
   const plan = planBustLandmarks(input);
   stageBustLandmarks(plan, files).commit();
   return plan;
+}
+
+/** The record beside a landmarks file `propose --bust-landmarks` reads, checked; `pending` is its shape still to write. */
+export interface BustSidecar {
+  path: string;
+  provenance: BustLandmarksProvenance;
+  /** The reviewed shape still to write onto the chest carrier, or null (none recorded, or already applied). */
+  pending: PendingBustShape | null;
+  /** The record's bytes with its shape marked applied, written beside the config write that applies it. */
+  appliedText: string | null;
+}
+
+/**
+ * Issue #1382: read `<landmarks>.provenance.json` beside a landmarks file, if there is one. None there is null, and
+ * `propose` reads the landmarks file as before. One there must be a well-formed record of this spec whose
+ * `landmarks_sha256` is the landmarks file's own digest; anything else is refused by name, every problem at once.
+ */
+export function readBustSidecar(landmarksPath: string, landmarksBytes: Uint8Array): BustSidecar | null {
+  const path = landmarksPath + BUST_LANDMARKS_PROVENANCE_SUFFIX;
+  try { lstatSync(path); }
+  catch (error) {
+    if (errorCode(error) === 'ENOENT') return null;
+    throw new PartsError([{ code: 'PROPOSE_BUST_SIDECAR', object: path, detail: `cannot be read (${errorCode(error)}); the provenance record bust-landmarks wrote, or no file at this path, is required` }]);
+  }
+  const problems: Problem[] = [];
+  const fail = (object: string, detail: string): void => { problems.push({ code: 'PROPOSE_BUST_SIDECAR', object, detail }); };
+  let raw: unknown;
+  try { raw = JSON.parse(readFileSync(path, 'utf8')); }
+  catch (error) {
+    const why = error instanceof SyntaxError ? `does not parse as JSON (${error.message})` : `cannot be read (${errorCode(error)})`;
+    throw new PartsError([{ code: 'PROPOSE_BUST_SIDECAR', object: path, detail: `${why}; the provenance record bust-landmarks wrote is required` }]);
+  }
+  if (!isObject(raw)) throw new PartsError([{ code: 'PROPOSE_BUST_SIDECAR', object: path, detail: `is ${show(raw)}; a ${BUST_LANDMARKS_PROVENANCE_SPEC} object is required` }]);
+  const keys = ['spec', 'act', 'row_sha256', 'slot', 'source', 'landmarks_sha256', 'shape'];
+  for (const key of Object.keys(raw)) if (!keys.includes(key)) fail(`${path} ${key}`, `is unknown; ${BUST_LANDMARKS_PROVENANCE_SPEC} takes ${keys.join(', ')}`);
+  if (raw.spec !== BUST_LANDMARKS_PROVENANCE_SPEC) fail(`${path} spec`, `is ${show(raw.spec)}; "${BUST_LANDMARKS_PROVENANCE_SPEC}" is required`);
+  const hex = (v: unknown): v is string => typeof v === 'string' && SHA256_PATTERN.test(v);
+  const act = raw.act;
+  if (!isObject(act) || act.schema !== BUST_LANDMARKS_ACT_SCHEMA || !isName(act.act_id) || !hex(act.file_sha256)) {
+    fail(`${path} act`, `is ${show(act)}; {schema: "${BUST_LANDMARKS_ACT_SCHEMA}", act_id, file_sha256} is required`);
+  }
+  if (!hex(raw.row_sha256)) fail(`${path} row_sha256`, `is ${show(raw.row_sha256)}; 64 lowercase hex digits are required`);
+  if (!isName(raw.slot)) fail(`${path} slot`, `is ${show(raw.slot)}; the chest carrier's part name is required`);
+  const source = raw.source;
+  const frame = isObject(source) ? source.frame : undefined;
+  if (!isObject(source) || !hex(source.hash) || !isObject(frame) || typeof frame.width !== 'number' || typeof frame.height !== 'number') {
+    fail(`${path} source`, `is ${show(source)}; {hash, frame: {width, height}} is required`);
+  }
+  if (!hex(raw.landmarks_sha256)) fail(`${path} landmarks_sha256`, `is ${show(raw.landmarks_sha256)}; 64 lowercase hex digits are required`);
+  let shape: BustLandmarksProvenance['shape'];
+  if (Object.hasOwn(raw, 'shape')) {
+    const s = raw.shape;
+    const fields = isObject(s) ? s.fields : undefined;
+    if (!isObject(s) || (s.status !== 'pending' && s.status !== 'applied') || !isObject(fields) || Object.keys(fields).length === 0) {
+      fail(`${path} shape`, `is ${show(s)}; {status: "pending" or "applied", fields: one or more of ${SHAPE_KEYS.join(', ')}} is required`);
+    } else {
+      const read: PendingBustShape['fields'] = {};
+      for (const key of Object.keys(fields)) if (!(SHAPE_KEYS as readonly string[]).includes(key)) fail(`${path} shape.fields.${key}`, `is unknown; contour.bust's shape fields are ${SHAPE_KEYS.join(', ')}`);
+      for (const key of SHAPE_KEYS) {
+        if (!Object.hasOwn(fields, key)) continue;
+        const v = fields[key];
+        const ok = key === 'bone_r' || key === 'bone_l' ? isName(v) : typeof v === 'number' && Number.isFinite(v);
+        if (!ok) fail(`${path} shape.fields.${key}`, `is ${show(v)}; ${key === 'bone_r' || key === 'bone_l' ? 'a non-empty bone name' : 'a finite number'} is required`);
+        else read[key] = v as number | string;
+      }
+      shape = { status: s.status, fields: read };
+    }
+  }
+  if (problems.length > 0) throw new PartsError(problems);
+  const computed = sha256(landmarksBytes);
+  if (raw.landmarks_sha256 !== computed) {
+    throw new PartsError([{ code: 'PROPOSE_BUST_SIDECAR_DIGEST', object: `${path} landmarks_sha256`, detail: `is "${raw.landmarks_sha256 as string}"; "${computed}" is required, the sha256 of ${landmarksPath}'s bytes: the landmarks file is not the one this record was written with` }]);
+  }
+  const a = act as Record<string, unknown>, src = source as Record<string, unknown>, f = frame as Record<string, unknown>;
+  const provenance: BustLandmarksProvenance = {
+    spec: BUST_LANDMARKS_PROVENANCE_SPEC,
+    act: { schema: BUST_LANDMARKS_ACT_SCHEMA, act_id: a.act_id as string, file_sha256: a.file_sha256 as string },
+    row_sha256: raw.row_sha256 as string,
+    slot: raw.slot as string,
+    source: { hash: src.hash as string, frame: { width: f.width as number, height: f.height as number } },
+    landmarks_sha256: computed,
+    ...(shape === undefined ? {} : { shape }),
+  };
+  const pending = shape?.status === 'pending' ? { part: provenance.slot, fields: shape.fields } : null;
+  const appliedText = pending === null ? null : JSON.stringify({ ...provenance, shape: { status: 'applied', fields: pending.fields } }, null, 2) + '\n';
+  return { path, provenance, pending, appliedText };
 }
