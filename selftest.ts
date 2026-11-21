@@ -66,6 +66,7 @@ import { prepareSeeThroughInput } from './src/seethrough-transform.ts';
 import { runSeeThroughTransformChecks } from './tools/check_seethrough_transform.ts';
 import { runPlateChecks } from './tools/check_plate.ts';
 import { runEditorReceiptChecks } from './tools/check_editor_receipts.ts';
+import { writeEditorReceiptFixture } from './fixtures/editor_receipts.ts';
 import { runEditedPartChecks, runEditedReferenceCwdChecks } from './tools/check_edited_parts.ts';
 import { runOutlineSpeckChecks } from './tools/check_outline_specks.ts';
 import { runExternalReceiptChecks } from './tools/check_external_receipt.ts';
@@ -777,7 +778,7 @@ import { backgroundMask, checkPainting, DEFAULT_PAINTING_FORM, isPaintingForm, l
 import { CANVAS as PAINT_CANVAS, figureJoints as paintJoints, FIGURE as PAINT_FIGURE, keypointFile as paintKeypointFile, mutant as paintMutant, paint as paintFigure } from './fixtures/painting.ts';
 import { LEGS_APART, LEGS_JOINED, LYING_PARTS, LYING_RIG, type PoseName, POSES, SEATED_PARTS, SEATED_RIG } from './fixtures/poses.ts';
 import { buildSheet, tileImage, tilesFrom } from './src/sheet.ts';
-import { block, constraintConfig, dustImages, dustParts, FACE_EXPECT, faceConfig, faceImages, faceParts, HEAT_STRIP_EXPECT, heatStripConfig, islandImages, LASH_CREASE, LASH_RIG, LASH_ROW, lashConfig, lashImages, lashParts, RIG_CANVAS, RIG_EXPECT, rigConfig, rigImages, rigParts, SCENE_TARGET, shoeConfig, shoeImages, shoeKick, shoeParts, TURNED_EXPECT, turnedConfig, writeRigFixture as originalWriteRigFixture } from './fixtures/rig.ts';
+import { block, constraintConfig, dustImages, dustParts, FACE_EXPECT, faceConfig, faceImages, faceParts, HEAT_STRIP_EXPECT, heatStripConfig, islandImages, islandParts, LASH_CREASE, LASH_RIG, LASH_ROW, lashConfig, lashImages, lashParts, RIG_CANVAS, RIG_EXPECT, rigConfig, rigImages, rigParts, SCENE_TARGET, shoeConfig, shoeImages, shoeKick, shoeParts, TURNED_EXPECT, turnedConfig, writeRigFixture as originalWriteRigFixture } from './fixtures/rig.ts';
 import { FORK_SMOOTH_MAX_INFLUENCES, smoothForkShares } from './src/rig.ts';
 import { type AttachmentSetsFile, blinkHoldProblems, buildRig as originalBuildRig, influenceReachHolds, DEFAULT_IDLE_KEYS, expandSetAttachmentKeys, FACE_TIPS_AXIS_NAME, HEAD_UP_BONE, flattenRig, IDLE_DRIVES_MESHES_WHY, type MeshAttachment, PAD, type RegionAttachment, rigJsonText, type RigOutput, type RigSpec, roundShares, tipRoundingBound, writtenShares } from './src/rig.ts';
 import { readEditorReceipts } from './src/editreceipt.ts';
@@ -8860,9 +8861,9 @@ function runRigSuite(): number {
     'the reference gave such a bone the segment (x, y) -> (x, y + 1): one pixel straight down, a direction no field states',
   );
 
-  const oneLoopTwoIslands = refusals(() => buildRig(rigCfg(), rigParts(), islandImages(), 0));
-  const joined = refusals(() => buildRig(rigCfg(), rigParts(), islandImages()));
-  const joinedRig = joined === null ? buildRig(rigCfg(), rigParts(), islandImages()) : null;
+  const oneLoopTwoIslands = refusals(() => buildRig(rigCfg(), islandParts(), islandImages(), 0));
+  const joined = refusals(() => buildRig(rigCfg(), islandParts(), islandImages()));
+  const joinedRig = joined === null ? buildRig(rigCfg(), islandParts(), islandImages()) : null;
   say(
     'RG10_A_LATTICE_THAT_IS_NOT_ONE_LOOP_IS_REFUSED_AND_TWO_ISLANDS_ARE_JOINED',
     oneLoopTwoIslands !== null &&
@@ -8884,7 +8885,9 @@ function runRigSuite(): number {
   const e4 = refusals(() => buildRig(rigCfg(), rigParts(), missing));
   const blank = new Map(rigImages());
   blank.set('cloth', newRaster(16, 8));
-  const e5 = refusals(() => buildRig(rigCfg(), rigParts(), blank));
+  const blankParts = rigParts();
+  blankParts.parts[0].opaque_px = 0;
+  const e5 = refusals(() => buildRig(rigCfg(), blankParts, blank));
   say(
     'RG11_A_PART_PNG_MISSING_THE_WRONG_SIZE_OR_EMPTY_IS_REFUSED',
     e3?.problems.map((p) => p.code).join() === 'RIG_PNG_MATCHES_BOX' && e4?.problems.map((p) => p.code).join() === 'RIG_PNG_PRESENT' && e5?.problems.map((p) => p.code).join() === 'RIG_PART_HAS_ART',
@@ -9092,7 +9095,99 @@ function runRigSuite(): number {
   runClothRigCases(say);
   runSkirtInsideRigCases(say);
   runStopRigCases(say);
+  runOpaquePxRigCases(say);
   return bad();
+}
+
+/**
+ * Issue #1454: `rig` refuses a part PNG whose opaque pixel count (`alpha > 8`) differs from what `parts.json` records
+ * for it (`RIG_PNG_MATCHES_OPAQUE_PX`), so an in-place overwrite of an emitted part cannot bypass the edit receipt;
+ * a receipted `edited_parts` edit that removes opaque pixels updates `opaque_px` at assemble time and builds green.
+ */
+function runOpaquePxRigCases(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const dir = temp('opaque-px-rig');
+  try {
+    const posDirect = refusals(() => buildRig(rigCfg(), rigParts(), rigImages()));
+    const fxPos = writeRigFixture(join(dir, 'pos'));
+    const cliPos = runCli(['rig', '--config', fxPos.config, '--parts', fxPos.parts, '--out', join(dir, 'pos', 'out')]);
+    say(
+      'OPX01_CONSISTENT_OPAQUE_PX_BUILDS_GREEN',
+      posDirect === null && cliPos.status === 0 && existsSync(join(dir, 'pos', 'out', 'rig.json')),
+      `buildRig(rigCfg(), rigParts(), rigImages()) -> ${codes(posDirect)}; rig CLI -> exit ${cliPos.status}, rig.json exists: ${existsSync(join(dir, 'pos', 'out', 'rig.json'))}`,
+      'issue #1454: when every part PNG has the opaque pixel count parts.json records for it (cloth 128, eye 8), buildRig and the rig command build green',
+    );
+
+    const expectedDetail = 'parts/cloth.png has 64 opaque pixels; parts.json records 128';
+    const expectedLine = `RIG_PNG_MATCHES_OPAQUE_PX: part "cloth" — ${expectedDetail}`;
+    const negDirect = refusals(() => buildRig(rigCfg(), rigParts(), islandImages()));
+    const fxNeg = writeRigFixture(join(dir, 'neg'));
+    writeFileSync(join(fxNeg.parts, 'parts', 'cloth.png'), encodePngBytes(islandImages().get('cloth') as Raster));
+    const cliNeg = runCli(['rig', '--config', fxNeg.config, '--parts', fxNeg.parts, '--out', join(dir, 'neg', 'out')]);
+    const negFailLines = cliNeg.out.split('\n').filter((l) => /^ {2}FAIL {2}/.test(l));
+    say(
+      'OPX02_OVERWRITTEN_PART_PNG_WITH_FEWER_OPAQUE_PIXELS_IS_REFUSED_BY_NAME',
+      negDirect !== null &&
+        negDirect.problems.length === 1 &&
+        negDirect.problems[0].code === 'RIG_PNG_MATCHES_OPAQUE_PX' &&
+        negDirect.problems[0].object === 'part "cloth"' &&
+        negDirect.problems[0].detail === expectedDetail &&
+        cliNeg.status === 1 &&
+        negFailLines.length === 1 &&
+        negFailLines[0].includes(expectedLine) &&
+        !existsSync(join(dir, 'neg', 'out')),
+      `buildRig with cloth overwritten from 128 to 64 opaque px -> ${negDirect === null ? 'accepted' : `${negDirect.problems[0].code}: ${negDirect.problems[0].object} — ${negDirect.problems[0].detail}`}; rig CLI -> exit ${cliNeg.status}, ${(negFailLines[0] ?? 'no FAIL line').trim()}, out exists: ${existsSync(join(dir, 'neg', 'out'))}`,
+      'issue #1454: an in-place overwrite of parts/<name>.png that removes opaque pixels without updating parts.json through assemble.edited_parts is refused by name before rig writes any output',
+    );
+
+    // Receipted edited-part that removes opaque pixels from body (topwear, 48x24 = 1152 -> 21 px removed -> 1131 opaque px)
+    // and also overwrites an unedited part after assemble to confirm the receipted edit passes while an unreceipted overwrite is refused.
+    const editDir = join(dir, 'edited');
+    const cfg = writeEditorReceiptFixture(editDir, { author: false });
+    cfg.bones = [
+      { name: 'torso', parent: 'root', at: [32, 44] },
+      { name: 'head', parent: 'torso', at: [32, 20] },
+    ];
+    cfg.meshes = {};
+    cfg.regions = { body: 'torso', face: 'head' };
+    cfg.motion = { duration: 1, tracks: [{ bone: 'torso', prop: 'rotate', amp: 1, period: 1, phase: 0 }] };
+    const cfgPath = join(editDir, 'config.json');
+    writeFileSync(cfgPath, `${JSON.stringify(cfg, null, 2)}\n`);
+    const baseOut = join(editDir, 'base-out');
+    const baseAsm = runCli(['assemble', '--source', join(editDir, 'painting.png'), '--full', join(editDir, 'full'), '--config', cfgPath, '--out', baseOut]);
+    const baseBodyPath = join(baseOut, 'rig', 'parts', 'body.png');
+    const baseBody = readPng(baseBodyPath);
+    const editedBody = structuredClone(baseBody);
+    // Clear a 6-row triangle (1 + 2 + 3 + 4 + 5 + 6 = 21 opaque pixels) from the 48x24 = 1152 opaque-pixel body block.
+    for (let y = 0; y < 6; y++) for (let x = 0; x <= y; x++) editedBody.data.set([0, 0, 0, 0], (y * editedBody.width + x) * 4);
+    const editsDir = join(editDir, 'edits');
+    mkdirSync(editsDir, { recursive: true });
+    const editedBytes = encodePngBytes(editedBody);
+    const editedFile = join(editsDir, 'body.png');
+    writeFileSync(editedFile, editedBytes);
+    (cfg.assemble as Record<string, unknown>).edited_parts = { dir: 'edits', receipts: [] };
+    writeFileSync(cfgPath, `${JSON.stringify(cfg, null, 2)}\n`);
+    const recRun = runCli(['edited-part', '--config', cfgPath, '--part', 'body', '--file', editedFile, '--from', baseBodyPath, '--editor', 'OPX03 technical fixture']);
+    const editedOut = join(editDir, 'edited-out');
+    const editedAsm = runCli(['assemble', '--source', join(editDir, 'painting.png'), '--full', join(editDir, 'full'), '--config', cfgPath, '--out', editedOut]);
+    const editedParts = existsSync(join(editedOut, 'rig', 'parts.json')) ? readParts(join(editedOut, 'rig', 'parts.json')) : null;
+    const bodyRec = editedParts?.parts.find((p) => p.name === 'body');
+    const editedRigOut = join(editDir, 'rig-out');
+    const editedRigRun = runCli(['rig', '--config', cfgPath, '--parts', join(editedOut, 'rig'), '--out', editedRigOut]);
+    say(
+      'OPX03_RECEIPTED_EDITED_PART_REMOVING_OPAQUE_PIXELS_RECORDS_NEW_COUNT_AND_BUILDS_GREEN',
+      baseAsm.status === 0 &&
+        recRun.status === 0 &&
+        editedAsm.status === 0 &&
+        bodyRec?.opaque_px === 1131 &&
+        bodyRec.provenance?.edited_part?.removed_opaque_px === 21 &&
+        editedRigRun.status === 0 &&
+        existsSync(join(editedRigOut, 'rig.json')),
+      `base assemble ${baseAsm.status}, edited-part ${recRun.status}, edited assemble ${editedAsm.status}; body opaque_px ${bodyRec?.opaque_px} (1152 - 21), removed_opaque_px ${bodyRec?.provenance?.edited_part?.removed_opaque_px}; rig exit ${editedRigRun.status}, rig.json exists: ${existsSync(join(editedRigOut, 'rig.json'))}`,
+      'issue #1454: a receipted edited-part replacement updates parts.json opaque_px to the edited image\'s count (1131) and records removed_opaque_px (21), so rig accepts it',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -10319,7 +10414,7 @@ function runHeatRuleCases(say: (name: string, ok: boolean, detail: string, why: 
 
   // RG71 — the other two refusals: an island no bone has a source in, and a solve that does not converge within its bound.
   const islands = heatStripConfig({ rule: 'heat', segments: [['hem0', [10.5, 10.5], [10.5, 17.5]], ['hem1', [11.5, 10.5], [11.5, 17.5]]] });
-  const noIsland = refusals(() => buildRig(parseConfig(islands), rigParts(), islandImages()));
+  const noIsland = refusals(() => buildRig(parseConfig(islands), islandParts(), islandImages()));
   const ni = noIsland?.problems[0];
   const segsOf = (c: Record<string, unknown>) => {
     const raw = (c.meshes as Record<string, { segments: Array<[string, [number, number], [number, number]]> }>).cloth.segments;
@@ -10347,7 +10442,7 @@ function runHeatRuleCases(say: (name: string, ok: boolean, detail: string, why: 
   const dust303 = (mesh: Record<string, unknown>, runs: Array<[number, number, number]>): { row: Row303 | null; err: PartsError | null } => {
     let row: Row303 | null = null;
     const err = refusals(() => {
-      row = buildRig(parseConfig(heatStripConfig(mesh)), dustParts(), dustImages(runs)).meshReport[0] as unknown as Row303;
+      row = buildRig(parseConfig(heatStripConfig(mesh)), dustParts(runs), dustImages(runs)).meshReport[0] as unknown as Row303;
     });
     return { row, err };
   };
@@ -10390,9 +10485,9 @@ function runHeatRuleCases(say: (name: string, ok: boolean, detail: string, why: 
   };
   const oneIsland = rigTexts303({}, rigParts, rigImages());
   const oneIslandStray = rigTexts303({ stray: 4 }, rigParts, rigImages());
-  const dustAbsent = rigTexts303({}, dustParts, dustImages([[53, 20, 1]]));
-  const dustZero = rigTexts303({ stray: 0 }, dustParts, dustImages([[53, 20, 1]]));
-  const dustOne = rigTexts303({ stray: 1 }, dustParts, dustImages([[53, 20, 1]]));
+  const dustAbsent = rigTexts303({}, () => dustParts([[53, 20, 1]]), dustImages([[53, 20, 1]]));
+  const dustZero = rigTexts303({ stray: 0 }, () => dustParts([[53, 20, 1]]), dustImages([[53, 20, 1]]));
+  const dustOne = rigTexts303({ stray: 1 }, () => dustParts([[53, 20, 1]]), dustImages([[53, 20, 1]]));
   const echoOnly = (a: string, b: string): boolean => {
     const x = JSON.parse(a) as Array<Record<string, unknown>>;
     const y = JSON.parse(b) as Array<Record<string, unknown>>;
@@ -10641,7 +10736,9 @@ function runBlinkStillCases(say: (name: string, ok: boolean, detail: string, why
   const bare = lashImages();
   const noCrease = bare.get('lash') as Raster;
   for (let i = 0; i < 16 * 2 * 4; i++) noCrease.data[i] = 0;
-  const empty = refusals(() => buildRig(lashCfg((c) => (stillOf(c).lash.row = 18)), lashParts(), bare));
+  const bareParts = lashParts();
+  bareParts.parts.find((p) => p.name === 'lash')!.opaque_px = 80;
+  const empty = refusals(() => buildRig(lashCfg((c) => (stillOf(c).lash.row = 18)), bareParts, bare));
   const takenParts = lashParts();
   takenParts.parts.push({ ...takenParts.parts[1], name: 'lash_still' });
   // Past the loader, whose plan does not make lash_still: the rig stage's own check, for a caller that skipped it.
@@ -43861,7 +43958,7 @@ function runContourWiringSuite(): number {
           delete (c.motion as Record<string, unknown>).blink;
         }),
       ),
-      rigParts(),
+      islandParts(),
       islandImages(),
     ),
   );
@@ -44486,7 +44583,9 @@ function runContourWiringSuite(): number {
       }),
     );
   const mesh100 = (gap: [number, number]): { att: Record<string, unknown>; row: Record<string, unknown> } => {
-    const r = buildRig(cfg100(), rigParts(), new Map([['cloth', block(16, 8, gap)], ['eye', block(4, 2)]]));
+    const p = rigParts();
+    p.parts[0].opaque_px = (16 - (gap[1] - gap[0])) * 8;
+    const r = buildRig(cfg100(), p, new Map([['cloth', block(16, 8, gap)], ['eye', block(4, 2)]]));
     return { att: (r.rig.skins.default.cloth as Record<string, unknown>).cloth as Record<string, unknown>, row: r.meshReport.find((m) => m.part === 'cloth') as unknown as Record<string, unknown> };
   };
   const bridged100 = mesh100([4, 12]);
@@ -53772,8 +53871,10 @@ function runAutoMeshSuite(): number {
   cloth10.data.set([0, 0, 0, 0], 4);
   cloth10.data.set([0, 0, 0, 0], 16 * 4);
   speckImages.set('cloth', cloth10);
-  const e10 = refusals(() => buildRig(parseConfig(autoRigConfig()), rigParts(), speckImages));
-  const c10 = refusals(() => buildRig(parseConfig(autoRigConfig((c) => ((c.meshes as Record<string, unknown>).cloth = { contour: { tolerance: 0, margin: 1, spacing: 4 }, r: 8, segments: ['hem'] }))), rigParts(), speckImages));
+  const speckParts = rigParts();
+  speckParts.parts[0].opaque_px = 125;
+  const e10 = refusals(() => buildRig(parseConfig(autoRigConfig()), speckParts, speckImages));
+  const c10 = refusals(() => buildRig(parseConfig(autoRigConfig((c) => ((c.meshes as Record<string, unknown>).cloth = { contour: { tolerance: 0, margin: 1, spacing: 4 }, r: 8, segments: ['hem'] }))), speckParts, speckImages));
   say(
     'AM10_AN_ALPHA_1_SPECK_IS_A_SECOND_ISLAND_THE_SOURCE_GATE_REFUSES_BY_NAME_AND_THE_CONTOUR_MODE_BUILDS',
     has(e10, 'CONTOUR_ONE_ISLAND', 'contour mesh "cloth"', '1 px at (4, 4)', "automatic mode's source, at alpha 1 and above") && e10?.problems.length === 1 && c10 === null,
@@ -56264,7 +56365,9 @@ function runAutoMeshSuite(): number {
     });
   const builtSy = (stray: number | undefined, crumbPx: 0 | 1 | 2): RigOutput | PartsError => {
     try {
-      return buildRig(parseConfig(strayConfigSy(stray)), rigParts(), crumbImagesSy(crumbPx));
+      const p = rigParts();
+      p.parts[0].opaque_px = 80 + crumbPx;
+      return buildRig(parseConfig(strayConfigSy(stray)), p, crumbImagesSy(crumbPx));
     } catch (err) {
       if (err instanceof PartsError) return err;
       throw err;

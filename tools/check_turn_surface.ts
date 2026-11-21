@@ -149,6 +149,7 @@ export function runTurnSurfaceChecks(dir: string, say: Say): void {
         const i = (y * p.w + x) * 4;
         if (x === 0 || y === 0 || x === p.w - 1 || y === p.h - 1) { art.data[i + 3] = x === 0 ? 127 : 0; sheet.data.set([background, background, background, 255], i); }
       }
+      p.opaque_px = (p.w - 2) * (p.h - 2) + p.h;
     }
     return buildRig(parseConfig(f.config), f.parts, f.images);
   };

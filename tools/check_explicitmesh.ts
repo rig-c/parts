@@ -305,6 +305,7 @@ export function runExplicitMeshChecks(root: string, report: (name: string, ok: b
   const threeIslandsImages = islandImages();
   threeIslandsImages.set('cloth', threeIslandCloth);
   const twoOnThreeIslands = explicitIslandsFixture();
+  twoOnThreeIslands.parts.parts[0].opaque_px = 96;
   twoOnThreeIslands.mesh.explicit.image_sha256 = explicitImageHash(threeIslandCloth);
   const missingIslErr = refused(() => buildRig(parseConfig(twoOnThreeIslands.config), twoOnThreeIslands.parts, threeIslandsImages));
   const twoOnOneIsland = explicitIslandsFixture();

@@ -148,7 +148,7 @@ export function speckImage(): Raster {
 export function draftIslandsParts(): PartsFile {
   const p = draftParts();
   const rec = (name: string, tag: string, y: number, px: number): PartsFile['parts'][number] => ({ ...p.parts[0], name, from: `full:${tag}`, x: 40, y, w: 30, h: 8, opaque_px: px });
-  return { ...p, rig_size: [80, 420], parts: [...p.parts, rec('pins', 'earwear', 20, 112), rec('studs', 'headwear', 60, 112), rec('specks', 'objects', 100, 64)] };
+  return { ...p, rig_size: [80, 420], parts: [...p.parts, rec('pins', 'earwear', 20, 112), rec('studs', 'headwear', 60, 112), rec('specks', 'objects', 100, 70)] };
 }
 
 export function draftIslandsConfig(grid: number): Record<string, unknown> {
