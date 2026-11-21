@@ -17,6 +17,10 @@ import { PartsError } from './errors.ts';
 import { parseConfig, parseEarlyConfig, parseProposalSections } from './config.ts';
 import type { ConfigEdit } from './meshdraft.ts';
 
+/** Required point fields and optional shape fields of `meshes.<part>.contour.bust`, in the shorthand order `src/config.ts` validates (issues #475, #1428). */
+const BUST_LANDMARK_FIELDS = ['apex_r', 'apex_l', 'cleavage'] as const;
+const BUST_SHAPE_FIELDS = ['alpha', 'clearance', 'bone_r', 'bone_l', 'spacing'] as const;
+
 export type ConfigJson = null | boolean | number | string | ConfigJson[] | ConfigObject;
 export interface ConfigObject { [key: string]: ConfigJson }
 export type ConfigWritePatch =
@@ -148,6 +152,34 @@ export function mergeConfigProposal(raw: unknown, patch: ConfigWritePatch, recei
         if (patch.proposal[key] !== undefined) {
           const previous = config[key];
           config[key] = clone(patch.proposal[key], `proposal.${key}`);
+          if (key === 'meshes' && object(previous) && object(config.meshes)) {
+            const carriers: string[] = [];
+            for (const [part, mesh] of Object.entries(config.meshes)) {
+              if (!object(mesh) || !object(mesh.contour) || !object(mesh.contour.bust)) continue;
+              carriers.push(part);
+              const draftedBust = mesh.contour.bust;
+              const prevMesh = own(previous, part) ? previous[part] : undefined;
+              const prevBust = object(prevMesh) && object(prevMesh.contour) && object(prevMesh.contour.bust) ? prevMesh.contour.bust : null;
+              const mergedBust: ConfigObject = {};
+              for (const k of BUST_LANDMARK_FIELDS) if (own(draftedBust, k)) mergedBust[k] = draftedBust[k];
+              if (prevBust !== null) {
+                for (const k of BUST_SHAPE_FIELDS) if (own(prevBust, k)) mergedBust[k] = prevBust[k];
+              }
+              mesh.contour.bust = mergedBust;
+            }
+            for (const [oldPart, prevMesh] of Object.entries(previous)) {
+              if (carriers.includes(oldPart) || !object(prevMesh) || !object(prevMesh.contour) || !object(prevMesh.contour.bust)) continue;
+              const prevBust = prevMesh.contour.bust;
+              const dropped = BUST_SHAPE_FIELDS.filter((k) => own(prevBust, k));
+              if (dropped.length === 0) continue;
+              if (Array.isArray(patch.proposal.notes) && patch.proposal.notes.some((n) => n.startsWith(`${oldPart}: contour bust omitted for the declared reason: `))) continue;
+              const why = carriers.length > 0 ? `chest carrier is now ${carriers.join(', ')}` : `${oldPart} is no longer the chest carrier`;
+              const line = `${oldPart}: contour.bust shape field(s) ${dropped.join(', ')} dropped — ${why}`;
+              if (Array.isArray(patch.proposal.notes) && !Object.isFrozen(patch.proposal.notes) && !patch.proposal.notes.includes(line)) {
+                patch.proposal.notes.push(line);
+              }
+            }
+          }
           if (!equal(previous, config[key])) edits.push({ path: [key], value: config[key] });
         }
       }
