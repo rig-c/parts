@@ -1,6 +1,6 @@
 {
   "name": "@rig-c/parts",
-  "version": "2.49.1",
+  "version": "2.50.0",
   "description": "AI-authored 2D character parts from one anime painting and its See-through layer decomposition: measured parts, weighted-mesh rig specs, verified through rig-c before anything is written. A CLI for agents that cannot see the image.",
   "type": "module",
   "exports": {
@@ -75,7 +75,7 @@
   },
   "dependencies": {
     "ag-psd": "^31.0.2",
-    "@rig-c/core": "3.8.0"
+    "@rig-c/core": "3.8.1"
   },
   "devDependencies": {
     "@esotericsoftware/spine-core": "4.3.13",
