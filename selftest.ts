@@ -60442,17 +60442,19 @@ function runUnits(keys: readonly string[], examples: readonly string[]): string[
 }
 
 /**
- * Issue #1116: precedence-constrained longest-first placement from CI run
- * 42104905448 and the split fixture unit clocks scaled by 2.02. The sample
- * consumers keep their #1113 shard and relative order, preserving cached producers.
- * Every other unit takes the least-loaded worker; unit-name and worker-index
- * ties are stable. RT09 still requires every registered unit exactly once.
+ * Issue #1452 (using #1116's method): precedence-constrained longest-first
+ * placement from the per-unit median clocks across five green CI runs
+ * (44909945516, 44911425998, 44911662160, 44912887953 and 44914073049). The
+ * sample consumers keep their #1113 shard and relative order, preserving cached
+ * producers. Every other unit takes the least-loaded worker; unit-name and
+ * worker-index ties are stable. RT09 still requires every registered unit
+ * exactly once.
  */
 const SHARDS: ReadonlyArray<readonly [string, readonly string[]]> = [
-  ['1', ['build', 'cli', 'check@runBreathAloneCases', 'influence', 'auto-mesh-examples', 'chain@standard', 'chain@physics', 'check@runSweepCheckCases', 'config-write', 'limb-slots', 'comfy', 'take-layers', 'alternate-tips', 'chain@feature-contracts', 'readme-loop@loop-plain', 'limb-layout', 'subset-cover', 'ground-examples', 'depth-maps', 'check@coincide', 'winding', 'prompt', 'sheet', 'chain@feature-readme-plain', 'joint-contact', 'parts', 'raster-blur', 'raster-morph', 'raster-warp']],
-  ['2', ['check@fixtures', 'retune', 'rig', 'mesh-draft', 'alternate-layers', 'check@runPlantedFeetCases', 'fixed-skeleton', 'config', 'check@runDiscCheckCases', 'check@runStressCases', 'front-slot', 'corpus', 'chain@physics-driven', 'chain@structure', 'chain@feature-authoring', 'readme-loop@loop-cloth', 'keypoints', 'contour', 'foot-ownership', 'structure', 'assemble-examples@standard', 'skeleton', 'inputs-examples', 'assemble-examples@end', 'check@runMotionSeamWorldCases', 'check@runSweepUnitCases', 'layers-psd', 'propose-corpus', 'raster-composite', 'raster-resize']],
-  ['3', ['check@judgements', 'remesh', 'check@runMotionSeamCases', 'tree', 'check@requirements', 'check@row-scope', 'auto-motion', 'scene', 'chain@no-neck', 'chain@gesture', 'check@weight-step', 'check@runLimbCheckCases', 'check@runContourStepCases', 'requirements', 'assemble', 'auto-mesh', 'check@runBallCheckCases', 'check@runDressRiderCheckCases', 'loop', 'build-cost', 'contour-wiring', 'waist', 'chain-inherit', 'arm-split-upgrade', 'check@runRiderCheckCases', 'painting', 'diagnostics', 'layers-wrapper', 'inputs', 'plausibility', 'check@runRigcIdentityCases', 'hybrid-limb', 'editor-receipts', 'part-sources', 'check@gate-chain', 'core-pointer', 'fetch-examples', 'png', 'raster-components', 'raster-poly', 'chain@feature-readme-posed', 'readme-loop@loop-posed', 'readme-loop@end']],
-  ['4', ['check@runEnvironmentCheckCases', 'setup-painting', 'check@runAnimationFoldCases', 'propose', 'boundary-colour', 'check@runClothCheckCases', 'check@runFeetLevelCases', 'check@runClothSettlesCases', 'check@extremes', 'check@seated', 'check@stretch', 'mesh-stats', 'chain@cloth', 'chain@physics-mixed', 'chain@travel', 'chain@end', 'chain@feature-readme-cloth', 'behind-seams']],
+  ['1', ['cli', 'build', 'config', 'auto-mesh-examples', 'chain@standard', 'chain@physics', 'chain@feature-contracts', 'readme-loop@loop-plain', 'chain@feature-readme-plain']],
+  ['2', ['scene', 'parts', 'rig', 'propose', 'mesh-draft', 'assemble', 'boundary-colour', 'influence', 'alternate-layers', 'check@runPlantedFeetCases', 'check@runClothSettlesCases', 'check@extremes', 'check@stretch', 'check@runStressCases', 'check@runBallCheckCases', 'corpus', 'chain@physics-driven', 'chain@structure', 'chain@feature-authoring', 'readme-loop@loop-cloth', 'limb-layout', 'diagnostics', 'ground-examples', 'foot-ownership', 'assemble-examples@standard', 'hybrid-limb', 'raster-warp', 'raster-morph', 'winding', 'skeleton', 'raster-poly', 'joint-contact', 'sheet', 'prompt', 'inputs-examples', 'layers-psd', 'raster-composite', 'check@runSweepUnitCases', 'assemble-examples@end', 'raster-resize']],
+  ['3', ['check@judgements', 'remesh', 'check@runEnvironmentCheckCases', 'check@runMotionSeamCases', 'check@requirements', 'check@row-scope', 'chain@no-neck', 'chain@gesture', 'check@weight-step', 'check@runFeetLevelCases', 'config-write', 'comfy', 'check@runContourStepCases', 'front-slot', 'auto-mesh', 'check@runDressRiderCheckCases', 'check@runSweepCheckCases', 'depth-maps', 'loop', 'build-cost', 'limb-slots', 'take-layers', 'waist', 'contour-wiring', 'editor-receipts', 'alternate-tips', 'chain-inherit', 'arm-split-upgrade', 'painting', 'layers-wrapper', 'keypoints', 'contour', 'inputs', 'structure', 'check@runRigcIdentityCases', 'check@coincide', 'core-pointer', 'raster-blur', 'png', 'chain@feature-readme-posed', 'readme-loop@loop-posed', 'readme-loop@end']],
+  ['4', ['check@fixtures', 'tree', 'retune', 'setup-painting', 'check@runAnimationFoldCases', 'auto-motion', 'check@runClothCheckCases', 'check@runBreathAloneCases', 'behind-seams', 'fixed-skeleton', 'check@seated', 'check@runDiscCheckCases', 'requirements', 'check@runLimbCheckCases', 'mesh-stats', 'chain@cloth', 'chain@physics-mixed', 'chain@travel', 'chain@end', 'check@runRiderCheckCases', 'subset-cover', 'plausibility', 'part-sources', 'check@gate-chain', 'fetch-examples', 'raster-components', 'propose-corpus', 'check@runMotionSeamWorldCases', 'chain@feature-readme-cloth']],
 ];/**
  * The part of a split suite this worker runs (issue #395): null when it runs the whole suite, else the example its
  * unit names or {@link END_UNIT}. Set once, by {@link workerMain}, before the suite starts.
