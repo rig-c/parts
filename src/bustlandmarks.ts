@@ -266,7 +266,18 @@ type ShapeField = { key: ShapeKey; value?: number | string };
  * field to write: the act's value where the act spells it out, the key's removal where the act omits it. With no
  * `contour.bust`, a field that differs from the default is returned as pending, for the sidecar.
  */
-function checkRow(row: ChestRow, parts: PartsFile | null, config: CharacterConfig | null, writeConfig: boolean, problems: Problem[]): { fields: ShapeField[]; pending: PendingBustShape['fields'] } {
+/**
+ * Issue #1443: the act moves the points when apex_r or apex_l differs from the declared one in either coordinate, or
+ * when its cleavage differs from the declared one. An act with no cleavage moves the points too: propose derives one
+ * from a midline this command does not have, so it cannot be held equal, and the pending path loses nothing (propose
+ * writes the points and the shape in one staged write).
+ */
+export function bustPointsMoved(act: { apex_r: readonly number[]; apex_l: readonly number[]; cleavage?: readonly number[] }, declared: { apex_r: readonly number[]; apex_l: readonly number[]; cleavage: readonly number[] }): boolean {
+  const same = (a: readonly number[], b: readonly number[]): boolean => a.length === b.length && a.every((v, i) => v === b[i]);
+  return !same(act.apex_r, declared.apex_r) || !same(act.apex_l, declared.apex_l) || act.cleavage === undefined || !same(act.cleavage, declared.cleavage);
+}
+
+function checkRow(row: ChestRow, parts: PartsFile | null, config: CharacterConfig | null, writeConfig: boolean, problems: Problem[]): { fields: ShapeField[]; pending: PendingBustShape['fields']; moved: boolean } {
   const at = `value.chestLandmarks[${row.index}]`;
   if (parts !== null) {
     const [width, height] = parts.rig_size;
@@ -283,12 +294,12 @@ function checkRow(row: ChestRow, parts: PartsFile | null, config: CharacterConfi
   if (row.skin !== 'default') {
     problems.push({ code: 'BUST_LANDMARKS_SLOT', object: `${at}.edit.skin`, detail: `is "${row.skin}"; "default" is required: this package writes every mesh into the default skin` });
   }
-  if (config === null) return { fields: [], pending: {} };
+  if (config === null) return { fields: [], pending: {}, moved: false };
   const mesh = Object.hasOwn(config.meshes, row.slot) ? config.meshes[row.slot] : undefined;
   if (mesh === undefined || !('contour' in mesh)) {
     const found = mesh === undefined ? 'no mesh in config.meshes' : `a ${['grid', 'auto', 'influence', 'explicit'].find(m => m in mesh) ?? 'non-contour'} mesh`;
     problems.push({ code: 'BUST_LANDMARKS_SLOT', object: `${at}.edit.slot`, detail: `"${row.slot}" has ${found}; a part whose config.meshes entry is a contour mesh is required (the chest carrier propose drafts)` });
-    return { fields: [], pending: {} };
+    return { fields: [], pending: {}, moved: false };
   }
   // No contour.bust yet (a first draft made with --no-bust) reads as the defaults: propose drafts contour.bust from the
   // three points alone, so the defaults are the values the redraft builds with.
@@ -301,6 +312,9 @@ function checkRow(row: ChestRow, parts: PartsFile | null, config: CharacterConfi
     ...(declared.bone_l === undefined ? {} : { bone_l: declared.bone_l }),
   });
   const actShape = effective(row.shape);
+  // Issue #1443: with the points moved, the shape is not written against the config's old points: it waits in the
+  // sidecar like a first draft's, and propose writes it with the new points.
+  const moved = declared !== undefined && bustPointsMoved(row.landmarks, declared);
   const fields: ShapeField[] = [];
   const pending: PendingBustShape['fields'] = {};
   for (const key of SHAPE_KEYS) {
@@ -308,8 +322,10 @@ function checkRow(row: ChestRow, parts: PartsFile | null, config: CharacterConfi
     const spelled = row.shape[key];
     // No contour.bust yet: the field differs from the default, so the act spells it. It is left pending in the
     // sidecar for propose --write-config to write with the three points (shape fields alone make no contour.bust).
-    if (declared === undefined) {
-      if (spelled !== undefined) pending[key] = spelled;
+    // Points moved (issue #1443): the same, and a field the act leaves out where the config declares another value
+    // is pending as the default's value, since the record holds values and the act's shape is the default there.
+    if (declared === undefined || moved) {
+      pending[key] = spelled ?? SHAPE_DEFAULTS[key];
       continue;
     }
     if (writeConfig) {
@@ -325,14 +341,14 @@ function checkRow(row: ChestRow, parts: PartsFile | null, config: CharacterConfi
   // Issue #1441: the points against the shape propose will check them with, so this command refuses what propose
   // refuses. The config after this command: the act's fields with --write-config, else the declared ones. A cleavage
   // the act leaves out is derived by propose from a midline this command does not have, so it is checked there.
-  const after = declared === undefined ? undefined : writeConfig ? { ...row.shape } : { ...declared };
+  const after = declared === undefined ? undefined : writeConfig && !moved ? { ...row.shape } : { ...declared };
   const shape = effectiveBustShape(after, pending);
   const { apex_r, apex_l, cleavage } = row.landmarks;
   if (cleavage !== undefined && typeof shape.alpha.value === 'number' && typeof shape.clearance.value === 'number') {
     const detail = bustClearanceDetail({ apex_r, apex_l, cleavage }, shape.alpha.value, shape.clearance.value);
     if (detail !== null) problems.push({ code: 'CONFIG_BUST_CLEARANCE', object: `${at}.edit.bust`, detail: `${detail}; ${bustShapeClause(shape)}` });
   }
-  return { fields, pending };
+  return { fields, pending, moved };
 }
 
 /** A path's device and inode, or null when nothing is there. */
@@ -418,6 +434,9 @@ export interface BustLandmarksPlan {
   texts: readonly [string, string];
   /** With `writeConfig`: the act's shape fields that differ from the config's `contour.bust`; null when none differs. */
   configPatch: ConfigWritePatch | null;
+  /** Issue #1443: the config declares `contour.bust` and the act moves its points ({@link bustPointsMoved}), so a
+   * differing shape is pending in the record and the config is not written. */
+  moved: boolean;
 }
 
 /**
@@ -434,7 +453,7 @@ export function planBustLandmarks(input: { act: string; parts: string; config: s
   const parts = collect(() => readParts(join(partsDir, 'parts.json')), problems);
   const config = collect(() => loadConfig(configPath), problems);
   const row = act === null ? null : oneRow(act.rows, problems);
-  const { fields, pending } = row === null ? { fields: [], pending: {} } : checkRow(row, parts, config, input.writeConfig === true, problems);
+  const { fields, pending, moved } = row === null ? { fields: [], pending: {}, moved: false } : checkRow(row, parts, config, input.writeConfig === true, problems);
   if (problems.length > 0 || act === null || row === null || typeof actBytes === 'string') throw new PartsError(problems);
   const text = bustLandmarksText(row.landmarks);
   const provenance: BustLandmarksProvenance = {
@@ -450,6 +469,7 @@ export function planBustLandmarks(input: { act: string; parts: string; config: s
     landmarks: row.landmarks, provenance, out, provenancePath: out + BUST_LANDMARKS_PROVENANCE_SUFFIX,
     texts: [text, JSON.stringify(provenance, null, 2) + '\n'],
     configPatch: fields.length === 0 ? null : { kind: 'bust-shape', part: row.slot, fields },
+    moved,
   };
 }
 

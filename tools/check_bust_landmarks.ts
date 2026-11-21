@@ -150,7 +150,9 @@ export function runBustLandmarkChecks(dir: string, say: (name: string, pass: boo
   };
   pendingIn('A_TUNED_ALPHA_WITHOUT_CONTOUR_BUST_IS_PENDING', act([row({}, { apex_r: [75, 125], apex_l: [125, 125], alpha: 0.3 })]), { alpha: 0.3 });
   pendingIn('A_TUNED_BONE_WITHOUT_CONTOUR_BUST_IS_PENDING', act([row({}, { apex_r: [75, 125], apex_l: [125, 125], bone_r: 'chest' })]), { bone_r: 'chest' });
-  refused('SHAPE_ABSENT_AGAINST_A_DECLARED_ALPHA', act([row()]), 'BUST_LANDMARKS_SHAPE', 'value.chestLandmarks[0].edit.bust.alpha', bustConfig);
+  // Issue #1443: the shape refusals hold for an act at the config's own points; moved points leave the shape pending.
+  const declaredPoints = { apex_r: [70, 120], apex_l: [130, 120], cleavage: [100, 121] };
+  refused('SHAPE_ABSENT_AGAINST_A_DECLARED_ALPHA', act([row({}, declaredPoints)]), 'BUST_LANDMARKS_SHAPE', 'value.chestLandmarks[0].edit.bust.alpha', bustConfig);
   const accepted = (name: string, actValue: unknown, config: string): void => {
     const a = writeJson(`act-${name}.json`, actValue);
     const o = join(dir, 'out', `${name}.json`);
@@ -165,7 +167,7 @@ export function runBustLandmarkChecks(dir: string, say: (name: string, pass: boo
   refused('OUT_OVER_THE_ACT', actPath, 'BUST_LANDMARKS_OUT', '--out', noBustConfig, actPath);
   refused('OUT_OVER_THE_CONFIG', act([row()]), 'BUST_LANDMARKS_OUT', '--out', noBustConfig, noBustConfig);
   // Every problem is collected and thrown once.
-  const many = writeJson('act-many.json', act([row({ attachment: 'other', source: { hash: hex('a'), frame: { width: 1, height: 1 } } }, { apex_r: [75, 125], apex_l: [125, 125], alpha: 0.3, spacing: 7 })]));
+  const many = writeJson('act-many.json', act([row({ attachment: 'other', source: { hash: hex('a'), frame: { width: 1, height: 1 } } }, { ...declaredPoints, alpha: 0.3, spacing: 7 })]));
   let codes: string[] = [];
   try { bustLandmarksFromAct({ act: many, parts: partsDir, config: bustConfig, out: join(dir, 'out', 'many.json') }); } catch (error) { if (error instanceof PartsError) codes = error.problems.map(p => p.code); }
   say('EVERY_PROBLEM_IN_ONE_REFUSAL', codes.join(',') === 'BUST_LANDMARKS_FRAME,BUST_LANDMARKS_SLOT,BUST_LANDMARKS_SHAPE', codes.join(',') || 'no refusal');

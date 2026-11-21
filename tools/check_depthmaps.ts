@@ -12,6 +12,7 @@ import { applyDepth, bindDepthMap, parseDepthRecipe, prepareDepth } from '../src
 import { depthImageReference, readParts, writeParts } from '../src/parts.ts';
 import { assemblyConfigChanges, assemblyConfigReading } from '../src/assembly-reading.ts';
 import { assembleStage, readRigInputs } from '../src/build.ts';
+import { buildRig } from '../src/rig.ts';
 import { depthReading } from '../src/depthsheets.ts';
 import { type EditedPartReceipt } from '../src/editedparts.ts';
 import { scratchConfig } from '../src/meshdraft.ts';
@@ -659,6 +660,131 @@ export function runDepthMapChecks(dir: string, say: Say): void {
   const absoluteOut = join(dir, 'absolute-requirements-out'); applyDepth({ ...args, rigConfig: absoluteConfig, out: absoluteOut });
   say('DMP37_ABSOLUTE_REQUIREMENTS_REBASE_TO_THE_SAME_FILE', readRigInputs(join(absoluteOut, 'config.json'), absoluteOut).cfg.requirements !== undefined && readFileSync(join(absoluteOut, (JSON.parse(readFileSync(join(absoluteOut, 'config.json'), 'utf8')) as { requirements: string }).requirements)).equals(readFileSync(requirementsPath)), 'positive absolute input reuses the same real requirements reader and bytes');
   runDepthRelocationChecks(join(dir, 'relocation'), say);
+  runDepthGroupSelectionChecks(join(dir, 'group-selection'), say);
+}
+
+/** #1449: `depth-apply --groups` applies a recorded subset of one prepared recipe's groups. */
+export function runDepthGroupSelectionChecks(dir: string, say: Say): void {
+  const disk = (n: number): ReturnType<typeof newRaster> => {
+    const r = newRaster(n, n), c = (n - 1) / 2;
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) r.data.set([200, 120, 80, (x - c) ** 2 + (y - c) ** 2 <= (c - 2) ** 2 ? 255 : 0], (y * n + x) * 4);
+    return r;
+  };
+  // The fixture's maps carry no binding receipt; the legacy WARN is DMP1284's subject, not this one's.
+  const apply = (input: Parameters<typeof applyDepth>[0]): Obj => applyDepth(input, () => {});
+  const art = disk(32), ramp = Array.from({ length: 32 * 32 }, (_, i) => i % 32 + 2 * Math.floor(i / 32));
+  const source = join(dir, 'source'); mkdirSync(join(source, 'parts'), { recursive: true });
+  const pf = rigParts(); pf.rig_size = [100, 100];
+  pf.parts = [{ ...pf.parts[0], name: 'face', from: 'full:face', x: 20, y: 6, w: 32, h: 32, opaque_px: alphaSupport(art).reduce((s, v) => s + v, 0) },
+    { ...pf.parts[0], name: 'torso', from: 'full:topwear', x: 20, y: 44, w: 32, h: 32, opaque_px: alphaSupport(art).reduce((s, v) => s + v, 0) }];
+  // The torso carries an assembled sheet, so a left-out part's earlier sheet is visible in the output.
+  const priorSheet = newRaster(32, 32); for (let i = 0; i < 32 * 32; i++) priorSheet.data.set([128, 128, 128, 255], i * 4);
+  pf.parts[1].depth = { image: 'torso_depth.png', near: 'white', zScale: 40, sources: [{ from: 'full:topwear', image: 'torso_prior.png', sha256: sha256(encodePngBytes(priorSheet)), crop: [0, 0, 32, 32], reading: depthReading(priorSheet, art, null) }] };
+  writeParts(join(source, 'parts.json'), pf); writePng(join(source, 'parts/face.png'), art); writePng(join(source, 'parts/torso.png'), art); writePng(join(source, 'parts/torso_depth.png'), priorSheet);
+  const bodyTurn = { pivot: 18, roles: { torso: 'surface' } };
+  const base = { key: 'fixture', assemble: { rig_scale: .5, plan: [['torso', 'full', 'topwear'], ['face', 'full', 'face']] },
+    bones: [{ name: 'hip', parent: 'root', at: [36, 90] }, { name: 'chest', parent: 'hip', at: [36, 60] }, { name: 'head', parent: 'chest', at: [36, 22] }],
+    meshes: {}, regions: { face: 'head', torso: 'chest' }, motion: { duration: 1, tracks: [] } };
+  const headConfig = join(dir, 'head-config.json'), bodyConfig = join(dir, 'body-config.json'), bodyOnlyConfig = join(dir, 'body-only-config.json');
+  json(headConfig, { ...base, turn: { pivot: 30, roles: { face: 'surface' } } });
+  json(bodyConfig, { ...base, turn: { pivot: 30, roles: { face: 'surface' }, body: bodyTurn } });
+  json(bodyOnlyConfig, { ...base, turn: { body: bodyTurn } });
+
+  const recipe = { spec: 'rig-parts-depth/1', prepare: { longSide: 32, paddingFraction: 0, padding: 0 },
+    groups: { head: { near: 'white', zScale: 100, pivot: 30 }, body: { near: 'white', zScale: 40, pivot: 18 } },
+    parts: { face: { map: 'face.json', source: 'depth', frame: 'part', group: 'head', median: 50, relief: 10 },
+      torso: { map: 'torso.json', source: 'depth', frame: 'part', group: 'body', median: 20, relief: 6 } }, clear: [] };
+  const recipePath = join(dir, 'depth.json'); json(recipePath, recipe);
+  json(join(dir, 'face.json'), { spec: 'rig-parts-map/1', width: 32, height: 32, channels: 1, data: ramp });
+  const prepared = join(dir, 'prepared'); prepareDepth({ parts: source, config: recipePath, out: prepared });
+  const manifest = join(prepared, 'manifest.json'), manifestBytes = readFileSync(manifest);
+  const args = { parts: source, manifest, config: recipePath, rigConfig: headConfig };
+  const report = (out: string): Obj => JSON.parse(readFileSync(join(out, 'depth-report.json'), 'utf8')) as Obj;
+  const rig = (out: string): { bones: string[]; animations: string[] } => {
+    const read = readRigInputs(join(out, 'config.json'), out), built = buildRig(read.cfg, read.parts, read.images);
+    return { bones: built.rig.bones.map(b => b.name), animations: Object.keys(built.motion.animations) };
+  };
+  // A refused run or a missing output fails the control by name; it never aborts the suite.
+  const check = (name: string, fn: () => [boolean, string]): void => {
+    let result: [boolean, string];
+    try { result = fn(); } catch (e) { result = [false, `threw ${e instanceof PartsError ? e.problems.map(p => `${p.code}: ${p.object}`).join('; ') : String(e).split('\n')[0]}`]; }
+    say(name, result[0], result[1]);
+  };
+  // The torso map does not exist yet: a head-only answer needs no body inference.
+  const headOut = join(dir, 'head'), headOut2 = join(dir, 'head2');
+  const headCodes = codes(() => { apply({ ...args, out: headOut, groups: ['head'] }); apply({ ...args, out: headOut2, groups: ['head'] }); });
+  check('DGS01_HEAD_ONLY_APPLIES_THE_HEAD_PARTS_AND_DROPS_THE_LEFT_OUT_SHEET', () => {
+    const headParts = readParts(join(headOut, 'parts.json')), rows = (report(headOut).parts as Obj[]).map(r => r.part);
+    return [headCodes.length === 0 && existsSync(join(headOut, 'parts/face_depth.png')) && !existsSync(join(headOut, 'parts/torso_depth.png')) && !existsSync(join(dir, 'torso.json')) &&
+      headParts.parts.find(p => p.name === 'face')?.depth?.image === 'face_depth.png' && headParts.parts.find(p => p.name === 'torso')?.depth === undefined && JSON.stringify(rows) === '["face"]',
+    JSON.stringify({ refusals: headCodes, files: Object.keys(files(headOut)).sort(), rows, torsoDepth: headParts.parts.find(p => p.name === 'torso')?.depth ?? null })];
+  });
+  check('DGS02_HEAD_ONLY_RIG_BUILDS_NO_BODY_DIAL_AND_NO_BODY_TURN', () => {
+    const headRig = rig(headOut);
+    return [headRig.bones.includes('yaw_dial') && headRig.animations.includes('turn') && !headRig.bones.includes('body_yaw_dial') && !headRig.bones.includes('bodyshift') && !headRig.animations.includes('body_turn'), JSON.stringify(headRig)];
+  });
+  check('DGS03_HEAD_ONLY_RUNS_TWICE_TO_THE_SAME_BYTES', () => [headCodes.length === 0 && JSON.stringify(files(headOut)) === JSON.stringify(files(headOut2)), `${Object.keys(files(headOut)).length} files compared`]);
+  const bodyNoTurnCodes = codes(() => apply({ ...args, out: join(dir, 'body-no-turn-body'), groups: ['body'] }));
+  const noFlagCodes = codes(() => apply({ ...args, out: join(dir, 'no-flag-head-config') }));
+  say('DGS04_TURN_BODY_IS_REQUIRED_ONLY_WHEN_THE_BODY_GROUP_APPLIES',
+    noFlagCodes.join() === 'DEPTH_RECIPE: config.turn.body' && !existsSync(join(dir, 'no-flag-head-config')) &&
+    bodyNoTurnCodes.join() === 'DEPTH_GROUP_LEFT_OUT: config.turn.roles,DEPTH_RECIPE: config.turn.body' && !existsSync(join(dir, 'body-no-turn-body')),
+    `same head-only config: no --groups -> ${noFlagCodes.join('; ')}; --groups head -> green (DGS01); --groups body without config.turn.body -> ${bodyNoTurnCodes.join('; ')}`);
+  json(join(dir, 'torso.json'), { spec: 'rig-parts-map/1', width: 32, height: 32, channels: 1, data: ramp.map(v => -v) });
+  const fullOut = join(dir, 'full'), bothOut = join(dir, 'both');
+  const fullCodes = codes(() => { apply({ ...args, rigConfig: bodyConfig, out: fullOut }); apply({ ...args, rigConfig: bodyConfig, out: bothOut, groups: ['body', 'head'] }); });
+  const keys = (r: Obj): string => Object.keys(r).join(',');
+  const legacyKeys = 'spec,partsSha256,recipeSha256,manifestSha256,rigConfigSha256,alpha,normalization,extension,cleared,parts';
+  check('DGS05_FULL_APPLY_POSITIVE_CONTROL_BUILDS_THE_BODY_TURN_AND_WRITES_NO_SELECTION', () => {
+    const fullRig = rig(fullOut);
+    return [fullCodes.length === 0 && fullRig.bones.includes('body_yaw_dial') && fullRig.animations.includes('body_turn') && keys(report(fullOut)) === legacyKeys &&
+      readParts(join(fullOut, 'parts.json')).parts.find(p => p.name === 'torso')?.depth?.sources[0].image === 'torso.json', JSON.stringify({ refusals: fullCodes, rig: fullRig, keys: keys(report(fullOut)) })];
+  });
+  const selectionKeys = legacyKeys.replace('cleared,parts', 'cleared,selection,parts');
+  check('DGS06_REPORT_RECORDS_THE_SELECTION_AND_KEEPS_THE_RECIPE_AND_MANIFEST_BINDING', () => {
+    const headRead = report(headOut), fullRead = report(fullOut), bothRead = report(bothOut);
+    return [keys(headRead) === selectionKeys && JSON.stringify(headRead.selection) === '{"groups":["head"],"leftOut":["torso"]}' &&
+      headRead.recipeSha256 === fullRead.recipeSha256 && headRead.recipeSha256 === sha256(pretty(parseDepthRecipe(recipe))) &&
+      headRead.manifestSha256 === fullRead.manifestSha256 && headRead.manifestSha256 === sha256(manifestBytes) && headRead.partsSha256 === fullRead.partsSha256 &&
+      readFileSync(manifest).equals(manifestBytes) && JSON.stringify(bothRead.selection) === '{"groups":["head","body"],"leftOut":[]}',
+    JSON.stringify({ keys: keys(headRead), selection: headRead.selection, both: bothRead.selection })];
+  });
+  check('DGS07_EVERY_GROUP_NAMED_WRITES_THE_FULL_APPLY_BYTES_BUT_THE_REPORT', () => {
+    const bothFiles = files(bothOut), fullFiles = files(fullOut), differ = Object.keys({ ...bothFiles, ...fullFiles }).filter(k => bothFiles[k] !== fullFiles[k]);
+    return [JSON.stringify(differ) === '["depth-report.json"]', JSON.stringify(differ)];
+  });
+  const blocked = join(dir, 'blocked'), problems = (groups: string[], rigConfig = headConfig): string[] => {
+    try { apply({ ...args, rigConfig, out: blocked, groups }); return []; }
+    catch (e) { if (!(e instanceof PartsError)) throw e; return e.problems.map(p => `${p.code}: ${p.object} — ${p.detail}`); }
+  };
+  const has = 'the recipe\'s groups are "head", "body"';
+  const listed = problems(['head', 'tail', 'head', 'head', '']);
+  say('DGS08_UNKNOWN_REPEATED_AND_EMPTY_NAMES_REFUSED_TOGETHER_BEFORE_OUTPUT',
+    JSON.stringify(listed) === JSON.stringify([
+      `DEPTH_GROUP_SELECTION: depth-apply --groups — found "tail", which the recipe does not declare; required a group the recipe declares; ${has}`,
+      `DEPTH_GROUP_SELECTION: depth-apply --groups — found "head" more than once; required each group named once; ${has}`,
+      `DEPTH_GROUP_SELECTION: depth-apply --groups — found "", which the recipe does not declare; required a group the recipe declares; ${has}`]) && !existsSync(blocked),
+    JSON.stringify(listed));
+  const empty = problems([]);
+  say('DGS09_EMPTY_LIST_REFUSED', JSON.stringify(empty) === JSON.stringify([`DEPTH_GROUP_SELECTION: depth-apply --groups — found an empty list; required one or more group names, comma-separated; ${has}`]) && !existsSync(blocked), JSON.stringify(empty));
+  const legacyConfig = join(dir, 'legacy-head-config.json'); json(legacyConfig, { ...base, turn: { pivot: 30, depths: { face: 20, torso: 10 }, body: bodyTurn } });
+  const leftBody = problems(['head'], bodyConfig), leftHead = problems(['body'], bodyConfig), leftLegacy = problems(['body'], legacyConfig);
+  say('DGS10_A_LEFT_OUT_GROUP_DECLARED_TO_TURN_IS_REFUSED',
+    JSON.stringify(leftBody) === JSON.stringify(['DEPTH_GROUP_LEFT_OUT: config.turn.body — declares the body turn, and depth-apply --groups head leaves the recipe\'s body group out; required no config.turn.body in the rig config when the body group is left out, or body named in --groups']) &&
+    JSON.stringify(leftHead) === JSON.stringify(['DEPTH_GROUP_LEFT_OUT: config.turn.roles — declares the head turn, and depth-apply --groups body leaves the recipe\'s head group out; required no config.turn.roles in the rig config when the head group is left out, or head named in --groups']) &&
+    JSON.stringify(leftLegacy) === JSON.stringify(['DEPTH_GROUP_LEFT_OUT: config.turn.depths — declares the head turn, and depth-apply --groups body leaves the recipe\'s head group out; required no config.turn.depths in the rig config when the head group is left out, or head named in --groups']) && !existsSync(blocked),
+    JSON.stringify([...leftBody, ...leftHead, ...leftLegacy]));
+  const bodyOnlyCodes = codes(() => apply({ ...args, rigConfig: bodyOnlyConfig, out: join(dir, 'body-only'), groups: ['body'] }));
+  check('DGS11_BODY_ONLY_POSITIVE_CONTROL_APPLIES_THE_BODY_GROUP', () => [bodyOnlyCodes.length === 0 &&
+    JSON.stringify(report(join(dir, 'body-only')).selection) === '{"groups":["body"],"leftOut":["face"]}' && !existsSync(join(dir, 'body-only/parts/face_depth.png')),
+    JSON.stringify({ refusals: bodyOnlyCodes })]);
+  const cli = join(import.meta.dir, '../cli.ts');
+  const run = (out: string, groups: string) => spawnSync(process.execPath, [cli, 'depth-apply', '--parts', source, '--manifest', manifest, '--config', recipePath, '--rig-config', headConfig, '--out', out, '--groups', groups], { encoding: 'utf8' });
+  const green = run(join(dir, 'cli-head'), 'head'), refused = run(join(dir, 'cli-empty'), '');
+  check('DGS12_CLI_GROUPS_FLAG_APPLIES_AND_AN_EMPTY_VALUE_IS_REFUSED', () => [
+    green.status === 0 && green.stdout.includes('depth-apply: applied groups head; left out torso, without a depth sheet') &&
+    JSON.stringify(files(join(dir, 'cli-head'))) === JSON.stringify(files(headOut)) && refused.status === 1 && `${refused.stdout}${refused.stderr}`.includes('DEPTH_GROUP_SELECTION') && !existsSync(join(dir, 'cli-empty')),
+    `head exit ${green.status}; empty exit ${refused.status}; ${(refused.stdout + refused.stderr).split('\n').find(l => l.includes('DEPTH_GROUP_SELECTION')) ?? 'no refusal line'}`]);
 }
 
 if (import.meta.main) {

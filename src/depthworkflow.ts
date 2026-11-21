@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { refuseStaleAssembly } from './assembly-reading.ts';
+import { PartsError, type Problem } from './errors.ts';
 import { loadConfigAndAnimations, parseConfig } from './config.ts';
 import { relocateConfigReferences } from './configrelocation.ts';
 import { depthReading, readSourceDepth } from './depthsheets.ts';
@@ -213,8 +214,25 @@ function mapBinding(mapPath: string, bytes: Uint8Array, part: PreparedPart): str
   if (r.inputSha256 !== part.inputSha256) return refuse(`inference input sha found ${r.inputSha256}; required ${part.inputSha256}`);
   return undefined;
 }
-export function applyDepth(input: { parts: string; manifest: string; config: string; rigConfig: string; out: string }, log: (line: string) => void = console.warn): Obj {
-  const recipe = parseDepthRecipe(readJson(input.config)), expected = preparedParts(input.parts, recipe);
+/** `depth-apply --groups` (#1449): the recipe's groups the run applies, in the recipe's declaration order.
+ * Every problem in the list is collected and refused at once; absent, every group applies. */
+function groupSelection(recipe: DepthRecipe, groups: readonly string[] | undefined): string[] | undefined {
+  if (groups === undefined) return undefined;
+  const declared = Object.keys(recipe.groups), has = `the recipe's groups are ${declared.map(g => JSON.stringify(g)).join(', ')}`;
+  const problems: Problem[] = [], seen = new Set<string>(), repeated = new Set<string>();
+  const refuse = (detail: string): void => { problems.push({ code: 'DEPTH_GROUP_SELECTION', object: 'depth-apply --groups', detail }); };
+  if (groups.length === 0) refuse(`found an empty list; required one or more group names, comma-separated; ${has}`);
+  for (const name of groups) {
+    if (seen.has(name)) { if (!repeated.has(name)) refuse(`found ${JSON.stringify(name)} more than once; required each group named once; ${has}`); repeated.add(name); continue; }
+    seen.add(name);
+    if (!declared.includes(name)) refuse(`found ${JSON.stringify(name)}, which the recipe does not declare; required a group the recipe declares; ${has}`);
+  }
+  if (problems.length) throw new PartsError(problems);
+  return declared.filter(g => seen.has(g));
+}
+export function applyDepth(input: { parts: string; manifest: string; config: string; rigConfig: string; out: string; groups?: readonly string[] }, log: (line: string) => void = console.warn): Obj {
+  const recipe = parseDepthRecipe(readJson(input.config)), selection = groupSelection(recipe, input.groups), applied = (group: string): boolean => selection === undefined || selection.includes(group);
+  const expected = preparedParts(input.parts, recipe);
   const supplied = readJson(input.manifest);
   if (text(supplied) !== text(expected.manifest)) fail('DEPTH_INPUT_BINDING', input.manifest, 'does not match the recipe, parts.json, art hashes, crop or padding; run depth-prepare again for these exact inputs');
   for (const p of expected.manifest.parts) {
@@ -223,11 +241,23 @@ export function applyDepth(input: { parts: string; manifest: string; config: str
   }
   emptyOutput(input.out, [input.parts, input.config, input.manifest, input.rigConfig, ...Object.values(recipe.parts).flatMap(p => { const map = resolve(dirname(input.config), p.map); return [map, map + '.binding.json']; })]);
   const rawParts = object(readJson(join(input.parts, 'parts.json')), 'parts.json'), file = readParts(join(input.parts, 'parts.json'));
-  for (const p of file.parts) if (Object.hasOwn(recipe.parts, p.name) && p.provenance?.depth?.kind === 'authored-unit') fail('DEPTH_AUTHORED_UNIT_CONFLICT', `part "${p.name}"`, 'has provenance.depth.kind "authored-unit"; a transported scalar reference cannot coexist with authored unit depth — retain the unit declaration or supply an explicitly reassembled scalar-compatible input; no automatic transition is made');
+  for (const p of file.parts) if (Object.hasOwn(recipe.parts, p.name) && applied(recipe.parts[p.name].group) && p.provenance?.depth?.kind === 'authored-unit') fail('DEPTH_AUTHORED_UNIT_CONFLICT', `part "${p.name}"`, 'has provenance.depth.kind "authored-unit"; a transported scalar reference cannot coexist with authored unit depth — retain the unit declaration or supply an explicitly reassembled scalar-compatible input; no automatic transition is made');
   const { config } = loadConfigAndAnimations(input.rigConfig);
   refuseStaleAssembly(input.rigConfig, file, config);
   const raw = object(readJson(input.rigConfig), 'rig config'), turn = object(raw.turn, 'config.turn');
+  // A group left out must not turn: the rig builds a group's turn from its config block, not from its sheets.
+  // An applied body group still requires config.turn.body; every such problem is refused at once.
+  const turnProblems: Problem[] = [];
+  for (const name of Object.keys(recipe.groups)) {
+    if (applied(name)) {
+      if (name !== 'head' && (turn.body === null || typeof turn.body !== 'object' || Array.isArray(turn.body))) turnProblems.push({ code: 'DEPTH_RECIPE', object: 'config.turn.body', detail: 'requires an object with the documented fields' });
+      continue;
+    }
+    for (const field of name === 'head' ? ['roles', 'depths'] : ['body']) if (turn[field] !== undefined) turnProblems.push({ code: 'DEPTH_GROUP_LEFT_OUT', object: `config.turn.${field}`, detail: `declares the ${name} turn, and depth-apply --groups ${(selection as string[]).join(',')} leaves the recipe's ${name} group out; required no config.turn.${field} in the rig config when the ${name} group is left out, or ${name} named in --groups` });
+  }
+  if (turnProblems.length) throw new PartsError(turnProblems);
   for (const [name, group] of Object.entries(recipe.groups)) {
+    if (!applied(name)) continue;
     const target = name === 'head' ? turn : object(turn.body, 'config.turn.body'); target.pivot = group.pivot;
     if (group.unitDepths !== undefined) target.unitDepths = group.unitDepths;
   }
@@ -252,6 +282,8 @@ export function applyDepth(input: { parts: string; manifest: string; config: str
     const name = p.name, bytes = readFileSync(join(input.parts, partImageReference(p).path)), art = decodePngBytes(bytes, name), rec = recs.find(r => r.name === name) as Obj;
     writes.set(`${name}.png`, bytes);
     const declaration = Object.hasOwn(recipe.parts, name) ? recipe.parts[name] : undefined;
+    // A left-out group's part gets no new sheet, and any sheet it carried is dropped, never retained stale.
+    if (declaration !== undefined && !applied(declaration.group)) { if (p.depth !== undefined) retained.delete(depthImageReference(p.depth).path); delete rec.depth; continue; }
     if (declaration === undefined) {
       if (recipe.clear.includes(name)) { if (p.depth !== undefined) retained.delete(depthImageReference(p.depth).path); delete rec.depth; }
       else if (p.depth !== undefined) { const depthPath = join(input.parts, depthImageReference(p.depth).path); readSourceDepth(depthPath, art, null); writes.set(p.depth.image, readFileSync(depthPath)); }
@@ -285,13 +317,15 @@ export function applyDepth(input: { parts: string; manifest: string; config: str
   }
   // A replacement must share near/zScale with every retained part in its actual group.
   for (const [name, g] of Object.entries(recipe.groups)) {
+    if (!applied(name)) continue;
     const target = name === 'head' ? turn : object(turn.body, 'config.turn.body'), roles = object(target.roles, `config.turn.${name}.roles`);
     for (const rec of recs) if (Object.hasOwn(roles, String(rec.name)) && rec.depth !== undefined) {
       const d = rec.depth as Obj;
       if (d.near !== g.near || d.zScale !== g.zScale) fail('DEPTH_GROUP_BINDING', String(rec.name), `retained ${name} sheet near=${String(d.near)}, zScale=${String(d.zScale)}; declared group requires ${g.near}, ${g.zScale}; replace or explicitly clear that sheet`);
     }
   }
-  const report = { spec: 'rig-parts-depth-report/1', partsSha256: expected.manifest.partsSha256, recipeSha256: expected.manifest.recipeSha256, manifestSha256: hash(readFileSync(input.manifest)), rigConfigSha256: hash(readFileSync(input.rigConfig)), alpha: 128, normalization: 'median, linear p5..p95', extension: 'nearest alpha>=128, row-major ties', cleared: recipe.clear, parts: rows };
+  const report = { spec: 'rig-parts-depth-report/1', partsSha256: expected.manifest.partsSha256, recipeSha256: expected.manifest.recipeSha256, manifestSha256: hash(readFileSync(input.manifest)), rigConfigSha256: hash(readFileSync(input.rigConfig)), alpha: 128, normalization: 'median, linear p5..p95', extension: 'nearest alpha>=128, row-major ties', cleared: recipe.clear,
+    ...(selection === undefined ? {} : { selection: { groups: selection, leftOut: file.parts.filter(p => Object.hasOwn(recipe.parts, p.name) && !applied(recipe.parts[p.name].group)).map(p => p.name) } }), parts: rows };
   mkdirSync(join(input.out, 'parts'), { recursive: true });
   for (const [file, bytes] of retained) {
     if (['parts.json', 'config.json', 'depth-report.json'].includes(file)) continue;
