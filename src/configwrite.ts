@@ -42,6 +42,30 @@ export type ConfigWritePatch =
 export type BustShapeKey = (typeof BUST_SHAPE_FIELDS)[number];
 /** A reviewed shape `bust-landmarks` left pending in its sidecar (issue #1382): `propose --write-config` writes it
  * onto the drafted chest carrier's `contour.bust`, after the three points, in the shorthand's key order. */
+/**
+ * The parts `--only-missing` (issue #671) leaves alone, each with what attaches it in the destination config: a
+ * `meshes` or `regions` entry, a limb's segment source, or an assemble patch. The `proposal-missing` write skips
+ * exactly these, and `propose` reads the same map (issue #1441's review) so a carrier it skips is not checked
+ * against the shape its config entry declares.
+ */
+export function onlyMissingAttachments(config: unknown): Map<string, string> {
+  const attachments = new Map<string, string>();
+  if (!object(config)) return attachments;
+  for (const section of ['meshes', 'regions'] as const) {
+    const entries = config[section];
+    if (object(entries)) for (const part of Object.keys(entries)) attachments.set(part, field(`config.${section}`, part));
+  }
+  if (object(config.limbs)) for (const [limb, spec] of Object.entries(config.limbs)) {
+    if (object(spec) && Array.isArray(spec.segments)) for (const segment of spec.segments) {
+      if (object(segment) && typeof segment.from === 'string') attachments.set(segment.from, `${field('config.limbs', limb)} (source cut into its segment parts)`);
+    }
+  }
+  if (object(config.assemble) && Array.isArray(config.assemble.patches)) for (const patch of config.assemble.patches) {
+    if (object(patch) && typeof patch.name === 'string') attachments.set(patch.name, 'config.assemble.patches (a patch is always a region)');
+  }
+  return attachments;
+}
+
 export interface PendingBustShape { part: string; fields: Partial<Record<BustShapeKey, number | string>> }
 export interface ConfigWriteChange {
   path: string;
@@ -204,19 +228,10 @@ export function mergeConfigProposal(raw: unknown, patch: ConfigWritePatch, recei
     case 'proposal-missing': {
       // Read attachment ownership from the destination, even without --keypoints. A limb's source is consumed;
       // the loader requires regions for its segment parts instead. Patches are always regions.
-      const attachments = new Map<string, string>();
       for (const section of ['meshes', 'regions'] as const) {
         if (config[section] !== undefined && !object(config[section])) return refuse(`config.${section}`, 'is not an object; an object of part entries is required before an entry is added to it');
-        if (object(config[section])) for (const part of Object.keys(config[section])) attachments.set(part, field(`config.${section}`, part));
       }
-      if (object(config.limbs)) for (const [limb, spec] of Object.entries(config.limbs)) {
-        if (object(spec) && Array.isArray(spec.segments)) for (const segment of spec.segments) {
-          if (object(segment) && typeof segment.from === 'string') attachments.set(segment.from, `${field('config.limbs', limb)} (source cut into its segment parts)`);
-        }
-      }
-      if (object(config.assemble) && Array.isArray(config.assemble.patches)) for (const patch of config.assemble.patches) {
-        if (object(patch) && typeof patch.name === 'string') attachments.set(patch.name, 'config.assemble.patches (a patch is always a region)');
-      }
+      const attachments = onlyMissingAttachments(config);
       // This mode appends diagnostics to the proposal's existing notes output, never to the destination config.
       const note = (part: string, why: string): void => {
         const line = `--only-missing: skipped part "${part}" — ${why}; no entry or plan row added`;

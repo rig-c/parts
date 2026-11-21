@@ -142,4 +142,28 @@ export function runBustMovedChecks(dir: string, say: (name: string, pass: boolea
   say('BPM08_EVERY_OTHER_PROPOSE_MODE_REFUSES_A_RECORD_THIS_PATH_MADE',
     modes.every(([, r, code]) => r.status === 1 && first(r).startsWith(`  FAIL  ${code}`)),
     modes.map(([what, r]) => `${what}: exit ${r.status} ${first(r).trim().slice(0, 70)}`).join(' | '));
+
+  // #1444's review: --only-missing skips the carrier the config attaches, so the draft's points are not written and the
+  // declared shape is not checked against them. Declared [8, 46] / [56, 46] / [32, 46], clearance 20: |apex - cleavage|
+  // = 24, R = 4, r = 1 (valid). Draft [20, 46] / [44, 46] / [32, 46]: |apex - cleavage| = 12, with clearance 20 R = -8
+  // (refused), with the default 3.8 R = 8, 16 < 24, r = 2 (the draft's own check passes).
+  const skippedCfg = (() => {
+    const c = JSON.parse(ordinary) as { meshes: Record<string, Mesh>; bones: Json[] };
+    c.meshes.shirt.contour = { ...c.meshes.shirt.contour, bust: { apex_r: [8, 46], apex_l: [56, 46], cleavage: [32, 46], clearance: 20 } };
+    c.bones = [...c.bones, { name: 'boob_r', parent: 'chest', at: [8, 46] }, { name: 'boob_l', parent: 'chest', at: [56, 46] }];
+    return c;
+  })();
+  const draftPoints = write(join(work, `skipped-landmarks-${++n}.json`), { apex_r: [20, 46], apex_l: [44, 46], cleavage: [32, 46] });
+  const onlyMissingCfg = write(join(work, `skipped-config-${++n}.json`), skippedCfg);
+  const onlyBefore = read(onlyMissingCfg);
+  const skipped = commandTwo(onlyMissingCfg, draftPoints, '--only-missing');
+  const fullCfg = write(join(work, `skipped-config-${++n}.json`), skippedCfg);
+  const fullBefore = read(fullCfg);
+  const full = commandTwo(fullCfg, draftPoints);
+  say('BPM09_ONLY_MISSING_CHECKS_A_SKIPPED_CARRIER_AS_DRAFTED',
+    skipped.status === 0 && read(onlyMissingCfg) === onlyBefore &&
+      full.status === 1 && read(fullCfg) === fullBefore && first(full).startsWith('  FAIL  CONFIG_BUST_CLEARANCE: config.meshes.shirt.contour.bust.clearance — is 20 (giving R_r = -8, R_l = -8') &&
+      first(full).endsWith('; the shape checked: alpha 0.22 (the default), clearance 20 (the config) (see rig-parts guide CONFIG_BUST_CLEARANCE)'),
+    `--only-missing exit ${skipped.status}${skipped.status === 0 ? '' : `: ${first(skipped).trim().slice(0, 160)}`}, config ${read(onlyMissingCfg) === onlyBefore ? 'byte-unchanged' : 'CHANGED'} | without it exit ${full.status}: ${first(full).trim().slice(0, 110)} …${first(full).slice(first(full).indexOf('; the shape checked'))}`);
+
 }
