@@ -96,7 +96,7 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import type { Candidate, Piece, Viewport as RootCoverageViewport } from '@rig-c/core/render-shared';
 import { fillHoles } from './raster/morph.ts';
-import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, copyFileSync, cpSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { diagnosticSegment, diagnosticSiblings } from './outputpaths.ts';
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { measureRecomposite, type RecompositeFigures, recompositeRecord, scenePhrase, sourceInRig, figureSilhouette } from './assemble.ts';
@@ -4862,7 +4862,7 @@ export function motionSeamRequired(line: MotionSeamLine, rows: readonly MotionBa
   }
   const failed = problems.length - before;
   return { status: failed === 0 ? 'PASS' : 'FAIL', mode: 'gap-open', bar_px: 0, pairs: out, failed,
-    ...(cellEvidence.frames.length === 0 ? {} : { cells: { path: MOTION_CELLS_FILE, sha256: createHash('sha256').update(serializeCheckRows(cellEvidence)).digest('hex') } }) };
+    ...(cellEvidence.frames.length === 0 ? {} : { cells: { path: MOTION_CELLS_FILE, sha256: hashMotionSeamCellSidecar(cellEvidence) } }) };
 }
 
 /** The inline partition counts the same cells as the sidecar, including unresolved setup slots. */
@@ -4873,7 +4873,7 @@ function motionCellClasses(cells: readonly MotionOpenCell[]): MotionOpenFrame['c
 }
 
 /** Refuse broken evidence links and partitions rather than silently consuming partial evidence. */
-export function readMotionSeamCellSidecar(dir: string, required: MotionSeamRequired): MotionCellSidecar | null {
+export function readMotionSeamCellSidecar(dir: string, required: MotionSeamRequired, chunkBytes = 8 * 1024 * 1024): MotionCellSidecar | null {
   if (required.cells === undefined) return null;
   const bad = (object: string, detail: string): never => {
     refuseIfAny([{ code: 'FRAMES_SIDECAR', object, detail }]);
@@ -4882,53 +4882,53 @@ export function readMotionSeamCellSidecar(dir: string, required: MotionSeamRequi
   const reference = required.cells;
   if (reference.path !== MOTION_CELLS_FILE || !/^[a-f0-9]{64}$/.test(reference.sha256)) bad('SEAM_OVER_MOTION.required.cells', 'requires relative seam-cells.json path and a SHA-256 digest');
   const path = join(dir, reference.path);
-  let bytes: Buffer;
-  try { bytes = readFileSync(path); }
-  catch { return bad(path, 'referenced cell sidecar is missing or unreadable; unavailable is not zero'); }
-  const digest = createHash('sha256').update(bytes).digest('hex');
-  if (digest !== reference.sha256) bad(path, `SHA-256 is ${digest}; required ${reference.sha256}`);
-  let value: unknown;
-  try { value = JSON.parse(bytes.toString('utf8')) as unknown; }
-  catch { return bad(path, 'requires a JSON rig-parts-seam-cells/1 document'); }
-  if (!isRecord(value) || value.spec !== 'rig-parts-seam-cells/1' || !Array.isArray(value.frames)) return bad(path, 'requires rig-parts-seam-cells/1 frames');
+  // Streamed frame-by-frame scan: hashes file chunks without building one whole-file
+  // string, verifies the canonical rig-parts-seam-cells/1 frame layout, and summarizes
+  // each frame's cells as it streams through the file.
+  const summaries = scanMotionSeamCellSidecarFile(path, reference.sha256, bad, chunkBytes);
   const seen = new Set<number>();
   for (const pair of required.pairs) for (const frame of pair.open_frames ?? []) {
     const at = `${path} frames[${frame.cells_index}]`;
-    const read: unknown = value.frames[frame.cells_index];
-    if (!Number.isSafeInteger(frame.cells_index) || frame.cells_index < 0 || seen.has(frame.cells_index) || !isRecord(read) ||
+    const summary = Number.isSafeInteger(frame.cells_index) && frame.cells_index >= 0 ? summaries[frame.cells_index] : undefined;
+    const read = summary?.frame;
+    if (summary === undefined || read === undefined || seen.has(frame.cells_index) ||
         read.pair !== pair.pair || read.animation !== frame.animation || read.index !== frame.index || read.time !== frame.time || read.px !== frame.px || read.cell !== frame.cell ||
-        JSON.stringify(read.box) !== JSON.stringify(frame.box) || !Array.isArray(read.cells) || read.cells.length !== frame.px) {
+        JSON.stringify(read.box) !== JSON.stringify(frame.box) || summary.cellsLength !== frame.px) {
       bad(at, 'requires one matching pair-frame with cells.length === gapOpen px; unavailable is not zero');
       continue;
     }
     seen.add(frame.cells_index);
-    const classes = { figure: 0, background: 0, other: 0 };
-    for (const cell of read.cells) {
-      if (!isRecord(cell) || typeof cell.x !== 'number' || !Number.isFinite(cell.x) || typeof cell.y !== 'number' || !Number.isFinite(cell.y) ||
-          !(cell.setupTop === null || typeof cell.setupTop === 'string' && cell.setupTop.length > 0) ||
-          !(cell.setupUnder === null || typeof cell.setupUnder === 'string' && cell.setupUnder.length > 0) ||
-          !['figure', 'background', 'other'].includes(String(cell.class))) bad(at, 'requires finite world centres, setup names and figure/background/other classes');
-      else classes[cell.class as MotionOpenCell['class']]++;
+    if (!summary.cellsValid) {
+      bad(at, 'requires finite world centres, setup names and figure/background/other classes');
     }
+    const classes = summary.classes;
+    // Every cell in the sidecar frame was checked and tallied during the streamed
+    // scan before its cell array was replaced by an on-demand slice reader, so
+    // peak string length and retained heap stay bounded by a single frame.
     if (!frame.classes || !Object.values(frame.classes).every(n => Number.isSafeInteger(n) && n >= 0) ||
         frame.classes.figure + frame.classes.background + frame.classes.other !== frame.px ||
         frame.classes.figure !== classes.figure || frame.classes.background !== classes.background || frame.classes.other !== classes.other) {
       bad(at, `inline figure/background/other counts ${JSON.stringify(frame.classes)} must sum to gapOpen px ${frame.px} and match sidecar ${JSON.stringify(classes)}`);
     }
   }
-  if (seen.size !== value.frames.length) bad(path, `has ${value.frames.length} frame(s); inline rows reference ${seen.size} distinct frame(s)`);
+  if (seen.size !== summaries.length) {
+    bad(path, `has ${summaries.length} frame(s); inline rows reference ${seen.size} distinct frame(s)`);
+  }
   // Every cell and its pair/frame identity was checked above after the digest matched.
-  return value as unknown as MotionCellSidecar;
+  return {
+    spec: 'rig-parts-seam-cells/1',
+    frames: summaries.map(s => s.frame),
+  };
 }
 
 /** Publish check.json and its cell evidence together, restoring previous bytes on refusal. */
-export function publishMotionSeamCells(dir: string, required: MotionSeamRequired | undefined, evidence: MotionCellSidecar, publish: () => void): void {
+export function publishMotionSeamCells(dir: string, required: MotionSeamRequired | undefined, evidence: MotionCellSidecar, publish: () => void, onChunk?: (chunk: string, index: number) => void): void {
   const path = join(dir, MOTION_CELLS_FILE), check = join(dir, 'check.json');
   const previous = existsSync(path) ? readFileSync(path) : null;
   const previousCheck = existsSync(check) ? readFileSync(check) : null;
   try {
     if (required?.cells !== undefined) {
-      writeFileSync(path, serializeCheckRows(evidence));
+      writeMotionSeamCellSidecar(path, evidence, onChunk);
       readMotionSeamCellSidecar(dir, required);
     }
     publish();
@@ -9973,3 +9973,228 @@ export function stretchLine(geo: IdleGeometry | null, path: string, problems: Pr
 
 /** The compiler's `build-report/1` (`--report`) written beside `build/` on the primary packed compile (issue #1394). */
 export const BUILD_REPORT_FILE = 'build-report.json';
+
+/**
+ * Issue #1406: stream `seam-cells.json` (`rig-parts-seam-cells/1`) frame by frame so peak
+ * JS string length is a single frame while emitting the exact bytes `serializeCheckRows` writes.
+ */
+export function streamMotionSeamCellSidecar(evidence: MotionCellSidecar, sink: (chunk: string) => void): void {
+  if (evidence.frames.length === 0) {
+    sink(`{\n "spec": ${JSON.stringify(evidence.spec)},\n "frames": [`);
+    sink(']\n}\n');
+    return;
+  }
+  sink(`{\n "spec": ${JSON.stringify(evidence.spec)},\n "frames": [\n`);
+  for (let i = 0; i < evidence.frames.length; i++) {
+    const suffix = i + 1 < evidence.frames.length ? ',\n' : '\n';
+    sink(`  ${JSON.stringify(evidence.frames[i], null, 1).replaceAll('\n', '\n  ')}${suffix}`);
+  }
+  sink(' ]\n}\n');
+}
+
+/** Compute the SHA-256 of the streamed `seam-cells.json` chunks without building a whole-document string. */
+export function hashMotionSeamCellSidecar(evidence: MotionCellSidecar): string {
+  const hash = createHash('sha256');
+  streamMotionSeamCellSidecar(evidence, (chunk) => { hash.update(chunk); });
+  return hash.digest('hex');
+}
+
+/** Write `seam-cells.json` chunk by chunk through one file descriptor; `onChunk` supports mid-stream failure controls. */
+export function writeMotionSeamCellSidecar(path: string, evidence: MotionCellSidecar, onChunk?: (chunk: string, index: number) => void): void {
+  const fd = openSync(path, 'w');
+  let index = 0;
+  try {
+    streamMotionSeamCellSidecar(evidence, (chunk) => {
+      writeSync(fd, chunk);
+      onChunk?.(chunk, index++);
+    });
+  } finally {
+    closeSync(fd);
+  }
+}
+
+interface StreamedSidecarFrameSummary {
+  frame: MotionCellFrame;
+  cellsLength: number | null;
+  cellsValid: boolean;
+  classes: { figure: number; background: number; other: number };
+}
+
+function summarizeStreamedFrame(path: string, parsed: Record<string, unknown>, startOffset: number, endOffset: number): StreamedSidecarFrameSummary {
+  const cells = Array.isArray(parsed.cells) ? parsed.cells : null;
+  let cellsValid = cells !== null;
+  const classes = { figure: 0, background: 0, other: 0 };
+  if (cells !== null) {
+    for (const cell of cells) {
+      if (!isRecord(cell) || typeof cell.x !== 'number' || !Number.isFinite(cell.x) || typeof cell.y !== 'number' || !Number.isFinite(cell.y) ||
+          !(cell.setupTop === null || typeof cell.setupTop === 'string' && cell.setupTop.length > 0) ||
+          !(cell.setupUnder === null || typeof cell.setupUnder === 'string' && cell.setupUnder.length > 0) ||
+          !['figure', 'background', 'other'].includes(String(cell.class))) cellsValid = false;
+      else classes[cell.class as MotionOpenCell['class']]++;
+    }
+  }
+  const frame = { ...parsed } as unknown as MotionCellFrame;
+  Object.defineProperty(frame, 'cells', {
+    enumerable: true,
+    configurable: true,
+    get(): MotionOpenCell[] {
+      const slice = Buffer.allocUnsafe(endOffset - startOffset);
+      const fd = openSync(path, 'r');
+      try { readSync(fd, slice, 0, slice.length, startOffset); }
+      finally { closeSync(fd); }
+      const loaded = (JSON.parse(slice.toString('utf8')) as { cells: MotionOpenCell[] }).cells;
+      Object.defineProperty(frame, 'cells', { value: loaded, enumerable: true, configurable: true, writable: true });
+      return loaded;
+    },
+  });
+  return { frame, cellsLength: cells === null ? null : cells.length, cellsValid, classes };
+}
+
+/**
+ * Single-pass streamed reader for `seam-cells.json`: hashes raw byte chunks without allocating
+ * a whole-file string or buffer, verifies the canonical streamed frame layout, and summarizes
+ * each frame's cells one frame at a time.
+ */
+function scanMotionSeamCellSidecarFile(path: string, expectedSha256: string, bad: (object: string, detail: string) => never, chunkBytes = 8 * 1024 * 1024): StreamedSidecarFrameSummary[] {
+  let fd: number;
+  try { fd = openSync(path, 'r'); }
+  catch { return bad(path, 'referenced cell sidecar is missing or unreadable; unavailable is not zero'); }
+  const hash = createHash('sha256');
+  const step = Math.max(1, Math.floor(chunkBytes));
+  const buf = Buffer.allocUnsafe(step);
+  let totalBytes = 0;
+  let state: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 = 0;
+  let failure: 'json' | 'layout' | null = null;
+  let carry: Buffer = Buffer.alloc(0);
+  let carryStartOffset = 0;
+  let frameChunks: Buffer[] = [];
+  let frameStartOffset = 0;
+  let frameBytes = 0;
+  const summaries: StreamedSidecarFrameSummary[] = [];
+  try {
+    for (;;) {
+      let n: number;
+      try { n = readSync(fd, buf, 0, buf.length, totalBytes); }
+      catch { return bad(path, 'referenced cell sidecar is missing or unreadable; unavailable is not zero'); }
+      if (n === 0) break;
+      const raw = buf.subarray(0, n);
+      hash.update(raw);
+      const rawStartOffset = totalBytes;
+      totalBytes += n;
+      if (failure !== null) continue;
+      const chunk = carry.length === 0 ? raw : Buffer.concat([carry, raw]);
+      const chunkBaseOffset = carry.length === 0 ? rawStartOffset : carryStartOffset;
+      let lineStart = 0;
+      while (lineStart < chunk.length && failure === null) {
+        if (state === 4) {
+          const runStart = lineStart;
+          let closedFrame = false;
+          while (lineStart < chunk.length) {
+            const nl = chunk.indexOf(0x0a, lineStart);
+            if (nl === -1) break;
+            if (nl - lineStart >= 3 && chunk[lineStart] === 0x20 && chunk[lineStart + 1] === 0x20 && chunk[lineStart + 2] === 0x20) {
+              if (frameBytes + (nl + 1 - runStart) > 0x7fff_ff00) { failure = 'layout'; closedFrame = true; break; }
+              lineStart = nl + 1;
+              continue;
+            }
+            if (lineStart > runStart) {
+              const piece = Buffer.from(chunk.subarray(runStart, lineStart));
+              frameChunks.push(piece);
+              frameBytes += piece.length;
+            }
+            const closeLine = chunk.subarray(lineStart, nl).toString('utf8');
+            const closeLineFileOffset = chunkBaseOffset + lineStart;
+            lineStart = nl + 1;
+            if (closeLine !== '  },' && closeLine !== '  }') { failure = 'layout'; closedFrame = true; break; }
+            frameChunks.push(Buffer.from('  }'));
+            const frameEndOffset = closeLineFileOffset + 3;
+            const frameText = Buffer.concat(frameChunks).toString('utf8');
+            frameChunks = [];
+            frameBytes = 0;
+            let parsed: unknown;
+            try { parsed = JSON.parse(frameText) as unknown; }
+            catch { failure = 'json'; closedFrame = true; break; }
+            if (!isRecord(parsed) || `  ${JSON.stringify(parsed, null, 1).replaceAll('\n', '\n  ')}` !== frameText) {
+              failure = 'layout';
+              closedFrame = true;
+              break;
+            }
+            summaries.push(summarizeStreamedFrame(path, parsed, frameStartOffset, frameEndOffset));
+            state = closeLine === '  },' ? 3 : 5;
+            closedFrame = true;
+            break;
+          }
+          if (!closedFrame) {
+            if (lineStart > runStart) {
+              const piece = Buffer.from(chunk.subarray(runStart, lineStart));
+              frameChunks.push(piece);
+              frameBytes += piece.length;
+              if (frameBytes > 0x7fff_ff00) failure = 'layout';
+            }
+            break;
+          }
+        } else {
+          const nl = chunk.indexOf(0x0a, lineStart);
+          if (nl === -1) break;
+          const lineFileOffset = chunkBaseOffset + lineStart;
+          const line = chunk.subarray(lineStart, nl).toString('utf8');
+          lineStart = nl + 1;
+          if (state === 0) {
+            if (line === '{') state = 1;
+            else failure = 'layout';
+          } else if (state === 1) {
+            if (line === ' "spec": "rig-parts-seam-cells/1",') state = 2;
+            else failure = 'layout';
+          } else if (state === 2) {
+            if (line === ' "frames": []') state = 6;
+            else if (line === ' "frames": [') state = 3;
+            else failure = 'layout';
+          } else if (state === 3) {
+            if (line === '  {') {
+              frameChunks = [Buffer.from('  {\n')];
+              frameBytes = 4;
+              frameStartOffset = lineFileOffset;
+              state = 4;
+            } else failure = 'layout';
+          } else if (state === 5) {
+            if (line === ' ]') state = 6;
+            else failure = 'layout';
+          } else if (state === 6) {
+            if (line === '}') state = 7;
+            else failure = 'layout';
+          } else {
+            failure = 'layout';
+          }
+        }
+      }
+      if (failure === null) {
+        if (lineStart < chunk.length) {
+          carry = Buffer.from(chunk.subarray(lineStart));
+          carryStartOffset = chunkBaseOffset + lineStart;
+          if (carry.length > 4 * 1024 * 1024) failure = 'layout';
+        } else {
+          carry = Buffer.alloc(0);
+          carryStartOffset = totalBytes;
+        }
+      }
+    }
+  } finally {
+    closeSync(fd);
+  }
+  const digest = hash.digest('hex');
+  if (digest !== expectedSha256) bad(path, `SHA-256 is ${digest}; required ${expectedSha256}`);
+  if (failure !== null || state !== 7 || carry.length !== 0) {
+    if (totalBytes <= 4 * 1024 * 1024) {
+      let value: unknown;
+      try { value = JSON.parse(readFileSync(path, 'utf8')) as unknown; }
+      catch { return bad(path, 'requires a JSON rig-parts-seam-cells/1 document'); }
+      if (!isRecord(value) || value.spec !== 'rig-parts-seam-cells/1' || !Array.isArray(value.frames)) {
+        return bad(path, 'requires rig-parts-seam-cells/1 frames');
+      }
+      return bad(path, 'requires canonical rig-parts-seam-cells/1 streamed frame layout');
+    }
+    if (failure === 'json') return bad(path, 'requires a JSON rig-parts-seam-cells/1 document');
+    return bad(path, 'requires canonical rig-parts-seam-cells/1 streamed frame layout');
+  }
+  return summaries;
+}

@@ -1,8 +1,9 @@
 /** Generated rectangles expose setup-art and setup-background gaps through the stock gated renderer. */
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { packageRigc, readMotionSeamBackground, motionSeamRequired, type MotionSeamLine, type MotionSeamPair, type MotionCellSidecar, MOTION_CELLS_FILE, readMotionSeamCellSidecar, publishMotionSeamCells } from '../src/check.ts';
+import { packageRigc, readMotionSeamBackground, motionSeamRequired, type MotionSeamLine, type MotionSeamPair, type MotionCellFrame, type MotionCellSidecar, MOTION_CELLS_FILE, readMotionSeamCellSidecar, publishMotionSeamCells, streamMotionSeamCellSidecar, hashMotionSeamCellSidecar } from '../src/check.ts';
 import { checkRow, checkSlotParts, serializeCheckRows } from '../src/checkrow.ts';
 import { checkRowSchemaFaults } from './check_row_scope.ts';
 import { newRaster } from '../src/raster/types.ts';
@@ -150,6 +151,137 @@ export function runSeamCellChecks(home: string, say: Say, base: Record<string, u
   const sizes = { single500: sizeFor(1), sustained49x500: sizeFor(49) };
   say('SO37_SUSTAINED_CELL_ARRAYS_STAY_OUT_OF_CHECK_JSON', sizes.sustained49x500.check - sizes.sustained49x500.without < 1_000_000 && sizes.sustained49x500.sidecar > 1_000_000,
     JSON.stringify(sizes), 'Actual writer/reader publication measures 49 frames of 500 cells. Counts stay inline and the full arrays are in the digest-bound sidecar.');
+
+  const emptyCellsFrame: MotionCellFrame = {
+    ...checkRow('seam_cells.frames', 'pair', false, ['left', 'right']),
+    pair: 'left|right', animation: 'idle', index: 0, time: 0, px: 0, cell: 1, box: [0, 0, 10, 6], cells: [],
+  };
+  const secondPairFrame: MotionCellFrame = {
+    ...checkRow('seam_cells.frames', 'pair', false, ['upper', 'lower']),
+    pair: 'upper|lower', animation: 'idle', index: 3, time: 0.25, px: 2, cell: 0.5, box: [-4, -2, 8, 6],
+    cells: [
+      { ...checkRow('seam_cells.frames[].cells', 'part', false, ['upper']), x: 0.25, y: 1.75, setupTop: 'upper', setupUnder: 'lower', class: 'figure' },
+      { ...checkRow('seam_cells.frames[].cells', 'rig', false, []), x: 0.75, y: 1.75, setupTop: 'unmapped', setupUnder: null, class: 'other' },
+    ],
+  };
+  const identityDocs: ReadonlyArray<readonly [string, MotionCellSidecar]> = [
+    ['empty_frames', { spec: 'rig-parts-seam-cells/1', frames: [] }],
+    ['empty_cells_frame', { spec: 'rig-parts-seam-cells/1', frames: [emptyCellsFrame] }],
+    ['one_frame', { spec: 'rig-parts-seam-cells/1', frames: [frames[0]] }],
+    ['multi_frame_pairs', { spec: 'rig-parts-seam-cells/1', frames: [...frames, secondPairFrame] }],
+  ];
+  const identityResults = identityDocs.map(([label, doc]) => {
+    const whole = serializeCheckRows(doc);
+    const wholeSha = createHash('sha256').update(whole).digest('hex');
+    const chunks: string[] = [];
+    streamMotionSeamCellSidecar(doc, c => chunks.push(c));
+    const streamed = chunks.join('');
+    const streamedSha = hashMotionSeamCellSidecar(doc);
+    const droppedSha = createHash('sha256').update(chunks.slice(1).join('')).digest('hex');
+    return { label, bytesEqual: streamed === whole, shaEqual: streamedSha === wholeSha, droppedDiffers: droppedSha !== wholeSha, bytes: Buffer.byteLength(whole), sha256: streamedSha };
+  });
+  say('SCS01_STREAMED_SIDECAR_MATCHES_SERIALIZE_CHECK_ROWS_BYTES_AND_SHA256',
+    identityResults.every(r => r.bytesEqual && r.shaEqual && r.droppedDiffers),
+    JSON.stringify(identityResults.map(({ label, bytesEqual, shaEqual, bytes }) => ({ label, bytesEqual, shaEqual, bytes }))),
+    'Streamed sidecar chunks and SHA-256 equal whole-string serializeCheckRows across empty-frames, empty-cells, single-frame and multi-pair documents.');
+
+  const boundedPairs: MotionSeamPair[] = [
+    { pair: 'left|right', a: 'left', b: 'right', declared: ['synthetic split'] },
+    { pair: 'upper|lower', a: 'upper', b: 'lower', declared: ['synthetic split 2'] },
+  ];
+  const boundedLine: MotionSeamLine = { status: 'CLEAR', fps: 12, floor: '', pairs: boundedPairs, animations: ['figure', 'background'], warnings: 0, rows: [] };
+  const boundedCounts = [1, 3, 2, 4] as const;
+  const boundedRows = [
+    {
+      pair: 'left|right', animation: 'figure', frames: 2, drawn: 2, banded: 2, status: 'read' as const,
+      hits: [0, 1].map(idx => ({ index: idx, time: idx / 12, px: boundedCounts[idx], cell: 1, box: [0, 0, 10, 6] as [number, number, number, number], cells: cells500.slice(0, boundedCounts[idx]) })),
+    },
+    {
+      pair: 'upper|lower', animation: 'background', frames: 2, drawn: 2, banded: 2, status: 'read' as const,
+      hits: [0, 1].map(idx => ({ index: idx, time: idx / 12, px: boundedCounts[idx + 2], cell: 1, box: [0, 0, 12, 8] as [number, number, number, number], cells: cells500.slice(0, boundedCounts[idx + 2]) })),
+    },
+  ];
+  const boundedEvidence: MotionCellSidecar = { spec: 'rig-parts-seam-cells/1', frames: [] };
+  const boundedRequired = motionSeamRequired(boundedLine, boundedRows, 'synthetic requirements', [], boundedEvidence);
+  const sinkChunks: string[] = [];
+  streamMotionSeamCellSidecar(boundedEvidence, c => sinkChunks.push(c));
+  const chunkByteLengths = sinkChunks.map(c => Buffer.byteLength(c));
+  const expectedHeadBytes = Buffer.byteLength(`{\n "spec": ${JSON.stringify(boundedEvidence.spec)},\n "frames": [\n`);
+  const expectedTailBytes = Buffer.byteLength(' ]\n}\n');
+  const expectedFrameChunkBytes = boundedEvidence.frames.map((frame, i) =>
+    Buffer.byteLength(`  ${JSON.stringify(frame, null, 1).replaceAll('\n', '\n  ')}${i + 1 < boundedEvidence.frames.length ? ',\n' : '\n'}`));
+  const expectedMaxChunkBytes = Math.max(...expectedFrameChunkBytes);
+  const expectedTotalBytes = expectedHeadBytes + expectedFrameChunkBytes.reduce((a, b) => a + b, 0) + expectedTailBytes;
+  const maxChunkBytes = Math.max(...chunkByteLengths);
+  const totalStreamedBytes = chunkByteLengths.reduce((a, b) => a + b, 0);
+  const boundedDir = join(home, 'bounded');
+  mkdirSync(boundedDir, { recursive: true });
+  publishMotionSeamCells(boundedDir, boundedRequired, boundedEvidence, () => writeFileSync(join(boundedDir, 'check.json'), serializeCheckRows(document(boundedRequired))));
+  const straddledRead = readMotionSeamCellSidecar(boundedDir, boundedRequired, 17);
+  const straddledCells = straddledRead?.frames.map(f => f.cells.length) ?? [];
+  const missingCellDoc: MotionCellSidecar = {
+    spec: 'rig-parts-seam-cells/1',
+    frames: boundedEvidence.frames.map((f, i) => (i === 1 ? { ...f, cells: f.cells.slice(0, f.cells.length - 1) } : f)),
+  };
+  const missingCellDir = join(home, 'bounded-missing-cell');
+  mkdirSync(missingCellDir, { recursive: true });
+  writeFileSync(join(missingCellDir, MOTION_CELLS_FILE), serializeCheckRows(missingCellDoc));
+  const missingCellReq = { ...boundedRequired, cells: { path: MOTION_CELLS_FILE, sha256: hashMotionSeamCellSidecar(missingCellDoc) } };
+  let missingCellRefused = false;
+  try { readMotionSeamCellSidecar(missingCellDir, missingCellReq); }
+  catch (error) { missingCellRefused = error instanceof PartsError && error.problems.some(p => p.code === 'FRAMES_SIDECAR' && p.detail.includes('cells.length === gapOpen px')); }
+  const nonCanonicalText = JSON.stringify(boundedEvidence);
+  const nonCanonicalDir = join(home, 'bounded-noncanonical');
+  mkdirSync(nonCanonicalDir, { recursive: true });
+  writeFileSync(join(nonCanonicalDir, MOTION_CELLS_FILE), nonCanonicalText);
+  const nonCanonicalReq = { ...boundedRequired, cells: { path: MOTION_CELLS_FILE, sha256: createHash('sha256').update(nonCanonicalText).digest('hex') } };
+  let layoutDepartureRefused = false;
+  try { readMotionSeamCellSidecar(nonCanonicalDir, nonCanonicalReq); }
+  catch (error) { layoutDepartureRefused = error instanceof PartsError && error.problems.some(p => p.code === 'FRAMES_SIDECAR' && p.detail.includes('requires canonical rig-parts-seam-cells/1 streamed frame layout')); }
+  say('SCS02_STREAMED_CHUNKS_ARE_BOUNDED_BY_ONE_FRAME_AND_READER_REFUSES_LAYOUT_OR_CELL_COUNT_DEPARTURES',
+    sinkChunks.length === boundedEvidence.frames.length + 2 &&
+      chunkByteLengths[0] === 50 && chunkByteLengths[0] === expectedHeadBytes &&
+      chunkByteLengths[chunkByteLengths.length - 1] === 5 && chunkByteLengths[chunkByteLengths.length - 1] === expectedTailBytes &&
+      JSON.stringify(chunkByteLengths.slice(1, -1)) === JSON.stringify(expectedFrameChunkBytes) &&
+      maxChunkBytes === expectedMaxChunkBytes && totalStreamedBytes === expectedTotalBytes && maxChunkBytes < totalStreamedBytes / 2 &&
+      JSON.stringify(straddledCells) === '[1,3,2,4]' && missingCellRefused && layoutDepartureRefused,
+    JSON.stringify({ chunks: sinkChunks.length, chunkByteLengths, maxChunkBytes, totalStreamedBytes, straddledCells, missingCellRefused, layoutDepartureRefused }),
+    'Sink receives head (50 B), one chunk per frame bounded by the single largest frame, and tail (5 B). Chunk-straddled reader loads frame cells on demand and refuses missing cells or non-canonical layouts.');
+
+  const midFreshDir = join(home, 'mid-stream-fresh');
+  mkdirSync(midFreshDir, { recursive: true });
+  const midFreshCheck = join(midFreshDir, 'check.json'), midFreshCells = join(midFreshDir, MOTION_CELLS_FILE);
+  writeFileSync(midFreshCheck, firstCheck);
+  let midFreshPartialBytes = 0, midFreshThrew = false;
+  try {
+    publishMotionSeamCells(midFreshDir, boundedRequired, boundedEvidence, () => { writeFileSync(midFreshCheck, 'should-not-run'); }, (_chunk, index) => {
+      if (index === 1) {
+        midFreshPartialBytes = statSync(midFreshCells).size;
+        throw new Error('planted mid-stream sidecar failure');
+      }
+    });
+  } catch (error) {
+    midFreshThrew = error instanceof Error && error.message === 'planted mid-stream sidecar failure';
+  }
+  const midFreshNoPartialSidecar = !existsSync(midFreshCells) && readFileSync(midFreshCheck, 'utf8') === firstCheck;
+  let midExistingPartialBytes = 0, midExistingThrew = false;
+  try {
+    publishMotionSeamCells(published, boundedRequired, boundedEvidence, () => { writeFileSync(check, 'should-not-run'); }, (_chunk, index) => {
+      if (index === 1) {
+        midExistingPartialBytes = statSync(cellPath).size;
+        throw new Error('planted mid-stream overwrite failure');
+      }
+    });
+  } catch (error) {
+    midExistingThrew = error instanceof Error && error.message === 'planted mid-stream overwrite failure';
+  }
+  const midExistingRestored = readFileSync(cellPath, 'utf8') === firstCells && readFileSync(check, 'utf8') === firstCheck;
+  say('SCS03_MID_STREAM_WRITE_FAILURE_LEAVES_NO_PARTIAL_SIDECAR_AND_ROLLS_BACK',
+    midFreshThrew && midFreshPartialBytes > 50 && midFreshPartialBytes < expectedTotalBytes && midFreshNoPartialSidecar &&
+      midExistingThrew && midExistingPartialBytes > 50 && midExistingPartialBytes < expectedTotalBytes && midExistingRestored,
+    JSON.stringify({ midFreshPartialBytes, midFreshNoPartialSidecar, midExistingPartialBytes, midExistingRestored }),
+    'A write failure after streaming the first frame removes the partial sidecar when none existed and restores both files when one did.');
+
   writeFileSync(join(home, 'measurements.json'), JSON.stringify({ sizes, classes, countsHold, raw: withoutCells(rawReadings(flagged)), required }, null, 1) + '\n');
 }
 
