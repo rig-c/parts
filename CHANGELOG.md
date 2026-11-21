@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.51.0 (2026-11-21)
+
+`check` now reports what physics adds to each part, the cloth targets ship as data, and the `bust-landmarks` chain runs to the end on a sampled-neck config and on a second correction that moves the points.
+
+**Read before upgrading:**
+
+* **`check.json` gains a `PHYSICS_CONTRIBUTES` key on a rig with a part under physics,** after `CLOTH_SETTLES`. It is report-only and has no bar: the verdict and the problems do not change. A part under a physics constraint whose art physics never moves (the residual against the same build posed with physics off reads exactly 0) prints a named WARN, and the summary line counts it. A rig with no part under physics keeps its bytes.
+* **A retained render's frame-set folders are copied under the names `frames.json` records in `sets[].dir`,** with `@rig-c/core` 3.8.1, whose render writes and records a safe single-segment folder. A `sets[].dir` that is not one safe path segment is refused as `FRAMES_SIDECAR`. Before, Parts renamed a folder whose animation name held an unsafe character; renders of names that were already safe keep every byte.
+* **`propose --bust-landmarks` checks the points with the effective shape.** Each of `alpha` and `clearance` is the pending record's value, else the config's declared `contour.bust` field, else the default. Points that fit only a declared or pending shape were refused as `CONFIG_BUST_CLEARANCE` and now pass. A refusal names the shape it used and where each value came from. `bust-landmarks` refuses the same points and writes nothing. A carrier that `--only-missing` skips is checked as drafted.
+* **`bust-landmarks` leaves the shape pending when the act moves the points** of a declared `contour.bust`, with or without `--write-config`: the config is not written, and `propose --write-config --bust-landmarks` writes the three points and the shape in one staged write. An act at the declared points keeps the 2.50.0 behaviour.
+* **On a sampled body-turn neck config, `propose --write-config <config> --bust-landmarks <file>` (or `--no-bust <reason>`) without `--full` / `--head` is a chest-only write:** it sets the chest carrier's `contour.bust` and the `boob_r` / `boob_l` bones and nothing else. It was refused as `PROPOSE_NECK_MODE`. A carrier that is not a contour mesh is refused as `PROPOSE_BUST_CARRIER_MESH`.
+
+### Features
+
+* **check:** `PHYSICS_CONTRIBUTES` reports, for each part under physics, the max, p95 and mean residual of its art-supported vertices between the build posed over the idle with physics on and off, in rig px and as a fraction of the part's box diagonal, with a named WARN at exactly 0 (`#1320`, `#1438`, `2d8c82c`).
+* **propose:** a chest-only write for `--bust-landmarks` and `--no-bust` on a sampled body-turn neck config, applying a pending shape from the record as the ordinary route does; a cleavage the file leaves out is derived from the config's `neck` and `hip` bones (`#1436`, `#1440`, `7f45c34`).
+* **package:** `@rig-c/parts/cloth-targets.json` exports the cloth targets as `{"schema":"rig-parts/cloth-targets@1","targets":[…]}`, held equal to the constant `propose` reads (`#1433`, `#1437`, `a82b0f0`).
+
+### Bug Fixes
+
+* **check:** copy a retained render's `sets[].dir` as recorded and refuse an unsafe one as `FRAMES_SIDECAR`, with the `@rig-c/core` 3.8.1 pin (`#1367`, `#1435`, `d0e5701`).
+* **propose:** check the bust points with the effective shape on both routes, and name that shape in a `CONFIG_BUST_CLEARANCE` refusal (`#1441`, `#1444`, `0f413f1`).
+* **bust-landmarks:** leave the shape pending when the act moves the points, so a second correction that moves the points and tunes the shape goes through the printed two-command chain; `--only-missing` checks a carrier it skips as drafted (`#1443`, `#1446`, `e4b0308`).
+* **tree:** route the remaining open-coded crop-to-world y flips through `cropToSpineY` in `src/coords.ts`, with the same numbers, and refuse a new one in `src/` (`#1445`, `#1447`, `edbf705`).
+
 ## 2.50.0 (2026-11-21)
 
 A new command, `bust-landmarks`, writes the file `propose --bust-landmarks` reads from a review chest act. `BEHIND_PART_SEAMS` now reads motion on pairs that only touch at setup, and two per-cell lists in check outputs are no longer limited by size.
