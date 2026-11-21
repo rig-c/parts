@@ -8862,7 +8862,7 @@ export function chainRootsBelowArtClause(
  * The bones a part's attachments are bound to in the default skin (issue #231): a mesh's weights, or its slot's
  * bone for an attachment that carries no weights.
  */
-export function boundBones(rig: Record<string, unknown>, part: string): Set<string> {
+function boundBones(rig: Record<string, unknown>, part: string): Set<string> {
   const slot = (Array.isArray(rig.slots) ? rig.slots : []).filter(isRecord).find((sl) => sl.name === part);
   const skins = isRecord(rig.skins) ? rig.skins : {};
   const skin = isRecord(skins.default) ? skins.default : {};

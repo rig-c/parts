@@ -23846,7 +23846,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
         JSON.stringify(cpf.loop_physics) === '[{"name":"bob_phys","bone":"bob","in":"rig.json","row_scope":"rig","row_kind":"evidence","row_subjects":[]}]' &&
         Object.keys(cpf).join(',') === CHECK_KEYS.flatMap(key => {
           if (key === 'loop_max_diff') return [key, 'loop_physics'];
-          if (key === 'RECOMPOSITE_HOLES') return [CLOTH_LINE, key];
+          if (key === 'RECOMPOSITE_HOLES') return [CLOTH_LINE, PHYSICS_CONTRIBUTES_LINE, key];
           return [key];
         }).join(',') &&
         cp.out.split('\n').filter((l) => l.startsWith('  loop physics: ')).length === 1 &&
