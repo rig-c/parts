@@ -1,0 +1,1 @@
+Written on Linux by tools/regenerate_examples.ts: seam_scope.domain.states[].pose_sha256 and the last place of seam_scope.domain.states[].bounds in check.json are the Linux values (measured to differ on macOS); build.model_sha256 was measured equal on Linux and macOS; check.json key order sha256 7968f74082f2a0b491c48ae91ded0bfb32491437916a18b03a60701f02d31df6

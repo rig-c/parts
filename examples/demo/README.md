@@ -55,15 +55,14 @@ here (gitignored).
   its chain, so it carries `rotation` and `length` on the links, and the offsets under
   them in the turned frame, where this file holds unturned offsets only: a plain diff of
   the two shows those bones and the weights bound to them as changed, and the build is
-  not broken. The chain suite (`CH03`) compares this file with `flattenRig(built)`, not
-  with the built file; compare the same way.
+  not broken. The regeneration tool writes `flattenRig(built)` here and its `--check`
+  compares with that, not with the built file; compare the same way.
 - `expected/` — **this port's own build**, as for `scarf`:
   `rig-parts build --config examples/demo/config.json --source
   inputs/painting.png --full inputs/layers/full --head inputs/layers/head --out
-  <dir>`, the call the selftest's chain suite makes. The reference implementation
-  never saw this character, so there is no reference output to compare with: the
-  chain suite holds the tree to its own output at the commit that added it — a
-  determinism check, not a port check. `parts.json` (`assemble`), `motion.json` and
+  <dir>`, run from the repository root by `tools/regenerate_examples.ts` on Linux. The
+  reference implementation never saw this character, so there is no reference output
+  to compare with: the files are this package's own snapshots, regenerated on Linux by `tools/regenerate_examples.ts` and held by CI's whole-file `--check` of it (issue #1439) — a determinism check, not a port check. `parts.json` (`assemble`), `motion.json` and
   `mesh_report.json` (`rig`), and `check.json` and `gate_spine-html.txt` (`check`)
   are the build's files as written; `rig.json` is the build's `rig/rig.json`
   carried to its flat form by `flattenRig` (`src/rig.ts`), the form every example's

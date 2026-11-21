@@ -78,8 +78,8 @@ here (gitignored).
   its chain, so it carries `rotation` and `length` on the links, and the offsets under
   them in the turned frame, where this file holds unturned offsets only: a plain diff of
   the two shows those bones and the weights bound to them as changed, and the build is
-  not broken. The chain suite (`CH03`) compares this file with `flattenRig(built)`, not
-  with the built file; compare the same way.
+  not broken. The regeneration tool writes `flattenRig(built)` here and its `--check`
+  compares with that, not with the built file; compare the same way.
 - `expected/` — **this port's own build**, rebuilt by issue #118 (which moved
   `bottomwear` to contour mode and `TIP_OVER_ROOT` to the geometry; `parts.json` did
   not move) and by issue #196 (which moved `robe_r` onto the tie: `rig.json`,
@@ -87,14 +87,14 @@ here (gitignored).
   file did not):
   `rig-parts build --config examples/scarf/config.json --source
   inputs/painting.png --full inputs/layers/full --head inputs/layers/head --out
-  <dir>`, the call the selftest's chain suite makes. The reference implementation
-  never saw this character, so there is no reference output to compare with: the
-  chain suite holds the tree to its own earlier output — a determinism check, not a
-  port check. `parts.json` (`assemble`), `motion.json` and `mesh_report.json`
+  <dir>`, run from the repository root by `tools/regenerate_examples.ts` on Linux. The
+  reference implementation never saw this character, so there is no reference output
+  to compare with: the files are this package's own snapshots, held by CI's whole-file
+  `--check` of that tool (issue #1439) — a determinism check, not a port check. `parts.json` (`assemble`), `motion.json` and `mesh_report.json`
   (`rig`), and `check.json` and `gate_spine-html.txt` (`check`) are the build's files
   as written; `rig.json` is the build's `rig/rig.json` carried to its flat form by
   `flattenRig` (`src/rig.ts`), the form the reference wrote and reference-demo's and reference-sample's
-  `expected/rig.json` are in, so the chain suite (`CH03`) and the structure suite
+  `expected/rig.json` are in, so the regeneration tool and the structure suite
   (`ST25`) read the examples the same way. Issue #126 turned every mesh triangle counter-clockwise in Spine world, the winding rig-c reads a mesh in (the reference, and this port before it, wrote them clockwise there). The declared exception, and nothing else: every mesh `triangles` triple `[a, b, c]` is `[a, c, b]` in `rig.json`; the `check.json` `TEXTURE_STRETCH` entries that print a triangle's vertices and edge print them in that order (16 here, 52 over the three examples; the triangle, frame and figures are unchanged); and the untracked `skeleton.model.json`'s `spine.sha256`, which follows the skeleton bytes. Every rendered frame of the build is pixel-equal before and after. Issue #209 carried the seam's composite onto the render's pixel centres — the setup-pose still renders at frame scale 1.0107 here, not 1 — which moved `check.json`'s `seam_mean` from 0.211 to 0.206, with every other figure as before. Issue #216 judges the seam's pixel count in rig pixels — the frame count divided by s², so the bar reads one rig the same at every frame scale — and writes the scale it divides by as `check.json`'s `seam_frame_scale` (1.010705 here) after the three seam figures; that key is the only byte that moved, and the verdict is as before (2 frame px over 40, 1.96 rig px, against 50). The seam row of the table below is the three builds before it. Issue #224 moved
   `rig.json` (the 30 physics constraints), `motion.json` (the seven animations after
   `idle`), `gate_spine-html.txt` (`animations=8`, `physicsConstraints=30`, and one more

@@ -57,7 +57,8 @@ jobs:
   # Issue #1021 uses PR CI unit clocks and capped case-timing samples to split
   # check's fixture helpers into separately scheduled units. SHARDS documents
   # the measured inputs and the estimates the next PR CI run must confirm.
-  # The two-worker default and 25-minute timeout remain unchanged.
+  # The two-worker default remains unchanged. The job timeout is 40 minutes:
+  # 25 for the units, plus the 15 shard 3's expected-file check may take (#1439).
   # A shard judges nothing: its record holds every line its units printed, and
   # the merge prints and counts them as one whole run would.
   #
@@ -69,7 +70,7 @@ jobs:
     if: needs.tree-verdict.outputs.reused != 'true'
     name: selftest shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -97,6 +98,17 @@ jobs:
           for example in demo reference-demo reference-sample scarf wind; do
             bun tools/check_painting_public.ts "$example" || exit "$?"
           done
+      # Issue #1439: the five examples' expected/ and wind's expected-wave/ are
+      # this package's own builds, written on Linux by the tool. Here they are
+      # rebuilt and compared whole, byte for byte, machine-class fields included
+      # (this runner is Linux). It is a step, not a selftest suite: #1113 took
+      # fetched-art builds out of the suites so the suites read no network and
+      # no fetched painting, and that still holds. Measured on the Linux pool:
+      # 381 s for the six builds and the comparison; 15 min is that and margin.
+      - name: Check the public examples' expected files against a build
+        if: matrix.shard == '3'
+        timeout-minutes: 15
+        run: bun tools/regenerate_examples.ts --check --set examples
       - uses: actions/upload-artifact@v4
         if: always()
         with:

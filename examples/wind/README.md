@@ -63,13 +63,14 @@ also holds the licence; `bun run fetch-examples` copies the inputs into `inputs/
   its chain, so it carries `rotation` and `length` on the links, and the offsets under
   them in the turned frame, where this file holds unturned offsets only: a plain diff of
   the two shows those bones and the weights bound to them as changed, and the build is
-  not broken. The chain suite (`CH03`) compares this file with `flattenRig(built)`, not
-  with the built file; compare the same way.
+  not broken. The regeneration tool writes `flattenRig(built)` here and its `--check`
+  compares with that, not with the built file; compare the same way.
 - `expected/` — **this port's own build**: `rig-parts build --config
   examples/wind/config.json --source inputs/painting.png --full inputs/layers/full
-  --head inputs/layers/head --out <dir>`, the call the chain suite makes. No reference
-  implementation saw this character, so the chain suite holds the tree to its own
-  output — a determinism check, not a port check. `parts.json`, `motion.json`,
+  --head inputs/layers/head --out <dir>`, run from the repository root by
+  `tools/regenerate_examples.ts` on Linux. No reference implementation saw this
+  character, so the files are this package's own snapshots, held by CI's whole-file
+  `--check` of that tool (issue #1439) — a determinism check, not a port check. `parts.json`, `motion.json`,
   `mesh_report.json`, `check.json` and `gate_spine-html.txt` are the build's files as
   written; `rig.json` is the build's `rig/rig.json` carried to the flat form by
   `flattenRig` (`src/rig.ts`), as for `scarf`.
@@ -89,8 +90,9 @@ also holds the licence; `bun run fetch-examples` copies the inputs into `inputs/
   with `--config examples/wind/config.wave.json`: `parts.json`, `motion.json`,
   `mesh_report.json`, `sets.json`, and `rig.json` **as built**. The set's regions
   are drawn turned, which the flat form refuses, so this rig is not flattened. The
-  chain suite builds it (`CH30`), holds it to these files (`CH31`) and runs
-  `check --set wave_r` on it (`CH32`). `@rig-c/play`'s `setSet('wave_r')` on this
+  regeneration tool writes it and CI's `--check` holds it to the build, as for
+  `expected/`; the chain suite's gesture controls (`CH30`–`CH32`) run on the synthetic
+  validation variant, not on this example. `@rig-c/play`'s `setSet('wave_r')` on this
   build poses the arm as `check --set` does.
 
 There is no `animations.json`. `demo` and `scarf` carry named gestures (issue #224);

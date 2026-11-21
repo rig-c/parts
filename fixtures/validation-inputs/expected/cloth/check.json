@@ -1,4 +1,77 @@
 {
+  "spec": "rig-parts-check/1",
+  "bar_outcomes": {
+    "gate": {
+      "status": "PASS"
+    },
+    "loop": {
+      "status": "PASS"
+    },
+    "seam": {
+      "status": "PASS"
+    },
+    "BREATH_VISIBLE": {
+      "status": "PASS"
+    },
+    "BLINK_NO_HOLE": {
+      "status": "PASS"
+    },
+    "CHAIN_LAG": {
+      "status": "PASS"
+    },
+    "TIP_OVER_ROOT": {
+      "status": "PASS"
+    },
+    "STILL_REGIONS_DARK": {
+      "status": "PASS"
+    },
+    "TEXTURE_STRETCH": {
+      "status": "PASS"
+    },
+    "ANIMATIONS_DO_NOT_FOLD": {
+      "status": "PASS"
+    },
+    "FEET_STAY_LEVEL": {
+      "status": "SKIP",
+      "reason": "no-hanging-footwear"
+    },
+    "STRESS_OFF_CHAIN": {
+      "status": "SKIP",
+      "reason": "no-readable-binding"
+    },
+    "LIMB_ONE_BONE": {
+      "status": "PASS"
+    },
+    "SEAM_OVER_RANGE": {
+      "status": "SKIP",
+      "reason": "no-joint-range"
+    },
+    "ART_JOINT_DISTANCE": {
+      "status": "SKIP",
+      "reason": "undeclared"
+    },
+    "CUT_JOINT_MATERIAL": {
+      "status": "SKIP",
+      "reason": "undeclared"
+    },
+    "SETUP_MATCHES_PAINTING": {
+      "status": "SKIP",
+      "reason": "undeclared"
+    },
+    "BOUNDARY_COLOUR_STEP": {
+      "status": "PASS"
+    },
+    "BEHIND_PART_SEAMS": {
+      "status": "SKIP",
+      "reason": "undeclared"
+    },
+    "SEAM_OVER_MOTION": {
+      "status": "PASS"
+    }
+  },
+  "build": {
+    "model_sha256": "68c6edf66f756236f866374d6d82d12cc4d5058e4f5756abbd88dfaabec00332"
+  },
   "gate_spine_html_green": true,
   "rigc_entry": {
     "entry": "cli.ts",
