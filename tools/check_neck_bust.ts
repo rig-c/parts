@@ -260,4 +260,25 @@ export function runNeckBustChecks(dir: string, say: (name: string, pass: boolean
   say('NBL16_A_PENDING_RECORD_WITHOUT_WRITE_CONFIG_ON_A_NECK_CONFIG_IS_REFUSED',
     lost.status === 1 && first(lost).startsWith('  FAIL  PROPOSE_BUST_PENDING: --bust-landmarks') && !existsSync(join(work, 'p16', 'proposal.json')),
     first(lost).trim().slice(0, 120));
+
+  // The hint's command as printed, the ellipsis filled with the run's --parts, --source and --out: on an ordinary
+  // config and on the sampled-neck config, a points-only act (no shape, so no pending record) lands its points.
+  const pointsAct = write(join(work, 'act-points.json'), act(points));
+  const hinted = (cfg: string, name: string) => {
+    const out = join(work, `${name}-landmarks.json`);
+    const one = cli('bust-landmarks', '--from-act', pointsAct, '--parts', neckParts, '--config', cfg, '--out', out);
+    const line = one.stdout.split('\n').find(l => l.startsWith(`wrote ${out} and `)) ?? '';
+    const m = /; next, to apply it: rig-parts propose … --write-config (\S+) --bust-landmarks (\S+)$/.exec(line);
+    const two = m === null ? null : cli('propose', '--parts', neckParts, '--source', files.source, '--out', join(work, `${name}-p`), '--write-config', m[1], '--bust-landmarks', m[2]);
+    return { one, line, two, named: m !== null && m[1] === cfg && m[2] === out, noRecordShape: !read(out + BUST_LANDMARKS_PROVENANCE_SUFFIX).includes('"shape"') };
+  };
+  const ordinaryHint = unbodied(drafted, 'hint-ordinary.json');
+  const neckHint = join(work, 'hint-neck.json');
+  writeFileSync(neckHint, drafted);
+  const pointsBust = '{"apex_r":[20,46],"apex_l":[44,46],"cleavage":[32,47]}';
+  const h1 = hinted(ordinaryHint, 'hint-ordinary'), h2 = hinted(neckHint, 'hint-neck');
+  const landed = (h: typeof h1, cfg: string): boolean => h.one.status === 0 && h.named && h.noRecordShape && h.two !== null && h.two.status === 0 && bustOf(read(cfg)) === pointsBust;
+  say('NBL17_THE_HINT_AS_PRINTED_LANDS_THE_POINTS_ON_BOTH_ROUTES',
+    landed(h1, ordinaryHint) && landed(h2, neckHint) && rest(read(neckHint)) === rest(drafted),
+    `ordinary: ${JSON.stringify(h1.line.slice(h1.line.indexOf('; next')))} -> exit ${h1.two?.status ?? 'not run'}, contour.bust ${bustOf(read(ordinaryHint))} | neck: exit ${h2.two?.status ?? 'not run'}, contour.bust ${bustOf(read(neckHint))}, every other entry ${rest(read(neckHint)) === rest(drafted) ? 'as drafted' : 'MOVED'}`);
 }

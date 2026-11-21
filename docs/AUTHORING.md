@@ -270,8 +270,11 @@ on a drafted rig, and the act review emits carries them. The order is:
    config already declares `contour.bust`, add `--write-config`: it takes the
    act's five values into that `contour.bust` and then writes the landmarks
    file. When the config declares no `contour.bust` yet (the first draft), the
-   changed fields are recorded as a **pending** shape in the record, and the
-   command prints the one that applies them.
+   changed fields are recorded as a **pending** shape in the record. Either
+   way the command ends by printing the one that applies the file:
+   `next, to apply it: rig-parts propose … --write-config <config.json> --bust-landmarks <landmarks.json>`,
+   with the config it read. Without `--write-config`, `propose` writes only
+   `proposal.json`.
 4. Redraft with `propose … --write-config <config.json> --bust-landmarks <landmarks.json>`.
    On a sampled body-turn neck config the same command, without `--full` and
    `--head`, writes the chest alone and keeps the neck draft

@@ -2845,11 +2845,14 @@ function cmdBustLandmarks(args: string[]): number {
     if (target !== null) for (const line of configWriteLines(target, staged?.changes ?? [])) console.error(line);
     console.log(`bust-landmarks: slot "${provenance.slot}" apex_r ${JSON.stringify(landmarks.apex_r)} apex_l ${JSON.stringify(landmarks.apex_l)} cleavage ${landmarks.cleavage === undefined ? 'absent (propose derives it)' : JSON.stringify(landmarks.cleavage)}; act ${JSON.stringify(provenance.act.act_id)} sha256=${provenance.act.file_sha256} row sha256=${provenance.row_sha256} (verified against the row's edit)`);
     const shape = provenance.shape;
-    if (shape === undefined) console.log(`wrote ${plan.out} and ${plan.provenancePath}; next: rig-parts propose … --bust-landmarks ${plan.out}`);
+    // Issue #1436: both lines name the command that writes the points into the config; without --write-config,
+    // propose writes only proposal.json.
+    const next = `wrote ${plan.out} and ${plan.provenancePath}; next, to apply it: rig-parts propose … --write-config ${resolve(input.config)} --bust-landmarks ${plan.out}`;
+    if (shape === undefined) console.log(next);
     else {
       // Issue #1382: the config declares no contour.bust, so the reviewed shape waits in the record for propose.
       console.log(`bust-landmarks: pending shape for "${provenance.slot}": ${pendingFields(shape.fields)}; the config declares no contour.bust yet, so ${plan.provenancePath} carries it until propose writes it with the three points`);
-      console.log(`wrote ${plan.out} and ${plan.provenancePath}; next, to apply it: rig-parts propose … --write-config ${resolve(input.config)} --bust-landmarks ${plan.out}`);
+      console.log(next);
     }
     return EXIT_OK;
   } catch (error) { return printRefusal(error); }
