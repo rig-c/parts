@@ -6029,6 +6029,60 @@ function usageDrift(run: (args: string[]) => { status: number; out: string }, su
   return { rows, faults, candidates: surface.flags.length };
 }
 
+/**
+ * Issue #1456: CL26's commands in four case lines, CL26A to CL26D, each its own `cli@usage-<letter>` unit, so no
+ * one unit holds every probe. A set names top-level commands as `cliSurface` reads them; comfy stands for the
+ * subcommands its refusal names. `guide` is in no set: it takes no flag, so it has no refusal to read.
+ */
+const CL26_COMMAND_SETS: ReadonlyArray<readonly [string, readonly string[]]> = [
+  ['A', ['assemble', 'build', 'bust-landmarks', 'check', 'check-parts', 'compare', 'compose']],
+  ['B', ['comfy', 'depth-apply', 'depth-bind', 'depth-prepare']],
+  ['C', ['diff-components', 'diff-drafts', 'edited-part', 'external-receipt', 'head-crop-preflight', 'inputs', 'layers', 'loop']],
+  ['D', ['mesh-draft', 'mesh-stats', 'painting', 'propose', 'remesh', 'retune', 'rig', 'sheet']],
+];
+
+/** Every way the declared command sets differ from the commands `cli.ts` dispatches, `guide` aside; empty when each is in exactly one set. */
+function usageSetFaults(sets: ReadonlyArray<readonly [string, readonly string[]]>, commands: readonly string[]): string[] {
+  const declared = sets.flatMap(([, set]) => set);
+  return [
+    ...commands.filter((c) => c !== 'guide').flatMap((c) => {
+      const n = declared.filter((d) => d === c).length;
+      return n === 1 ? [] : [n === 0 ? `the command "${c}" is in no CL26 command set, so no line probes it` : `the command "${c}" is in ${n} CL26 command sets`];
+    }),
+    ...[...new Set(declared)].filter((d) => d === 'guide' || !commands.includes(d)).map((d) => `a CL26 command set names "${d}", which is no command cli.ts dispatches with flags`),
+  ];
+}
+
+/** One CL26 line: its set's commands probed exactly as CL26 probed every command; line A also holds the sets to the surface. */
+function runUsageDriftLine(say: ReturnType<typeof counter>['say'], letter: string): void {
+  const surface = cliSurface(readFileSync(join(ROOT, 'cli.ts'), 'utf8'));
+  const set = CL26_COMMAND_SETS.find(([l]) => l === letter)?.[1] ?? [];
+  const usageReport = usageDrift((args) => runCli(args), { commands: surface.commands.filter((c) => set.includes(c)), flags: surface.flags });
+  const dropLast = (listed: readonly string[]): string[] => listed.slice(0, -1);
+  const planted = usageReport.rows.map((r) => listDrift(r.command, dropLast(r.listed), r.accepted));
+  const plantedAll = planted.length > 0 && planted.every((p) => p.length > 0);
+  const first = letter === CL26_COMMAND_SETS[0][0];
+  const setFaults = first ? usageSetFaults(CL26_COMMAND_SETS, surface.commands) : [];
+  const lastSet = CL26_COMMAND_SETS.at(-1)!;
+  const dropped = lastSet[1].at(-1) ?? '';
+  const plantedSets = first ? usageSetFaults([...CL26_COMMAND_SETS.slice(0, -1), [lastSet[0], lastSet[1].slice(0, -1)]], surface.commands) : [];
+  const setsHeld = !first || (setFaults.length === 0 && plantedSets.length === 1 && plantedSets[0].includes(`"${dropped}" is in no CL26 command set`));
+  const names: Readonly<Record<string, string>> = {
+    A: 'CL26A_EVERY_UNKNOWN_FLAG_REFUSAL_LISTS_EXACTLY_THE_FLAGS_ITS_PARSER_ACCEPTS_AND_THE_SETS_COVER_EVERY_COMMAND',
+    B: 'CL26B_EVERY_UNKNOWN_FLAG_REFUSAL_LISTS_EXACTLY_THE_FLAGS_ITS_PARSER_ACCEPTS_COMFY_AND_DEPTH',
+    C: 'CL26C_EVERY_UNKNOWN_FLAG_REFUSAL_LISTS_EXACTLY_THE_FLAGS_ITS_PARSER_ACCEPTS_DIFF_TO_LOOP',
+    D: 'CL26D_EVERY_UNKNOWN_FLAG_REFUSAL_LISTS_EXACTLY_THE_FLAGS_ITS_PARSER_ACCEPTS_MESH_TO_SHEET',
+  };
+  say(
+    names[letter] ?? `CL26${letter}_UNNAMED_COMMAND_SET`,
+    usageReport.rows.length > 0 && usageReport.faults.length === 0 && plantedAll && setsHeld,
+    `set ${letter}: ${usageReport.rows.length} command(s) probed with each of the ${usageReport.candidates} flag(s) cli.ts spells: ${usageReport.faults.length === 0 ? usageReport.rows.map((r) => `${r.command} ${r.accepted.length}`).join(', ') : usageReport.faults.join('; ')}` +
+      (first ? `; the ${CL26_COMMAND_SETS.length} sets against cli.ts's ${surface.commands.length} commands: ${setFaults.length === 0 ? 'each in exactly one set' : setFaults.join('; ')}; guide takes one positional argument and no flag, so it has no refusal to read; planted: "${dropped}" dropped from set ${lastSet[0]} -> ${plantedSets.join('; ') || 'NOT CAUGHT'}` : '') +
+      `; planted: the last listed flag dropped from each refusal -> ${planted.filter((p) => p.length > 0).length} of ${planted.length} caught (${planted[0]?.[0] ?? 'none'})`,
+    'an agent that guesses a flag learns the real ones from the refusal, so a refusal that leaves one out (loop omitted --palette; sheet, rig and assemble listed none) hides a flag the command takes; the accepted set is probed flag by flag, not read from the table the refusal prints; issue #1456: the probes are split by command set, held to the commands cli.ts dispatches',
+  );
+}
+
 type CliCaseGroup = readonly [string, (say: ReturnType<typeof counter>['say']) => void];
 
 /**
@@ -6543,22 +6597,8 @@ function cliCaseGroups(): readonly CliCaseGroup[] {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
-  }], ['usage', (say) => {
-    // CL26: every command's unknown-flag refusal lists exactly the flags its parser accepts, both read off the CLI.
-    const usageReport = usageDrift((args) => runCli(args), cliSurface(readFileSync(join(ROOT, 'cli.ts'), 'utf8')));
-    const dropLast = (listed: readonly string[]): string[] => listed.slice(0, -1);
-    const planted = usageReport.rows.map((r) => listDrift(r.command, dropLast(r.listed), r.accepted));
-    const plantedAll = planted.length > 0 && planted.every((p) => p.length > 0);
-    say(
-      'CL26_EVERY_UNKNOWN_FLAG_REFUSAL_LISTS_EXACTLY_THE_FLAGS_ITS_PARSER_ACCEPTS',
-      usageReport.rows.length > 0 && usageReport.faults.length === 0 && plantedAll,
-      `${usageReport.rows.length} command(s) probed with each of the ${usageReport.candidates} flag(s) cli.ts spells: ${usageReport.faults.length === 0 ? usageReport.rows.map((r) => `${r.command} ${r.accepted.length}`).join(', ') : usageReport.faults.join('; ')}` +
-        `; guide takes one positional argument and no flag, so it has no refusal to read` +
-        `; planted: the last listed flag dropped from each refusal -> ${planted.filter((p) => p.length > 0).length} of ${planted.length} caught (${planted[0]?.[0] ?? 'none'})`,
-      'an agent that guesses a flag learns the real ones from the refusal, so a refusal that leaves one out (loop omitted --palette; sheet, rig and assemble listed none) hides a flag the command takes; the accepted set is probed flag by flag, not read from the table the refusal prints',
-    );
-
-  }], ['check-flags', (say) => {
+  }], ...CL26_COMMAND_SETS.map(([letter]): CliCaseGroup => [`usage-${letter.toLowerCase()}`, (say) => runUsageDriftLine(say, letter)]),
+  ['check-flags', (say) => {
     // CL166 (issue #257): every flag check takes is forwarded by build, taken by build as its own, or refused by build by
     // name with what build reads instead — read off the two refusals and probed, held to CHECK_FLAGS_IN_BUILD.
     const takenBy = (command: string): string[] => /it takes (.+) \(see rig-parts guide USAGE\)$/m.exec(runCli([command, '--not-a-flag']).out)?.[1].split(', ') ?? [];
@@ -60645,19 +60685,20 @@ function runUnits(keys: readonly string[], examples: readonly string[]): string[
 }
 
 /**
- * Issue #1456, by #1452's placement (#1116's method): precedence-constrained longest-first placement over the
- * per-unit median clocks of five green CI runs (44909945516, 44911425998, 44911662160, 44912887953, 44914073049),
- * shard 3 pre-loaded by its median 177 s public-painting allocation step, the #1113 sample consumers kept in their
- * shard and relative order. `cli` is now seven case groups; their clocks are local (macOS, one worker) case-line
- * timestamps of one whole `cli` worker run (737.9 s), scaled by 0.972 so they sum to cli's 717.3 s CI median.
- * cli@usage (CL26 alone) is about 638 s of that, so it bounds any placement: four shards predict at most 731.5 s
- * per job. RT09 still requires every registered unit exactly once.
+ * Issue #1456, by #1452's placement (#1116's method) over five shards: precedence-constrained longest-first
+ * placement over the per-unit median clocks of five green CI runs (44909945516, 44911425998, 44911662160,
+ * 44912887953, 44914073049), shard 3 pre-loaded by its median 177 s public-painting allocation step, the #1113
+ * sample consumers kept in their shard and relative order. `cli` is now ten case groups, CL26 four of them
+ * (cli@usage-a to -d). Their clocks are local (macOS, one worker, a loaded machine) case-line timestamps of one whole
+ * `cli` worker run (1109.3 s), scaled by 0.6466 so they sum to cli's 717.3 s CI median. Five shards predict at most
+ * 598.9 s per job; the five-shard floor is 568.8 s. RT09 still requires every registered unit exactly once.
  */
 const SHARDS: ReadonlyArray<readonly [string, readonly string[]]> = [
-  ['1', ['cli@usage', 'build', 'check@runBreathAloneCases', 'fixed-skeleton', 'auto-mesh-examples', 'chain@standard', 'chain@physics', 'depth-maps', 'limb-slots', 'contour-wiring', 'chain@feature-contracts', 'readme-loop@loop-plain', 'cli@surface', 'cli@receipts', 'contour', 'ground-examples', 'hybrid-limb', 'check@coincide', 'check@gate-chain', 'skeleton', 'chain@feature-readme-plain', 'raster-components', 'prompt', 'inputs-examples', 'raster-composite', 'check@runSweepUnitCases']],
-  ['2', ['scene', 'parts', 'check@runEnvironmentCheckCases', 'check@runMotionSeamCases', 'rig', 'check@runAnimationFoldCases', 'boundary-colour', 'check@runClothCheckCases', 'alternate-layers', 'check@weight-step', 'check@runFeetLevelCases', 'check@seated', 'check@runDiscCheckCases', 'check@runContourStepCases', 'check@runLimbCheckCases', 'auto-mesh', 'corpus', 'chain@physics-driven', 'chain@structure', 'chain@feature-authoring', 'readme-loop@loop-cloth', 'keypoints', 'inputs', 'structure', 'assemble-examples@standard', 'core-pointer', 'fetch-examples', 'joint-contact', 'sheet', 'propose-corpus', 'layers-psd', 'assemble-examples@end']],
-  ['3', ['check@fixtures', 'tree', 'check@requirements', 'check@row-scope', 'cli@cloth', 'auto-motion', 'chain@no-neck', 'chain@gesture', 'check@runClothSettlesCases', 'check@extremes', 'comfy', 'check@runStressCases', 'cli@guide', 'check@runBallCheckCases', 'check@runDressRiderCheckCases', 'check@runSweepCheckCases', 'loop', 'build-cost', 'take-layers', 'waist', 'editor-receipts', 'alternate-tips', 'chain-inherit', 'arm-split-upgrade', 'limb-layout', 'check@runRiderCheckCases', 'painting', 'layers-wrapper', 'diagnostics', 'subset-cover', 'cli@check-flags', 'foot-ownership', 'plausibility', 'check@runRigcIdentityCases', 'cli@artist', 'part-sources', 'raster-warp', 'raster-morph', 'winding', 'raster-blur', 'raster-poly', 'png', 'chain@feature-readme-posed', 'readme-loop@loop-posed', 'readme-loop@end']],
-  ['4', ['check@judgements', 'remesh', 'retune', 'setup-painting', 'propose', 'mesh-draft', 'assemble', 'influence', 'behind-seams', 'check@runPlantedFeetCases', 'config', 'config-write', 'requirements', 'check@stretch', 'front-slot', 'mesh-stats', 'chain@cloth', 'chain@physics-mixed', 'chain@travel', 'chain@end', 'check@runMotionSeamWorldCases', 'chain@feature-readme-cloth', 'raster-resize']],
+  ['1', ['build', 'scene', 'cli@usage-b', 'mesh-draft', 'check@runPlantedFeetCases', 'check@extremes', 'auto-mesh-examples', 'chain@standard', 'chain@physics', 'chain@feature-contracts', 'readme-loop@loop-plain', 'chain@feature-readme-plain', 'layers-psd']],
+  ['2', ['parts', 'check@judgements', 'rig', 'propose', 'boundary-colour', 'influence', 'check@runClothCheckCases', 'alternate-layers', 'check@runFeetLevelCases', 'config', 'check@runContourStepCases', 'check@stretch', 'corpus', 'chain@physics-driven', 'chain@structure', 'chain@feature-authoring', 'readme-loop@loop-cloth', 'assemble-examples@standard', 'assemble-examples@end']],
+  ['3', ['retune', 'cli@usage-a', 'check@runAnimationFoldCases', 'cli@cloth', 'chain@no-neck', 'chain@gesture', 'check@seated', 'comfy', 'check@runLimbCheckCases', 'auto-mesh', 'check@runDressRiderCheckCases', 'loop', 'build-cost', 'waist', 'cli@receipts', 'cli@surface', 'alternate-tips', 'limb-layout', 'check@runRiderCheckCases', 'diagnostics', 'cli@artist', 'cli@check-flags', 'contour', 'inputs', 'hybrid-limb', 'check@runRigcIdentityCases', 'check@coincide', 'raster-morph', 'core-pointer', 'skeleton', 'fetch-examples', 'png', 'chain@feature-readme-posed', 'readme-loop@loop-posed', 'readme-loop@end']],
+  ['4', ['cli@usage-d', 'remesh', 'check@runEnvironmentCheckCases', 'check@runMotionSeamCases', 'assemble', 'auto-motion', 'check@runBreathAloneCases', 'behind-seams', 'fixed-skeleton', 'check@runClothSettlesCases', 'requirements', 'check@runStressCases', 'mesh-stats', 'chain@cloth', 'chain@physics-mixed', 'chain@travel', 'chain@end', 'chain@feature-readme-cloth']],
+  ['5', ['check@fixtures', 'tree', 'cli@usage-c', 'setup-painting', 'check@requirements', 'check@row-scope', 'check@weight-step', 'cli@guide', 'config-write', 'check@runDiscCheckCases', 'front-slot', 'check@runBallCheckCases', 'check@runSweepCheckCases', 'depth-maps', 'limb-slots', 'take-layers', 'contour-wiring', 'editor-receipts', 'chain-inherit', 'arm-split-upgrade', 'painting', 'layers-wrapper', 'keypoints', 'subset-cover', 'ground-examples', 'foot-ownership', 'plausibility', 'structure', 'part-sources', 'raster-warp', 'check@gate-chain', 'winding', 'raster-blur', 'raster-poly', 'joint-contact', 'raster-components', 'sheet', 'prompt', 'propose-corpus', 'inputs-examples', 'check@runMotionSeamWorldCases', 'raster-composite', 'check@runSweepUnitCases', 'raster-resize']],
 ];/**
  * The part of a split suite this worker runs (issue #395): null when it runs the whole suite, else the example its
  * unit names or {@link END_UNIT}. Set once, by {@link workerMain}, before the suite starts.
