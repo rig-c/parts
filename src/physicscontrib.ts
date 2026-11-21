@@ -25,6 +25,7 @@
  * descendant of one, or to a bone a transform constraint drives from such a bone (and its descendants).
  */
 import { type CheckRowLabels, checkRow } from './checkrow.ts';
+import { cropToSpineY } from './coords.ts';
 import { edgeLength } from './length.ts';
 import type { PlacedArt } from './requirements.ts';
 import type { StageBox } from './check.ts';
@@ -144,8 +145,7 @@ export function partConstraints(bound: ReadonlySet<string>, reach: ReadonlyMap<s
   return decls.filter((d) => names.has(d.name));
 }
 
-/**
- * The vertices of the rest triangles that hold at least one pixel centre of the art, ascending. `rest` is the
+/** The vertices of the rest triangles that hold at least one pixel centre of the art, ascending. `rest` is the
  * attachment's rest vertices in the world (y up), `art` the part's art on the stage (crop px, y down).
  */
 export function artVertices(rest: readonly number[], triangles: readonly number[], art: PlacedArt, stage: StageBox): number[] {
@@ -158,16 +158,16 @@ export function artVertices(rest: readonly number[], triangles: readonly number[
     const det = ex1 * ey2 - ex2 * ey1;
     if (det === 0) continue;
     const xs = [x0, rest[2 * j], rest[2 * k]], ys = [y0, rest[2 * j + 1], rest[2 * k + 1]];
-    // Crop column X has its centre at world x stage.x + X + 0.5; crop row Y at world y stage.y + H - (Y + 0.5).
+    // Crop column X has its centre at world x stage.x + X + 0.5; crop row Y at world y stage.y + cropToSpineY(Y + 0.5, H).
     const X0 = Math.max(art.x, Math.floor(Math.min(...xs) - stage.x - 0.5));
     const X1 = Math.min(art.x + art.width - 1, Math.ceil(Math.max(...xs) - stage.x - 0.5));
-    const Y0 = Math.max(art.y, Math.floor(H - (Math.max(...ys) - stage.y) - 0.5));
-    const Y1 = Math.min(art.y + art.height - 1, Math.ceil(H - (Math.min(...ys) - stage.y) - 0.5));
+    const Y0 = Math.max(art.y, Math.floor(cropToSpineY(Math.max(...ys) - stage.y, H) - 0.5));
+    const Y1 = Math.min(art.y + art.height - 1, Math.ceil(cropToSpineY(Math.min(...ys) - stage.y, H) - 0.5));
     let found = false;
     for (let Y = Y0; Y <= Y1 && !found; Y++) {
       for (let X = X0; X <= X1; X++) {
         if (art.data[(Y - art.y) * art.width + (X - art.x)] !== 1) continue;
-        const dx = stage.x + X + 0.5 - x0, dy = stage.y + H - (Y + 0.5) - y0;
+        const dx = stage.x + X + 0.5 - x0, dy = stage.y + cropToSpineY(Y + 0.5, H) - y0;
         const l1 = (dx * ey2 - ex2 * dy) / det, l2 = (ex1 * dy - dx * ey1) / det;
         if (l1 >= 0 && l2 >= 0 && l1 + l2 <= 1) {
           found = true;

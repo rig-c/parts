@@ -1141,7 +1141,7 @@ export function crossingOf(art: ArtMask, stage: StageBox, frames: ReadonlyArray<
   // Distance from a world point to the nearest pixel outside the region: rings of pixels around the one holding it.
   const depthAt = (x: number, y: number): number => {
     const u0 = Math.floor(x - stage.x);
-    const v0 = Math.floor(H - (y - stage.y));
+    const v0 = Math.floor(cropToSpineY(y - stage.y, H));
     let best = Infinity;
     for (let r = 0; r - 1 < best; r++) {
       for (let v = v0 - r; v <= v0 + r; v++) {
@@ -1188,7 +1188,7 @@ export function crossingOf(art: ArtMask, stage: StageBox, frames: ReadonlyArray<
           by1 = Math.max(by1, poly[q + 1]);
         }
         for (let u = Math.floor(bx0 - stage.x); u <= Math.floor(bx1 - stage.x); u++) {
-          for (let v = Math.floor(H - (by1 - stage.y)); v <= Math.floor(H - (by0 - stage.y)); v++) {
+          for (let v = Math.floor(cropToSpineY(by1 - stage.y, H)); v <= Math.floor(cropToSpineY(by0 - stage.y, H)); v++) {
             if (!inR(u, v)) continue;
             const sx0 = stage.x + u;
             const sy1 = stage.y + cropToSpineY(v, H);
