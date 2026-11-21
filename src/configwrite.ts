@@ -14,8 +14,12 @@ import type { CharacterConfig } from './config.ts';
 import { orderedEditedPartReceipt, type EditedPartReceipt } from './editedparts.ts';
 import type { Proposal, PROPOSAL_CONFIG_SECTIONS } from './propose.ts';
 import { PartsError } from './errors.ts';
-import { BUST_LANDMARK_FIELDS, BUST_SHAPE_FIELDS, parseConfig, parseEarlyConfig, parseProposalSections } from './config.ts';
+import { parseConfig, parseEarlyConfig, parseProposalSections } from './config.ts';
 import type { ConfigEdit } from './meshdraft.ts';
+
+/** Required point fields and optional shape fields of `meshes.<part>.contour.bust`, in the shorthand order `src/config.ts` validates (issues #475, #1428). */
+const BUST_LANDMARK_FIELDS = ['apex_r', 'apex_l', 'cleavage'] as const;
+const BUST_SHAPE_FIELDS = ['alpha', 'clearance', 'bone_r', 'bone_l', 'spacing'] as const;
 
 export type ConfigJson = null | boolean | number | string | ConfigJson[] | ConfigObject;
 export interface ConfigObject { [key: string]: ConfigJson }
