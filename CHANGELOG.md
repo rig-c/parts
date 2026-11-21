@@ -1,5 +1,28 @@
 # Changelog
 
+## 2.50.0 (2026-11-21)
+
+A new command, `bust-landmarks`, writes the file `propose --bust-landmarks` reads from a review chest act. `BEHIND_PART_SEAMS` now reads motion on pairs that only touch at setup, and two per-cell lists in check outputs are no longer limited by size.
+
+**Read before upgrading:**
+
+* **A contact-only pair with an authored `behind_seams` threshold may change from unmeasured to PASS or FAIL.** A pair whose members only touch at setup (no overlap band) had no motion reading: every idle frame and turn pose was a named HOLE, and the line failed as `CHECK_BEHIND_PART_SEAMS_UNMEASURED` even on a rig where nothing moves. `motion_opened` on such a pair is now read from transported setup contact edges, so the pair may PASS, or FAIL with `CHECK_BEHIND_PART_SEAMS`. Rows read this way carry `motion_support: "setup-contact"`. A row whose count may be short carries `lower_bound_cells` (on the pair: `lower_bound_frames`, `lower_bound_poses`): read that count as a lower bound. A pair with an overlap band keeps its `check.json` bytes.
+* **Some contact-only pairs stay a named HOLE.** A member that draws more than one fragment, a member a clip cuts, and members that overlap only below 128/255 are each named as such in `unmeasured[]`. A pair with no band and no contact keeps its HOLE text.
+* **`unread_corridors[].cells` holds at most 64 cells per corridor.** A corridor with more carries `cells_omitted`, and `cell_count` stays the corridor's full count. A consumer that read `cells.length` as the corridor's size reads `cell_count` instead. Corridors of 64 cells or fewer keep their bytes.
+* **`propose --write-config` keeps the `contour.bust` shape fields the config declares.** A redraft with `--bust-landmarks` used to remove `alpha`, `clearance`, `bone_r`, `bone_l` and `spacing` from the chest carrier. They are now kept on the same part, after the three points. When the chest carrier becomes another part they are dropped with a printed note. A config with only the three points, or with no `contour.bust`, is written with the same bytes as before.
+* **`propose --bust-landmarks <file>` now reads `<file>.provenance.json` when it exists.** That record is written by `bust-landmarks`. A record that does not match the landmarks file is refused (`PROPOSE_BUST_SIDECAR_DIGEST`), and a record that holds a pending shape needs `--write-config` (`PROPOSE_BUST_PENDING`). With no record beside the file, `propose` is unchanged: a hand-written landmarks file works as before.
+
+### Features
+
+* **cli:** `rig-parts bust-landmarks --from-act <act.json> --parts <dir> --config <config.json> --out <landmarks.json> [--write-config]` writes the landmarks file `propose --bust-landmarks` reads from a `rig-review/act@9` chest-landmarks act, with a provenance record beside it. It verifies the row's digest, refuses a frame that differs from `parts.json`'s `rig_size` and a slot that is not a contour-mesh part, and writes both outputs or neither. `--write-config` takes the act's shape values into the config's `contour.bust`; when the config has none yet, the shape rides the record as pending and `propose --write-config --bust-landmarks` writes it with the three points and marks it applied (`#1382`, `#1427`, `37ca2df`).
+* **check:** `BEHIND_PART_SEAMS` reads `motion_opened` on contact-only pairs from transported setup contact edges, on idle frames and turn poses, with `motion_support`, `lower_bound_cells`, `lower_bound_frames` and `lower_bound_poses` in the output (`#1409`, `#1430`, `abce507`).
+
+### Bug Fixes
+
+* **propose:** `--write-config` keeps the `contour.bust` shape fields a config declares on the chest carrier when it redrafts (`#1428`, `#1429`, `f4bd477`).
+* **check:** bound `BEHIND_PART_SEAMS` `unread_corridors[].cells` at 64 evenly spaced cells per corridor, with `cells_omitted` above that. On a synthetic 512-pixel-square rig built to maximise unread corridors, `check.json` went from 42,887,949 B to 5,885,120 B (`#1406`, `#1431`, `ab6575a`).
+* **check:** write and read the motion-seam cell sidecar `seam-cells.json` one frame at a time. Its bytes and the digest recorded in `check.json` are unchanged, and its size is no longer limited by one string: a 2,187,130,098 B sidecar was written and read back, where reading the same file as one string fails (`#1406`, `#1432`, `9f7a04b`).
+
 ## 2.49.1 (2026-11-21)
 
 `check` now says when a `setup_painting` limit mostly measures pixels the rig does not draw, and `assemble --emit-fill-masks` works with a region take.
