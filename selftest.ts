@@ -24031,14 +24031,67 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
       'the keys close, and the render with the constraint does not (the witness: idle_frames/ is rendered with it, and its ends differ), which is what the loop bar refused before issue #183; the constraint is named with its bone on one line and in check.json beside the figure it was left out of, and judged by nothing',
     );
 
+    const windRig = join(dir, 'named-wind');
+    writeCheckRig(windRig);
+    withPhysics(windRig);
+    const windMotionPath = join(windRig, 'motion.json');
+    const windMotion = JSON.parse(readFileSync(windMotionPath, 'utf8')) as { animations: { idle: unknown } };
+    const windTrack = { physics: 'bob_phys', property: 'wind', keys: [{ t: 0, v: [0] }, { t: 0.5, v: [1] }, { t: 1, v: [0] }] };
+    const wind = { duration: 1, tracks: [windTrack] };
+    const mixed = { duration: 1, tracks: [windTrack, { bone: 'root', property: 'translatex', keys: [{ t: 0, v: [0] }, { t: 1, v: [1] }] }] };
+    writeFileSync(windMotionPath, `${JSON.stringify({ ...windMotion, animations: { ...windMotion.animations, wind, mixed } }, null, 2)}\n`);
+    const windOut = join(dir, 'named-wind-out');
+    const windCheck = runCli(['check', '--rig', windRig, '--out', windOut, '--no-extremes']);
+    const windFigures = readJsonFile(join(windOut, 'check.json'));
+    const windFolds = windFigures?.[FOLD_LINE] as Record<string, unknown> | undefined;
+    const windSkip = '    folds physics off: SKIP — "wind" has no timeline after removing physics tracks';
+    const windRefusal = failLine(windCheck.out, 'CHECK_RIGC_GREEN');
+    say(
+      'CK1395_PHYSICS_ONLY_WIND_BESIDE_IDLE_PASSES_THE_KEYED_LOOP_AND_NAMES_THE_FOLD_SKIP',
+      windCheck.status === 0 && checkBarIs(windFigures, 'loop', 'PASS') && windFigures?.loop_max_diff === 0 &&
+        windFolds?.status === 'PASS' && JSON.stringify(windFolds.animations) === '["idle","wind","mixed"]' &&
+        JSON.stringify(windFolds.physics_off_skipped) === '["wind"]' &&
+        windCheck.out.split('\n').includes(`${physLine}; physics-only animation(s) omitted from the keyed build: "wind"`) &&
+        windCheck.out.split('\n').includes(windSkip),
+      `exit ${windCheck.status}; loop ${String(windFigures?.loop_max_diff)}, folds ${String(windFolds?.status)}, physics off skips ${JSON.stringify(windFolds?.physics_off_skipped)}${windRefusal === null ? '' : `; ${windRefusal.trim()}`}`,
+      'issue #1461: the primary build reads both wind and mixed for folds. The keyed idle still closes, and only wind has no keyed fold reading. The pre-fix keyed build refuses wind because stripping its last track leaves a positive duration with no keys.',
+    );
+
+    writeFileSync(windMotionPath, `${JSON.stringify({ ...windMotion, animations: { wind } }, null, 2)}\n`);
+    const onlyWindOut = join(dir, 'only-wind-out');
+    const onlyWindCheck = runCli(['check', '--rig', windRig, '--out', onlyWindOut, '--no-extremes']);
+    const onlyWindFigures = readJsonFile(join(onlyWindOut, 'check.json'));
+    const onlyWindFolds = onlyWindFigures?.[FOLD_LINE] as Record<string, unknown> | undefined;
+    const onlyWindRefusal = failLine(onlyWindCheck.out, 'CHECK_RIGC_GREEN');
+    say(
+      'CK1396_PHYSICS_ONLY_WIND_WITH_NO_IDLE_STILL_GETS_A_PHYSICS_ON_FOLD_VERDICT',
+      onlyWindCheck.status === 0 && checkBarIs(onlyWindFigures, 'loop', 'no-idle') &&
+        onlyWindFolds?.status === 'PASS' && JSON.stringify(onlyWindFolds.animations) === '["wind"]' &&
+        JSON.stringify(onlyWindFolds.physics_off_skipped) === '["wind"]' &&
+        onlyWindCheck.out.split('\n').includes(windSkip) && !onlyWindCheck.out.includes('  loop physics:'),
+      `exit ${onlyWindCheck.status}; folds ${String(onlyWindFolds?.status)}, physics off skips ${JSON.stringify(onlyWindFolds?.physics_off_skipped)}${onlyWindRefusal === null ? '' : `; ${onlyWindRefusal.trim()}`}`,
+      'issue #1461: with no keyed animation to render, the physics-on fold reading still has a verdict and the physics-off skip is reported outside the loop note.',
+    );
+
     const plain = withoutPhysics(JSON.parse(readFileSync(join(rig, 'rig.json'), 'utf8')) as Record<string, unknown>, JSON.parse(readFileSync(join(rig, 'motion.json'), 'utf8')) as Record<string, unknown>);
     const ownEnds = idleEnds(out);
+    const boneTrack = { bone: 'a', property: 'rotate', keys: [{ t: 0, v: [0] }, { t: 1, v: [8] }] };
+    const physicsTrack = { physics: 'p2', property: 'mix', keys: [{ t: 0, v: [1] }, { t: 1, v: [0] }] };
+    const empty = { duration: 0, tracks: [] };
+    const events = [{ t: 1, name: 'beat' }];
+    const drawOrder = [{ t: 1, offsets: [] }];
     const plantedPhys = withoutPhysics(
       {
         constraints: [{ type: 'ik', name: 'aim', bones: ['a'], target: 't' }, { type: 'physics', name: 'p1', bone: 'a' }],
         skins: { default: { attachments: {}, physics: ['p1'] }, plain: { s: {} } },
       },
-      { physics: { p2: { bone: 'b' } }, animations: { idle: { duration: 1, tracks: [{ bone: 'a', property: 'rotate', keys: [] }, { physics: 'p2', property: 'mix', keys: [] }] } } },
+      { physics: { p2: { bone: 'b' } }, animations: {
+        idle: { duration: 1, tracks: [boneTrack, physicsTrack] },
+        mixed: { duration: 1, tracks: [physicsTrack, boneTrack] },
+        empty,
+        event: { duration: 1, tracks: [physicsTrack], events },
+        reorder: { duration: 1, tracks: [physicsTrack], drawOrder },
+      } },
     );
     say(
       'CK513_A_RIG_WITHOUT_PHYSICS_IS_MEASURED_OFF_ITS_OWN_IDLE_RENDER_AND_EVERY_PHYSICS_DECLARATION_IS_LEFT_OUT_OF_A_RIG_WITH_ONE',
@@ -24051,9 +24104,15 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
         plantedPhys !== null &&
         JSON.stringify(plantedPhys.physics) === '[{"name":"p1","bone":"a","in":"rig.json"},{"name":"p2","bone":"b","in":"motion.json"}]' &&
         JSON.stringify(plantedPhys.rig) === '{"constraints":[{"type":"ik","name":"aim","bones":["a"],"target":"t"}],"skins":{"default":{"attachments":{}},"plain":{"s":{}}}}' &&
-        JSON.stringify(plantedPhys.motion) === '{"animations":{"idle":{"duration":1,"tracks":[{"bone":"a","property":"rotate","keys":[]}]}}}',
+        JSON.stringify(plantedPhys.motion) === JSON.stringify({ animations: {
+          idle: { duration: 1, tracks: [boneTrack] },
+          mixed: { duration: 1, tracks: [boneTrack] },
+          empty,
+          event: { duration: 1, tracks: [], events },
+          reorder: { duration: 1, tracks: [], drawOrder },
+        } }),
       `CK01's rig: withoutPhysics ${plain === null ? 'null' : 'NOT NULL'}; check.json loop_physics ${fig !== null && 'loop_physics' in fig ? 'WRITTEN' : 'absent'}; loop_max_diff ${String(fig?.loop_max_diff)} against its own idle_frames/ ends ${ownEnds ?? 'not read'}; planted (a physics constraint in rig.json listed by a skin, one in motion.json keyed by a track, beside an ik): left out ${JSON.stringify(plantedPhys?.physics ?? null)}; rig ${JSON.stringify(plantedPhys?.rig ?? null)}; motion ${JSON.stringify(plantedPhys?.motion ?? null)}`,
-      'a rig with no physics constraint is measured as it always was — no second build, the figure the idle render\'s own ends, no key added to check.json, no line — and a rig with one has every declaration rig-c reads left out (rig.json constraints, motion.json\'s table) with what only activates or keys them (a skin\'s list, a physics track), and nothing else: the ik stays',
+      'a rig with no physics constraint is measured from its own idle render. A rig with one has the physics declarations, activation lists and tracks stripped. The IK, mixed bone tracks, untouched empty animation and animations with event or draw order timelines stay.',
     );
 
     // Issue #1320: PHYSICS_CONTRIBUTES — what physics adds to a part, read against the same compiled build posed with

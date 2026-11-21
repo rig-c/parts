@@ -7067,6 +7067,10 @@ assemble*, at the end of this section):
   `loop physics: … "<name>" on bone "<bone>" (rig.json|motion.json)`, and written as `check.json`'s `loop_physics` after
   `loop_max_diff`; they are reported, not judged. A rig with none is measured from the
   idle render itself, exactly as before, and writes no such line or key.
+  When removing physics tracks leaves a named animation beside `idle` without
+  any timeline, the keyed build omits it and the `loop physics:` line names it
+  (issue #1461). Bone tracks and other timelines, including events and draw order,
+  stay in the keyed build.
 
 On the examples: `reference-sample` 23/23, seam 0.207 with 0 pixels over 40, loop 0;
 `reference-demo` (default rule) 23/23, seam 0.326 with 2 pixels over 40, loop 0.
@@ -7381,6 +7385,7 @@ exemption that exempts nothing.
 | `animations` | every animation, the idle included, in `motion.json`'s order: each one read |
 | `fps` | the rate the reading sampled at |
 | `physics_left_out` | how many physics constraints the rig declares — stepped in `physics_on` and left out in `physics_off` (0 without any) |
+| `physics_off_skipped` | written when stripping physics removed a named animation's last timeline. Lists omitted names in motion order. The original build still supplies their fold verdicts. The console marks their physics-off readings `SKIP`, and `FEET_STAY_LEVEL` reads only the remaining keyed animations. A `physics_off: null` for a listed animation means no reading was taken. |
 | `folding` | one row per mesh that folds in an animation: `animation`, `slot`, `attachment`, `frames` (how many show a folded triangle), `worst_frame`, `worst_triangles`, `triangles` (the mesh's), `physics_on` and `physics_off` (`{ frames, worst_frame, worst_triangles, line }` or null, side by side so a reader sees which folds physics adds), `physics_constraints` (the physics constraints on the mesh's bones, `"<name> on <bone>"`, when the fold appears only with physics on; empty otherwise), `declared` (the `may_fold` why, or null) and `line`, rigc's printed line verbatim |
 | `folding_undeclared` | the rows no `may_fold` entry takes: the bar's figure |
 | `declared_not_folding` | the `may_fold` entries no row matches, each a failure |
