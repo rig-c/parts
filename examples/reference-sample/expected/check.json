@@ -1184,6 +1184,56 @@
    }
   ]
  },
+ "PHYSICS_CONTRIBUTES": {
+  "status": "WARN",
+  "off": "the same compiled build posed with the poser's physics off (spine-core Physics.none, rig-c physicsMode 'off') over the same frames — not the rig spec with its physics constraints stripped and built again",
+  "points": "every vertex of a rest triangle that holds a pixel centre of the part's art (alpha above the mesh threshold); per frame the largest residual over them, frames 1..N-1",
+  "world": "rig-c's default environment",
+  "poser": "core",
+  "fps": 12,
+  "frames": 49,
+  "warnings": 1,
+  "rows": [
+   {
+    "row_scope": "part",
+    "row_kind": "finding",
+    "row_subjects": [
+     "bottomwear"
+    ],
+    "part": "bottomwear",
+    "constraints": [
+     "hip_phys"
+    ],
+    "external_force": [],
+    "vertices": 324,
+    "frames_read": 48,
+    "max_rig_px": 0,
+    "p95_rig_px": 0,
+    "mean_rig_px": 0,
+    "max_of_diagonal": 0,
+    "moves": false
+   },
+   {
+    "row_scope": "part",
+    "row_kind": "evidence",
+    "row_subjects": [
+     "topwear"
+    ],
+    "part": "topwear",
+    "constraints": [
+     "bust_phys"
+    ],
+    "external_force": [],
+    "vertices": 316,
+    "frames_read": 48,
+    "max_rig_px": 0.066,
+    "p95_rig_px": 0.042,
+    "mean_rig_px": 0.026,
+    "max_of_diagonal": 0.0002267,
+    "moves": true
+   }
+  ]
+ },
  "RECOMPOSITE_HOLES": {
   "status": "REPORTED",
   "error_px": 4359,

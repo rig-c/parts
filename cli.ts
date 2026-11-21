@@ -5,7 +5,7 @@ import { DIFF_DRAFTS_SPEC, diffDraftsCommand } from './src/diffdrafts.ts';
 import { applyTakenLayers } from './src/takelayers.ts';
 import { applyDepth, bindDepthMap, prepareDepth } from './src/depthworkflow.ts';
 import { externalReceipt } from './src/externalreceipt.ts';
-import { BUST_LANDMARKS_ACT_SCHEMA, BUST_LANDMARKS_PROVENANCE_SPEC, BUST_LANDMARKS_PROVENANCE_SUFFIX, type BustSidecar, planBustLandmarks, readBustSidecar, stageBustLandmarks, stageReplacements, type StagedBustLandmarks } from './src/bustlandmarks.ts';
+import { BUST_LANDMARKS_ACT_SCHEMA, BUST_LANDMARKS_PROVENANCE_SPEC, BUST_LANDMARKS_PROVENANCE_SUFFIX, BUST_POINT_SHAPE_FIELDS, bustShapeClause, type BustSidecar, effectiveBustShape, planBustLandmarks, readBustSidecar, stageBustLandmarks, stageReplacements, type StagedBustLandmarks } from './src/bustlandmarks.ts';
 import { writeEditedPart } from './tools/edited-part-cli.ts';
 /**
  * rig-parts — one painting and its See-through layers in, Spine-ready parts
@@ -32,6 +32,7 @@ import { ACCEPTABLE_BARS, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, findRigc, PACK
 import { ComfyClient, resolveHost, runBackground, runMatte, runPainting, runSeeThrough } from './src/comfy/index.ts';
 import { coreCfg, DEFAULT_GROW_PX, runForeground } from './src/plate.ts';
 import { type CharacterConfig, loadClothConfig, loadConfig, loadEarlyConfig, loadPaintConfig } from './src/config.ts';
+import type { ConfigWritePatch } from './src/configwrite.ts';
 import { configWriteLines, type ConfigWriteTarget, readConfigWriteTarget, separateConfigWriteTarget, stageConfigWrite, type StagedConfigWrite } from './tools/configwrite.ts';
 import { failLine, guidePointer, PartsError, type Problem } from './src/errors.ts';
 import { GUIDE_DOC, type GuideAnswer, guideRule, guideSection } from './src/guide.ts';
@@ -42,7 +43,7 @@ import { idleKeysOf, isIdleKeys } from './src/rig.ts';
 import { bodyCoreBox, bodyOpaqueBox, CORE_ALPHA, depthSkipLine, exportLayers, figuresPhrase, hiddenLayerLine, implausibleRules, layerCoreBox, layerFigures, layerOpaqueBox, type LayerSet, layerSetDiff, type OpaqueBox, OPAQUE_ALPHA_ABOVE, pct, readLayers, readWrapperLayers, ruleSummary, templateLayerNames, templatePsdBytes, times } from './src/layers.ts';
 import { checkImageSize, choosePerson, KEYPOINTS_SPEC, loadKeypoints, type RigJoints, toRigJoints } from './src/keypoints.ts';
 import { checkPartsStage } from './src/partscheck.ts';
-import { basisLines, branchSqueezeLine, checkProposal, compare, compareLines, DEFAULT_GRID_RULE, draftTurn, drawLandmarks, FIGURE_GRID_DIVISOR, FRINGE_STEP_PX, GRID_RULES, type GridRule, type BustDraft, HIP_MIN_FRACTION, type DraftLintFinding, lint, lintLine, type PartSet, PROPOSAL_CONFIG_SECTIONS, proposalAsConfig, proposeWithBasis, readBustLandmarks, readPartSet, serializeProposal, withTurn, WRIST_ON_PART_PX } from './src/propose.ts';
+import { basisLines, branchSqueezeLine, bustCleavage, checkProposal, compare, compareLines, DEFAULT_GRID_RULE, draftTurn, drawLandmarks, FIGURE_GRID_DIVISOR, FRINGE_STEP_PX, GRID_RULES, type GridRule, type BustDraft, type Proposal, HIP_MIN_FRACTION, type DraftLintFinding, lint, lintLine, type PartSet, PROPOSAL_CONFIG_SECTIONS, proposalAsConfig, proposeWithBasis, readBustLandmarks, readPartSet, serializeProposal, withTurn, WRIST_ON_PART_PX } from './src/propose.ts';
 import { BASIS_FILE, BASIS_SPEC, basisFile, basisLine, coverageLines, legChainChoice, serializeBasis } from './src/diagnostics.ts';
 import { BEND_DEGREES, BEND_WORST_SHARE, DUST_MAX_PX, DUST_MAX_SHARE, IDLE_BOUND_PX, MESH_DRAFT_REPORT, MESH_DRAFT_SPEC, meshDraftStage, MORE_TRIANGLES_FLAG, relativeConfigPaths, TOLERANCE_FIGURE_DIVISOR } from './src/meshdraft.ts';
 import { meshStatsStage } from './src/meshstats.ts';
@@ -266,6 +267,10 @@ usage:
       rigid sibling unit under the body carrier. Reassembled art is written to
       <out>/rig; depth comes from the existing scalar input, named in note:.
       Missing depth, landmarks or clean source is refused, never invented.
+      With --bust-landmarks or --no-bust instead of --full and --head, write
+      only the chest carrier's contour.bust and bones boob_r/boob_l, every
+      other entry as read; a cleavage the file omits is derived from the
+      config's own neck and hip bones, and the output says which source.
 
   rig-parts propose … [--grid-rule figure|part]
       How each drafted lattice's spacing (meshes.<part>.grid) is chosen.
@@ -1826,14 +1831,30 @@ function cmdPropose(args: string[]): number {
     if (!existsSync(source)) {
       throw new PartsError([{ code: 'PROPOSE_SOURCE_PRESENT', object: source, detail: 'no such file; the painting is drawn under the overlay' }]);
     }
+    // Issue #1436: on a sampled body-turn neck config the chest flags without the runs write the chest alone.
+    let chestOnly = false;
     if (target !== null && typeof target.raw === 'object' && target.raw !== null && 'turn' in target.raw) {
       const turn = target.raw.turn;
       if (typeof turn === 'object' && turn !== null && 'body' in turn && (loadEarlyConfig(target.path, 'assemble').assemble.plan.some(([, , tag]) => tag === 'neck'))) {
-        const unsupported = [...flags.keys()].filter(f => !['--parts', '--source', '--out', '--full', '--head', '--write-config'].includes(f));
-        if (unsupported.length > 0) throw new PartsError([{ code: 'PROPOSE_NECK_MODE', object: unsupported.join(', '), detail: 'cannot be combined with the authored sampled-turn neck draft; use --parts, --source, --out, --full, --head and --write-config only; run comparison or landmark drafting separately' }]);
+        const chestFlags = ['--bust-landmarks', '--no-bust'].filter((f) => flags.has(f));
+        const runs = ['--full', '--head'].filter((f) => flags.has(f));
+        const chestCommand = `rig-parts propose --parts <dir> --source <painting.png> --out <dir> --write-config ${writeArg} ${chestFlags.includes('--no-bust') ? '--no-bust "<reason>"' : '--bust-landmarks <landmarks.json>'}`;
+        if (chestFlags.length > 0 && runs.length > 0) {
+          throw new PartsError([{ code: 'PROPOSE_NECK_MODE', object: [...chestFlags, ...runs].join(', '), detail: `the neck draft (--full, --head) and the chest-only write (${chestFlags.join(', ')}) are separate runs on a sampled body-turn neck config; write the chest with ${chestCommand}, without --full and --head, and draft the neck in its own run` }]);
+        }
+        chestOnly = chestFlags.length > 0;
+        const allowed = chestOnly ? ['--parts', '--source', '--out', '--write-config', '--bust-landmarks', '--no-bust'] : ['--parts', '--source', '--out', '--full', '--head', '--write-config'];
+        const unsupported = [...flags.keys()].filter(f => !allowed.includes(f));
+        if (unsupported.length > 0) {
+          throw new PartsError([{ code: 'PROPOSE_NECK_MODE', object: unsupported.join(', '), detail: chestOnly
+            ? `cannot be combined with the chest-only write on a sampled body-turn neck config; use --parts, --source, --out, --write-config and ${chestFlags.join(', ')} only (${chestCommand}); run comparison or other drafting separately`
+            : 'cannot be combined with the authored sampled-turn neck draft; use --parts, --source, --out, --full, --head and --write-config only; run comparison or landmark drafting separately' }]);
+        }
         if (onlyMissing) throw new PartsError([{ code: 'PROPOSE_NECK_MODE', object: '--only-missing', detail: 'cannot replace an attached neck; omit --only-missing for the explicit sampled body-turn neck draft' }]);
-        proposeNeck(target, { source, parts: partsDir, out, full: flags.get('--full'), head: flags.get('--head') });
-        return EXIT_OK;
+        if (!chestOnly) {
+          proposeNeck(target, { source, parts: partsDir, out, full: flags.get('--full'), head: flags.get('--head') });
+          return EXIT_OK;
+        }
       }
     }
     if (flags.has('--from-config') && (flags.has('--bust-landmarks') || flags.has('--no-bust'))) return usage('--bust-landmarks and --no-bust draft a torso. --from-config reads authored meshes');
@@ -1887,6 +1908,22 @@ function cmdPropose(args: string[]): number {
         separateConfigWriteTarget(target, [sidecar.path]);
       }
     }
+    // Issue #1436: the config is the record, so a cleavage the file leaves out is derived from the config's own midline.
+    let cleavageSource: string | null = null;
+    if (chestOnly && bust.landmarks !== undefined) {
+      if (bust.landmarks.cleavage === undefined) {
+        const declared = loadConfig(target!.path).bones;
+        const at = (name: string): [number, number] => {
+          const bone = declared.find((b) => 'name' in b && b.name === name);
+          if (bone === undefined || !('at' in bone)) throw new PartsError([{ code: 'PROPOSE_BUST_INPUT', object: 'landmarks.cleavage', detail: `is absent and config.bones declares no "${name}" bone with an origin; the config's neck-to-hip midline is required to derive it, or declare cleavage in the landmarks file` }]);
+          return [bone.at[0], bone.at[1]];
+        };
+        const neckAt = at('neck'), hipAt = at('hip');
+        bust.landmarks = { ...bust.landmarks, cleavage: bustCleavage(bust.landmarks.apex_r, bust.landmarks.apex_l, neckAt, hipAt) };
+        cleavageSource = `derived at the apex segment crossing of the config's neck [${neckAt.join(', ')}] -> hip [${hipAt.join(', ')}] midline`;
+        bust.cleavageFrom = cleavageSource;
+      } else cleavageSource = 'from the landmarks file';
+    }
     const { proposal: drafted, basis, draftLint } = proposeWithBasis(P, joints, wristSnap, gridRule, cloth, true, bust);
     const fullRun = flags.get('--full');
     const headRun = flags.get('--head');
@@ -1895,7 +1932,8 @@ function cmdPropose(args: string[]): number {
         ? drafted
         : withTurn(drafted, draftTurn(P, { ...(fullRun === undefined ? {} : { full: readLayers(fullRun) }), ...(headRun === undefined ? {} : { head: readLayers(headRun) }) }, drafted));
     // Emit only after green: a proposal the config loader would refuse is not written, nor a basis record that does not hold to it.
-    checkProposal(P, prop);
+    // Issue #1441: the chest carrier's points are checked with the shape the config write will hold.
+    checkProposalWithBustShape(P, prop, target, sidecar);
     if (sidecar !== null) {
       // The record's part must be the chest carrier this draft makes: points placed on another part are not these.
       const carriers = Object.entries(prop.meshes).filter(([, mesh]) => 'contour' in mesh && mesh.contour.bust !== undefined).map(([part]) => part);
@@ -1939,7 +1977,11 @@ function cmdPropose(args: string[]): number {
     const bfile = basisFile(P, prop, basis, cfg === null || cmpPath === undefined ? null : { where: cmpPath, config: cfg });
     const img = drawLandmarks(P, painting, prop.bones, 'PROPOSAL - CORRECT ME');
     const pending = sidecar?.pending ?? null;
-    if (target !== null) staged = stageConfigWrite(target, onlyMissing ? { kind: 'proposal-missing', proposal: prop, parts: P.recs } : { kind: 'proposal', proposal: prop, sections: PROPOSAL_CONFIG_SECTIONS, ...(pending === null ? {} : { bustShape: pending }) });
+    let chest: { patch: Extract<ConfigWritePatch, { kind: 'bust' }>; line: string } | null = null;
+    if (target !== null && chestOnly) {
+      chest = chestOnlyPatch(target, prop, bust, cleavageSource);
+      staged = stageConfigWrite(target, { ...chest.patch, ...(pending === null ? {} : { bustShape: pending }) });
+    } else if (target !== null) staged = stageConfigWrite(target, onlyMissing ? { kind: 'proposal-missing', proposal: prop, parts: P.recs } : { kind: 'proposal', proposal: prop, sections: PROPOSAL_CONFIG_SECTIONS, ...(pending === null ? {} : { bustShape: pending }) });
     else if (written !== null) staged = stageConfigWrite({ kind: 'fresh', path: written.at, text: written.text });
     // The record marked applied is staged after the config and renamed in before the config's commit; a failed
     // config commit puts the record back, so the two change together or not at all.
@@ -1962,6 +2004,7 @@ function cmdPropose(args: string[]): number {
         throw new PartsError(problems);
       }
       if (target !== null) for (const line of configWriteLines(target, staged.changes)) console.error(line);
+      if (chest !== null) console.log(chest.line);
       if (marked !== null && pending !== null && sidecar !== null) {
         console.log(`propose: wrote the pending shape of act ${JSON.stringify(sidecar.provenance.act.act_id)} into meshes.${pending.part}.contour.bust (${pendingFields(pending.fields)}) with the three points; marked it applied in ${sidecar.path}`);
       }
@@ -2731,6 +2774,66 @@ function pendingFields(fields: Readonly<Record<string, number | string | undefin
   return Object.entries(fields).filter(([, v]) => v !== undefined).map(([k, v]) => `${k} ${JSON.stringify(v)}`).join(', ');
 }
 
+/**
+ * The chest-only write on a sampled body-turn neck config (issue #1436): the chest carrier this draft makes, its
+ * `contour.bust` points (none with --no-bust) and the `boob_r` / `boob_l` bones, as one `bust` patch, and the line
+ * that says what it writes and where the cleavage came from. The config's carrier must already be a contour mesh.
+ */
+/**
+ * Issue #1441: `checkProposal`, with the chest carrier's `contour.bust` checked against the effective shape
+ * (`effectiveBustShape`): the config's declared shape fields on that part, a pending record's over them, the
+ * defaults for the rest, which is what the config write keeps. The proposal written is the draft as it was. With
+ * no declared or pending alpha or clearance the check is the draft's own, so its refusals read as before; otherwise a
+ * clearance refusal names the shape it used and where each value came from.
+ */
+function checkProposalWithBustShape(P: PartSet, prop: Proposal, target: ConfigWriteTarget | null, sidecar: BustSidecar | null): void {
+  const carrier = Object.entries(prop.meshes).find(([, mesh]) => 'contour' in mesh && mesh.contour.bust !== undefined);
+  if (carrier === undefined || !('contour' in carrier[1]) || carrier[1].contour.bust === undefined) { checkProposal(P, prop); return; }
+  const [part, mesh] = carrier;
+  const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+  const raw = target === null ? undefined : target.raw;
+  const meshes = isObject(raw) && isObject(raw.meshes) ? raw.meshes : undefined;
+  const declaredMesh = meshes !== undefined && Object.hasOwn(meshes, part) ? meshes[part] : undefined;
+  const declared = isObject(declaredMesh) && isObject(declaredMesh.contour) && isObject(declaredMesh.contour.bust) ? declaredMesh.contour.bust : undefined;
+  const pending = sidecar?.pending?.part === part ? sidecar.pending.fields : undefined;
+  const shape = effectiveBustShape(declared, pending);
+  const used = BUST_POINT_SHAPE_FIELDS.filter((key) => shape[key].source !== 'the default');
+  if (used.length === 0) { checkProposal(P, prop); return; }
+  const bust = { ...mesh.contour.bust, ...Object.fromEntries(used.map((key) => [key, shape[key].value])) };
+  // checkProposal's own reader (proposalAsConfig), given the shape values as read: the loader types them.
+  const meshesChecked: Record<string, unknown> = { ...prop.meshes, [part]: { ...mesh, contour: { ...mesh.contour, bust } } };
+  try { proposalAsConfig(P, { ...prop, meshes: meshesChecked }); }
+  catch (error) {
+    if (!(error instanceof PartsError)) throw error;
+    const at = `config.meshes.${part}.contour.bust.clearance`;
+    throw new PartsError(error.problems.map((p) => p.code === 'CONFIG_BUST_CLEARANCE' && p.object === at ? { ...p, detail: `${p.detail}; ${bustShapeClause(shape)}` } : p));
+  }
+}
+
+function chestOnlyPatch(target: ConfigWriteTarget, prop: Proposal, bust: BustDraft, cleavageSource: string | null): { patch: Extract<ConfigWritePatch, { kind: 'bust' }>; line: string } {
+  const omitted = (part: string): boolean => prop.notes.some((n) => n.startsWith(`${part}: contour bust omitted for the declared reason: `));
+  const carrier = Object.entries(prop.meshes).find(([part, mesh]) => 'contour' in mesh && (mesh.contour.bust !== undefined || omitted(part)));
+  if (carrier === undefined) {
+    const chestBone = prop.bones.find((b) => 'name' in b && b.name === 'chest');
+    const where = chestBone !== undefined && 'at' in chestBone ? ` at [${chestBone.at.join(', ')}]` : '';
+    throw new PartsError([{ code: 'PROPOSE_BUST_INPUT', object: 'chest carrier', detail: `no topwear art covers chest${where}. A chest-holding topwear part is required for the declared bust input` }]);
+  }
+  const [part, mesh] = carrier;
+  const raw = target.raw as { meshes?: Record<string, unknown> };
+  const declared = typeof raw.meshes === 'object' && raw.meshes !== null ? raw.meshes[part] : undefined;
+  if (typeof declared !== 'object' || declared === null || !('contour' in declared)) {
+    const found = typeof declared !== 'object' || declared === null ? 'no mesh' : `a ${['grid', 'auto', 'influence', 'explicit'].find((m) => m in declared) ?? 'non-contour'} mesh`;
+    throw new PartsError([{ code: 'PROPOSE_BUST_CARRIER_MESH', object: `config.meshes.${part}`, detail: `is ${found}; the chest-only write on a sampled body-turn neck config sets contour.bust on the chest carrier's contour mesh, which it does not draft. Produce one in this order: rig-parts propose … --write-config <config> --no-bust "<reason>" before turn.body is written, then write turn.body and draft the neck` }]);
+  }
+  const points = 'contour' in mesh ? mesh.contour.bust : undefined;
+  const bones = prop.bones.filter((b): b is { name: string; parent: string; at: [number, number] } => 'name' in b && (b.name === 'boob_r' || b.name === 'boob_l') && 'at' in b).map((b) => ({ name: b.name, parent: b.parent, at: [b.at[0], b.at[1]] }));
+  const patch: Extract<ConfigWritePatch, { kind: 'bust' }> = { kind: 'bust', part, bust: points === undefined || points.cleavage === undefined ? null : { apex_r: [...points.apex_r], apex_l: [...points.apex_l], cleavage: [...points.cleavage] }, bones };
+  const line = patch.bust === null
+    ? `propose: chest-only write on the sampled body-turn neck config: meshes.${part}.contour.bust and bones boob_r, boob_l removed where present (--no-bust: ${bust.noBust ?? ''}); every other entry as read`
+    : `propose: chest-only write on the sampled body-turn neck config: meshes.${part}.contour.bust apex_r ${JSON.stringify(patch.bust.apex_r)} apex_l ${JSON.stringify(patch.bust.apex_l)} cleavage ${JSON.stringify(patch.bust.cleavage)} (${cleavageSource ?? 'from the landmarks file'}); bones boob_r, boob_l under chest at the apices; every other entry as read`;
+  return { patch, line };
+}
+
 function cmdBustLandmarks(args: string[]): number {
   // The one switch (issue #1382, round 2): taken out before the valued flags are read.
   const writes = args.filter((a) => a === '--write-config').length;
@@ -2774,11 +2877,14 @@ function cmdBustLandmarks(args: string[]): number {
     if (target !== null) for (const line of configWriteLines(target, staged?.changes ?? [])) console.error(line);
     console.log(`bust-landmarks: slot "${provenance.slot}" apex_r ${JSON.stringify(landmarks.apex_r)} apex_l ${JSON.stringify(landmarks.apex_l)} cleavage ${landmarks.cleavage === undefined ? 'absent (propose derives it)' : JSON.stringify(landmarks.cleavage)}; act ${JSON.stringify(provenance.act.act_id)} sha256=${provenance.act.file_sha256} row sha256=${provenance.row_sha256} (verified against the row's edit)`);
     const shape = provenance.shape;
-    if (shape === undefined) console.log(`wrote ${plan.out} and ${plan.provenancePath}; next: rig-parts propose … --bust-landmarks ${plan.out}`);
+    // Issue #1436: both lines name the command that writes the points into the config; without --write-config,
+    // propose writes only proposal.json.
+    const next = `wrote ${plan.out} and ${plan.provenancePath}; next, to apply it: rig-parts propose … --write-config ${resolve(input.config)} --bust-landmarks ${plan.out}`;
+    if (shape === undefined) console.log(next);
     else {
       // Issue #1382: the config declares no contour.bust, so the reviewed shape waits in the record for propose.
       console.log(`bust-landmarks: pending shape for "${provenance.slot}": ${pendingFields(shape.fields)}; the config declares no contour.bust yet, so ${plan.provenancePath} carries it until propose writes it with the three points`);
-      console.log(`wrote ${plan.out} and ${plan.provenancePath}; next, to apply it: rig-parts propose … --write-config ${resolve(input.config)} --bust-landmarks ${plan.out}`);
+      console.log(next);
     }
     return EXIT_OK;
   } catch (error) { return printRefusal(error); }

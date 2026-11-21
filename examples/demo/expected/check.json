@@ -1913,6 +1913,173 @@
    }
   ]
  },
+ "PHYSICS_CONTRIBUTES": {
+  "status": "CLEAR",
+  "off": "the same compiled build posed with the poser's physics off (spine-core Physics.none, rig-c physicsMode 'off') over the same frames — not the rig spec with its physics constraints stripped and built again",
+  "points": "every vertex of a rest triangle that holds a pixel centre of the part's art (alpha above the mesh threshold); per frame the largest residual over them, frames 1..N-1",
+  "world": "rig-c's default environment",
+  "poser": "core",
+  "fps": 12,
+  "frames": 41,
+  "warnings": 0,
+  "rows": [
+   {
+    "row_scope": "part",
+    "row_kind": "evidence",
+    "row_subjects": [
+     "hair_back"
+    ],
+    "part": "hair_back",
+    "constraints": [
+     "hairback_r0_phys",
+     "hairback_r1_phys",
+     "hairback_r2_phys",
+     "hairback_l0_phys",
+     "hairback_l1_phys",
+     "hairback_l2_phys"
+    ],
+    "external_force": [],
+    "vertices": 143,
+    "frames_read": 40,
+    "max_rig_px": 12.137,
+    "p95_rig_px": 11.908,
+    "mean_rig_px": 8.31,
+    "max_of_diagonal": 0.01626,
+    "moves": true
+   },
+   {
+    "row_scope": "part",
+    "row_kind": "evidence",
+    "row_subjects": [
+     "handwear_l"
+    ],
+    "part": "handwear_l",
+    "constraints": [
+     "sleeve_l0_phys",
+     "sleeve_l1_phys",
+     "sleeve_l2_phys"
+    ],
+    "external_force": [],
+    "vertices": 97,
+    "frames_read": 40,
+    "max_rig_px": 0.284,
+    "p95_rig_px": 0.282,
+    "mean_rig_px": 0.184,
+    "max_of_diagonal": 0.0006502,
+    "moves": true
+   },
+   {
+    "row_scope": "part",
+    "row_kind": "evidence",
+    "row_subjects": [
+     "handwear_r"
+    ],
+    "part": "handwear_r",
+    "constraints": [
+     "sleeve_r0_phys",
+     "sleeve_r1_phys",
+     "sleeve_r2_phys"
+    ],
+    "external_force": [],
+    "vertices": 101,
+    "frames_read": 40,
+    "max_rig_px": 0.262,
+    "p95_rig_px": 0.258,
+    "mean_rig_px": 0.169,
+    "max_of_diagonal": 0.000598,
+    "moves": true
+   },
+   {
+    "row_scope": "part",
+    "row_kind": "evidence",
+    "row_subjects": [
+     "bottomwear"
+    ],
+    "part": "bottomwear",
+    "constraints": [
+     "skirt_r0_phys",
+     "skirt_r1_phys",
+     "skirt_r2_phys",
+     "skirt_c0_phys",
+     "skirt_c1_phys",
+     "skirt_c2_phys",
+     "skirt_l0_phys",
+     "skirt_l1_phys",
+     "skirt_l2_phys"
+    ],
+    "external_force": [],
+    "vertices": 164,
+    "frames_read": 40,
+    "max_rig_px": 0.157,
+    "p95_rig_px": 0.155,
+    "mean_rig_px": 0.107,
+    "max_of_diagonal": 0.000306,
+    "moves": true
+   },
+   {
+    "row_scope": "part",
+    "row_kind": "evidence",
+    "row_subjects": [
+     "earring"
+    ],
+    "part": "earring",
+    "constraints": [
+     "earring_phys"
+    ],
+    "external_force": [],
+    "vertices": 15,
+    "frames_read": 40,
+    "max_rig_px": 0.33,
+    "p95_rig_px": 0.291,
+    "mean_rig_px": 0.183,
+    "max_of_diagonal": 0.0006375,
+    "moves": true
+   },
+   {
+    "row_scope": "part",
+    "row_kind": "evidence",
+    "row_subjects": [
+     "hairpin"
+    ],
+    "part": "hairpin",
+    "constraints": [
+     "hairpin_phys"
+    ],
+    "external_force": [],
+    "vertices": 113,
+    "frames_read": 40,
+    "max_rig_px": 0.195,
+    "p95_rig_px": 0.142,
+    "mean_rig_px": 0.101,
+    "max_of_diagonal": 0.0008224,
+    "moves": true
+   },
+   {
+    "row_scope": "part",
+    "row_kind": "evidence",
+    "row_subjects": [
+     "hair_front"
+    ],
+    "part": "hair_front",
+    "constraints": [
+     "bang_r0_phys",
+     "bang_r1_phys",
+     "bang_c0_phys",
+     "bang_c1_phys",
+     "bang_l0_phys",
+     "bang_l1_phys"
+    ],
+    "external_force": [],
+    "vertices": 122,
+    "frames_read": 40,
+    "max_rig_px": 0.254,
+    "p95_rig_px": 0.231,
+    "mean_rig_px": 0.148,
+    "max_of_diagonal": 0.001196,
+    "moves": true
+   }
+  ]
+ },
  "RECOMPOSITE_HOLES": {
   "status": "REPORTED",
   "error_px": 14570,

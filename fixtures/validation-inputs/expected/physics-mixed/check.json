@@ -1342,6 +1342,45 @@
       }
     ]
   },
+  "PHYSICS_CONTRIBUTES": {
+    "status": "CLEAR",
+    "off": "the same compiled build posed with the poser's physics off (spine-core Physics.none, rig-c physicsMode 'off') over the same frames — not the rig spec with its physics constraints stripped and built again",
+    "points": "every vertex of a rest triangle that holds a pixel centre of the part's art (alpha above the mesh threshold); per frame the largest residual over them, frames 1..N-1",
+    "world": "rig-c's default environment",
+    "poser": "core",
+    "fps": 12,
+    "frames": 49,
+    "warnings": 0,
+    "rows": [
+      {
+        "row_scope": "part",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hair_back"
+        ],
+        "part": "hair_back",
+        "constraints": [
+          "hairback_r0_0_physics",
+          "hairback_r0_1_physics",
+          "hairback_l0_0_physics",
+          "hairback_l0_1_physics"
+        ],
+        "external_force": [
+          "hairback_r0_0_physics",
+          "hairback_r0_1_physics",
+          "hairback_l0_0_physics",
+          "hairback_l0_1_physics"
+        ],
+        "vertices": 80,
+        "frames_read": 48,
+        "max_rig_px": 0.676,
+        "p95_rig_px": 0.676,
+        "mean_rig_px": 0.579,
+        "max_of_diagonal": 0.004908,
+        "moves": true
+      }
+    ]
+  },
   "RECOMPOSITE_HOLES": {
     "status": "REPORTED",
     "error_px": 64,

@@ -1409,6 +1409,34 @@ const SIDES = [
 export interface BustDraft {
   landmarks?: { apex_r: Point; apex_l: Point; cleavage?: Point };
   noBust?: string;
+  /** Where a cleavage the caller derived came from (issue #1436), said in the torso's note in place of "declared". */
+  cleavageFrom?: string;
+}
+
+/**
+ * The cleavage a landmarks file without one gets: the crossing of the apex segment and the neck-to-hip midline,
+ * on the 1/256-px contour grid. #475's clearance identity requires it on the apex segment, between the two apices;
+ * a midline that crosses it nowhere inside is refused by name. The proposer calls it with its drafted neck and hip;
+ * the chest-only write (issue #1436) with the config's own.
+ */
+export function bustCleavage(apex_r: Point, apex_l: Point, neckAt: Point, hip: Point): Point {
+  const apexDeltaX = apex_l[0] - apex_r[0];
+  const apexDeltaY = apex_l[1] - apex_r[1];
+  const midlineDeltaX = hip[0] - neckAt[0];
+  const midlineDeltaY = hip[1] - neckAt[1];
+  const cross = apexDeltaX * midlineDeltaY - apexDeltaY * midlineDeltaX;
+  const share = ((neckAt[0] - apex_r[0]) * midlineDeltaY - (neckAt[1] - apex_r[1]) * midlineDeltaX) / cross;
+  if (!Number.isFinite(share) || share <= 0 || share >= 1) {
+    throw new PartsError([{
+      code: 'PROPOSE_BUST_INPUT', object: 'landmarks.cleavage',
+      detail: `the neck-to-hip midline ${fmtAt(neckAt)} -> ${fmtAt(hip)} has no unique crossing inside apex_r ${fmtAt(apex_r)} -> apex_l ${fmtAt(apex_l)}. Declare cleavage explicitly or place the apices on opposite sides of the torso midline`,
+    }]);
+  }
+  // Derived coordinates use the same fixed-point grid the contour config reader requires.
+  return [
+    pyRound((apex_r[0] + share * apexDeltaX) * GRID) / GRID,
+    pyRound((apex_r[1] + share * apexDeltaY) * GRID) / GRID,
+  ];
 }
 
 /** Read only the declared landmark fields. Geometry is checked by checkProposal's config reader. */
@@ -3655,27 +3683,7 @@ export function proposeWithBasis(
         detail: 'needs a declared bust: give --bust-landmarks <file> or --no-bust "<reason>"' }]);
     } else {
       const { apex_r, apex_l } = bust.landmarks;
-      let cleavage = bust.landmarks.cleavage;
-      if (cleavage === undefined) {
-        // #475's clearance identity requires cleavage on the apex segment, between the two apices.
-        const apexDeltaX = apex_l[0] - apex_r[0];
-        const apexDeltaY = apex_l[1] - apex_r[1];
-        const midlineDeltaX = hip[0] - neckAt[0];
-        const midlineDeltaY = hip[1] - neckAt[1];
-        const cross = apexDeltaX * midlineDeltaY - apexDeltaY * midlineDeltaX;
-        const share = ((neckAt[0] - apex_r[0]) * midlineDeltaY - (neckAt[1] - apex_r[1]) * midlineDeltaX) / cross;
-        if (!Number.isFinite(share) || share <= 0 || share >= 1) {
-          throw new PartsError([{
-            code: 'PROPOSE_BUST_INPUT', object: 'landmarks.cleavage',
-            detail: `the neck-to-hip midline ${fmtAt(neckAt)} -> ${fmtAt(hip)} has no unique crossing inside apex_r ${fmtAt(apex_r)} -> apex_l ${fmtAt(apex_l)}. Declare cleavage explicitly or place the apices on opposite sides of the torso midline`,
-          }]);
-        }
-        // Derived coordinates use the same fixed-point grid the contour config reader requires.
-        cleavage = [
-          pyRound((apex_r[0] + share * apexDeltaX) * GRID) / GRID,
-          pyRound((apex_r[1] + share * apexDeltaY) * GRID) / GRID,
-        ];
-      }
+      const cleavage = bust.landmarks.cleavage ?? bustCleavage(apex_r, apex_l, neckAt, hip);
       const landmarks: ContourBustSpec = { apex_r, apex_l, cleavage };
       contour.bust = landmarks;
       for (const side of ['r', 'l'] as const) {
@@ -3687,7 +3695,7 @@ export function proposeWithBasis(
           parts: [source.name], bones: ['chest'],
         }), tip: null });
       }
-      notes.push(`${torsoName}: contour.bust from declared apex_r/apex_l. Cleavage ${bust.landmarks.cleavage === undefined ? 'derived at the apex segment crossing of the neck-to-hip midline' : 'declared'}. Bones boob_r/boob_l are parented to chest`);
+      notes.push(`${torsoName}: contour.bust from declared apex_r/apex_l. Cleavage ${bust.landmarks.cleavage === undefined ? 'derived at the apex segment crossing of the neck-to-hip midline' : bust.cleavageFrom ?? 'declared'}. Bones boob_r/boob_l are parented to chest`);
     }
     const chains = new Set(bones.flatMap(b => 'chain' in b
       ? [b.chain, ...b.points.map((_, index) => `${b.chain}${index}`)]
