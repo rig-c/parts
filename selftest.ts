@@ -44817,6 +44817,22 @@ function expectedFormCases(text: ReadonlyArray<readonly [string, string]>, say: 
   say('EXP03_THE_REGENERATION_CHECK_NAMES_A_SPLICE_A_STALE_VALUE_AND_A_MACHINE_CLASS_FIELD', ok,
     JSON.stringify({ self: self.faults.length, splice: splice.faults, stale: stale.faults, poseLinux: poseLinux.faults, poseMac: poseMac.machine }),
     'issue #1439: tools/regenerate_examples.ts --check fails a spliced key and a stale value by path with both values, fails a changed pose_sha256 on Linux and reports it as machine class, exit 0, on another platform');
+
+  // Same values, other bytes: an expected file is held to the build's bytes, not to the tool's serializer (#1439 review).
+  const respacedCheck = JSON.stringify(JSON.parse(demoBody), null, 2) + '\n';
+  const indentLinux = compareExpected(demoCheck, respacedCheck, demoBody, 'linux', true, serialize);
+  const indentMac = compareExpected(demoCheck, respacedCheck, demoBody, 'darwin', true, serialize);
+  const partsRespaced = compareExpected(plantFile, JSON.stringify(JSON.parse(partsBody), null, 2) + '\n', partsBody, 'linux', true);
+  // A build the serializer does not reproduce (the writer changed its indent) with a machine-class difference.
+  const posedWide = JSON.stringify(poseDoc, null, 2) + '\n';
+  const otherWriter = compareExpected(demoCheck, demoBody, posedWide, 'darwin', true, serialize);
+  const okBytes = indentLinux.faults.length === 1 && indentLinux.faults[0].includes('same values, other bytes than the build: line 2') &&
+    indentMac.faults.length === 1 && indentMac.machine.length === 0 && indentMac.faults[0].includes('other bytes than the build') &&
+    partsRespaced.faults.length === 1 && partsRespaced.faults[0].includes('other bytes than the build') &&
+    otherWriter.faults.length === 1 && otherWriter.faults[0].includes('the serializer is not the writer on this build');
+  say('EXP04_SAME_VALUES_IN_OTHER_BYTES_ARE_NOT_THE_BUILD', okBytes,
+    JSON.stringify({ indentLinux: indentLinux.faults, indentMac: indentMac.faults, partsRespaced: partsRespaced.faults, otherWriter: otherWriter.faults }),
+    'issue #1439 review: with no value difference the bytes are compared with the build\'s, on every platform; with machine-class differences only, the serializer must first reproduce the built bytes');
 }
 
 function runTreeSuite(_corpus: string | null = null, pre = false): number {

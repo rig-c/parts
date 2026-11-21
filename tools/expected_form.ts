@@ -91,6 +91,32 @@ function setPath(doc: unknown, path: string, value: unknown): void {
   cur[parts[parts.length - 1]] = value;
 }
 
+/** The first line two texts part at, as a fault: `against` names what the expected bytes were held to. */
+function firstLineFault(file: string, why: string, expected: string, against: string, label: string, first = 'expected'): string {
+  const a = expected.split('\n'), b = against.split('\n');
+  const i = a.findIndex((l, n) => l !== b[n]);
+  const at = i < 0 ? a.length : i;
+  return `EXPECTED_IS_THE_BUILD: ${file} — ${why}: line ${at + 1}: ${first} ${show(a[at])}, ${label} ${show(b[at])}`;
+}
+
+/**
+ * The bytes of a file whose values all agree with the build, but for machine-class fields (issue #1439
+ * review): with no value difference the bytes are held to the build's own bytes. With machine-class
+ * differences only, the serializer is first proven to be the writer's on this build (it reproduces the
+ * built bytes exactly), and then the expected bytes are held to it with the Linux values put back.
+ */
+function sameValueFaults(file: string, expected: string, built: string, ba: unknown,
+  diffs: ReadonlyArray<[string, unknown, unknown]>, serialize?: (value: unknown) => string): string[] {
+  if (diffs.length === 0) return expected === built ? [] : [firstLineFault(file, 'same values, other bytes than the build', expected, built, 'built')];
+  if (serialize === undefined) return [firstLineFault(file, 'machine-class values only, and no serializer to hold the other bytes', expected, built, 'built')];
+  const rewritten = serialize(ba);
+  if (rewritten !== built) return [firstLineFault(file, 'the serializer is not the writer on this build', built, rewritten, 'serialized', 'built')];
+  const held = structuredClone(ba);
+  for (const [path, a] of diffs) setPath(held, path, a);
+  const again = serialize(held);
+  return again === expected ? [] : [firstLineFault(file, 'same values, other bytes than the writer\'s', expected, again, 'written')];
+}
+
 /**
  * One expected file against its build. `faults` fail the check; `machine` are
  * machine-class differences, reported and not failed off Linux.
@@ -117,17 +143,7 @@ export function compareExpected(file: string, expected: string | Uint8Array, bui
       machine.push(`MACHINE_CLASS: ${file} — ${path} differs by machine class: held to Linux (expected ${show(a)}, built ${show(b)} on ${platform})`);
     } else faults.push(`EXPECTED_IS_THE_BUILD: ${file} — ${path}: expected ${show(a)}, built ${show(b)}`);
   }
-  if (faults.length === 0) {
-    // Same values apart from machine class: the bytes must then be the writer's, with the Linux values put back.
-    const held = structuredClone(ba);
-    for (const [path, a] of diffs) setPath(held, path, a);
-    const again = serialize === undefined ? null : serialize(held);
-    if (again !== eb.toString('utf8')) {
-      const a = eb.toString('utf8').split('\n'), b = (again ?? bb.toString('utf8')).split('\n');
-      const i = a.findIndex((l, n) => l !== b[n]);
-      faults.push(`EXPECTED_IS_THE_BUILD: ${file} — same values, other bytes than the writer's: line ${i + 1}: expected ${show(a[i])}, written ${show(b[i])}`);
-    }
-  }
+  if (faults.length === 0) faults.push(...sameValueFaults(file, eb.toString('utf8'), bb.toString('utf8'), ba, diffs, serialize));
   return { faults, machine };
 }
 
