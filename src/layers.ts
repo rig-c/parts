@@ -224,7 +224,11 @@ const DEPTH_RULE = 'a finite number (See-through\'s depth, larger = further back
  * order, a scale) that silently ignoring would get wrong — so the reader says
  * which key it does not know and stops.
  */
-export function readWrapperLayers(path: string, binding?: DepthBinding): LayerSet {
+export function readWrapperLayers(
+  path: string, binding?: DepthBinding,
+  sealedFiles?: ReadonlyMap<string, Buffer>,
+): LayerSet {
+  const bytesOf = (file: string): Buffer => sealedFiles?.get(file) ?? readFileSync(file);
   const manifestPath = existsSync(path) && statSync(path).isDirectory() ? join(path, 'layers.json') : path;
   const dir = dirname(manifestPath);
   const problems: Problem[] = [];
@@ -237,7 +241,7 @@ export function readWrapperLayers(path: string, binding?: DepthBinding): LayerSe
   }
   let manifest: unknown;
   try {
-    manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    manifest = JSON.parse(bytesOf(manifestPath).toString('utf8'));
   } catch (err) {
     refuse('LAYERS_MANIFEST_IS_JSON', manifestPath, `does not parse as JSON: ${(err as Error).message}`);
     refuseIfAny(problems);
@@ -355,7 +359,7 @@ export function readWrapperLayers(path: string, binding?: DepthBinding): LayerSe
       refuse('LAYERS_PNG_PRESENT', `layer "${name}"`, `neither ${flat} nor ${byTag} exists; one of them is required`);
       return;
     }
-    const bytes = present.map((p) => new Uint8Array(readFileSync(p)));
+    const bytes = present.map(p => new Uint8Array(bytesOf(p)));
     if (bytes.length === 2 && Buffer.compare(Buffer.from(bytes[0]), Buffer.from(bytes[1])) !== 0) {
       refuse('LAYERS_PNG_UNAMBIGUOUS', `layer "${name}"`, `${flat} and ${byTag} both exist with different bytes; exactly one source is required`);
       return;

@@ -107,6 +107,8 @@ import type { MeshQualityReport, MotionSchedule } from '@rig-c/core/mesh';
 import { encodeGif } from './gif.ts';
 import { CONTROL_SUFFIX, withAnimations } from './motion.ts';
 import type { PaletteError } from './palette.ts';
+import { PartVisibility } from './partvisibility.ts';
+import { readRunVisibility } from './visibility.ts';
 import { type LayerSet, readLayers } from './layers.ts';
 import { placeBoneEntriesForSkeleton, poseBoneEntriesForDrawn, REGISTER_OFFSET_BAR, REGISTER_SCALE_BAR, registeredWithinBar, registerSkeleton, SKELETON_LIMB_BONES, skeletonDrawnLength, skeletonLimbJoints } from './limbs.ts';
 import { type AlternatePartsRecord, PAINTING_IN_RIG_FILE, FRONT_SUFFIX, type OccluderPlateRecord, type PartRecord, partImageReference, depthImageReference, readParts, readPartsManifest, type RecompositeRecord, type SingleRunPad, tagOf, writeParts } from './parts.ts';
@@ -148,10 +150,20 @@ export function readSource(path: string): Raster {
  * head run (`head` null, issue #359) the full run is read once and stands for
  * both, and `single` says so: the stage then holds it to `checkSingleRun`.
  */
-export function readRuns(full: string, head: string | null): { full: LayerSet; head: LayerSet; single: boolean } {
+export function readRuns(full: string, head: string | null, recordVisibility = false): {
+  full: LayerSet; head: LayerSet; single: boolean; visibility?: PartVisibility;
+} {
   const problems: Problem[] = [];
-  const one = (path: string): LayerSet | null => {
+  let recorded: ReturnType<typeof readRunVisibility>;
+  const one = (path: string, verify = false): LayerSet | null => {
     try {
+      if (verify && !/\.psd$/i.test(path) && existsSync(path)) {
+        const wrapperDir = statSync(path).isDirectory() ? path : basename(path) === 'layers.json' ? dirname(path) : undefined;
+        if (wrapperDir !== undefined) {
+          recorded = readRunVisibility(wrapperDir);
+          if (recorded !== undefined) return recorded.set;
+        }
+      }
       return readLayers(path);
     } catch (err) {
       if (err instanceof PartsError) {
@@ -161,10 +173,19 @@ export function readRuns(full: string, head: string | null): { full: LayerSet; h
       throw err;
     }
   };
-  const f = one(full);
+  const f = one(full, recordVisibility);
   const h = head === null ? f : one(head);
   if (problems.length > 0) throw new PartsError(problems);
-  return { full: f as LayerSet, head: h as LayerSet, single: head === null };
+  const runs = { full: f as LayerSet, head: h as LayerSet, single: head === null };
+  if (recorded === undefined) return runs;
+  const visibility = new PartVisibility();
+  const { manifest, masks } = recorded;
+  const byTag = new Map(manifest.layers.map((layer, i) => [layer.tag, masks[i]]));
+  for (const layer of [...runs.full.layers, ...runs.full.hidden]) {
+    visibility.layer(layer.pixels, `full:${layer.name}`, byTag.get(layer.name));
+  }
+  if (!runs.single) for (const layer of [...runs.head.layers, ...runs.head.hidden]) visibility.layer(layer.pixels, `head:${layer.name}`);
+  return { ...runs, visibility };
 }
 
 /** One `--alt <name>=<source>:<full>[:<head>]` argument (issue #454). */
@@ -545,14 +566,14 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   const { seam, project } = effectiveAssemblyRules(cfg.assemble, input);
   const { requirements, effectiveSetup } = resolveAssemblyRequirements(input, cfg, project, requirementsFile);
   const src = readSource(input.source);
-  const read = readRuns(input.full, input.head);
+  const read = readRuns(input.full, input.head, true);
   // Issue #946: every declared receipt is held to its file, and under `required` every edited image needs one, before anything is assembled.
   const receipts = readEditorReceipts(cfg.assemble.editor_receipts, input.config);
   const editedParts = readEditedParts(cfg.assemble.edited_parts, input.config, cfg.assemble.plan ?? []);
   // Issue #947: under `trace_parts`, a shape drawn in the config through a part's pixels is refused with them.
   refuseIfAny([...receipts.problems, ...missingReceipts(receipts, [...editedRunImages(read), ...editedConfigImages(input.config, cfg.assemble.cuts ?? [], cfg.limbs)]), ...untracedPartSources(cfg)]);
-  const takenRuns = applyTakenLayers(read, src, cfg, input.config);
-  const runs = applyTakenRegions(takenRuns, src, cfg, input.config, effectiveSetup, receipts, input.source, requirements?.read);
+  const takenRuns = applyTakenLayers(read, src, cfg, input.config, read.visibility);
+  const runs = applyTakenRegions(takenRuns, src, cfg, input.config, effectiveSetup, receipts, input.source, requirements?.read, read.visibility);
   for (const note of runs.notes) log(note.startsWith('WARN  ') ? note : `note: ${note}`);
   const fields = projectedStageFields(cfg, runs.single ? { w: src.width, h: src.height } : null);
   const setupPainting = requirements === null || fields.ground !== 'busy' || project !== 'visible' ? undefined
@@ -565,7 +586,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   const under = readUnders(input.config, fields.cuts, { sourcePath: input.source, rigSize, platesOut: underPlates });
   const caps = fields.limbs === undefined ? undefined : readCaps(input.config, fields.limbs);
   const occluders = cfg.assemble.occluders === undefined ? undefined : readOccluderInputs(cfg.assemble.occluders, input.config, src);
-  const result = assemble({ editedParts, allocationEvent: input.allocationEvent === undefined ? undefined : event => input.allocationEvent!(event, null), source: src, full: runs.full, head: runs.head, depth: cfg.depth, depthBase: dirname(resolve(input.config)), ...fields, under, ...(declaredFigure === undefined ? {} : { declaredFigure }),
+  const result = assemble({ editedParts, allocationEvent: input.allocationEvent === undefined ? undefined : event => input.allocationEvent!(event, null), source: src, full: runs.full, head: runs.head, visibility: read.visibility, depth: cfg.depth, depthBase: dirname(resolve(input.config)), ...fields, under, ...(declaredFigure === undefined ? {} : { declaredFigure }),
     ...((cfg.assemble.take ?? []).some(t => 'seed' in t) ? { regionTake: { full: takenRuns.full, head: takenRuns.head, targets: (cfg.assemble.take ?? []).flatMap(t => 'seed' in t ? [t.part] : []) } } : {}), ...(caps === undefined ? {} : { caps }), ...(occluders === undefined ? {} : { occluders }), seamRule: seam, projectRule: project });
   refuseIfAny(verifyUnderPlateMasks(result, fields.cuts, underPlates));
 
@@ -735,7 +756,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       const invalidFocus = setFocusProblems(alt.focus, `${alt.at}.focus`, [altSrc.width, altSrc.height]);
       if (invalidFocus.length > 0) { altProblems.push(...invalidFocus); continue; }
     }
-    const altRuns = readRuns(alt.full, alt.head ?? null);
+    const altRuns = readRuns(alt.full, alt.head ?? null, true);
     altProblems.push(...missingReceipts(receipts, [...editedRunImages(altRuns, `alternate set "${alt.name}" `), ...editedConfigImages(input.config, alt.cuts ?? [], undefined, `${alt.at}.cuts`)]));
     const hidesSet = new Set(alt.hides ?? []);
     const declaredSlots = alt.parts !== undefined ? alt.parts.filter((p) => !hidesSet.has(p)) : baseSlots.filter((p) => !hidesSet.has(p));
@@ -927,6 +948,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
         capOwnership: input.setCapOwnership ?? 'target',
         full: altRuns.full,
         head: altRuns.head,
+        visibility: altRuns.visibility,
         ...(hiddenExtent === undefined ? {} : { requireHiddenExtent: hiddenExtent }),
         ...(fields.keepUnderOccluders === undefined ? {} : { keepUnderOccluders: fields.keepUnderOccluders.filter(name => altPlanNames.has(name)) }),
         resolution: fields.resolution,

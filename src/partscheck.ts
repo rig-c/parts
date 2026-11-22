@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { failLine, PartsError, type Problem } from './errors.ts';
-import { FIGURE_MASK_FILE, partImageReference, partsFileReferences, readParts, type PartsFile } from './parts.ts';
+import { FIGURE_MASK_FILE, orderedSourceVisibility, partImageReference, partsFileReferences, readParts, type PartsFile, type PartSourceVisibility } from './parts.ts';
 import { readPng } from './raster/png.ts';
 import { RasterError } from './raster/types.ts';
 import { NotAPngError } from '@rig-c/core/png';
@@ -76,14 +76,21 @@ export interface PartsCheckInput {
 }
 interface Refusal extends Problem { found: unknown; required: unknown }
 interface Hole { code: string; object: string; reason: string; line: string }
-interface CoverRow { code: string; set: string | null; part: string; source: string; count: number; spans: unknown[] }
+interface CoverRow { code: 'PARTS_UNPLANNED_SOURCE_COVER'; set: string | null; part: string; source: string; count: number; spans: unknown[] }
+interface MaterialRow {
+  code: 'PARTS_INVENTED_MATERIAL';
+  set: string | null;
+  part: string;
+  occluded_px: number;
+  undecided_px: PartSourceVisibility['undecided_px'];
+}
 export interface PartsCheckReport {
   spec: typeof PARTS_CHECK_SPEC;
   stage: 'parts';
   inputs: PartsCheckInput[];
   parts: { primary: string[]; alternates: unknown[]; source_cover: unknown; painting_allocation: unknown[] };
   refusals: Refusal[];
-  reported: CoverRow[];
+  reported: (CoverRow | MaterialRow)[];
   holes: Hole[];
   exit_code: number;
 }
@@ -237,12 +244,19 @@ export function checkPartsStage(input: string, output: string, log: (line: strin
   before.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
   const holes: Hole[] = [];
   const hole = (code: string, at: string, reason: string): void => { holes.push({ code, object: at, reason, line: `${code}: HOLE — ${reason}` }); };
-  for (const [code, reason] of PARTS_QUALITY_HOLES) hole(code, 'parts', reason);
+  const partRows = file === undefined ? [] : [
+    ...file.parts.map(part => ({ part, set: null, path: partImageReference(part).path })),
+    ...(file.alternates ?? []).flatMap(set => set.records.map(part => ({ part, set: set.name, path: partImageReference(part, set.name).path }))),
+  ];
+  const materialRows: MaterialRow[] = partRows.flatMap(({ part, set }) => {
+    if (part.source_visibility === undefined) return [];
+    const { occluded_px, undecided_px } = orderedSourceVisibility(part.source_visibility);
+    return [{ code: 'PARTS_INVENTED_MATERIAL', set, part: part.name, occluded_px, undecided_px }];
+  });
+  for (const [code, reason] of PARTS_QUALITY_HOLES) {
+    if (code !== 'PARTS_INVENTED_MATERIAL' || materialRows.length === 0) hole(code, 'parts', reason);
+  }
   if (file !== undefined) {
-    const partRows = [
-      ...file.parts.map(part => ({ part, path: partImageReference(part).path })),
-      ...(file.alternates ?? []).flatMap(set => set.records.map(part => ({ part, path: partImageReference(part, set.name).path }))),
-    ];
     for (const { part, path } of partRows) {
       try {
         const image = readPng(join(home, path));
@@ -395,7 +409,7 @@ export function checkPartsStage(input: string, output: string, log: (line: strin
     spec: PARTS_CHECK_SPEC, stage: 'parts', inputs: before,
     parts: { primary: file?.parts.map(part => part.name) ?? [], alternates: canonical(file?.alternates ?? []) as unknown[],
       source_cover: canonical(cover), painting_allocation: allocations },
-    refusals, reported, holes, exit_code: refusals.length === 0 ? 0 : 1,
+    refusals, reported: [...reported, ...materialRows], holes, exit_code: refusals.length === 0 ? 0 : 1,
   };
   if (JSON.stringify(before) !== JSON.stringify(inventory(false))) {
     fatal('PARTS_CHECK_INPUT_CHANGED', '--parts', 'input inventory changed during the read; no report was published');
@@ -416,6 +430,11 @@ export function checkPartsStage(input: string, output: string, log: (line: strin
   }
   for (const refusal of refusals) log(failLine(refusal));
   for (const row of reported) log(`${row.code}: REPORTED part "${row.part}" — ${row.source}, ${row.count} px`);
+  for (const row of materialRows) {
+    const set = row.set === null ? '' : ` in set "${row.set}"`;
+    const undecided = Object.entries(row.undecided_px).map(([reason, px]) => `${reason} ${px}`).join(', ');
+    log(`${row.code}: REPORTED part "${row.part}"${set} — occluded ${row.occluded_px} px, undecided (${undecided})`);
+  }
   for (const row of holes) log(row.line);
   return report;
 }

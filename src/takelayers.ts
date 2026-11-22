@@ -13,6 +13,7 @@ import { newMask, newRaster, newFloatImage, type Raster } from './raster/types.t
 import { readPng } from './raster/png.ts';
 import type { TakeDeclaration, TakeOccluderSplit } from './takeregion.ts';
 import { crop, pad } from './raster/composite.ts';
+import type { PartVisibility } from './partvisibility.ts';
 import { warpAffine, type ScaleTranslate } from './raster/warp.ts';
 import { takenTransportProblems, type TakenLayerSource, type TakenLayerTransport } from './takesource.ts';
 
@@ -164,7 +165,7 @@ function supportOverlap(a: Layer, b: Layer): number {
 export function applyTakenLayers<T extends Pick<EarlyConfig, 'depth'> & {
   seethrough: Pick<EarlyConfig['seethrough'], 'resolution' | 'head_box'>;
   assemble: { take?: TakeDeclaration[]; plan?: PlanEntry[]; occluders?: OccluderDeclaration[] };
-}>(runs: { full: LayerSet; head: LayerSet; single: boolean }, painting: Raster, cfg: T, configPath: string): { full: LayerSet; head: LayerSet; single: boolean; notes: string[] } {
+}>(runs: { full: LayerSet; head: LayerSet; single: boolean }, painting: Raster, cfg: T, configPath: string, visibility?: PartVisibility): { full: LayerSet; head: LayerSet; single: boolean; notes: string[] } {
   const wholeDeclarations = (cfg.assemble.take ?? []).filter((item): item is TakeLayers => 'tags' in item);
   const declarations = (cfg.assemble.take ?? []).filter((item): item is TakeLayers | TakeOccluderSplit => 'tags' in item || 'occluder' in item);
   const occluders = cfg.assemble.occluders ?? [];
@@ -248,6 +249,7 @@ export function applyTakenLayers<T extends Pick<EarlyConfig, 'depth'> & {
       };
       const transported = geometry === undefined ? undefined : transportLayer(donorLayer, donor, set, image, d, geometry.map, geometry.exact, tagAt);
       const donorOnSet = transported?.layer ?? donorLayer;
+      visibility?.layer(donorOnSet.pixels, `${d.run}:${donorLayer.name}`);
       const merged = newRaster(set.canvas.w, set.canvas.h);
       let coveredPx = 0, visiblePx = 0, opaquePx = 0;
       for (let y = 0; y < set.canvas.h; y++) for (let x = 0; x < set.canvas.w; x++) {
@@ -256,12 +258,14 @@ export function applyTakenLayers<T extends Pick<EarlyConfig, 'depth'> & {
           if (x >= baseLayer.left && x < baseLayer.right && y >= baseLayer.top && y < baseLayer.bottom) {
             const bp = ((y - baseLayer.top) * baseLayer.pixels.width + (x - baseLayer.left)) * 4;
             merged.data.set(baseLayer.pixels.data.subarray(bp, bp + 4), p);
+            visibility?.copy(merged, p / 4, baseLayer.pixels, bp / 4);
             if (baseLayer.pixels.data[bp + 3] > OPAQUE_ALPHA_ABOVE) { coveredPx++; opaquePx++; }
           }
         } else {
           if (x >= donorOnSet.left && x < donorOnSet.right && y >= donorOnSet.top && y < donorOnSet.bottom) {
             const dp = ((y - donorOnSet.top) * donorOnSet.pixels.width + (x - donorOnSet.left)) * 4;
             merged.data.set(donorOnSet.pixels.data.subarray(dp, dp + 4), p);
+            visibility?.copy(merged, p / 4, donorOnSet.pixels, dp / 4);
             if (donorOnSet.pixels.data[dp + 3] > OPAQUE_ALPHA_ABOVE) { visiblePx++; opaquePx++; }
           }
         }
@@ -322,6 +326,7 @@ export function applyTakenLayers<T extends Pick<EarlyConfig, 'depth'> & {
       const transported = geometry === undefined ? undefined : transportLayer(layer, donor, set, image, d, geometry.map, geometry.exact, `${at} tag "${tag}"`);
       if (transported !== undefined) source.transport = transported.transport;
       const replacement: Layer = { ...(transported?.layer ?? layer), takenLayers: [source] };
+      visibility?.layer(replacement.pixels, `${d.run}:${layer.name}`);
       lists[d.run] = [...lists[d.run].filter(l => l.name !== tag), replacement];
       origins.set(replacement, resolve(base, d.run_dir));
       notes.push(takeLayerNote(source));

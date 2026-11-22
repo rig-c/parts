@@ -68,7 +68,7 @@ export function runPartsCheckChecks(parent: string, say: Say): void {
   const positive = fresh();
   const green = run(positive);
   say('PCK1161_POSITIVE_AND_COVER', green.exit === 0 && green.report?.refusals.length === 0 &&
-    green.report.reported.length === 1 && green.report.reported[0].part === 'neck' && green.report.reported[0].count === 2 &&
+    green.report.reported.length === 1 && green.report.reported[0].code === 'PARTS_UNPLANNED_SOURCE_COVER' && green.report.reported[0].part === 'neck' && green.report.reported[0].count === 2 &&
     JSON.stringify(green.report.reported[0].spans) === '[[0,0,2]]', JSON.stringify(green.report?.reported));
   for (const [code] of PARTS_QUALITY_HOLES) {
     const row = green.report?.holes.find(hole => hole.code === code);

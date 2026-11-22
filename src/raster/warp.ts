@@ -120,20 +120,37 @@ export function warpAffine(src: FloatImage, map: ScaleTranslate, width: number, 
   return out;
 }
 
-/** Exact nonzero quantized tap support, without cancellation between taps. */
-export function warpSupport(src: Mask, map: ScaleTranslate, width: number, height: number, filter: WarpFilter): Mask {
+/** Visit the in-bounds nonzero taps of the same quantized filter as warpAffine. */
+export function visitWarpSupport(
+  src: Pick<Mask, 'width' | 'height'>, map: ScaleTranslate, width: number, height: number, filter: WarpFilter,
+  visit: (pixel: number, taps: readonly number[]) => void,
+): void {
   const xs = positions(width, map.sx, map.tx, 'x'), ys = positions(height, map.sy, map.ty, 'y');
-  const out = newMask(width, height);
+  const taps: number[] = [];
   for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
     const [ix, fx] = xs[x], [iy, fy] = ys[y];
     const firstX = fx !== 0 && filter === 'bicubic' ? -1 : 0;
     const firstY = fy !== 0 && filter === 'bicubic' ? -1 : 0;
     const lastX = fx !== 0 ? filter === 'bicubic' ? 2 : 1 : 0;
     const lastY = fy !== 0 ? filter === 'bicubic' ? 2 : 1 : 0;
+    taps.length = 0;
     for (let dy = firstY; dy <= lastY; dy++) for (let dx = firstX; dx <= lastX; dx++) {
       const sx = ix + dx, sy = iy + dy;
-      if (sx >= 0 && sy >= 0 && sx < src.width && sy < src.height && src.data[sy * src.width + sx] === 1) out.data[y * width + x] = 1;
+      if (sx >= 0 && sy >= 0 && sx < src.width && sy < src.height) taps.push(sy * src.width + sx);
     }
+    visit(y * width + x, taps);
   }
+}
+
+/** Exact nonzero quantized tap support, without cancellation between taps. */
+export function warpSupport(src: Mask, map: ScaleTranslate, width: number, height: number, filter: WarpFilter): Mask {
+  const out = newMask(width, height);
+  visitWarpSupport(src, map, width, height, filter, (p, taps) => {
+    for (const q of taps) {
+      if (src.data[q] !== 1) continue;
+      out.data[p] = 1;
+      break;
+    }
+  });
   return out;
 }
