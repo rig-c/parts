@@ -17,6 +17,7 @@ import { paintingExtensionMasks, paintingExtensionProblems, type PaintingExtensi
 import { applyEdgeSplits, edgeSplitLines, edgeSplitProblems, type EdgeSplit, type EdgeSplitReading } from './edgesplit.ts';
 import { AUTOMATIC_WRITERS as AW, compactValueBaseline, pixelProvenance, rgbaEqual, type ValueBaseline, type StageMap } from './provenance.ts';
 import type { PartVisibility } from './partvisibility.ts';
+import { encodeSourceStateMap, sourceStateMapImage } from './sourcestates.ts';
 import { bindDepthRun, copyDepthMaterial, registerDepthRun, transportPartDepth, type DepthConfig, type RegisteredDepth } from './depthsheets.ts';
 import { COPIED_ALPHA_ABOVE, OCCLUDER_EMPTY, occluderDrawCycleProblems, type OccluderDeclaration, occluderUnheldWarning, orderPlanForOccluders } from './occluders.ts';
 /**
@@ -2895,6 +2896,8 @@ export interface PlacedPart {
   /** Verified edited PNG bytes; emit verbatim rather than encoding image again. */
   encodedBytes?: Uint8Array;
   depthImage?: Raster;
+  /** Issue #1473: the per-texel source-state map, written as `record.source_state_map.image`; present exactly when that is. */
+  sourceStates?: Raster;
   record: PartRecord;
   image: Raster;
 }
@@ -6791,7 +6794,13 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   const editedPartFrontColours = (input.editedParts?.length ?? 0) > 0
     ? replaceEditedParts(placed, input.editedParts!, new Set(input.plan.map(([name]) => name)), stageMap!, editContexts!, srcr, paintingOwner ?? rawPaintingOwnerForPlan(), ERROR_LIMIT, visibility)
     : [];
-  if (visibility !== undefined) for (const part of placed) part.record.source_visibility = visibility.summarize(part.image);
+  if (visibility !== undefined) for (const part of placed) {
+    part.record.source_visibility = visibility.summarize(part.image);
+    // Issue #1473: where each counted state lies, bound by the bytes build writes.
+    const map = encodeSourceStateMap(visibility.states(part.image).codes, part.image.width, part.image.height);
+    part.record.source_state_map = { image: sourceStateMapImage(part.record.name), sha256: map.sha256 };
+    part.sourceStates = map.image;
+  }
   if (editContexts !== undefined) for (const p of placed) {
     const samples = editContexts.get(p)?.depthClampedSamples;
     if (samples === undefined) continue;

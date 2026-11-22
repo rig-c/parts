@@ -10,6 +10,7 @@ import { CUT_MATERIAL_LINE, checkJointMaterial, type MaterialLine } from './cutm
 import { ART_JOINT_LINE, artJointLine, type ArtJointLine } from './artjoints.ts';
 import { BOUNDARY_COLOUR_LINE, BOUNDARY_COLOUR_UNMEASURED_CODE, BOUNDARY_COLOUR_UNMEASURED_SUFFIX, measureBoundaryColour, type BoundaryColourMeasured } from './boundarycolour.ts';
 import { BEHIND_SEAM_LINE, behindTurnAnimations, measureBehindSeams, type BehindSeamsMeasured } from './behindseams.ts';
+import { hasSourceStateMaps, measureSourceExposure, readSourceStateMaps, SOURCE_EXPOSURE_LINE, type SourceExposureMeasured } from './sourceexposure.ts';
 import { baseAnchorMoves, type AnchorRegion } from './baseanchor.ts';
 import { PHYSICS_CONTRIBUTES_LINE, measurePhysicsContribution, physicsLine, type PhysicsContributionLine } from './physicscontrib.ts';
 /**
@@ -2893,6 +2894,7 @@ export interface CheckFigures {
   [BOUNDARY_COLOUR_LINE]?: BoundaryColourMeasured;
   /** Issue #1314: omitted unless behind_seams is declared; undeclared preserves existing check.json bytes. */
   [BEHIND_SEAM_LINE]?: BehindSeamsMeasured;
+  [SOURCE_EXPOSURE_LINE]?: SourceExposureMeasured;
   PASS: boolean;
 }
 
@@ -3352,7 +3354,7 @@ export function checkStatuses(fig: Omit<CheckFigures, 'spec' | 'bar_outcomes' | 
   const bar = (id: 'gate' | 'loop' | 'seam', measured: boolean): CheckStatus => (!measured ? 'SKIP' : checkBarStatus(raw, id) === 'FAIL' ? 'FAIL' : 'PASS');
   const out: Record<string, CheckStatus> = { gate: bar('gate', true), loop: bar('loop', fig.loop_max_diff !== null), seam: bar('seam', fig.seam_mean !== null) };
   for (const n of JUDGEMENT_LINES) out[n] = fig[n].status;
-  for (const n of [FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, MOTION_SEAM_LINE, CLOTH_LINE, PHYSICS_CONTRIBUTES_LINE, ...REPORTED_LINES, 'figure_openings', SOURCE_LINE, WIND_BAND_LINE, ART_JOINT_LINE, CUT_MATERIAL_LINE, SETUP_PAINTING_LINE, BOUNDARY_COLOUR_LINE, BEHIND_SEAM_LINE, COINCIDE_LINE] as const) {
+  for (const n of [FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, MOTION_SEAM_LINE, CLOTH_LINE, PHYSICS_CONTRIBUTES_LINE, ...REPORTED_LINES, 'figure_openings', SOURCE_LINE, WIND_BAND_LINE, ART_JOINT_LINE, CUT_MATERIAL_LINE, SETUP_PAINTING_LINE, BOUNDARY_COLOUR_LINE, BEHIND_SEAM_LINE, SOURCE_EXPOSURE_LINE, COINCIDE_LINE] as const) {
     const l = fig[n];
     if (l !== undefined) out[n] = l.status;
   }
@@ -6897,6 +6899,8 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     if (wb !== null) take(() => resolveWindBand(wb, ready));
     refuseIfAny(refused);
   }
+  // Issue #1473: every source-state map is verified before anything is built; a rig without one reads nothing here.
+  if (hasSourceStateMaps(inp.parts)) readSourceStateMaps(inp.parts as PartsFile, inp.partsDir);
   // Issue #538: a motion with no animation gives check no render a schedule could pose — every frame it reads would be
   // the setup still's — so the flag is refused rather than recorded over readings it did not move.
   if (env !== null && !(isRecord(inp.motion.animations) && Object.keys(inp.motion.animations).length > 0)) {
@@ -7739,6 +7743,11 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     }
   }
 
+  // Issue #1473: recorded-hidden and undecided source texels the poses show, where a part carries a map or a limit is declared.
+  const exposureDeclared = reqFile?.source_exposure;
+  const sourceExposure = exposureDeclared === undefined && !hasSourceStateMaps(inp.parts) ? null
+    : measureSourceExposure(officialRenderer(), { build: buildDir, stage: inp.stage, parts: inp.parts, partsDir: inp.partsDir, imagesDir: typeof inp.rig.images === 'string' ? resolve(inp.rigDir, inp.rig.images) : join(inp.rigDir, 'images'), rig: inp.rig, fps: IDLE_FPS }, exposureDeclared, problems);
+
   // 5. the scene's declared requirements (issue #93), only under --requirements
   const reqProblems: Problem[] = [];
   const reqBlock = reqFile === null || reqRecord === null ? null : { file: reqRecord, ...measureRequirements(inp, reqFile, buildDir, out, rigc, reqProblems, seams ?? new Map(), measured) };
@@ -7786,6 +7795,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     ...(setupPainting === null ? {} : { [SETUP_PAINTING_LINE]: setupPainting }),
     ...(boundaryColour === null ? {} : { [BOUNDARY_COLOUR_LINE]: boundaryColour }),
     ...(behindSeams === null ? {} : { [BEHIND_SEAM_LINE]: behindSeams }),
+    ...(sourceExposure === null ? {} : { [SOURCE_EXPOSURE_LINE]: sourceExposure }),
     ...(cutMaterial === null ? {} : { [CUT_MATERIAL_LINE]: cutMaterial }),
     ...(reqBlock === null ? {} : { requirements: reqBlock }),
   };
@@ -7863,6 +7873,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   if (setupPainting !== null) tally(SETUP_PAINTING_LINE, setupPainting.status === 'SKIP' ? (setupPainting.reason ?? 'no declared limit') : null);
   if (boundaryColour !== null) tally(BOUNDARY_COLOUR_LINE, null);
   if (behindSeams !== null) tally(BEHIND_SEAM_LINE, behindSeams.status === 'SKIP' ? 'HOLE: no complete authored threshold reading; not a pass' : null);
+  if (sourceExposure !== null) tally(SOURCE_EXPOSURE_LINE, sourceExposure.status === 'REPORTED' ? 'no declared limit; a measurement, never a pass' : null);
   // Issue #348: the level bar where it is written; a line whose every foot no frame posed says SKIP and is not measured.
   if (level !== null) tally(LEVEL_LINE, level.status === 'SKIP' ? (level.reason ?? '') : null);
   // Issue #347: the stress bar is counted where it is written — on every rig with a handwear part and an idle.

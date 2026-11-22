@@ -4,6 +4,7 @@ import type { PartSourceVisibility } from './parts.ts';
 import { visitWarpSupport, type ScaleTranslate, type WarpFilter } from './raster/warp.ts';
 import type { Raster } from './raster/types.ts';
 import { VISIBILITY_STATE } from './visibility.ts';
+import { SOURCE_STATE, sourceStateCounts } from './sourcestates.ts';
 
 const UNRECORDED = 1 << VISIBILITY_STATE.unrecorded;
 const VISIBLE = 1 << VISIBILITY_STATE.visible;
@@ -136,29 +137,35 @@ export class PartVisibility {
     });
   }
 
-  summarize(image: Raster): PartSourceVisibility {
+  /**
+   * Each texel's source state (#1473): `SOURCE_STATE.none` at alpha 8 or less,
+   * otherwise the one state its material's contributors share — unrecorded
+   * when any is outside the record, `mixed-source-states` when they differ.
+   */
+  states(image: Raster): { codes: Uint8Array; layers: string[] } {
     const pixels = this.images.get(image);
-    const layers = new Set<string>();
+    const codes = new Uint8Array(image.width * image.height);
     const used = new Set<number>();
-    const result: PartSourceVisibility = {
-      source_layers: [], visible_px: 0, occluded_px: 0,
-      undecided_px: { 'partial-top': 0, 'depth-tie': 0, 'mixed-source-states': 0 },
-      unrecorded_px: 0,
-    };
-    for (let p = 0; p < image.width * image.height; p++) {
+    for (let p = 0; p < codes.length; p++) {
       if (image.data[p * 4 + 3] <= OPAQUE_ALPHA_ABOVE) continue;
       const id = this.union(pixels?.rgb[p] ?? 0, pixels?.alpha[p] ?? 0);
       used.add(id);
       const { states } = this.materials[id];
-      if ((states & UNRECORDED) !== 0) result.unrecorded_px++;
-      else if (states === VISIBLE) result.visible_px++;
-      else if (states === OCCLUDED) result.occluded_px++;
-      else if (states === PARTIAL_TOP) result.undecided_px['partial-top']++;
-      else if (states === DEPTH_TIE) result.undecided_px['depth-tie']++;
-      else result.undecided_px['mixed-source-states']++;
+      codes[p] = (states & UNRECORDED) !== 0 ? SOURCE_STATE.unrecorded
+        : states === VISIBLE ? SOURCE_STATE.visible
+        : states === OCCLUDED ? SOURCE_STATE.occluded
+        : states === PARTIAL_TOP ? SOURCE_STATE['partial-top']
+        : states === DEPTH_TIE ? SOURCE_STATE['depth-tie']
+        : SOURCE_STATE['mixed-source-states'];
     }
+    const layers = new Set<string>();
     for (const id of used) for (const layer of this.materials[id].layers) layers.add(layer);
-    result.source_layers = [...layers].sort();
-    return result;
+    return { codes, layers: [...layers].sort() };
+  }
+
+  /** The counts are read off {@link states}, so the map assemble writes beside them holds them exactly. */
+  summarize(image: Raster): PartSourceVisibility {
+    const { codes, layers } = this.states(image);
+    return { source_layers: layers, ...sourceStateCounts(codes) };
   }
 }
