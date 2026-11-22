@@ -452,8 +452,10 @@ export function checkPartsStage(input: string, output: string, log: (line: strin
     const set = row.set === null ? '' : ` in set "${row.set}"`;
     const undecided = Object.entries(row.undecided_px).map(([reason, px]) => `${reason} ${px}`).join(', ');
     const layers = row.source_layers.length === 0 ? '' : ` (${row.source_layers.join(', ')})`;
+    const native = row.native_samples === undefined ? '' :
+      `; native sample witnesses ${row.native_samples.inverted_px} of ${row.native_samples.overlap_px} attributable overlapping px`;
     log(`${row.code}: REPORTED part "${row.part}" behind part "${row.front}"${set} — inverted ${row.inverted_px} of ${row.overlap_px} overlapping px${layers}; ` +
-      `agreeing ${row.agreeing_px}, unordered ${row.unordered_px}, undecided (${undecided}), unrecorded ${row.unrecorded_px}`);
+      `agreeing ${row.agreeing_px}, unordered ${row.unordered_px}, undecided (${undecided}), unrecorded ${row.unrecorded_px}${native}`);
   }
   for (const row of holes) log(row.line);
   return report;

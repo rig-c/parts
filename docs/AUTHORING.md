@@ -5972,6 +5972,9 @@ partition the final output PNG's `opaque_px` (alpha above 8).
 | `unrecorded_px` | At least one contributing sample has no state, or material outside the record contributes. Examples include native alpha below 128, head-run art blended with full-run art, and painting or edited PNG material added by assembly. |
 
 Assembly follows the artwork's exact nonzero resampling taps and pixel copies.
+Changing the scale can change this partition. A downscale can skip a native
+sample entirely. An upscale can mix decisions into `mixed-source-states`.
+The partition still describes the emitted part PNG and state map at that scale.
 Unchanged pixels in an edited PNG retain their assembled contributors. A
 changed pixel in an external edit uses the replacement image as its source.
 The top-level `visible_px` and `occluded_px` still measure assembly's own
@@ -6011,15 +6014,26 @@ recorded state of each part's contributors at that pixel, as
 | `unordered_px` | Both parts are visible, or both are occluded, so the record does not order the pair here. Both occluded means a third layer covers them. Both visible happens where resampling draws the two parts from different native pixels. |
 | `undecided_px` | `partial-top` and `depth-tie` when both parts carry that one producer reason. Any other mix of recorded states is `mixed-source-states`. |
 | `unrecorded_px` | Either part has material outside the record at that pixel. |
+| `native_samples` | Optional original full-run evidence at non-unit registration scale. Its `overlap_px` counts attributable co-located samples and its `inverted_px` counts the subset where the record shows the back layer and hides the front layer. Neither count enters the output-pixel partition. |
 
 An inversion is a contradiction between two of the run's own layers. It holds
 only among the layers of that See-through run, and says nothing about material
 the run did not separate. A pixel counts as inverted only when every
 resampling tap of both parts agrees. Where a stroke thinner than the filter's
 support mixes with occluded neighbours, its pixels read `mixed-source-states`,
-and under a downscale a stroke one native pixel wide can drop out of
-`inverted_px` altogether, so read `mixed-source-states` beside it. Nothing moves: assembly keeps every pixel and the
-draw order. To remove an inversion, change the input so the material sits in a
+and a downscale can skip the stroke's source row altogether. Read
+`native_samples` alongside the output partition for original draw-order evidence.
+It follows direct, registered full-run material that remains at its mapped
+position in both overlapping parts. A native sample is in scope when its
+mapped integer grid cell is opaque in both parts and both source layers have
+alpha above 8 at that native position. Each such position counts once per
+pair. The geometric cell includes native positions the resampling filter
+may skip, so an inversion can appear here even when `inverted_px` in the
+output partition is zero. Ambiguous or replaced material contributes no
+native evidence. An omitted block means this reading was unavailable, and
+a zero covers only the samples counted in that block.
+
+To remove an inversion, change the input so the material sits in a
 layer whose part is drawn in front, for example with an author layer or a
 `take`, or change the plan order when the whole overlap reads inverted. Then
 re-run assemble and read the count again. `check-parts` reports each row under
@@ -8732,6 +8746,9 @@ count is exact for the frame the renderer draws. It is not an estimate of where
 a texel lands. A count is of stage pixels at scale 1. It equals texels where a
 piece is drawn unscaled and pixel-aligned. Where the sampler blends texels of
 two states into one pixel, that pixel counts for both.
+Changing the rig scale changes the area sampled on the stage. The renderer
+also sees only the state map that assembly emitted at that scale. A native
+state lost during assembly cannot count under its original state in this report.
 
 Without a declaration the line is a measurement: it prints `REPORTED` and is
 never a pass. To hold it to a number, declare a limit in the requirements file.

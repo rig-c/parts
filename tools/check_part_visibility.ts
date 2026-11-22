@@ -309,6 +309,42 @@ export function runSourceOverlapChecks(dir: string, say: Say): void {
   say('AS1474_AGREEING_OVERLAP_READS_ZERO', same(agreed, [{ ...expected[0], source_layers: [], inverted_px: 0, agreeing_px: 104 }]),
     json(agreed), 'Without the stroke, the stroke row agrees with the draw order too: 104 agreeing, 0 inverted, no layers.');
 
+  const scaledOverlap = (scale: number, stroke: boolean) => {
+    const label = `scale-${scale}-${stroke ? 'stroke' : 'agree'}`;
+    const scaled = fixture(join(dir, label), plan, [back(stroke), front], [face], scale);
+    record(scaled.full);
+    const out = join(dir, `${label}-parts`);
+    scaled.run(out);
+    return { out, path: join(out, 'parts.json'), parts: readParts(join(out, 'parts.json')) };
+  };
+  const half = scaledOverlap(0.5, true);
+  const doubleScale = scaledOverlap(2, true);
+  const halfRow = half.parts.parts[0].source_overlaps![0];
+  const twiceRow = doubleScale.parts.parts[0].source_overlaps![0];
+  say('AS1477_NATIVE_STROKE_SURVIVES_THE_OUTPUT_SAMPLE_GRID', halfRow.inverted_px === 0 && twiceRow.inverted_px === 17 &&
+    same(halfRow.native_samples, { overlap_px: 128, inverted_px: 8 }) && same(twiceRow.native_samples, halfRow.native_samples),
+    json({ half: halfRow, twice: twiceRow }),
+    'The eight native stroke samples fall on an odd source row skipped at half scale. Their registered cells still overlap at both scales.');
+
+  const halfAgree = scaledOverlap(0.5, false).parts.parts[0].source_overlaps![0];
+  const nativeLines: string[] = [];
+  const nativeReport = checkPartsStage(half.out, join(dir, 'native-stroke-check'), line => nativeLines.push(line));
+  const nativeRow = nativeReport.reported.find(row => row.code === 'PARTS_DRAW_ORDER_INVERTED');
+  say('AS1477_WITNESSES_REPORT_AND_KEEP_THE_AGREEING_CONTROL', same(halfAgree.native_samples, { overlap_px: 128, inverted_px: 0 }) &&
+    nativeReport.exit_code === 0 && nativeRow?.code === 'PARTS_DRAW_ORDER_INVERTED' && same(nativeRow.native_samples, halfRow.native_samples) &&
+    nativeLines.some(line => line.endsWith('native sample witnesses 8 of 128 attributable overlapping px')),
+    json({ agrees: halfAgree, report: nativeRow }), 'The native counts round trip independently of the output-pixel partition.');
+
+  const invalidNative = readParts(half.path);
+  const invalidRow = invalidNative.parts[0].source_overlaps![0];
+  invalidRow.native_samples = { overlap_px: 7, inverted_px: 8 };
+  const badNativeCount = plant(half.path, json(invalidNative), () => readParts(half.path));
+  invalidRow.native_samples = { overlap_px: 8, inverted_px: -1 };
+  const badNativeType = plant(half.path, json(invalidNative), () => readParts(half.path));
+  say('AS1477_INVALID_NATIVE_SAMPLE_COUNTS_ARE_REFUSED', badNativeCount === 'PARTS_COUNTS_ADD_UP' && badNativeType === 'PARTS_FIELD_TYPE',
+    `inverted exceeds overlap: ${badNativeCount}; negative inversion: ${badNativeType}`,
+    'Both native counts must be safe nonnegative integers, and inversions must fit in their native overlap.');
+
   const rejectOut = join(dir, 'refused');
   const maskPath = join(planted.full, manifest.layers.find(layer => layer.tag === front.tag)!.record.path);
   const tampered = readFileSync(maskPath);

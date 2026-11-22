@@ -1844,6 +1844,7 @@ export function splitMergedArmRunsWithNotes(
       }
       if (opaque === 0 || x1 < x0) return null;
       visibility?.clone(cleaned, canvas);
+      visibility?.forgetNative(canvas); // The split discarded part of the source before the warp.
       return copyDepthMaterial({
         name,
         tag: readLayerTag(name) as LayerTagReading,
@@ -1979,7 +1980,7 @@ export function layerToRig(canvas: Raster, frame: Frame, run: Run, visibility?: 
     }
     out.data[i * 4 + 3] = Math.trunc(a);
   }
-  visibility?.warp(canvas, out, map, filter);
+  visibility?.warp(canvas, out, map, filter, undefined, run === 'full' ? frame : undefined);
   return out;
 }
 
@@ -2023,6 +2024,7 @@ export function layerToRigSplit(
 ): Raster {
   const toRig = (l: Layer): Raster => {
     const placed = placeLayer(l, resolution, visibility);
+    if (!cleaned) visibility?.forgetNative(placed);
     return layerToRig(cleaned ? cleanGhosts(placed, visibility).canvas : placed, frame, run, visibility);
   };
   const split = layer.occluderSplit;
@@ -2033,6 +2035,7 @@ export function layerToRigSplit(
   const kept = cleaned ? cleanGhosts(placeLayer(layer, resolution)).canvas : null;
   const sideToRig = (l: Layer): Raster => {
     const placed = placeLayer(l, resolution, visibility);
+    visibility?.forgetNative(placed);
     if (kept !== null) for (let p = 0; p < resolution * resolution; p++) if (kept.data[p * 4 + 3] === 0) placed.data[p * 4 + 3] = 0;
     return layerToRig(placed, frame, run, visibility);
   };
@@ -4858,6 +4861,7 @@ function cutLimbs(
             if (na === ua) continue;
             if (na === 0) upper.data.fill(0, p * 4, p * 4 + 4);
             else upper.data[p * 4 + 3] = na;
+            visibility?.forgetNative(upper, p);
             // Issue #444: a pixel the feather ramp fades to alpha <= OPAQUE_ALPHA_ABOVE is no longer opaque on the
             // upper piece (its opacity is carried by the lower segment's opaque cap beneath), so it leaves the upper
             // piece's region and its remaining ramp is marked feathered so pushBackFringe does not clear the fade.
@@ -5623,6 +5627,8 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
               trackBaseline?.copy(canvas, p, sourceCanvas);
             }
           }
+          // The restoration baseline deliberately uses uncleaned layer alpha.
+          trackBaseline?.forgetNative(canvas);
           raw = layerToRig(canvas, frame, run, trackBaseline);
         }
       }
