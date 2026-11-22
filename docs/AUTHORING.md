@@ -5991,16 +5991,19 @@ uses the map to say which of these texels a pose shows; see
 
 ##### Draw-order inversions (`source_overlaps`, issue #1474)
 
-A recorded set also gives every part `source_overlaps`: one row for each later
-part in `parts.json` (a part drawn in front of it, as the recomposite draws)
-whose opaque output pixels (alpha above 8) meet its own. A part with no such
-overlap has an empty list. Each row classifies the shared pixels by the
+A recorded set also gives every part `source_overlaps`: one row for each part
+the set draws in front of it whose opaque output pixels (alpha above 8) meet
+its own. A part with no such overlap has an empty list. The primary set draws
+in `parts.json` order, since a front slot shows nothing at setup. An alternate
+draws its records in base order, except that a part the set draws on its
+front slot comes after that slot's target, as its recomposite and its rig
+slots draw it. An alternate's rows pair only records the set keeps. Each row classifies the shared pixels by the
 recorded state of each part's contributors at that pixel, as
 `source_visibility` reads them.
 
 | Field | Meaning |
 | --- | --- |
-| `front` | The part drawn in front of this one. Rows follow draw order. |
+| `front` | The part drawn in front of this one. Rows follow the set's draw order. |
 | `source_layers` | Sorted layers that contributed to the inverted pixels, from both parts. Empty exactly when `inverted_px` is 0. |
 | `overlap_px` | Pixels both parts make opaque. The six classes below partition it. |
 | `inverted_px` | This part is visible in the record and the front part is occluded: the painting shows the part that is drawn behind. |

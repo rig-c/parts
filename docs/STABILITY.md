@@ -103,7 +103,9 @@ They have `code`, `set`, `part`, `occluded_px`, `undecided_px` in that order.
 the material rows in the same set order, with each part's overlaps in draw
 order. They have `code`, `set`, `part`, `front`, `source_layers`,
 `overlap_px`, `inverted_px`, `agreeing_px`, `unordered_px`, `undecided_px`,
-`unrecorded_px` in that order. `part` is drawn behind `front`. `holes` rows have
+`unrecorded_px` in that order. `part` is drawn behind `front` in that set's
+draw order: `parts.json` order for the primary set, and for an alternate the
+base order with each front-slot part after its slot's target. `holes` rows have
 `code`, `object`, `reason`, `line`. Absent source cover or allocation adds its
 own HOLE; malformed present reports are refused. A HOLE carries no measured zero.
 

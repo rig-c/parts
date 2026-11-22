@@ -891,8 +891,13 @@ export function readParts(path: string): PartsFile {
   return file;
 }
 
-/** Pairwise source visibility over overlapping opaque pixels (issue #1474); names resolve within the carrying list. */
-function checkSourceOverlaps(raw: unknown, r: Record<string, unknown>, names: ReadonlyArray<unknown>, index: number, label: string, fail: (code: string, object: string, detail: string) => void): void {
+/**
+ * Pairwise source visibility over overlapping opaque pixels (issue #1474); names resolve within the carrying list.
+ * The primary list is the draw order, so a front part comes later in it. An alternate set draws a front-slot part
+ * after a target parts.json does not record (`pairs` is given): there a front is another record of the set, and
+ * each pair of records is reported once.
+ */
+function checkSourceOverlaps(raw: unknown, r: Record<string, unknown>, names: ReadonlyArray<unknown>, index: number, label: string, fail: (code: string, object: string, detail: string) => void, pairs?: Set<string>): void {
   const at = label + ' source_overlaps';
   if (!('source_visibility' in r)) fail('PARTS_FIELD_PRESENT', `${label} field "source_visibility"`, 'is absent; source_overlaps is written only beside it');
   if (!Array.isArray(raw)) {
@@ -911,7 +916,12 @@ function checkSourceOverlaps(raw: unknown, r: Record<string, unknown>, names: Re
       return;
     }
     const front = names.indexOf(value.front);
-    if (typeof value.front !== 'string' || front <= previous) {
+    if (pairs !== undefined) {
+      const key = JSON.stringify([String(r.name), String(value.front)].sort());
+      if (typeof value.front !== 'string' || front < 0 || front === index || pairs.has(key)) {
+        fail('PARTS_FIELD_TYPE', `${rowAt} front`, `is ${show(value.front)}; another record of the set, each pair of records once, is required`);
+      } else pairs.add(key);
+    } else if (typeof value.front !== 'string' || front <= previous) {
       const later = names.slice(index + 1).filter(n => typeof n === 'string').map(n => JSON.stringify(n)).join(', ') || 'none';
       fail('PARTS_FIELD_TYPE', `${rowAt} front`, `is ${show(value.front)}; a part drawn later than this one, once each in draw order, is required (later parts: ${later})`);
     } else previous = front;
@@ -1374,6 +1384,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
       }
       if (!Array.isArray(set.records)) return;
       if (set.records.some((p) => typeof p === 'object' && p !== null && !Array.isArray(p) && typeof p.limb === 'object' && p.limb !== null && ('hybrid' in p.limb || 'band' in p.limb))) checkLimbRecords(set.records, `${at} `, fail, false);
+      const setPairs = new Set<string>();
       set.records.forEach((p, j) => {
         if (typeof p !== 'object' || p === null || Array.isArray(p)) {
           fail('PARTS_FIELD_TYPE', `${at} records[${j}]`, `is ${show(p)}; a part object is required`);
@@ -1388,7 +1399,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
         checkPaintingExtensionCount(r, `${at} ${part817}`, fail);
         if ('source_visibility' in r) checkSourceVisibility(r.source_visibility, r.opaque_px, `${at} ${part817}`, fail);
         if ('source_state_map' in r) checkSourceStateMap(r, `${at} ${part817}`, fail);
-        if ('source_overlaps' in r) checkSourceOverlaps(r.source_overlaps, r, (set.records as unknown[]).map(q => (q as Record<string, unknown> | null)?.name), j, `${at} ${part817}`, fail);
+        if ('source_overlaps' in r) checkSourceOverlaps(r.source_overlaps, r, (set.records as unknown[]).map(q => (q as Record<string, unknown> | null)?.name), j, `${at} ${part817}`, fail, setPairs);
         const l = r[LIMB_KEY];
         if (typeof l !== 'object' || l === null || Array.isArray(l) || !('cap' in l)) return;
         const part = typeof r.name === 'string' ? `part "${r.name}"` : `records[${j}]`;

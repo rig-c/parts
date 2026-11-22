@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { assembleConfig } from '../fixtures/assemble_fixture.ts';
+import { writeFrontSlotFixture } from '../fixtures/front_slot.ts';
 import { writeTakeRegionFixture } from '../fixtures/take_region.ts';
 import { assembleStage, type AssembleStageInput } from '../src/build.ts';
 import { PartsError } from '../src/errors.ts';
@@ -335,4 +336,44 @@ export function runSourceOverlapChecks(dir: string, say: Say): void {
     !noRecord.reported.some(row => row.code === 'PARTS_DRAW_ORDER_INVERTED') &&
     !noRecord.holes.some(row => row.code === 'PARTS_DRAW_ORDER_INVERTED') && !noLines.some(line => line.includes('PARTS_DRAW_ORDER_INVERTED')),
     json(noRecord.reported), 'With no record, parts.json has no overlap key and check-parts prints no row, line or HOLE for it.');
+
+  // The #664 front-slot fixture: plan order draws the arm behind the torso, and the set "chest" draws its forearm on
+  // forearm_r_front, after the face. Here the set also covers the torso, and its run is recorded with the arm layer
+  // nearer than the topwear, so where the gesture forearm [8, 28) x [29, 36) crosses the torso [18, 44) x [16, 50)
+  // (10 columns by 7 rows, 70 px) the forearm is visible and the torso occluded. Drawn on its front slot, that agrees.
+  const slotHome = join(dir, 'front-slot');
+  const slotCfg = writeFrontSlotFixture(slotHome);
+  const [chest] = (slotCfg.assemble as { alternates: Array<{ parts: string[] }> }).alternates;
+  chest.parts.push('torso');
+  writeFileSync(join(slotHome, 'config.json'), json(slotCfg));
+  const chestFull = join(slotHome, 'chest_full'), chestLayers = join(chestFull, 'layers.json');
+  const chestRun = JSON.parse(readFileSync(chestLayers, 'utf8')) as {
+    layers: { name: string; left: number; top: number; right: number; bottom: number; depth_filename?: string }[];
+  };
+  for (const layer of chestRun.layers) {
+    layer.depth_filename = `${layer.name}_depth.png`;
+    png(join(chestFull, 'parts', layer.depth_filename), layer.right - layer.left, layer.bottom - layer.top, gray(layer.name === 'topwear' ? 30 : 10));
+  }
+  writeFileSync(chestLayers, json(chestRun));
+  record(chestFull);
+  // A plain white set painting: projection then keeps the layer art (as in the stroke fixture) instead of painting
+  // pixels from outside the record over it.
+  png(join(slotHome, 'chest.png'), 128, 128, gray(255));
+  const slotOut = join(slotHome, 'out');
+  assembleStage({ source: join(slotHome, 'painting.png'), full: join(slotHome, 'full'), head: join(slotHome, 'head'), config: join(slotHome, 'config.json'), seam: 'near-white', project: 'core' },
+    { partsJson: join(slotOut, 'parts.json'), partsDir: join(slotOut, 'parts'), recomposite: join(slotOut, 'flat.png'), errorMap: join(slotOut, 'error.png') }, () => {});
+  const slotSet = readParts(join(slotOut, 'parts.json')).alternates?.find(set => set.name === 'chest');
+  const pairRows = (slotSet?.records ?? []).flatMap(part => (part.source_overlaps ?? []).map(row => ({ back: part.name, ...row })))
+    .filter(row => [row.back, row.front].includes('forearm_r') && [row.back, row.front].includes('torso'));
+  const slotParts = join(slotOut, 'parts.json');
+  const twice = readParts(slotParts);
+  const twiceSet = twice.alternates!.find(set => set.name === 'chest')!;
+  const torsoRow = twiceSet.records.find(part => part.name === 'torso')!.source_overlaps!.find(row => row.front === 'forearm_r')!;
+  twiceSet.records.find(part => part.name === 'forearm_r')!.source_overlaps!.push({ ...torsoRow, front: 'torso' });
+  const reversed = plant(slotParts, json(twice), () => readParts(slotParts));
+  say('AS1474_FRONT_SLOT_PAIR_FOLLOWS_THE_SET_DRAW_ORDER', same(slotSet?.front, ['forearm_r']) && pairRows.length === 1 &&
+    pairRows[0].back === 'torso' && pairRows[0].front === 'forearm_r' && pairRows[0].overlap_px === 70 &&
+    pairRows[0].agreeing_px === 70 && pairRows[0].inverted_px === 0 && reversed === 'PARTS_FIELD_TYPE',
+    `${json(pairRows)}; the same pair added back in the other direction: ${reversed}`,
+    'The set draws the forearm on its front slot after the torso, so the 70 crossing pixels agree; in plan order they read inverted. A set reports each pair of records once.');
 }
