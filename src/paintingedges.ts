@@ -1,4 +1,5 @@
 import { foreignPaintingReceiver, paintingReceiverAt, type PaintingReceivers } from './paintingowner.ts';
+import type { PartVisibility } from './partvisibility.ts';
 import { OPAQUE_ALPHA_ABOVE } from './layers.ts';
 import { connectedComponents } from './raster/components.ts';
 import { type Ground } from './projectrule.ts';
@@ -230,6 +231,7 @@ export interface PaintingEdgeOptions {
   movingPair?: ((a: number, b: number) => boolean) | null;
   /** Called once per part and pixel whose RGBA changed. */
   written?: (part: number, pixel: number) => void;
+  visibility?: PartVisibility;
   /** Issue #996: the painting's ground; absent, `plain` (see the invariant above {@link EDGE_RADIUS}). */
   ground?: Ground;
 }
@@ -298,7 +300,7 @@ function applyPaintingEdges(
   existing?: { parts: Raster[]; defects: Uint8Array },
   readDecision?: (q: Decision, alpha: number) => void,
 ): PaintingEdgeResult {
-  const allocation = options.owner;
+  const { owner: allocation, visibility } = options;
   const events: Array<{ p: number; front: number; behind: number; target: number; affected: number[]; status: string; reason: string }> = [];
   const reading: PaintingAllocationReading | undefined = allocation === undefined ? undefined
     : { supplier: allocation.supplier, refused: {}, lineage: allocation.faults, fallbackHeld: 0, coverageTransfers: [] };
@@ -515,11 +517,12 @@ function applyPaintingEdges(
   const at = new Int32Array(W * H).fill(-1);
   decisions.forEach((q, k) => { at[q.p] = k; });
   const alphaOf = new Int16Array(decisions.length);
+  const alphaMaterials = visibility === undefined ? undefined : new Uint32Array(decisions.length);
   const stage = (q: Decision): number => (q.inside ? 2 * q.ring : 2 * q.ring - 1);
   const order = decisions.map((_, k) => k).sort((u, v) => stage(decisions[u]) - stage(decisions[v]) || u - v);
   /** The greatest coverage already resolved for the same FRONT among p's 8 neighbours on the given side and ring. */
-  const neighbours = (q: Decision, inside: boolean, ring: number): number => {
-    let best = 0;
+  const neighbours = (q: Decision, inside: boolean, ring: number): [number, number] => {
+    let best = 0, material = 0;
     const x = q.p % W;
     const y = (q.p - x) / W;
     for (let dy = -1; dy <= 1; dy++) {
@@ -528,27 +531,48 @@ function applyPaintingEdges(
         const ny = y + dy;
         if ((dx === 0 && dy === 0) || nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
         const j = at[ny * W + nx];
-        if (j >= 0 && decisions[j].front === q.front && decisions[j].inside === inside && decisions[j].ring === ring) best = Math.max(best, alphaOf[j]);
+        if (j < 0 || decisions[j].front !== q.front || decisions[j].inside !== inside || decisions[j].ring !== ring) continue;
+        if (alphaOf[j] > best) {
+          best = alphaOf[j];
+          material = alphaMaterials?.[j] ?? 0;
+        } else if (alphaOf[j] === best && alphaMaterials !== undefined && best > 0) {
+          material = visibility!.union(material, alphaMaterials[j]);
+        }
       }
     }
-    return best;
+    return [best, material];
   };
   for (const k of order) {
     const q = decisions[k];
-    let alpha = q.matte;
-    if (q.inside && q.ring > 1) alpha = Math.max(q.own, q.matte);
+    let alpha = q.matte, material = 0;
+    const take = (other: number, from: number, prefer: boolean): void => {
+      if (prefer) { alpha = other; material = from; }
+      else if (other === alpha && visibility !== undefined) material = visibility.union(material, from);
+    };
+    if (q.inside && q.ring > 1) take(q.own, visibility?.sample(parts[q.front], q.p)[1] ?? 0, q.own > alpha);
     else if (q.inside) {
-      alpha = Math.max(alpha, neighbours(q, false, 1));
-      if (busy && q.behind === -1) alpha = Math.max(alpha, q.own);
+      const [adjacent, from] = neighbours(q, false, 1);
+      take(adjacent, from, adjacent > alpha);
+      if (busy && q.behind === -1) take(q.own, visibility?.sample(parts[q.front], q.p)[1] ?? 0, q.own > alpha);
+    } else if (q.ring > 1) {
+      const [adjacent, from] = neighbours(q, false, q.ring - 1);
+      take(adjacent, from, adjacent < alpha);
     }
-    else if (q.ring > 1) alpha = Math.min(alpha, neighbours(q, false, q.ring - 1));
     if (alpha <= OPAQUE_ALPHA_ABOVE) alpha = 0;
     else if (alpha >= 255 - OPAQUE_ALPHA_ABOVE) alpha = 255;
     alphaOf[k] = alpha;
+    if (alphaMaterials !== undefined) alphaMaterials[k] = material;
   }
   // Every write is planned first, per part, so a part's pieces can be held before anything lands.
-  const planned: Array<Map<number, readonly [number, number, number, number]>> = parts.map(() => new Map());
-  const plan = (i: number, p: number, r: number, g: number, bl: number, al: number): void => {
+  type RGBA = readonly [number, number, number, number];
+  type Material = readonly [number, number];
+  const planned: Array<Map<number, RGBA>> = parts.map(() => new Map());
+  const materials: Array<Map<number, Material>> | undefined = visibility === undefined ? undefined : parts.map(() => new Map());
+  const write = (i: number, p: number, rgba: RGBA, material: Material = [0, 0]): void => {
+    planned[i].set(p, rgba);
+    materials?.[i].set(p, material);
+  };
+  const plan = (i: number, p: number, r: number, g: number, bl: number, al: number, material?: Material): void => {
     const d = parts[i].data;
     const s = p * 4;
     if (d[s] === r && d[s + 1] === g && d[s + 2] === bl && d[s + 3] === al) return;
@@ -556,7 +580,7 @@ function applyPaintingEdges(
       skipped.support++;
       return;
     }
-    planned[i].set(p, [r, g, bl, al]);
+    write(i, p, [r, g, bl, al], material);
   };
   /** Per part, the pixels it fills as BEHIND, with the FRONT part over them. */
   const fills: Array<Map<number, number>> = parts.map(() => new Map());
@@ -565,9 +589,9 @@ function applyPaintingEdges(
     const P = [srcr.data[s], srcr.data[s + 1], srcr.data[s + 2]];
     // An existing BEHIND surface keeps its own colour. Unmix FRONT against
     // that same surface so the pair still reconstructs the painting.
-    const cb = q.behind >= 0 && parts[q.behind].data[s + 3] >= EDGE_OWNER_ALPHA
-      ? [parts[q.behind].data[s], parts[q.behind].data[s + 1], parts[q.behind].data[s + 2]]
-      : q.cb;
+    const behind = q.behind >= 0 && parts[q.behind].data[s + 3] >= EDGE_OWNER_ALPHA ? parts[q.behind] : undefined;
+    const cb = behind === undefined ? q.cb : [behind.data[s], behind.data[s + 1], behind.data[s + 2]];
+    const behindRgb = behind === undefined ? 0 : visibility?.sample(behind, q.p)[0] ?? 0;
     const unmixAt = (c: number, a: number): number => Math.min(255, Math.max(0, Math.round(cb[c] + ((P[c] - cb[c]) * 255) / a)));
     // FRONT's colour is clamped to 0..255, so a pixel the two colours cannot mix at that coverage (a painted line darker or
     // lighter than both) would miss the painting: FRONT's coverage rises to the least that brings the composite within half
@@ -612,10 +636,11 @@ function applyPaintingEdges(
       // FRONT keeps its coverage: nothing is planned for it here.
     } else if (alpha === 0) plan(q.front, q.p, 0, 0, 0, 0);
     else if (alpha === 255) plan(q.front, q.p, P[0], P[1], P[2], 255);
-    else plan(q.front, q.p, unmix(0), unmix(1), unmix(2), alpha);
+    else plan(q.front, q.p, unmix(0), unmix(1), unmix(2), alpha,
+      visibility === undefined ? undefined : [visibility.union(0, behindRgb), alphaMaterials![k]]);
     if (q.behind >= 0 && alpha < 255) {
       if (alpha === 0) plan(q.behind, q.p, P[0], P[1], P[2], 255);
-      else plan(q.behind, q.p, cb[0], cb[1], cb[2], 255);
+      else plan(q.behind, q.p, cb[0], cb[1], cb[2], 255, [behindRgb, 0]);
       fills[q.behind].set(q.p, q.front);
     }
   });
@@ -629,7 +654,7 @@ function applyPaintingEdges(
       const pre = parts[i].data.subarray(event.p * 4, event.p * 4 + 4);
       if (pre.every((v, c) => v === rgba[c])) planned[i].delete(event.p);
       else {
-        planned[i].set(event.p, [rgba[0], rgba[1], rgba[2], rgba[3]]);
+        write(i, event.p, [rgba[0], rgba[1], rgba[2], rgba[3]], visibility?.sample(existing.parts[i], event.p));
         fallback.push({ p: event.p, part: i, desired: Array.from(rgba) });
       }
     }
@@ -700,7 +725,7 @@ function applyPaintingEdges(
               // original pixel, including clean fallbacks and silhouettes.
               const offset = p * 4;
               const original = parts[i].data;
-              writes.set(p, [original[offset], original[offset + 1], original[offset + 2], OPAQUE_ALPHA_ABOVE + 1]);
+              write(i, p, [original[offset], original[offset + 1], original[offset + 2], OPAQUE_ALPHA_ABOVE + 1], [visibility?.sample(parts[i], p)[0] ?? 0, 0]);
             }
             skipped.pieces++;
           }
@@ -720,7 +745,7 @@ function applyPaintingEdges(
         const front = fills[i].get(p);
         if (front !== undefined) {
           if (busy && !supports(front, p)) skipped.support++;
-          else planned[front].set(p, [srcr.data[p * 4], srcr.data[p * 4 + 1], srcr.data[p * 4 + 2], 255]);
+          else write(front, p, [srcr.data[p * 4], srcr.data[p * 4 + 1], srcr.data[p * 4 + 2], 255]);
         }
       }
     }
@@ -746,7 +771,8 @@ function applyPaintingEdges(
           // Keep the original FRONT colour at the least coverage that preserves
           // the guarded art bridge. BEHIND already carries its accepted own P.
           const front = parts[event.front].data;
-          planned[event.front].set(event.p, [front[offset], front[offset + 1], front[offset + 2], OPAQUE_ALPHA_ABOVE + 1]);
+          write(event.front, event.p, [front[offset], front[offset + 1], front[offset + 2], OPAQUE_ALPHA_ABOVE + 1],
+            [visibility?.sample(parts[event.front], event.p)[0] ?? 0, 0]);
           event.status = 'retained-front';
         } else {
           for (const i of event.affected) planned[i].delete(event.p);
@@ -769,6 +795,7 @@ function applyPaintingEdges(
     const d = parts[i].data;
     for (const [p, v] of writes) {
       d.set(v, p * 4);
+      if (visibility !== undefined) visibility.write(parts[i], p, materials![i].get(p)!);
       changed[i].data[p] = 1;
     }
   });
@@ -866,6 +893,7 @@ function applyPaintingEdges(
   for (const [p, front] of restore) {
     const s = p * 4;
     parts[front].data.set([srcr.data[s], srcr.data[s + 1], srcr.data[s + 2], 255], s);
+    visibility?.painting(parts[front], p, 'both');
     changed[front].data[p] = 1;
   }
   planned.forEach((writes, i) => {
@@ -901,9 +929,13 @@ function applyPaintingEdges(
 
 /** Apply the owner-aware plan after evaluating clean fallback on scratch art. */
 export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEdgeOptions): PaintingEdgeResult {
-  const allocation = options.owner;
+  const { owner: allocation, visibility } = options;
   if (allocation === undefined) return applyPaintingEdges(parts, srcr, options);
-  const scratch = parts.map(r => ({ ...r, data: new Uint8ClampedArray(r.data) }));
+  const scratch = parts.map(r => {
+    const copy = { ...r, data: new Uint8ClampedArray(r.data) };
+    visibility?.clone(r, copy);
+    return copy;
+  });
   const decisions: Array<{ p: number; front: number; behind: number; alpha: number }> = [];
   const old = applyPaintingEdges(scratch, srcr, { ...options, owner: undefined, written: undefined }, undefined,
     (q, alpha) => decisions.push({ p: q.p, front: q.front, behind: q.behind, alpha }));

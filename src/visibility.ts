@@ -4,7 +4,7 @@ import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { depthSheetProblems } from './depthsheets.ts';
 import { foldName, PartsError, type Problem, refuseIfAny } from './errors.ts';
-import { readWrapperLayers, type Layer } from './layers.ts';
+import { readWrapperLayers, type Layer, type LayerSet } from './layers.ts';
 import { decodePngBytes } from './raster/png.ts';
 import type { Raster } from './raster/types.ts';
 import { readLayerTag } from './tags.ts';
@@ -16,7 +16,7 @@ const MANIFEST = 'visibility.json';
 const WRAPPER = 'layers.json';
 const MASK_DIR = 'visibility';
 const SHA256 = /^[0-9a-f]{64}$/;
-const STATE = { visible: 1, occluded: 2, partialTop: 3, depthTie: 4 } as const;
+export const VISIBILITY_STATE = { unrecorded: 0, visible: 1, occluded: 2, partialTop: 3, depthTie: 4 } as const;
 
 export interface VisibilityIdentity {
   prompt_id: string;
@@ -38,7 +38,7 @@ export interface VisibilityManifest extends VisibilityIdentity {
 type Obj = Record<string, unknown>;
 type Code = 'VISIBILITY_SOURCE' | 'VISIBILITY_MANIFEST' | 'VISIBILITY_HASH';
 type Crop = { layer: Layer; depth: Raster; image: Seal; sheet: Seal };
-type RecordFiles = { manifest: VisibilityManifest; masks: Uint8Array[] };
+type RecordFiles = { manifest: VisibilityManifest; masks: Uint8Array[]; set: LayerSet };
 
 /** Compare native depth levels. Smaller levels are nearer. */
 export function compareVisibilityDepth(a: number, b: number): -1 | 0 | 1 {
@@ -177,9 +177,9 @@ function sourceNames(dir: string, bytes: Buffer): string[] {
   return names;
 }
 
-function readWrapper(dir: string): ReturnType<typeof readWrapperLayers> {
+function readWrapper(dir: string, sealed: ReadonlyMap<string, Buffer>): ReturnType<typeof readWrapperLayers> {
   try {
-    return readWrapperLayers(dir);
+    return readWrapperLayers(dir, undefined, sealed);
   } catch (error) {
     if (error instanceof PartsError) {
       throw new PartsError(error.problems.map(problem => ({ ...problem, code: 'VISIBILITY_SOURCE' })));
@@ -239,9 +239,9 @@ function score(crops: readonly Crop[], [width, height]: Pair): Uint8Array[] {
         const pixel = y * art.width + x;
         if (art.data[pixel * 4 + 3] < ALPHA_FLOOR) continue;
         const cell = (y + layer.top) * width + x + layer.left;
-        if (compareVisibilityDepth(nearest[cell], second[cell]) === 0) mask[pixel] = STATE.depthTie;
-        else if (topAlpha[cell] < 255) mask[pixel] = STATE.partialTop;
-        else mask[pixel] = depth.data[pixel * 4] === nearest[cell] ? STATE.visible : STATE.occluded;
+        if (compareVisibilityDepth(nearest[cell], second[cell]) === 0) mask[pixel] = VISIBILITY_STATE.depthTie;
+        else if (topAlpha[cell] < 255) mask[pixel] = VISIBILITY_STATE.partialTop;
+        else mask[pixel] = depth.data[pixel * 4] === nearest[cell] ? VISIBILITY_STATE.visible : VISIBILITY_STATE.occluded;
       }
     }
     return mask;
@@ -267,15 +267,17 @@ function buildRecord(dir: string, identity: VisibilityIdentity, saved?: { value:
   if (recorded !== undefined && (!Array.isArray(rows) || rows.length !== names.length)) {
     fail('VISIBILITY_MANIFEST', manifestAt + '.layers', `found ${Array.isArray(rows) ? rows.length : describe(rows)}; requires ${names.length} drawn layers`);
   }
+  const sealed = new Map([[join(dir, WRAPPER), wrapper.bytes]]);
   const sourceLayers = names.map((tag, i) => {
     const at = `${manifestAt}.layers[${i}]`;
     const row = Array.isArray(rows) ? fields(rows[i], ['tag', 'offset', 'size', 'image', 'depth', 'record'], at) : undefined;
     if (row !== undefined) match(row.tag, tag, at + '.tag');
-    const image = readSealed(dir, `parts/${tag}.png`, row && { value: row.image, at: at + '.image' }).seal;
-    return { tag, at, row, image };
+    const image = readSealed(dir, `parts/${tag}.png`, row && { value: row.image, at: at + '.image' });
+    sealed.set(join(dir, image.seal.path), image.bytes);
+    return { tag, at, row, image: image.seal };
   });
 
-  const set = readWrapper(dir);
+  const set = readWrapper(dir, sealed);
   const canvas: Pair = [set.canvas.w, set.canvas.h];
   if (recorded !== undefined) match(recorded.canvas, canvas, manifestAt + '.canvas');
   if (!canvas.every(Number.isSafeInteger) || !Number.isSafeInteger(canvas[0] * canvas[1])) {
@@ -330,7 +332,7 @@ function buildRecord(dir: string, identity: VisibilityIdentity, saved?: { value:
       image, depth: sheet, record: { path, sha256: expected },
     };
   });
-  return { manifest: { ...run, layer_manifest: wrapper.seal, canvas, ...policy, layers }, masks };
+  return { manifest: { ...run, layer_manifest: wrapper.seal, canvas, ...policy, layers }, masks, set };
 }
 
 /** Stage into a fresh wrapper transaction directory. The manifest is written last. */
@@ -352,9 +354,31 @@ export function writeVisibilityRecord(dir: string, identity: VisibilityIdentity)
 }
 
 /** Verify the run, current source bytes, native grids and exact scored masks. */
-export function readVisibilityRecord(dir: string, identity: VisibilityIdentity): VisibilityManifest {
+export function readVisibilityRecord(dir: string, identity: VisibilityIdentity): VisibilityManifest;
+export function readVisibilityRecord(dir: string, identity: VisibilityIdentity, includeSamples: true): RecordFiles;
+export function readVisibilityRecord(
+  dir: string, identity: VisibilityIdentity, includeSamples = false,
+): VisibilityManifest | RecordFiles {
   checkIdentity(identity);
   const file = join(dir, MANIFEST);
   const value = parse(readBytes(file), file, 'VISIBILITY_MANIFEST');
-  return buildRecord(dir, identity, { value }).manifest;
+  const result = buildRecord(dir, identity, { value });
+  return includeSamples ? result : result.manifest;
+}
+
+/** The expected identity comes from the independent producer metadata. */
+export function readRunVisibility(dir: string): RecordFiles | undefined {
+  const path = join(dir, MANIFEST);
+  if (lstatSync(path, { throwIfNoEntry: false }) === undefined) return;
+  const meta = join(dir, 'meta.json');
+  const value = parse(readBytes(meta), meta, 'VISIBILITY_SOURCE');
+  if (!isObject(value) || Object.hasOwn(value, 'visibility_warning')) {
+    fail('VISIBILITY_SOURCE', meta, 'requires producer metadata with a successful visibility record');
+  }
+  const { prompt_id, uploaded_image_sha256, graph_sha256 } = value;
+  if (typeof prompt_id !== 'string' || prompt_id.length === 0 || prompt_id.trim() !== prompt_id ||
+      !isSha256(uploaded_image_sha256) || !isSha256(graph_sha256)) {
+    fail('VISIBILITY_SOURCE', meta, 'requires prompt_id and lowercase SHA-256 uploaded_image_sha256 and graph_sha256 from the producing run');
+  }
+  return readVisibilityRecord(dir, { prompt_id, input_sha256: uploaded_image_sha256, graph_sha256 }, true);
 }

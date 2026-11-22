@@ -10,6 +10,7 @@ import { readPng } from './raster/png.ts';
 import { resize } from './raster/resize.ts';
 import { newMask, newRaster, type Raster } from './raster/types.ts';
 import type { SetupPainting } from './setuppainting.ts';
+import type { PartVisibility } from './partvisibility.ts';
 import { cropGeometry, transportLayer, type TakeLayers } from './takelayers.ts';
 
 export interface TakeRegion {
@@ -75,7 +76,7 @@ function offsetAt(layer: Layer, x: number, y: number): number | null {
 }
 
 /** Copy exactly the seed's 8-connected qualifying component. Inputs stay intact. */
-export function deriveTakenRegion(base: Layer, donor: Layer, painting: Raster, seed: readonly [number, number], tolerance: number, at: string): { layer: Layer; reading: Omit<RegionReading, 'part' | 'run' | 'run_dir'> } {
+export function deriveTakenRegion(base: Layer, donor: Layer, painting: Raster, seed: readonly [number, number], tolerance: number, at: string, visibility?: PartVisibility): { layer: Layer; reading: Omit<RegionReading, 'part' | 'run' | 'run_dir'> } {
   const { width, height } = painting;
   const qualifying = newMask(width, height);
   let candidates = 0;
@@ -101,12 +102,16 @@ export function deriveTakenRegion(base: Layer, donor: Layer, painting: Raster, s
   const pixels = newRaster(right - left, bottom - top);
   for (let y = base.top; y < base.bottom; y++) for (let x = base.left; x < base.right; x++) {
     const from = offsetAt(base, x, y)!;
-    pixels.data.set(base.pixels.data.subarray(from, from + 4), ((y - top) * pixels.width + x - left) * 4);
+    const to = (y - top) * pixels.width + x - left;
+    pixels.data.set(base.pixels.data.subarray(from, from + 4), to * 4);
+    visibility?.copy(pixels, to, base.pixels, from / 4);
   }
   for (let y = stats.top; y < stats.top + stats.height; y++) for (let x = stats.left; x < stats.left + stats.width; x++) {
     if (components.labels[y * width + x] !== label) continue;
     const from = offsetAt(donor, x, y)!;
-    pixels.data.set(donor.pixels.data.subarray(from, from + 4), ((y - top) * pixels.width + x - left) * 4);
+    const to = (y - top) * pixels.width + x - left;
+    pixels.data.set(donor.pixels.data.subarray(from, from + 4), to * 4);
+    visibility?.copy(pixels, to, donor.pixels, from / 4);
   }
   for (let p = 0; p < qualifying.data.length; p++) qualifying.data[p] = components.labels[p] === label ? 1 : 0;
   let opaquePx = 0;
@@ -121,7 +126,7 @@ export function deriveTakenRegion(base: Layer, donor: Layer, painting: Raster, s
 export function applyTakenRegions(runs: Runs, painting: Raster, cfg: Pick<AssembleConfig, 'depth'> & {
   seethrough: Pick<AssembleConfig['seethrough'], 'head_box'> | undefined;
   assemble: Pick<AssembleConfig['assemble'], 'take' | 'plan'>;
-}, configPath: string, setup: SetupPainting | undefined, receipts: ReceiptLedger, sourcePath?: string, requirementsPath?: string): Runs {
+}, configPath: string, setup: SetupPainting | undefined, receipts: ReceiptLedger, sourcePath?: string, requirementsPath?: string, visibility?: PartVisibility): Runs {
   const declarations = (cfg.assemble.take ?? []).filter((item): item is TakeRegion => 'seed' in item);
   if (declarations.length === 0) return runs;
   const tolerance = setup?.rgb_tolerance;
@@ -191,7 +196,8 @@ export function applyTakenRegions(runs: Runs, painting: Raster, cfg: Pick<Assemb
     const colourTarget = declaration.run === 'head' ? colourInputs.head! : target === painting ? referencePainting : colourInputs.full;
     const source = resize(colourTarget, set.canvas.w, set.canvas.h, 'lanczos3');
     const transported = geometry === undefined ? material : transportLayer(material, donor, set, supplied, declaration, geometry.map, geometry.exact, at).layer;
-    const derived = deriveTakenRegion(base, transported, source, declaration.seed, tolerance, at);
+    visibility?.layer(transported.pixels, `${declaration.run}:${material.name}`);
+    const derived = deriveTakenRegion(base, transported, source, declaration.seed, tolerance, at, visibility);
     lists[declaration.run] = lists[declaration.run].map(layer => layer === base ? derived.layer : layer);
     const reading: RegionReading = { part: declaration.part, run: declaration.run, run_dir: declaration.run_dir, ...derived.reading };
     const pad = target === painting ? [0, 0] : declaration.run === 'head' ? inputs.headBox! : [-inputs.padLeft, -inputs.padTop];

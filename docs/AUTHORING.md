@@ -5955,6 +5955,30 @@ with `meta.json`'s `prompt_id`, they are the expected identity for
 | <a id="VISIBILITY_MANIFEST"></a>`VISIBILITY_MANIFEST` | The visibility manifest is malformed or disagrees with the run identity or grids | use the producer's manifest for this run |
 | <a id="VISIBILITY_HASH"></a>`VISIBILITY_HASH` | A bound file differs from its recorded SHA-256 | restore the exact file from the producing run |
 
+When the full wrapper run has a sibling `visibility.json`, assembly verifies
+it against the producer's `meta.json` and the native layer, depth and state
+bytes. The full input can name the wrapper directory or its `layers.json`.
+An alternate set uses its own full input. A set with no record keeps the
+legacy part fields.
+
+For a recorded set, every emitted part has `source_visibility`. The counts
+partition the final output PNG's `opaque_px` (alpha above 8).
+
+| Field | Meaning |
+| --- | --- |
+| `source_layers` | Sorted original layer names prefixed with `full:` or `head:` that contributed to opaque output pixels, including layers outside the record. An image with no observed layer contributors uses an empty list. |
+| `visible_px`, `occluded_px` | Every contributing native sample has the same recorded state. Occlusion is relative to the layers of that See-through run. Painted-versus-invented material remains unknown. |
+| `undecided_px` | Counts by reason. `partial-top` and `depth-tie` preserve unanimous producer reasons. `mixed-source-states` means every contributing native sample was recorded and the states or reasons disagree. |
+| `unrecorded_px` | At least one contributing sample has no state, or material outside the record contributes. Examples include native alpha below 128, head-run art blended with full-run art, and painting or edited PNG material added by assembly. |
+
+Assembly follows the artwork's exact nonzero resampling taps and pixel copies.
+Unchanged pixels in an edited PNG retain their assembled contributors. A
+changed pixel in an external edit uses the replacement image as its source.
+The top-level `visible_px` and `occluded_px` still measure assembly's own
+draw/coverage rules. Assembly publishes counts only because this report
+measures totals per part. Measuring exposure in poses requires a separate
+position-bound record and frame observations.
+
 #### Step-4 plates (`comfy plate`, issue #1183)
 
 `rig-parts comfy plate --mode background|foreground --painting <png>
@@ -6645,7 +6669,7 @@ documents do not ship). Each is an input this package built; none is an author's
 Run `rig-parts check-parts --parts <assembled-dir> --out <disjoint-report-dir>`
 before parts review. Add `--json` for the completed report alone. The command
 writes `parts-check.json` and reads no rig, motion or plate. Exit 0 records input
-integrity while the six #945/#884 quality classes remain named HOLEs.
+integrity. Quality classes without measurements remain named HOLEs.
 [STABILITY](STABILITY.md#parts-stage-integrity-report) defines the binding and
 closed diagnostic vocabulary. Base and alternate `scene.figure_mask` remain
 outside the consumed inputs pending [#1177](https://github.com/rig-c/parts/issues/1177).
@@ -6663,7 +6687,8 @@ outside the consumed inputs pending [#1177](https://github.com/rig-c/parts/issue
 | <a id="PARTS_SOURCE_COVER"></a>`PARTS_SOURCE_COVER` | HOLE when source_cover.json is absent | re-run assemble when a cover inventory is required |
 | <a id="PARTS_PAINTING_ALLOCATION"></a>`PARTS_PAINTING_ALLOCATION` | HOLE when painting_allocation.json is absent | retain the missing transfer observation in review |
 | <a id="PARTS_PLATE_GHOST"></a><a id="PARTS_PLATE_STRUCTURE"></a><a id="PARTS_PLATE_SMEAR"></a><a id="PARTS_PLATE_STEPS"></a>`PARTS_PLATE_GHOST`, `PARTS_PLATE_STRUCTURE`, `PARTS_PLATE_SMEAR`, `PARTS_PLATE_STEPS` | HOLE; no adopted plate discriminator is available | carry these unmeasured classes to parts review |
-| <a id="PARTS_INVENTED_MATERIAL"></a><a id="PARTS_INVENTED_EXPOSURE"></a>`PARTS_INVENTED_MATERIAL`, `PARTS_INVENTED_EXPOSURE` | HOLE; validated producer material truth and posed exposure are unavailable | retain the producer-provenance and frame-measurement gaps in review |
+| <a id="PARTS_INVENTED_MATERIAL"></a>`PARTS_INVENTED_MATERIAL` | REPORTED per part with a validated [See-through visibility record](#see-through-layer-visibility), with occluded and undecided counts. If only some parts have measurements, one HOLE counts and names every unmeasured part and its primary or alternate set. If no part has measurements, the legacy HOLE remains. | read the counts as same-run visibility |
+| <a id="PARTS_INVENTED_EXPOSURE"></a>`PARTS_INVENTED_EXPOSURE` | HOLE while posed-frame observations are unavailable | retain the frame-measurement gap in review |
 
 ### check and build
 

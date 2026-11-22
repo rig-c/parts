@@ -41,6 +41,8 @@ const PART_STRING_FIELDS = [
   'provenance.edited_part.receipt.producer.tool',
   'provenance.edited_part.receipt.sha256',
   'provenance.edits[].edit',
+  // Original run-qualified layer identities.
+  'source_visibility.source_layers[]',
   'taken_layers[].prompt_id',
   'taken_layers[].run',
   'taken_layers[].run_dir',

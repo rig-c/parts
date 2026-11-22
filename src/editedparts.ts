@@ -1,4 +1,5 @@
 /** Rig-space whole-file replacements, applied after the last normal raster pass. */
+import type { PartVisibility } from './partvisibility.ts';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -156,6 +157,7 @@ export function replaceEditedParts(
   painting: Raster,
   owner: PaintingOwner,
   errorLimit: number,
+  visibility?: PartVisibility,
 ): EditedPartFrontColourReading[] {
   const problems: Problem[] = [], seen = new Set<string>();
   for (const edit of edits) {
@@ -206,6 +208,7 @@ export function replaceEditedParts(
       const offset = p * 4, prior = previous(), priorSeam = preSeam();
       const changed = !rgbaEqual(old.data, offset, edit.image.data, offset);
       const counted = edit.image.data[offset + 3] > OPAQUE_ALPHA_ABOVE;
+      if (!changed && counted) visibility?.copy(edit.image, p, old);
       if (changed) {
         metadata.changed_px++;
         if (counted) metadata.changed_counted_px++; else metadata.changed_excluded_px++;

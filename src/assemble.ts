@@ -16,6 +16,7 @@ import { authoredUnitDepths, type AuthoredUnitDepth } from './authoredunit.ts';
 import { paintingExtensionMasks, paintingExtensionProblems, type PaintingExtension } from './paintingextension.ts';
 import { applyEdgeSplits, edgeSplitLines, edgeSplitProblems, type EdgeSplit, type EdgeSplitReading } from './edgesplit.ts';
 import { AUTOMATIC_WRITERS as AW, compactValueBaseline, pixelProvenance, rgbaEqual, type ValueBaseline, type StageMap } from './provenance.ts';
+import type { PartVisibility } from './partvisibility.ts';
 import { bindDepthRun, copyDepthMaterial, registerDepthRun, transportPartDepth, type DepthConfig, type RegisteredDepth } from './depthsheets.ts';
 import { COPIED_ALPHA_ABOVE, OCCLUDER_EMPTY, occluderDrawCycleProblems, type OccluderDeclaration, occluderUnheldWarning, orderPlanForOccluders } from './occluders.ts';
 /**
@@ -326,6 +327,7 @@ export function singleRunPadRecord(single: boolean, sourceW: number, sourceH: nu
 }
 
 export interface AssembleInput {
+  visibility?: PartVisibility;
   /** Verified whole-file base-part edits, placed after all normal raster passes. */
   editedParts?: readonly VerifiedEditedPart[];
   /** Observe allocation decisions after guarding and restoration. */
@@ -1275,12 +1277,13 @@ export function checkGeometry(g: Geometry, runs?: { full: LayerSet; head: LayerS
  * Place a layer's pixels on its run's `resolution x resolution` canvas.
  * `readWrapperLayers`/`readPsdLayers` already refused a box outside it.
  */
-export function placeLayer(layer: Pick<Layer, 'pixels' | 'left' | 'top'>, resolution: number): Raster {
+export function placeLayer(layer: Pick<Layer, 'pixels' | 'left' | 'top'>, resolution: number, visibility?: PartVisibility): Raster {
   const out = newRaster(resolution, resolution);
   const p = layer.pixels;
   for (let y = 0; y < p.height; y++) {
     out.data.set(p.data.subarray(y * p.width * 4, (y + 1) * p.width * 4), ((layer.top + y) * resolution + layer.left) * 4);
   }
+  visibility?.rows(out, p, 0, 0, p.width, p.height, layer.left, layer.top);
   return out;
 }
 
@@ -1296,9 +1299,10 @@ export function placeLayer(layer: Pick<Layer, 'pixels' | 'left' | 'top'>, resolu
  * `alpha > 8` pixel comes back fully transparent with `ghostPx` 0.
  * (`assemble_parts.py` `clean`.)
  */
-export function cleanGhosts(canvas: Raster): { canvas: Raster; ghostPx: number } {
+export function cleanGhosts(canvas: Raster, visibility?: PartVisibility): { canvas: Raster; ghostPx: number } {
   const { width: w, height: h } = canvas;
   const out: Raster = { width: w, height: h, data: new Uint8ClampedArray(canvas.data) };
+  visibility?.clone(canvas, out);
   const m = newMask(w, h);
   let any = false;
   for (let i = 0; i < w * h; i++) {
@@ -1338,9 +1342,9 @@ export interface RunLayer {
 }
 
 /** Every layer of a run, placed and cleaned, in draw order (back to front). */
-export function runLayers(set: LayerSet, resolution: number): RunLayer[] {
+export function runLayers(set: LayerSet, resolution: number, visibility?: PartVisibility): RunLayer[] {
   return set.layers.map((layer) => {
-    const { canvas, ghostPx } = cleanGhosts(placeLayer(layer, resolution));
+    const { canvas, ghostPx } = cleanGhosts(placeLayer(layer, resolution, visibility), visibility);
     let opaqueRunPx = 0;
     for (let i = 3; i < canvas.data.length; i += 4) if (canvas.data[i] > OPAQUE_ALPHA_ABOVE) opaqueRunPx++;
     return { tag: layer.name, canvas, drawOrder: layer.drawOrder, ghostPx, opaqueRunPx };
@@ -1400,7 +1404,7 @@ function splitColumnsAtRow(y: number, armSplit: ArmSplit): number[] {
  * - either resulting arm layer is left with 0 opaque pixels, or an arm is cut
  *   into disconnected components.
  */
-export function applyArmSplit(set: LayerSet, resolution: number, armSplit: ArmSplit): LayerSet {
+export function applyArmSplit(set: LayerSet, resolution: number, armSplit: ArmSplit, visibility?: PartVisibility): LayerSet {
   const handLayers = set.layers.filter((l) => l.name === 'handwear-r' || l.name === 'handwear-l');
   if (handLayers.length === 0) {
     refuseIfAny([
@@ -1414,12 +1418,15 @@ export function applyArmSplit(set: LayerSet, resolution: number, armSplit: ArmSp
   const combinedRaw = newRaster(resolution, resolution);
   const scalarOwners = handLayers.some(l => l.depthSheet !== undefined) ? new Int32Array(resolution * resolution).fill(-1) : null;
   for (const [layerIndex, l] of handLayers.entries()) {
-    const { canvas } = cleanGhosts(placeLayer(l, resolution));
+    const { canvas } = cleanGhosts(placeLayer(l, resolution, visibility), visibility);
     for (let p = 0; p < resolution * resolution; p++) {
-      if (canvas.data[p * 4 + 3] > 0) { combinedRaw.data.set(canvas.data.subarray(p * 4, p * 4 + 4), p * 4); if (scalarOwners !== null) scalarOwners[p] = layerIndex; }
+      if (canvas.data[p * 4 + 3] === 0) continue;
+      combinedRaw.data.set(canvas.data.subarray(p * 4, p * 4 + 4), p * 4);
+      if (scalarOwners !== null) scalarOwners[p] = layerIndex;
+      visibility?.copy(combinedRaw, p, canvas);
     }
   }
-  const { canvas: combined } = cleanGhosts(combinedRaw);
+  const { canvas: combined } = cleanGhosts(combinedRaw, visibility);
   const rightCanvas = newRaster(resolution, resolution);
   const leftCanvas = newRaster(resolution, resolution);
   let firstCutRun: { y: number; rx0: number; rx1: number; col: number } | null = null;
@@ -1463,8 +1470,9 @@ export function applyArmSplit(set: LayerSet, resolution: number, armSplit: ArmSp
     for (let cx = 0; cx < resolution; cx++) {
       const p = (y * resolution + cx) * 4;
       if (combined.data[p + 3] === 0) continue;
-      const dst = cx < col ? rightCanvas.data : leftCanvas.data;
-      dst.set(combined.data.subarray(p, p + 4), p);
+      const dst = cx < col ? rightCanvas : leftCanvas;
+      dst.data.set(combined.data.subarray(p, p + 4), p);
+      visibility?.copy(dst, p / 4, combined);
     }
   }
   const maskOf = (r: Raster): { mask: Mask; opaque: number; x0: number; y0: number; x1: number; y1: number } => {
@@ -1528,7 +1536,7 @@ export function applyArmSplit(set: LayerSet, resolution: number, armSplit: ArmSp
     tag: readLayerTag(name) as LayerTagReading,
     file: refLayer.file,
     takenLayers: unionTakenSources(handLayers.map(l => l.takenLayers)),
-    pixels: crop(canvas, m.x0, m.y0, m.x1 - m.x0 + 1, m.y1 - m.y0 + 1),
+    pixels: visibilityCrop(canvas, m.x0, m.y0, m.x1 - m.x0 + 1, m.y1 - m.y0 + 1, visibility),
     left: m.x0,
     top: m.y0,
     right: m.x1 + 1,
@@ -1657,6 +1665,7 @@ export function splitMergedArmRunsWithNotes(
   sourceW: number,
   sourceH: number,
   keySkeleton: ControlSkeleton,
+  visibility?: PartVisibility,
 ): { set: LayerSet; notes: string[] } {
   const [latentW, latentH] = keySkeleton.latent;
   const sx = sourceW / latentW;
@@ -1674,7 +1683,7 @@ export function splitMergedArmRunsWithNotes(
     const tag = `handwear-${s}` as const;
     const hwLayer = set.layers.find((l) => l.name === tag);
     if (hwLayer === undefined) continue;
-    const { canvas: cleaned } = cleanGhosts(placeLayer(hwLayer, resolution));
+    const { canvas: cleaned } = cleanGhosts(placeLayer(hwLayer, resolution, visibility), visibility);
     const sh = toRun(keySkeleton.points[`${s}_shoulder`]);
     const el = toRun(keySkeleton.points[`${s}_elbow`]);
     const wr = toRun(keySkeleton.points[`${s}_wrist`]);
@@ -1833,12 +1842,13 @@ export function splitMergedArmRunsWithNotes(
         }
       }
       if (opaque === 0 || x1 < x0) return null;
+      visibility?.clone(cleaned, canvas);
       return copyDepthMaterial({
         name,
         tag: readLayerTag(name) as LayerTagReading,
         file: hwLayer.file,
         ...(hwLayer.takenLayers === undefined ? {} : { takenLayers: hwLayer.takenLayers }),
-        pixels: crop(canvas, x0, y0, x1 - x0 + 1, y1 - y0 + 1),
+        pixels: visibilityCrop(canvas, x0, y0, x1 - x0 + 1, y1 - y0 + 1, visibility),
         left: x0,
         top: y0,
         right: x1 + 1,
@@ -1881,8 +1891,9 @@ export function splitMergedArmRuns(
   sourceW: number,
   sourceH: number,
   keySkeleton: ControlSkeleton,
+  visibility?: PartVisibility,
 ): LayerSet {
-  return splitMergedArmRunsWithNotes(set, resolution, frame, sourceW, sourceH, keySkeleton).set;
+  return splitMergedArmRunsWithNotes(set, resolution, frame, sourceW, sourceH, keySkeleton, visibility).set;
 }
 
 /**
@@ -1939,7 +1950,7 @@ export function runMap(frame: Frame, run: Run): { k: number; sx: number; tx: num
  * without being warped: every tap would read 0.
  * (`assemble_parts.py` `to_rig`.)
  */
-export function layerToRig(canvas: Raster, frame: Frame, run: Run): Raster {
+export function layerToRig(canvas: Raster, frame: Frame, run: Run, visibility?: PartVisibility): Raster {
   const { W, H } = frame;
   const n = canvas.width * canvas.height;
   let any = false;
@@ -1953,7 +1964,9 @@ export function layerToRig(canvas: Raster, frame: Frame, run: Run): Raster {
     pre.data[i * 4 + 3] = a;
   }
   const m = runMap(frame, run);
-  const wr = warpAffine(pre, { sx: m.sx, sy: m.sx, tx: m.tx, ty: m.ty }, W, H, m.k < 1 ? 'bilinear' : 'bicubic');
+  const map = { sx: m.sx, sy: m.sx, tx: m.tx, ty: m.ty };
+  const filter = m.k < 1 ? 'bilinear' : 'bicubic';
+  const wr = warpAffine(pre, map, W, H, filter);
   const out = newRaster(W, H);
   const eps = f32(1e-3);
   const clip = (v: number): number => (v < 0 ? 0 : v > 255 ? 255 : v);
@@ -1965,6 +1978,7 @@ export function layerToRig(canvas: Raster, frame: Frame, run: Run): Raster {
     }
     out.data[i * 4 + 3] = Math.trunc(a);
   }
+  visibility?.warp(canvas, out, map, filter);
   return out;
 }
 
@@ -2004,10 +2018,11 @@ export function layerToRigSplit(
   run: Run,
   occluderCoreMasks: readonly Mask[],
   cleaned = false,
+  visibility?: PartVisibility,
 ): Raster {
   const toRig = (l: Layer): Raster => {
-    const placed = placeLayer(l, resolution);
-    return layerToRig(cleaned ? cleanGhosts(placed).canvas : placed, frame, run);
+    const placed = placeLayer(l, resolution, visibility);
+    return layerToRig(cleaned ? cleanGhosts(placed, visibility).canvas : placed, frame, run, visibility);
   };
   const split = layer.occluderSplit;
   const mask = split === undefined ? undefined : occluderCoreMasks[split.occluder];
@@ -2016,16 +2031,17 @@ export function layerToRigSplit(
   // base across the occluder edge is one component there. What the merged clean-up drops is dropped from both sides.
   const kept = cleaned ? cleanGhosts(placeLayer(layer, resolution)).canvas : null;
   const sideToRig = (l: Layer): Raster => {
-    const placed = placeLayer(l, resolution);
+    const placed = placeLayer(l, resolution, visibility);
     if (kept !== null) for (let p = 0; p < resolution * resolution; p++) if (kept.data[p * 4 + 3] === 0) placed.data[p * 4 + 3] = 0;
-    return layerToRig(placed, frame, run);
+    return layerToRig(placed, frame, run, visibility);
   };
   const baseRig = sideToRig(split.base);
   const donorRig = sideToRig(split.donor);
   const out = newRaster(frame.W, frame.H);
   for (let p = 0; p < frame.W * frame.H; p++) {
-    const src = mask.data[p] === 1 ? baseRig.data : donorRig.data;
-    out.data.set(src.subarray(p * 4, p * 4 + 4), p * 4);
+    const src = mask.data[p] === 1 ? baseRig : donorRig;
+    out.data.set(src.data.subarray(p * 4, p * 4 + 4), p * 4);
+    visibility?.copy(out, p, src);
   }
   return out;
 }
@@ -2040,6 +2056,7 @@ export function fullLayerToHead(
   canvas: Raster,
   frame: Pick<Frame, 'fullK' | 'fullPad' | 'fullPadTop' | 'headBox' | 'headK'>,
   resolution: number,
+  visibility?: PartVisibility,
 ): Raster {
   const n = canvas.width * canvas.height;
   let any = false;
@@ -2056,7 +2073,9 @@ export function fullLayerToHead(
   const sx = f32(k);
   const tx = f32(-(frame.headBox[0] + frame.fullPad) / frame.headK);
   const ty = frame.fullPadTop === 0 && frame.headBox[1] === 0 ? 0 : f32(-(frame.headBox[1] + frame.fullPadTop) / frame.headK);
-  const wr = warpAffine(pre, { sx, sy: sx, tx, ty }, resolution, resolution, k < 1 ? 'bilinear' : 'bicubic');
+  const map = { sx, sy: sx, tx, ty };
+  const filter = k < 1 ? 'bilinear' : 'bicubic';
+  const wr = warpAffine(pre, map, resolution, resolution, filter);
   const out = newRaster(resolution, resolution);
   const eps = f32(1e-3);
   const clip = (v: number): number => (v < 0 ? 0 : v > 255 ? 255 : v);
@@ -2068,6 +2087,8 @@ export function fullLayerToHead(
     }
     out.data[i * 4 + 3] = Math.trunc(a);
   }
+  // Underfill reads this warp's RGB even when positive filtered alpha truncates to zero.
+  visibility?.warp(canvas, out, map, filter, p => wr.data[p * 4 + 3] > 0);
   return out;
 }
 
@@ -2087,18 +2108,19 @@ function prepareHeadFace(
   resolution: number,
   underfill: boolean,
   minPx = PROPOSE_MIN_PX,
+  visibility?: PartVisibility,
 ): { head: LayerSet; underfillPx: number; underfillNote: string | null } {
   if (full.source !== '' && full.source === head.source) return { head, underfillPx: 0, underfillNote: null };
   const fullFaceLayer = full.layers.find((l) => l.name === 'face');
   if (fullFaceLayer === undefined) return { head, underfillPx: 0, underfillNote: null };
-  const cleanedFull = cleanGhosts(placeLayer(fullFaceLayer, resolution));
+  const cleanedFull = cleanGhosts(placeLayer(fullFaceLayer, resolution, visibility), visibility);
   let fullOpaqueRunPx = 0;
   for (let i = 3; i < cleanedFull.canvas.data.length; i += 4) {
     if (cleanedFull.canvas.data[i] > OPAQUE_ALPHA_ABOVE) fullOpaqueRunPx++;
   }
   if (fullOpaqueRunPx < minPx) return { head, underfillPx: 0, underfillNote: null };
 
-  const warpedFull = fullLayerToHead(cleanedFull.canvas, frame, resolution);
+  const warpedFull = fullLayerToHead(cleanedFull.canvas, frame, resolution, visibility);
   const rawFullMask = newMask(resolution, resolution);
   for (let p = 0; p < resolution * resolution; p++) {
     if (warpedFull.data[p * 4 + 3] > OPAQUE_ALPHA_ABOVE) rawFullMask.data[p] = 1;
@@ -2122,7 +2144,7 @@ function prepareHeadFace(
   const cleanedHead =
     headFaceLayer === undefined
       ? { canvas: newRaster(resolution, resolution), ghostPx: 0 }
-      : cleanGhosts(placeLayer(headFaceLayer, resolution));
+      : cleanGhosts(placeLayer(headFaceLayer, resolution, visibility), visibility);
   let headRawOpaquePx = 0;
   for (let i = 3; i < cleanedHead.canvas.data.length; i += 4) {
     if (cleanedHead.canvas.data[i] > OPAQUE_ALPHA_ABOVE) headRawOpaquePx++;
@@ -2182,6 +2204,7 @@ function prepareHeadFace(
           comp.data[i + c] = Math.trunc(cleanedHead.canvas.data[i + c] * tf + warpedFull.data[i + c] * (1 - tf));
         }
         comp.data[i + 3] = a;
+        visibility?.underfill(comp, p, cleanedHead.canvas, warpedFull, ta, ua);
         if (ta <= OPAQUE_ALPHA_ABOVE && a > OPAQUE_ALPHA_ABOVE) underfillPx++;
         if (a > OPAQUE_ALPHA_ABOVE) compOpaquePx++;
         if (x < x0) x0 = x;
@@ -2196,7 +2219,7 @@ function prepareHeadFace(
       const replacedLayer: Layer = {
         ...headFaceLayer,
         takenLayers: unionTakenSources([headFaceLayer.takenLayers, fullFaceLayer.takenLayers]),
-        pixels: crop(comp, x0, y0, x1 - x0 + 1, y1 - y0 + 1),
+        pixels: visibilityCrop(comp, x0, y0, x1 - x0 + 1, y1 - y0 + 1, visibility),
         left: x0,
         top: y0,
         right: x1 + 1,
@@ -2388,7 +2411,7 @@ export function pixelOwners(rigLayers: readonly Raster[], rank: readonly number[
  * masks mark own-layer art under a subset set's actual cover (alpha above 8);
  * those pixels are occluded, outside every projection core, and never recoloured.
  */
-export function projectSource(rigLayers: Raster[], srcr: Raster, frame: Frame, run: Run, rule: ProjectRule = DEFAULT_PROJECT_RULE, rank: readonly number[] | null = null, keep: ReadonlyArray<Mask | null> | null = null, changed?: (layer: number, rigPixel: number) => void, observeOwners?: (owner: ArrayLike<number>) => void): ProjectionStats[] {
+export function projectSource(rigLayers: Raster[], srcr: Raster, frame: Frame, run: Run, rule: ProjectRule = DEFAULT_PROJECT_RULE, rank: readonly number[] | null = null, keep: ReadonlyArray<Mask | null> | null = null, changed?: (layer: number, rigPixel: number) => void, observeOwners?: (owner: ArrayLike<number>) => void, visibility?: PartVisibility): ProjectionStats[] {
   const { W, H } = frame;
   const owner = pixelOwners(rigLayers, rank);
   observeOwners?.(owner);
@@ -2459,6 +2482,7 @@ export function projectSource(rigLayers: Raster[], srcr: Raster, frame: Frame, r
         different ||= next !== r.data[p * 4 + c];
         r.data[p * 4 + c] = next;
       }
+      if (w !== 0) visibility?.painting(r, p, 'rgb', rest !== 0);
       if (different) changed?.(i, p);
     }
     return { core: coreN, taken, refused, clear, takenMask, coreMask: core, refusedMask };
@@ -3185,6 +3209,7 @@ export function seamOverride(
   turnMovingPair: ((a: string, b: string) => boolean) | null = null,
   written?: (part: number, rigPixel: number) => void,
   decisions?: RegionSeamDecisions,
+  visibility?: PartVisibility,
 ): void {
   const { width: W } = srcr;
   const { top, cand } = seamCandidates(parts, srcr, rule, silhouette);
@@ -3228,6 +3253,7 @@ export function seamOverride(
         image.data[s] = srcr.data[d * 4];
         image.data[s + 1] = srcr.data[d * 4 + 1];
         image.data[s + 2] = srcr.data[d * 4 + 2];
+        visibility?.painting(image, s / 4, 'rgb');
         if (different) written?.(i, d);
         n++;
       }
@@ -4057,7 +4083,7 @@ export function cutFillMask(piece: Raster, sourceW: number, sourceH: number): Ra
  * is the uncut layer's wherever the image fills, so its silhouette does not
  * grow over a soft edge an opaque image covers.
  */
-export function fillUnder(base: Raster, piece: Raster, band: Mask, under: Raster, box: { x0: number; y0: number }, fill?: 'colour'): { filled: number; empty: number } {
+export function fillUnder(base: Raster, piece: Raster, band: Mask, under: Raster, box: { x0: number; y0: number }, fill?: 'colour', visibility?: PartVisibility): { filled: number; empty: number } {
   const W = base.width;
   let filled = 0;
   let empty = 0;
@@ -4072,7 +4098,12 @@ export function fillUnder(base: Raster, piece: Raster, band: Mask, under: Raster
     if (fill === 'colour') {
       base.data.set(under.data.subarray(u, u + 3), p * 4);
       base.data[p * 4 + 3] = a;
-    } else base.data.set(under.data.subarray(u, u + 4), p * 4);
+      visibility?.copy(base, p, piece, p, 'alpha');
+      visibility?.copy(base, p, under, u / 4, 'rgb');
+    } else {
+      base.data.set(under.data.subarray(u, u + 4), p * 4);
+      visibility?.copy(base, p, under, u / 4);
+    }
     filled++;
   }
   return { filled, empty };
@@ -4456,6 +4487,7 @@ function cutLimbs(
   tips?: Record<string, [number, number]>,
   sourceGroups: ReadonlyMap<string, string> = new Map(),
   emptyTargets?: ReadonlySet<string>,
+  visibility?: PartVisibility,
 ): { parts: LimbPart[]; pieces: Built[]; counts: LimbCount[]; capFrom: Array<CapFrom | null>; material: MaterialRow[]; sources: MaterialSource[] } {
   const logical = (source: string): string => sourceGroups.get(source) ?? source;
   const names = Object.keys(limbs);
@@ -4601,6 +4633,7 @@ function cutLimbs(
         if (parts[at].of !== src) continue;
         if (b.r.data[p * 4 + 3] > OPAQUE_ALPHA_ABOVE) selectedBefore++;
         rasters[at].data.set(b.r.data.subarray(p * 4, p * 4 + 4), p * 4);
+        visibility?.copy(rasters[at], p, b.r);
         if (b.region === null || b.region.data[p] === 1) regions[at].data[p] = 1;
       }
     }
@@ -4695,7 +4728,7 @@ function cutLimbs(
         problems.push({ code: 'ASSEMBLE_HIDDEN_ONE_SOURCE', object: `${object}.cap`, detail: `names ${sg.cap}, and "${sg.from}" also has the hidden-art layer ${hidden.layer}; one source of the cap's art is required — remove cap, or the hidden-art layer` });
         return;
       }
-      const img = sg.cap === undefined ? (hidden === null ? null : boxOf(hidden.raster, box[0], box[1], box[2], box[3])) : (caps.get(`${l}/${k}`) ?? null);
+      const img = sg.cap === undefined ? (hidden === null ? null : boxOf(hidden.raster, box[0], box[1], box[2], box[3], visibility)) : (caps.get(`${l}/${k}`) ?? null);
       if (sg.cap !== undefined && img === null) {
         problems.push({ code: 'ASSEMBLE_LIMB_CAP_PRESENT', object: `${object}.cap`, detail: `names ${sg.cap}, and no image was handed to the stage for it; the decoded PNG is required (a caller of assemble() reads the file)` });
         return;
@@ -4752,6 +4785,7 @@ function cutLimbs(
             } else if (img !== null && img.data[u + 3] > 0) {
               capWrite(p, img.data, u);
               lower.data.set(img.data.subarray(u, u + 4), p * 4);
+              visibility?.copy(lower, p, img, u / 4);
               lowerPx++;
               mark(x, y, CAP_FROM_LOWER);
             } else {
@@ -4765,11 +4799,13 @@ function cutLimbs(
           if (img !== null && img.data[u + 3] > 0) {
             capWrite(p, img.data, u);
               lower.data.set(img.data.subarray(u, u + 4), p * 4);
+              visibility?.copy(lower, p, img, u / 4);
             imagePx++;
             mark(x, y, CAP_FROM_IMAGE);
           } else if (ownLower[p] === li && lowerSrc.r.data[p * 4 + 3] > 0) {
             capWrite(p, lowerSrc.r.data, p * 4);
             lower.data.set(lowerSrc.r.data.subarray(p * 4, p * 4 + 4), p * 4);
+            visibility?.copy(lower, p, lowerSrc.r);
             layerPx++;
             mark(x, y, CAP_FROM_LAYER);
           } else if (upper.data[p * 4 + 3] > 0) {
@@ -4778,6 +4814,7 @@ function cutLimbs(
             // short only where no layer of the limb gives a pixel.
             capWrite(p, upper.data, p * 4);
             lower.data.set(upper.data.subarray(p * 4, p * 4 + 4), p * 4);
+            visibility?.copy(lower, p, upper);
             upperPx++;
             mark(x, y, CAP_FROM_UPPER);
           } else {
@@ -4919,6 +4956,7 @@ function cutLimbs(
         // opaque. The overlap is wholly bound to the matching rigid carrier.
         if (Math.abs(along) <= width / 2 + 1) {
           r.data.set(source.r.data.subarray(p * 4, p * 4 + 4), p * 4);
+          visibility?.copy(r, p, source.r);
           region.data[p] = source.region === null ? 1 : source.region.data[p];
         }
         if (along > -width / 2) { rasters[upAt].data.fill(0, p * 4, p * 4 + 4); regions[upAt].data[p] = 0; }
@@ -5112,7 +5150,7 @@ interface HiddenArt {
  * drawn layers are (`placeLayer`, `layerToRig`) — no ghost clean-up, because
  * it is the artist's own art, not See-through's.
  */
-export function hiddenArtByPart(plan: readonly PlanEntry[], cuts: readonly Cut[], sets: { full: LayerSet; head: LayerSet }, frame: Frame, resolution: number): Map<string, HiddenArt> {
+export function hiddenArtByPart(plan: readonly PlanEntry[], cuts: readonly Cut[], sets: { full: LayerSet; head: LayerSet }, frame: Frame, resolution: number, visibility?: PartVisibility): Map<string, HiddenArt> {
   const out = new Map<string, HiddenArt>();
   const warped = new Map<string, HiddenArt>();
   for (const [name, run, tag] of plan) {
@@ -5121,7 +5159,7 @@ export function hiddenArtByPart(plan: readonly PlanEntry[], cuts: readonly Cut[]
     const key = `${run}:${h.name}`;
     let art = warped.get(key);
     if (art === undefined) {
-      art = { layer: key, raster: layerToRig(placeLayer(h, resolution), frame, run) };
+      art = { layer: key, raster: layerToRig(placeLayer(h, resolution, visibility), frame, run, visibility) };
       warped.set(key, art);
     }
     out.set(name, art);
@@ -5133,8 +5171,14 @@ export function hiddenArtByPart(plan: readonly PlanEntry[], cuts: readonly Cut[]
   return out;
 }
 
-/** `r`'s pixels over the box `[x0, y0, w, h]`, transparent where the box reaches past `r`. */
-export function boxOf(r: Raster, x0: number, y0: number, w: number, h: number): Raster {
+function visibilityCrop(image: Raster, x: number, y: number, w: number, h: number, visibility?: PartVisibility): Raster {
+  const result = crop(image, x, y, w, h);
+  visibility?.rows(result, image, x, y, w, h);
+  return result;
+}
+
+/** Pixels over the box, transparent where the box reaches past the image. */
+export function boxOf(r: Raster, x0: number, y0: number, w: number, h: number, visibility?: PartVisibility): Raster {
   const out = newRaster(w, h);
   for (let y = 0; y < h; y++) {
     const sy = y0 + y;
@@ -5143,6 +5187,7 @@ export function boxOf(r: Raster, x0: number, y0: number, w: number, h: number): 
       const sx = x0 + x;
       if (sx < 0 || sx >= r.width) continue;
       out.data.set(r.data.subarray((sy * r.width + sx) * 4, (sy * r.width + sx) * 4 + 4), (y * w + x) * 4);
+      visibility?.copy(out, y * w + x, r, sy * r.width + sx);
     }
   }
   return out;
@@ -5290,7 +5335,7 @@ export function assemble(input: AssembleInput): AssembleResult {
  * may be recovered by a take, so only that counterfactual permits them. */
 function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, beforeTake: AssembleResult | null = null, counterfactual?: { cleanup: Map<string, RunLayer[]>; seam: Map<string, Uint8Array> }, editContexts?: Map<PlacedPart, EditedPartContext>): AssembleResult {
   const emptyTargets = beforeTake === null ? targets : undefined;
-  const { source, extend, patches, seamRule, projectRule } = input;
+  const { source, extend, patches, seamRule, projectRule, visibility } = input;
   const authoredDepths = input.depth === undefined ? new Map<string, AuthoredUnitDepth>() : authoredUnitDepths(input);
   if (input.paintingExtension !== undefined) refuseIfAny(paintingExtensionProblems(input.paintingExtension));
   if (input.edgeSplits !== undefined) refuseIfAny(edgeSplitProblems(input.edgeSplits, new Set(input.plan.map(([name]) => name))));
@@ -5373,9 +5418,9 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     refuseIfAny(hiddenExtentProblems(input.requireHiddenExtent!, sources, frame.W, frame.H));
   }
   // Issue #439: when seethrough.arm_split is declared, split the full run's overlapping handwear into handwear-r and handwear-l.
-  const fullArmSplit = input.armSplit === undefined ? fullPadded : applyArmSplit(fullPadded, input.resolution, input.armSplit);
+  const fullArmSplit = input.armSplit === undefined ? fullPadded : applyArmSplit(fullPadded, input.resolution, input.armSplit, visibility);
   // Issue #490: when generation.control.skeleton is present, split merged arm layers (or refuse when sleeve and drape share one colour).
-  const full = input.keySkeleton === undefined ? fullArmSplit : splitMergedArmRuns(fullArmSplit, input.resolution, frame, source.width, source.height, input.keySkeleton);
+  const full = input.keySkeleton === undefined ? fullArmSplit : splitMergedArmRuns(fullArmSplit, input.resolution, frame, source.width, source.height, input.keySkeleton, visibility);
   const plan = mergedArmSplitPlan(armSplitPlan(input.plan, input.armSplit), full);
   const cutLayerPlan: PlanEntry[] = input.cuts.flatMap(c => {
     const tag = input.cutLayers?.get(c.into);
@@ -5390,7 +5435,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     (plan.some(([, r, t]) => r === 'head' && t === 'face') ||
       (!plan.some(([, r, t]) => r === 'full' && t === 'face') && plan.some(([, r]) => r === 'full') && plan.some(([, r]) => r === 'head')));
   const headFacePrep = checkHeadFace
-    ? prepareHeadFace(full, depthHeadInput, frame, input.resolution, input.headFaceUnderfill === true)
+    ? prepareHeadFace(full, depthHeadInput, frame, input.resolution, input.headFaceUnderfill === true, PROPOSE_MIN_PX, visibility)
     : { head: single ? full : depthHeadInput, underfillPx: 0, underfillNote: null };
   const head = headFacePrep.head;
   const padRecord = singleRunPadRecord(single, source.width, source.height, input.resolution, frame);
@@ -5417,7 +5462,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   }
   // Issue #359: a part's hidden-art layer is the under of a cut that names none — and, with one named, a refusal, since
   // reading either would be a guess. Its uses are counted for `hiddenLines`.
-  const hiddenArt = hiddenArtByPart(plan, input.cuts, { full, head }, frame, input.resolution);
+  const hiddenArt = hiddenArtByPart(plan, input.cuts, { full, head }, frame, input.resolution, visibility);
   const hiddenUses = new Map<string, string[]>();
   for (const [run, set] of single ? ([['full', full]] as const) : ([['full', full], ['head', head]] as const)) for (const h of set.hidden) hiddenUses.set(`${run}:${h.name}`, []);
   const hiddenProblems: Problem[] = [];
@@ -5431,7 +5476,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     }
     const box = underBox(q.polygon);
     hiddenUses.get(art.layer)?.push(`cuts[${i}].under (part "${q.into}")`);
-    return boxOf(art.raster, box.x0, box.y0, box.w, box.h);
+    return boxOf(art.raster, box.x0, box.y0, box.w, box.h, visibility);
   });
   const cuts = input.cuts.map((q): Cut => {
     const art = hiddenArt.get(q.from);
@@ -5459,6 +5504,9 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   const valueBaselines = new Map<string, ValueBaseline | null>();
   // Extend-only rasters are still projected/merged, but are never emitted as own sources.
   const readKeys = new Set(sourcePlan.map(([, run, tag]) => `${run}:${tag}`));
+  const trackedKeys = visibility === undefined ? undefined : new Set([...readKeys, ...extend.map(e => `${e.run}:${e.tag}`)]);
+  const restoreParts = new Set(input.keepUnderOccluders ?? []);
+  const restoreKeys = new Set(input.plan.filter(([name]) => restoreParts.has(name)).map(([, run, tag]) => `${run}:${tag}`));
   const sourceCover: SourceCoverReading = { sources: [], parts: [] };
   const rig = new Map<string, Raster>();
   const stats = new Map<string, ProjectionStats>();
@@ -5468,7 +5516,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   const preparedRuns: Array<{ run: Run; set: LayerSet; layers: ReturnType<typeof runLayers>; rigLayers: Raster[]; rank: number[]; keep: Array<Mask | null>; writes: Array<Int32Array | null> }> = [];
   // A single run (issue #359) is read once: there is no head run to place, project or count ghosts for.
   for (const [run, set] of single ? ([['full', full]] as const) : ([['full', full], ['head', head]] as const)) {
-    const layers = runLayers(set, input.resolution);
+    const layers = runLayers(set, input.resolution, visibility);
     if (beforeTake === null) counterfactual?.cleanup.set(run, layers);
     else if (counterfactual !== undefined) for (const layer of layers) {
       const sourceLayer = set.layers.find(q => q.name === layer.tag);
@@ -5481,7 +5529,10 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       const dx = single ? frame.fullPad : 0, dy = single ? frame.fullPadTop : 0;
       for (let y = 0; y < input.resolution; y++) for (let x = 0; x < input.resolution; x++) {
         const sx = x - dx, sy = y - dy, p = y * input.resolution + x;
-        if (sx < 0 || sy < 0 || sx >= selection.width || sy >= selection.height || selection.data[sy * selection.width + sx] === 0) layer.canvas.data[p * 4 + 3] = baseline.canvas.data[p * 4 + 3];
+        if (sx < 0 || sy < 0 || sx >= selection.width || sy >= selection.height || selection.data[sy * selection.width + sx] === 0) {
+          layer.canvas.data[p * 4 + 3] = baseline.canvas.data[p * 4 + 3];
+          visibility?.copy(layer.canvas, p, baseline.canvas, p, 'alpha');
+        }
         if (layer.canvas.data[p * 4 + 3] > OPAQUE_ALPHA_ABOVE) layer.opaqueRunPx++;
         else if (raw.data[p * 4 + 3] > OPAQUE_ALPHA_ABOVE) layer.ghostPx++;
       }
@@ -5489,11 +5540,12 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     if (run === 'full') fullTags.push(...layers.filter((l) => l.opaqueRunPx > 0).map((l) => l.tag));
     const rigLayers = layers.map((l) => {
       const srcLayer = set.layers.find((q) => q.name === l.tag);
+      const tracked = trackedKeys?.has(`${run}:${l.tag}`) ? visibility : undefined;
       return srcLayer?.occluderSplit !== undefined &&
         srcLayer.pixels === srcLayer.occluderSplit.merged &&
         srcLayer.regionSelection === undefined
-        ? layerToRigSplit(srcLayer, input.resolution, frame, run, occluderCoreMasks, true)
-        : layerToRig(l.canvas, frame, run);
+        ? layerToRigSplit(srcLayer, input.resolution, frame, run, occluderCoreMasks, true, tracked)
+        : layerToRig(l.canvas, frame, run, tracked);
     });
     const rank = planRanks(layers.map((l) => l.tag), run, sourcePlan);
     const keep = layers.map((l, i): Mask | null => {
@@ -5548,6 +5600,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       const sourceLayers = run === 'full' && splitTag && preparedWriter === AW.armSplit
         ? input.armSplit === undefined ? fullPadded.layers.filter(q => q.name === parentTag) : fullPadded.layers.filter(q => q.name === 'handwear-r' || q.name === 'handwear-l')
         : original === undefined ? [] : [original];
+      const trackBaseline = restoreKeys.has(key) ? visibility : undefined;
       let raw: Raster | null = null;
       if (author === 0 && sourceLayers.length > 0) {
         if (
@@ -5555,16 +5608,19 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
           sourceLayers[0].occluderSplit !== undefined &&
           sourceLayers[0].pixels === sourceLayers[0].occluderSplit.merged
         ) {
-          raw = layerToRigSplit(sourceLayers[0], input.resolution, frame, run, occluderCoreMasks);
+          raw = layerToRigSplit(sourceLayers[0], input.resolution, frame, run, occluderCoreMasks, false, trackBaseline);
         } else {
           // A sole layer needs no composite copy: layerToRig premultiplies,
           // so discarded RGB at alpha 0 has exactly the same float32 input.
-          const canvas = sourceLayers.length === 1 ? placeLayer(sourceLayers[0], input.resolution) : newRaster(input.resolution, input.resolution);
+          const canvas = sourceLayers.length === 1 ? placeLayer(sourceLayers[0], input.resolution, trackBaseline) : newRaster(input.resolution, input.resolution);
           if (sourceLayers.length > 1) for (const originalLayer of sourceLayers) {
-            const sourceCanvas = placeLayer(originalLayer, input.resolution);
-            for (let p = 0; p < input.resolution * input.resolution; p++) if (sourceCanvas.data[p * 4 + 3] > 0) canvas.data.set(sourceCanvas.data.subarray(p * 4, p * 4 + 4), p * 4);
+            const sourceCanvas = placeLayer(originalLayer, input.resolution, trackBaseline);
+            for (let p = 0; p < input.resolution * input.resolution; p++) if (sourceCanvas.data[p * 4 + 3] > 0) {
+              canvas.data.set(sourceCanvas.data.subarray(p * 4, p * 4 + 4), p * 4);
+              trackBaseline?.copy(canvas, p, sourceCanvas);
+            }
           }
-          raw = layerToRig(canvas, frame, run);
+          raw = layerToRig(canvas, frame, run, trackBaseline);
         }
       }
       // Reuse only a proved identical placed input, never wrapper identity.
@@ -5580,7 +5636,9 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       }
       // Keep only samples that could equal a final opaque pixel; full raw and
       // prepared normalization temporaries end with this layer's callback.
-      valueBaselines.set(key, raw === null ? null : compactValueBaseline(raw));
+      const baseline = raw === null ? null : compactValueBaseline(raw);
+      if (baseline !== null && raw !== null) trackBaseline?.rows(baseline.image, raw, baseline.x, baseline.y, baseline.image.width, baseline.image.height);
+      valueBaselines.set(key, baseline);
       return ids;
     });
     preparedRuns.push({ run, set, layers, rigLayers, rank, keep, writes });
@@ -5602,6 +5660,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       const idx = prep?.layers.findIndex(l => l.tag === row[2]) ?? -1;
       const w = prep !== undefined && idx >= 0 ? prep.writes[idx] : null;
       if (w !== null && w !== undefined) w[pixel] = cleared ? 0 : AW.sourceProjection;
+      if (!cleared && prep !== undefined && idx >= 0) visibility?.painting(prep.rigLayers[idx], pixel, 'both');
     },
   );
   const edgeSplitDepthProblems: Problem[] = [];
@@ -5625,7 +5684,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
         rigLayers, rank, sourcePlan, extend, owners, (o, i) => frontOf(o, i, rank), keep);
       sourceCover.sources.push(...reading.sources);
       sourceCover.parts.push(...reading.parts);
-    });
+    }, visibility);
     writes.forEach((ids, i) => { if (ids !== null) layerWriters.set(`${run}:${layers[i].tag}`, ids); });
     writes.length = 0;
     layers.forEach((l, i) => {
@@ -5756,6 +5815,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     const key = `${run}:${tag}`;
     const src = rig.get(key) as Raster;
     const r: Raster = { width: W, height: H, data: new Uint8ClampedArray(src.data) };
+    visibility?.clone(src, r);
     const st = stats.get(key) as ProjectionStats;
     const extendKeys = extend.filter((e) => e.part === name).map((e) => `${e.run}:${e.tag}`);
     const extras = extendKeys.map((k) => rig.get(k) as Raster);
@@ -5773,6 +5833,12 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
         for (let p = 0; p < W * H; p++) if (occKeep.data[p] === 1) front.data[p] = 1;
       }
       merged = mergeCropEntries(r, extras, front, srcr, frame, extend.filter(e => e.part === name), trace, (p, stage) => { writers[p] = AW[stage]; });
+      if (visibility !== undefined) for (let p = 0; p < trace.from.length; p++) {
+        const e = trace.from[p];
+        if (e < 0) continue;
+        if (trace.ring.data[p] === 1) visibility.painting(r, p, 'both');
+        else visibility.copy(r, p, extras[e]);
+      }
     }
     const { x1, opaque } = measureBox(r);
     if (opaque === 0 && !emptyTargets?.has(name)) {
@@ -5853,6 +5919,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
         const a = b.r.data[p * 4 + 3];
         if (m.data[p] === 0 || a === 0) continue;
         r.data.set(b.r.data.subarray(p * 4, p * 4 + 4), p * 4);
+        visibility?.copy(r, p, b.r);
         if (band.data[p] === 0) b.r.data.fill(0, p * 4, p * 4 + 4);
         if (a > OPAQUE_ALPHA_ABOVE) {
           n++;
@@ -5909,7 +5976,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       if (u === null) return undefined;
       // Filled where the image is at least as opaque as the layer was; left empty elsewhere (`fillUnder`).
       // With under_fill "colour" (issue #360) a filled pixel keeps the alpha the cut removed and takes the image's colour only.
-      const f = fillUnder(b.r, (pieces[i] as Built).r, cutBand(cutMasks[i], cuts[i].overlap), u, underBox(cuts[i].polygon), cuts[i].under_fill);
+      const f = fillUnder(b.r, (pieces[i] as Built).r, cutBand(cutMasks[i], cuts[i].overlap), u, underBox(cuts[i].polygon), cuts[i].under_fill, visibility);
       const band = cutBand(cutMasks[i], cuts[i].overlap);
       let opaqueFilled = 0;
       // The under operation wrote only removed pixels it actually filled.
@@ -5949,7 +6016,10 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   cutSources.forEach((source, i) => {
     if (source === null) return;
     const m = cutMasks[i], r = newRaster(W, H);
-    for (let p = 0; p < W * H; p++) if (m.data[p] === 1) r.data.set(source.r.data.subarray(p * 4, p * 4 + 4), p * 4);
+    for (let p = 0; p < W * H; p++) if (m.data[p] === 1) {
+      r.data.set(source.r.data.subarray(p * 4, p * 4 + 4), p * 4);
+      visibility?.copy(r, p, source.r);
+    }
     if (opaqueOf(r) === 0 && !emptyTargets?.has(cuts[i].into)) empty.push({ code: 'ASSEMBLE_CUT_PIXELS', object: `config.assemble.cuts[${i}] (part "${cuts[i].into}")`, detail: `takes 0 opaque pixels from selected ${source.key}; draw its polygon over that layer's art` });
     const writers = (source.writers as Int32Array).slice();
     pieces[i] = { ...source, r, writers, region: m, merged: mergedIn(source, m) };
@@ -5978,7 +6048,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     const ci = cuts.findIndex((q) => q.into === name);
     return ci >= 0 ? pieces[ci] : null;
   };
-  const lim = cutLimbs(input.limbs ?? {}, input.bones ?? [], input.caps ?? new Map(), W, H, limbSource, opaqueOf, mergedIn, count, (name) => hiddenArt.get(name) ?? null, (layer, by) => hiddenUses.get(layer)?.push(by), input.boneTips, input.limbSourceGroups, emptyTargets);
+  const lim = cutLimbs(input.limbs ?? {}, input.bones ?? [], input.caps ?? new Map(), W, H, limbSource, opaqueOf, mergedIn, count, (name) => hiddenArt.get(name) ?? null, (layer, by) => hiddenUses.get(layer)?.push(by), input.boneTips, input.limbSourceGroups, emptyTargets, visibility);
   // Issue #564: and the cap a run's own layer fills above its upper joint, read once the limbs are cut.
   if (bands !== null) refuseIfAny(limbBands(cuts, pieces, input.limbs ?? {}, input.bones ?? [], W, H, (l, k) => lim.parts.find((q) => q.limb === l && q.segment === k)?.record.cap, input.boneTips).problems);
   const limbPieces = lim.pieces;
@@ -6091,9 +6161,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   // #825: decide ownership on the final draw stack, after merges, cuts,
   // limb splits and exclusions. Restore only original own-layer samples:
   // no merge/ring, under-fill, cap, patch or authored replacement is borrowed.
-  const wanted = new Set(input.keepUnderOccluders ?? []);
-  refuseIfAny([...wanted].filter(name => !input.plan.some(([n]) => n === name)).map(name => ({ code: 'CONFIG_NAME_RESOLVES', object: 'config.assemble.keep_under_occluders', detail: `names "${name}"; a source part in assemble.plan is required` })));
-  const sourceKeys = new Set(input.plan.filter(([name]) => wanted.has(name)).map(([, run, tag]) => `${run}:${tag}`));
+  refuseIfAny([...restoreParts].filter(name => !input.plan.some(([n]) => n === name)).map(name => ({ code: 'CONFIG_NAME_RESOLVES', object: 'config.assemble.keep_under_occluders', detail: `names "${name}"; a source part in assemble.plan is required` })));
   const keptRetake: Array<Mask | null> = order.map(() => null);
   const softOcclusion: SoftOcclusionReading[] = [];
   const keepInOrder = order.map((d, i): Mask | null => {
@@ -6110,7 +6178,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     if ('patch' in d) return withOccKeep(limb);
     const b = pieceAt(d).b, baseline = valueBaselines.get(b.key);
     if (baseline === undefined || baseline === null) return withOccKeep(limb);
-    const enabled = sourceKeys.has(b.key);
+    const enabled = restoreKeys.has(b.key);
     const mask = enabled ? newMask(W, H) : limb;
     if (enabled && limb !== null) mask!.data.set(limb.data);
     const restored = enabled ? newMask(W, H) : null;
@@ -6136,6 +6204,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
           if (different || enabled) holders.set(stack[j].record.name, (holders.get(stack[j].record.name) ?? 0) + 1);
           if (enabled) {
             b.r.data.set(raw.subarray(q, q + 4), p * 4);
+            visibility?.copy(b.r, p, baseline.image, q / 4);
             mask!.data[p] = 1;
             restored!.data[p] = 1;
             reading.kept++;
@@ -6259,7 +6328,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
         }
         const finished = finishYieldedProjection(b.r, srcr, b.st, finish, queue.subarray(0, end),
           { kept: keptRetake[orderIdx], region: b.region, merged: b.trace.from, ring: b.trace.ring, behind: behindAt },
-          p => { writersInOrder[orderIdx][p] = AW.sourceProjection; });
+          p => { writersInOrder[orderIdx][p] = AW.sourceProjection; visibility?.painting(b.r, p, 'rgb'); });
         if (finished > 0) reading.finishedProjection = finished;
       }
       reading.yielded = yielded;
@@ -6301,6 +6370,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       image.data.set(srcr.data.subarray(p * 4, p * 4 + 3), p * 4);
       image.data[p * 4 + 3] = paintingAlpha!.data[p * 4 + 3];
       writersInOrder[i][p] = AW.paintingExtension;
+      visibility?.painting(image, p, 'both');
       if (!('patch' in d)) {
         const region = pieceAt(d).b.region;
         if (region !== null) region.data[p] = 1;
@@ -6369,6 +6439,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     const e = paintingEdges(canvases, srcr, {
       owner: receivers,
       allocationEvent: input.allocationEvent,
+      visibility,
       painted: supportPainted,
       figure: visibleFigure,
       ...(input.declaredFigure === undefined ? {} : { declaredFigure: input.declaredFigure }),
@@ -6598,7 +6669,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     if (paintingGain !== undefined) record.painting_extension_px = paintingGain.data.reduce((sum, value) => sum + value, 0);
     if (pushedHere.length > 0) record.fringe_pushed_back = pushedHere;
     if (limb !== undefined) record.limb = limb;
-    const image = crop(r, x0, y0, record.w, record.h);
+    const image = visibilityCrop(r, x0, y0, record.w, record.h, visibility);
     const limbIndex = limb === undefined ? -1 : lim.parts.findIndex(q => q.record.name === limb.name && q.record.segment === limb.segment);
     const upperIndex = limb === undefined ? -1 : lim.parts.findIndex(q => q.record.name === limb.name && q.record.segment === limb.segment - 1);
     const capSource = limbIndex < 0 ? null : lim.capFrom[limbIndex];
@@ -6686,7 +6757,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       preSeamWriters.set(i, changed);
     }
     writersInOrder[i][p] = AW.seamOverride;
-  }, counterfactual === undefined ? undefined : beforeTake === null ? { record: counterfactual.seam } : { baseline: counterfactual.seam, support: regionSupport });
+  }, counterfactual === undefined ? undefined : beforeTake === null ? { record: counterfactual.seam } : { baseline: counterfactual.seam, support: regionSupport }, visibility);
   const stageMap: StageMap | undefined = input.stageMap !== true ? undefined : {
     schema: 'rig-parts-stage-map/1', rig_size: [W, H], automatic: AW, edits: [...editNames], parts: [],
   };
@@ -6718,8 +6789,9 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     });
   }
   const editedPartFrontColours = (input.editedParts?.length ?? 0) > 0
-    ? replaceEditedParts(placed, input.editedParts!, new Set(input.plan.map(([name]) => name)), stageMap!, editContexts!, srcr, paintingOwner ?? rawPaintingOwnerForPlan(), ERROR_LIMIT)
+    ? replaceEditedParts(placed, input.editedParts!, new Set(input.plan.map(([name]) => name)), stageMap!, editContexts!, srcr, paintingOwner ?? rawPaintingOwnerForPlan(), ERROR_LIMIT, visibility)
     : [];
+  if (visibility !== undefined) for (const part of placed) part.record.source_visibility = visibility.summarize(part.image);
   if (editContexts !== undefined) for (const p of placed) {
     const samples = editContexts.get(p)?.depthClampedSamples;
     if (samples === undefined) continue;

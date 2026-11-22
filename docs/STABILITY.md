@@ -55,9 +55,17 @@ See
 
 `rig-parts check-parts --parts <assembled-dir> --out <disjoint-report-dir>
 [--json]` writes `parts-check.json`, spec `rig-parts-parts-check/1`.
-Exit 0 is not a quality pass. No #945/#884 defect class is measured yet.
-The six quality HOLEs are always present. They name plate ghost, plate structure,
-plate smear, stepped fill, invented material and invented-material exposure.
+Exit 0 records input integrity. Plate ghost, plate structure, plate smear,
+stepped fill and invented-material exposure always report HOLEs.
+`PARTS_INVENTED_MATERIAL` reports a measurement for each primary or alternate
+part with a validated `source_visibility` block from assembly. The measurement
+describes visibility within the producing See-through run. Painted-versus-
+invented material remains unknown. When only some parts have a measurement,
+the report keeps those rows and emits one material HOLE whose reason gives the
+count and names every unmeasured part and its primary or alternate set.
+When every part has a measurement, there is no material HOLE. When neither
+the primary set nor any alternate has a measurement, the existing material
+HOLE remains and both the JSON report and command output keep their legacy bytes.
 
 The top-level key order is `spec`, `stage`, `inputs`, `parts`, `refusals`,
 `reported`, `holes`, `exit_code`. `stage` is `parts`. `inputs` is sorted by
@@ -80,8 +88,14 @@ and allocation reports. Embedded object keys are sorted, and producer array
 order is retained. `refusals` rows have `code`, `object`, `found`, `required`,
 `detail`; reused metadata-reader diagnostics retain their code and detail with
 null structured values when the reader supplies none. A refused input produces
-a report and exit 1. `reported` rows have `code`, `set`, `part`, `source`, `count`,
-`spans`; unplanned direct cover is reported without a refusal. `holes` rows have
+a report and exit 1. `PARTS_UNPLANNED_SOURCE_COVER` rows in `reported` have
+`code`, `set`, `part`, `source`, `count`, `spans`. Unplanned direct cover is
+reported without a refusal. `PARTS_INVENTED_MATERIAL` rows follow the cover
+rows, with primary parts first and alternate records in manifest order.
+They have `code`, `set`, `part`, `occluded_px`, `undecided_px` in that order.
+`set` is null for a primary part and the set name for an alternate.
+`undecided_px` gives counts for `partial-top`, `depth-tie`, and
+`mixed-source-states` in that order. `holes` rows have
 `code`, `object`, `reason`, `line`. Absent source cover or allocation adds its
 own HOLE; malformed present reports are refused. A HOLE carries no measured zero.
 

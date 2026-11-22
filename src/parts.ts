@@ -103,6 +103,16 @@ import { readLayerTag } from './tags.ts';
 import { edgeLength } from './length.ts';
 import { recordedFocusProblems } from './setfocus.ts';
 
+export const SOURCE_UNDECIDED_REASONS = ['partial-top', 'depth-tie', 'mixed-source-states'] as const;
+
+export interface PartSourceVisibility {
+  source_layers: string[];
+  visible_px: number;
+  occluded_px: number;
+  undecided_px: Record<typeof SOURCE_UNDECIDED_REASONS[number], number>;
+  unrecorded_px: number;
+}
+
 export interface PartRecord {
   /** Verified donor sources, including sources of cuts, limbs and extensions. */
   taken_layers?: TakenLayerSource[];
@@ -125,6 +135,7 @@ export interface PartRecord {
   w: number;
   h: number;
   opaque_px: number;
+  source_visibility?: PartSourceVisibility;
   /** Absent in a `parts.json` the reference wrote; `assemble` always writes it. */
   visible_px?: number;
   /** Absent in a `parts.json` the reference wrote; `assemble` always writes it. */
@@ -509,6 +520,7 @@ export const PART_KEYS = [
   'w',
   'h',
   'opaque_px',
+  'source_visibility',
   'provenance',
   'painting_extension_px',
   'visible_px',
@@ -529,10 +541,10 @@ const FRINGE_KEY = 'fringe_pushed_back';
 const CUT_FROM_KEY = 'cut_from';
 /** The one part field that is a record of its own: a limb segment's provenance (issue #349), written only on one. */
 const LIMB_KEY = 'limb';
-const COUNT_KEYS = PART_KEYS.slice(2).filter((k) => k !== FRINGE_KEY && k !== CUT_FROM_KEY && k !== LIMB_KEY && k !== 'depth' && k !== 'provenance' && k !== 'taken_layers') as ReadonlyArray<(typeof PART_KEYS)[number]>;
+const COUNT_KEYS = PART_KEYS.slice(2).filter((k) => k !== FRINGE_KEY && k !== CUT_FROM_KEY && k !== LIMB_KEY && k !== 'depth' && k !== 'provenance' && k !== 'taken_layers' && k !== 'source_visibility') as ReadonlyArray<(typeof PART_KEYS)[number]>;
 /** The port's own counts: all three or none (none = a record the reference wrote). */
 export const VISIBILITY_KEYS = ['visible_px', 'occluded_px', 'visible_not_projected_px'] as const;
-const REQUIRED_KEYS = PART_KEYS.filter((k) => k !== 'painting_extension_px' && !(VISIBILITY_KEYS as readonly string[]).includes(k) && k !== FRINGE_KEY && k !== CUT_FROM_KEY && k !== LIMB_KEY && k !== 'depth' && k !== 'provenance' && k !== 'taken_layers');
+const REQUIRED_KEYS = PART_KEYS.filter((k) => k !== 'painting_extension_px' && !(VISIBILITY_KEYS as readonly string[]).includes(k) && k !== FRINGE_KEY && k !== CUT_FROM_KEY && k !== LIMB_KEY && k !== 'depth' && k !== 'provenance' && k !== 'taken_layers' && k !== 'source_visibility');
 
 /** Where a part came from: a See-through run and a v3 tag or an author-made layer's `author:<label>` (issue #256), or the painting itself for a patch. */
 export type From = { run: 'full' | 'head'; tag: string } | { run: 'painting'; patch: string };
@@ -673,9 +685,23 @@ function orderedTakenSource(source: TakenLayerSource): TakenLayerSource {
   };
 }
 
+export function orderedSourceVisibility(value: PartSourceVisibility): PartSourceVisibility {
+  return {
+    source_layers: [...value.source_layers].sort(),
+    visible_px: value.visible_px,
+    occluded_px: value.occluded_px,
+    undecided_px: {
+      'partial-top': value.undecided_px['partial-top'],
+      'depth-tie': value.undecided_px['depth-tie'],
+      'mixed-source-states': value.undecided_px['mixed-source-states'],
+    },
+    unrecorded_px: value.unrecorded_px,
+  };
+}
+
 function serializePartList(parts: readonly PartRecord[]): Array<Record<string, unknown>> {
   return parts.map((p) =>
-    Object.fromEntries(PART_KEYS.filter((k) => p[k] !== undefined).map((k) => [k, k === FRINGE_KEY ? (p.fringe_pushed_back ?? []).map((q) => ({ part: q.part, px: q.px })) : k === LIMB_KEY ? orderedLimb(p.limb as LimbRecord) : k === 'taken_layers' ? p.taken_layers?.map(orderedTakenSource) : k === 'provenance' ? orderedProvenance(p.provenance as PixelProvenance) : p[k]])),
+    Object.fromEntries(PART_KEYS.filter((k) => p[k] !== undefined).map((k) => [k, k === FRINGE_KEY ? (p.fringe_pushed_back ?? []).map((q) => ({ part: q.part, px: q.px })) : k === LIMB_KEY ? orderedLimb(p.limb as LimbRecord) : k === 'taken_layers' ? p.taken_layers?.map(orderedTakenSource) : k === 'provenance' ? orderedProvenance(p.provenance as PixelProvenance) : k === 'source_visibility' ? orderedSourceVisibility(p.source_visibility!) : p[k]])),
   );
 }
 
@@ -821,6 +847,34 @@ export function readParts(path: string): PartsFile {
 }
 
 /** Additive ownership census; not another term in the value partition. */
+function checkSourceVisibility(raw: unknown, opaque: unknown, label: string, fail: (code: string, object: string, detail: string) => void): void {
+  const value = raw as Record<string, unknown> | null;
+  const count = (n: unknown): n is number => Number.isSafeInteger(n) && Number(n) >= 0;
+  const fields = ['source_layers', 'visible_px', 'occluded_px', 'undecided_px', 'unrecorded_px'];
+  const at = label + ' source_visibility';
+  if (value === null || typeof value !== 'object' || Array.isArray(value) ||
+      Object.keys(value).length !== fields.length || !fields.every(k => Object.hasOwn(value, k))) {
+    fail('PARTS_FIELD_TYPE', at, `is ${show(raw)}; requires exactly ${fields.join(', ')}`);
+    return;
+  }
+  const layers = value.source_layers;
+  if (!Array.isArray(layers) || layers.some(k => typeof k !== 'string' || !/^(full|head):.+$/.test(k)) ||
+      new Set(layers).size !== layers.length) {
+    fail('PARTS_FIELD_TYPE', at, `source_layers is ${show(layers)}; requires unique full: or head: layer names`);
+  }
+  const undecided = value.undecided_px as Record<string, unknown> | null;
+  if (undecided === null || typeof undecided !== 'object' || Array.isArray(undecided) ||
+      Object.keys(undecided).length !== SOURCE_UNDECIDED_REASONS.length || !SOURCE_UNDECIDED_REASONS.every(k => count(undecided[k])) ||
+      !count(value.visible_px) || !count(value.occluded_px) || !count(value.unrecorded_px)) {
+    fail('PARTS_FIELD_TYPE', at, `is ${show(raw)}; visibility counts must be non-negative safe integers for each state and undecided reason`);
+    return;
+  }
+  const total = value.visible_px + value.occluded_px + value.unrecorded_px +
+    SOURCE_UNDECIDED_REASONS.reduce((n, k) => n + Number(undecided[k]), 0);
+  if (!count(opaque)) fail('PARTS_FIELD_TYPE', at, `opaque_px is ${show(opaque)}; a non-negative safe integer is required`);
+  else if (total !== opaque) fail('PARTS_COUNTS_ADD_UP', at, `state counts sum to ${total}; opaque_px ${opaque} is required`);
+}
+
 function checkPaintingExtensionCount(r: Record<string, unknown>, label: string, fail: (code: string, object: string, detail: string) => void): void {
   if (!('painting_extension_px' in r)) return;
   const n = r.painting_extension_px;
@@ -988,6 +1042,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
       const count = (k: string): number | null => (Number.isInteger(r[k]) && (r[k] as number) >= 0 ? (r[k] as number) : null);
       if ('provenance' in r) checkProvenance(r.provenance, r.opaque_px, label + ' provenance', fail, 'depth' in r, { name: r.name, w: r.w, h: r.h });
       checkPaintingExtensionCount(r, label, fail);
+      if ('source_visibility' in r) checkSourceVisibility(r.source_visibility, r.opaque_px, label, fail);
       const [op, vis, occ, vnp] = ['opaque_px', 'visible_px', 'occluded_px', 'visible_not_projected_px'].map(count);
       if (held.length === VISIBILITY_KEYS.length && op !== null && vis !== null && occ !== null && vnp !== null) {
         if (vis + occ !== op) fail('PARTS_COUNTS_ADD_UP', `${label}`, `visible_px ${vis} + occluded_px ${occ} = ${vis + occ}; opaque_px ${op} is required`);
@@ -1224,6 +1279,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
         const part817 = typeof r.name === 'string' ? `part "${r.name}"` : `records[${j}]`;
         if ('provenance' in r) checkProvenance(r.provenance, r.opaque_px, `${at} ${part817} provenance`, fail, 'depth' in r, { name: r.name, w: r.w, h: r.h });
         checkPaintingExtensionCount(r, `${at} ${part817}`, fail);
+        if ('source_visibility' in r) checkSourceVisibility(r.source_visibility, r.opaque_px, `${at} ${part817}`, fail);
         const l = r[LIMB_KEY];
         if (typeof l !== 'object' || l === null || Array.isArray(l) || !('cap' in l)) return;
         const part = typeof r.name === 'string' ? `part "${r.name}"` : `records[${j}]`;

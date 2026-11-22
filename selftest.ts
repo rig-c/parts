@@ -65,6 +65,7 @@ import { runRequirementsNamedChecks } from './tools/check_requirements_named.ts'
 import { prepareSeeThroughInput } from './src/seethrough-transform.ts';
 import { runSeeThroughTransformChecks } from './tools/check_seethrough_transform.ts';
 import { runPlateChecks } from './tools/check_plate.ts';
+import { runPartVisibilityChecks } from './tools/check_part_visibility.ts';
 import { runVisibilityChecks } from './tools/check_visibility.ts';
 import { runEditorReceiptChecks } from './tools/check_editor_receipts.ts';
 import { writeEditorReceiptFixture } from './fixtures/editor_receipts.ts';
@@ -35979,6 +35980,7 @@ function runAssembleSuite(): number {
     runPaintingEdgeChecks((name, ok, detail) => say(name, ok, detail, 'issue #953: under visible, a part edge takes the painting\'s line and coverage; every skip reason planted next to a positive strip'));
     runGroundUnitChecks((name, ok, detail) => say(name, ok, detail, 'issue #996: the ring share and its cut-off, and the busy-ground rules on a strip next to the plain mutant that takes the ground'));
     runCropEdgeChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #1075: generated two-run crop, exact integer samples, independent outside counts'));
+    runPartVisibilityChecks(join(dir, 'part-visibility'), say);
     runPartsCheckChecks(join(dir, 'parts-check'), (name, ok, detail) => say(name, ok, detail, 'issue #1161: generated input-integrity reports, explicit quality holes and deterministic bindings'));
     runSourceCoverChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #1158: direct projection-input cover, planted memberships, empty output and alternate inheritance'));
     writeAssembleFixture(dir);
