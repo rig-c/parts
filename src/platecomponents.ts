@@ -231,9 +231,13 @@ export function readClassifiedPlateMask(manifestPath: string, width: number, hei
     const path = join(partsDir, key);
     const image = decode(stamped(key), path);
     checkGrid(path, image.width, image.height, w, h, 'the part box in parts.json');
-    for (let row = Math.max(0, -y); row < Math.min(h, H - y); row++) {
-      for (let col = Math.max(0, -x); col < Math.min(w, W - x); col++) {
-        if (image.data[(row * w + col) * 4 + 3] > OPAQUE_ALPHA_ABOVE) coverage[(y + row) * W + x + col] = 1;
+    for (let row = 0; row < h; row++) {
+      const ry = y + row;
+      if (ry < 0 || ry >= H) continue;
+      for (let col = 0; col < w; col++) {
+        const rx = x + col;
+        if (rx < 0 || rx >= W) continue;
+        if (image.data[(row * w + col) * 4 + 3] > OPAQUE_ALPHA_ABOVE) coverage[ry * W + rx] = 1;
       }
     }
   }
