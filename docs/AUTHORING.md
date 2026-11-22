@@ -6042,7 +6042,8 @@ re-run assemble and read the count again. `check-parts` reports each row under
 #### Step-4 plates (`comfy plate`, issue #1183)
 
 `rig-parts comfy plate --mode background|foreground --painting <png>
---mask-from seethrough:<dir>|figure-mask:<dir> --out <dir>` makes the two plates
+--mask-from seethrough:<dir>|figure-mask:<dir>|matte:<dir>|classified:<manifest.json>
+--out <dir>` makes the two plates
 a full-screen scene needs: the background with the figure removed, and a
 foreground matte with alpha. `--mode occluder` (below) makes a third: the
 painting with a declared occluder removed. It never makes a character part
@@ -6051,9 +6052,10 @@ or a joint.
 - **The mask comes from a source.** `seethrough:<dir>` is a See-through run in
   the wrapper form, and the figure is every drawn layer's alpha above 8 on the
   run's canvas. `figure-mask:<dir>` is an assemble output whose `parts.json`
-  declares a `scene`, and the figure is its `figure_rig.png`. The mask is never
-  fitted: a source grid that is not the painting's size is refused. With no
-  source the command refuses by name, writes nothing and reaches no box.
+  declares a `scene`, and the figure is its `figure_rig.png` on the painting's
+  grid. `matte:<dir>` reads a receipted matte. Use
+  `classified:<manifest.json>` to keep explicitly declared background props.
+  With no source the command refuses by name, writes nothing and reaches no box.
 - **background** grows the mask by `--grow` px (a square, default 8) and
   inpaints it on a ComfyUI box. `--graph lama` (the default) uses the
   comfyui-inpaint-nodes pack and its LaMa model (`--model`, default
@@ -6204,6 +6206,49 @@ inside, opaque black outside) and `receipt.json`, spec
 `rig-parts-plate-receipt/1` ([STABILITY](STABILITY.md#plate-receipt)). A receipted
 plate pass from this command is a recorded source step, not a repair.
 
+### Classified plate mask
+
+Run `assemble` with `config.scene` using the exact painting you will give to
+`comfy plate --painting`. The classified source verifies the painting bytes
+against the completed assemble `run.json` source input and verifies
+`figure_rig.png`, `parts.json` and every emitted part PNG against its output
+hashes. Start with a JSON declaration such as the following, replacing the
+three placeholders with SHA-256 hashes of the respective file bytes. Resolve
+`parts_dir` relative to the declaration file's directory.
+
+```json
+{
+  "spec": "rig-parts-plate-components/1",
+  "parts_dir": "assembly/rig",
+  "painting_sha256": "<painting PNG SHA-256>",
+  "figure_mask_sha256": "<figure_rig.png SHA-256>",
+  "parts_manifest_sha256": "<parts.json SHA-256>",
+  "components": []
+}
+```
+
+The command uses the existing pixel-centre mapping to read the scene mask and
+the placed part support on the native painting grid. It inventories every
+8-connected component of the scene mask outside the union of emitted part
+pixels with alpha strictly greater than 8. There is no minimum component
+size. Each ID is the SHA-256 of the UTF-8 compact JSON array of that component's
+pixel indices, in ascending row-major order (`y * painting_width + x`). The
+existing assemble figure-mask diagnostic remains available.
+
+Pass the declaration with `--mask-from classified:<manifest.json>`. If the
+list is empty and components exist, or any current ID is missing, the refusal
+shows the inventory with each ID, bounding box and pixel count, and a
+ready-to-paste `components` array with blank roles. Assign every ID one role.
+`background-prop` protects its pixels from background inpainting.
+`figure-accessory` keeps its pixels in the figure mask.
+
+Background mode grows the classified figure mask first, then clips the exact pixels of
+each declared `background-prop` from the grown mask. It prints each prop ID
+and the number of pixels clipped. Foreground uses the classified figure mask
+without growth and records zero clips per prop. Classified receipts include
+the declaration's byte hash and the per-prop counts in `mask_classification`.
+See [Plate receipt](STABILITY.md#plate-receipt).
+
 ### See-through mask grid mapping
 
 For non-square paintings, `comfy seethrough` prepares the configured square
@@ -6228,6 +6273,8 @@ recorded transform. The record fields and sampling formula are specified in
 | <a id="PLATE_MASK_SOURCE"></a><a id="PLATE_MASK_GRID"></a><a id="PLATE_MASK_VALUES"></a><a id="PLATE_MASK_EMPTY"></a>`PLATE_MASK_SOURCE`, `PLATE_MASK_GRID`, `PLATE_MASK_VALUES`, `PLATE_MASK_EMPTY` | no `--mask-from`, or a source directory holding no See-through run or no scene figure mask; a source on another grid without a valid recorded `input_transform`; a `figure_rig.png` holding other than opaque white and black; a mask with no figure pixel | run `comfy seethrough` on the original painting to record its input transform, or `assemble` with `config.scene` at the painting grid |
 | <a id="PLATE_MASK_RUN"></a>`PLATE_MASK_RUN` | the figure source has no readable `rig-run/1` assemble `run.json`, or its `figure_rig.png`, `parts.json` or declared `painting_in_rig.png` lacks exactly one matching output hash; or the See-through source has no readable `meta.json` with `image_sha256` and `layers` hashes, or a layer PNG on disk lacks a matching `layers` entry | re-run `assemble` with the source config to regenerate `run.json` and its `rig/` files together, or re-run `comfy seethrough` on the painting to regenerate `meta.json` and `parts/` together |
 | <a id="PLATE_MASK_PAINTING"></a>`PLATE_MASK_PAINTING` | `parts.json` has an invalid `painting_in_rig` declaration, its recorded painting is missing, undecodable or differs from its declared hash, or the supplied painting differs from the recorded opaque RGB; or the supplied painting's SHA-256 differs from a See-through source's `meta.json` `image_sha256` | use the original `--painting` file for this source, or re-run `assemble` or `comfy seethrough` on this painting |
+| <a id="PLATE_COMPONENT_SOURCE"></a>`PLATE_COMPONENT_SOURCE` | the classified source declaration, its files, or its completed assemble stamp cannot establish the required source identity or mask geometry | use the exact assemble source painting and its completed scene output, and update the declaration's file hashes |
+| <a id="PLATE_COMPONENT_ROLE"></a>`PLATE_COMPONENT_ROLE` | the declaration fails to assign exactly one allowed role to each current component ID | use the current inventory and assign `background-prop` or `figure-accessory` to each ID |
 | <a id="PLATE_OCCLUDER_PRESENT"></a><a id="PLATE_OCCLUDER_GRID"></a><a id="PLATE_OCCLUDER_ALPHA"></a>`PLATE_OCCLUDER_PRESENT`, `PLATE_OCCLUDER_GRID`, `PLATE_OCCLUDER_ALPHA` | `--mode occluder` with no readable `--occluder` file; an occluder whose size is not the painting's; an occluder with no transparent pixel (it would mask the whole painting) | export the occluder as an RGBA PNG on the painting's grid, transparent outside it |
 | <a id="PLATE_CHECKPOINT_SHA256"></a><a id="PLATE_MODEL_GIVEN"></a>`PLATE_CHECKPOINT_SHA256`, `PLATE_MODEL_GIVEN` | `--checkpoint-sha256` absent or not 64 hex characters; `--graph core` without `--model` | the flag |
 | <a id="PLATE_CORE_CFG"></a>`PLATE_CORE_CFG` | `--cfg` given with `--graph lama`, or not a finite number above 0 | `--cfg`, `--graph` |

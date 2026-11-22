@@ -14,6 +14,7 @@ import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, write
 import { join } from 'node:path';
 import { FAKE_FILL } from '../fixtures/fakecomfy.ts';
 import { assembleConfig } from '../fixtures/assemble_fixture.ts';
+import { runClassifiedPlateChecks } from './check_classified_plate.ts';
 import { runOccluderChainChecks } from './check_occluders.ts';
 import { cutFillMask } from '../src/assemble.ts';
 import { assembleStage } from '../src/build.ts';
@@ -625,6 +626,7 @@ export function runPlateChecks(dir: string, painting: string, R: Record<string, 
   figureBindingChecks(dir, painting, say);
   seethroughBindingChecks(dir, painting, say);
   occluderChecks(dir, painting, R, say);
+  runClassifiedPlateChecks(dir, say);
   const nothingAsked = (r: PlateHarnessResult | undefined): boolean => r !== undefined && r.paths.length === 0 && r.uploads.length === 0 && r.prompts === 0;
   const nothingWritten = (name: string): boolean => !existsSync(join(dir, name));
   const noUpload = (r: PlateHarnessResult | undefined): boolean => r !== undefined && r.uploads.length === 0 && r.prompts === 0 && !r.paths.includes('POST /upload/image');

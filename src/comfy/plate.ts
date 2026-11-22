@@ -31,6 +31,7 @@ import { refuseIfAny } from '../errors.ts';
 import { checkGraph, type Graph } from '../graphs.ts';
 import {
   assertPlateOutFree,
+  clipClassifiedProps,
   CORE_DEFAULTS,
   coreCfg,
   type CoreParams,
@@ -112,6 +113,10 @@ export async function runBackground(connect: () => ComfyClient, run: BackgroundR
   }
   assertPlateOutFree(run.out);
   const mask = growMask(source, run.growPx);
+  const maskClassification = clipClassifiedProps(source, mask);
+  for (const { id, clipped_px } of maskClassification?.prop_clips ?? []) {
+    say(`  classified background prop ${id}: clipped ${clipped_px} grown px`);
+  }
   const prepared = run.graph === 'core' ? prepareCoreGrid(painting.raster, mask) : { painting: painting.raster, mask };
   const uploadPaintingBytes = prepared.transform === undefined ? painting.bytes : encodePngBytes(prepared.painting);
   const uploadMaskBytes = encodePngBytes(maskImage(prepared.mask));
@@ -156,6 +161,7 @@ export async function runBackground(connect: () => ComfyClient, run: BackgroundR
     source: from.source,
     sourceDir: from.dir,
     mask,
+    maskClassification,
     plate: pasteInside(painting.raster, inpainted, mask),
     model: { name: model, checkpoint_sha256: checkpoint, checkpoint_sha256_from: 'declared' },
     params: { ...(run.graph === 'lama' ? lama : core), ...(occluderMode ? { holes: run.holes === true, mask_alpha_above: OCCLUDER_ALPHA_ABOVE } : { mask_alpha_above: OPAQUE_ALPHA_ABOVE }) },

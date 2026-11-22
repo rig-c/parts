@@ -7,8 +7,7 @@
  * inpainting run, lives in `src/comfy/plate.ts` and carries the graphs this
  * file builds.
  *
- * 🔒 **The mask comes from a source, never a hand polygon.** Three sources are
- * read, and nothing else:
+ * 🔒 **The mask comes from a source, never a hand polygon.**
  *
  * - `seethrough:<dir>`: a See-through run in the wrapper form (`layers.json`
  *   and `parts/`), the figure being every drawn layer's alpha above
@@ -18,13 +17,14 @@
  *   (opaque white inside the figure, opaque black outside);
  * - `matte:<dir>`: a model mask whose receipt binds both raw and final masks
  *   to the exact painting bytes and the recorded threshold/transform;
+ * - `classified:<manifest.json>`: an assemble scene mask with explicitly
+ *   labeled outside-parts components and declared prop pixels excluded;
  * - `--occluder <png>` (`--mode occluder`, issue #1230): a declared RGBA
  *   image of what stands in front of the character, on the painting's grid,
  *   the mask being its alpha above 0 (enclosed holes filled under `--holes`).
  *
- * The mask is taken on its own grid and never fitted: a source whose grid is
- * not the painting's size is refused by name. With no source the command
- * refuses before it writes anything or reaches a box.
+ * The source must match the painting grid or define a verified mapping to it.
+ * With no source the command refuses before it writes anything or reaches a box.
  *
  * The receipt (`rig-parts-plate-receipt/1`) names the painting, the mask, the
  * model, every parameter, the graph, the GPU and the output, with the sha256
@@ -42,6 +42,7 @@ import { PartsError, type Problem } from './errors.ts';
 import type { Graph } from './graphs.ts';
 import { type LayerSet, OPAQUE_ALPHA_ABOVE, readWrapperLayers } from './layers.ts';
 import { FIGURE_MASK_FILE, PAINTING_IN_RIG_FILE } from './parts.ts';
+import { readClassifiedPlateMask } from './platecomponents.ts';
 import { decodePngBytes, encodePngBytes } from './raster/png.ts';
 import { fillHoles } from './raster/morph.ts';
 import { newMask, newRaster, type Raster } from './raster/types.ts';
@@ -64,7 +65,12 @@ export const CORE_GRID_TRANSFORM_KEYS = ['source', 'padded', 'pad', 'pad_fill', 
 
 export type PlateMode = 'background' | 'foreground' | 'occluder';
 export type PlateGraph = 'lama' | 'core';
-export type MaskSource = 'seethrough' | 'figure-mask' | 'matte' | 'occluder';
+export type MaskSource = 'seethrough' | 'figure-mask' | 'matte' | 'classified' | 'occluder';
+
+interface PlateMaskClassification {
+  manifest_sha256: string;
+  prop_clips: Array<{ id: string; clipped_px: number }>;
+}
 
 export interface CoreGridTransform {
   source: [number, number];
@@ -94,6 +100,7 @@ export interface PlateReceipt {
   /** `--mode occluder` only: the declared occluder image the mask is read from. */
   occluder?: { path: string; sha256: string };
   mask: { source: MaskSource; from: string; path: string; sha256: string };
+  mask_classification?: PlateMaskClassification;
   model: { name: string; checkpoint_sha256: string; checkpoint_sha256_from: 'declared' } | null;
   params: Record<string, string | number | boolean>;
   graph: string;
@@ -132,13 +139,16 @@ export function coreCfg(value: number | string | undefined, graph: PlateGraph): 
   return n;
 }
 
-/** `--mask-from <source>:<dir>`, parsed; an absent or unknown source is refused by name. */
+/** `--mask-from <source>:<path>`, parsed; an absent or unknown source is refused by name. */
 export function parseMaskFrom(value: string | undefined): { source: MaskSource; dir: string } {
   if (value === undefined) {
-    fail('PLATE_MASK_SOURCE', '--mask-from', 'is absent; a source mask is required — seethrough:<run dir> (run `rig-parts comfy seethrough` on the painting) or figure-mask:<assemble out dir> (run `assemble` with config.scene), or matte:<matte out dir> (run `rig-parts comfy matte`); a hand-drawn mask is not taken');
+    fail('PLATE_MASK_SOURCE', '--mask-from',
+      'is absent; a source mask is required — seethrough:<run dir> (run comfy seethrough on the painting), ' +
+      'figure-mask:<assemble rig dir> (run assemble with config.scene), matte:<matte out dir> (run comfy matte), ' +
+      'or classified:<manifest.json> (declare roles for the assemble mask); a hand-drawn mask is not taken');
   }
-  const m = /^(seethrough|figure-mask|matte):(.+)$/.exec(value);
-  if (m === null) fail('PLATE_MASK_SOURCE', '--mask-from', `is ${JSON.stringify(value)}; seethrough:<dir>, figure-mask:<dir> or matte:<dir> is required`);
+  const m = /^(seethrough|figure-mask|matte|classified):(.+)$/.exec(value);
+  if (m === null) fail('PLATE_MASK_SOURCE', '--mask-from', `is ${JSON.stringify(value)}; seethrough:<dir>, figure-mask:<dir>, matte:<dir> or classified:<manifest.json> is required`);
   return { source: m[1] as MaskSource, dir: m[2] };
 }
 
@@ -147,6 +157,7 @@ export interface FigureMask {
   width: number;
   height: number;
   inside: Uint8Array;
+  classification?: ReturnType<typeof readClassifiedPlateMask>['classification'];
 }
 
 function maskRecord(path: string, code: string, remedy = 're-run assemble'): { record: Record<string, unknown>; bytes: Uint8Array } {
@@ -266,6 +277,13 @@ function bindFigureSource(dir: string, parts: Record<string, unknown>, partsByte
  * writes, and a mask with no figure pixel.
  */
 export function readSourceMask(source: MaskSource, dir: string, width: number, height: number, painting?: Raster, paintingBytes?: Uint8Array): FigureMask {
+  if (source === 'classified') {
+    const mask = readClassifiedPlateMask(dir, width, height, paintingBytes);
+    if (!mask.inside.includes(1)) {
+      fail('PLATE_MASK_EMPTY', `classified:${dir}`, 'holds no figure pixel after excluding the declared props; verify the component roles');
+    }
+    return mask;
+  }
   if (!existsSync(dir) || !statSync(dir).isDirectory()) {
     fail('PLATE_MASK_SOURCE', `${source}:${dir}`, `is not a directory; ${source === 'seethrough' ? 'a See-through run directory (from `rig-parts comfy seethrough`)' : source === 'matte' ? 'a comfy matte directory with receipt.json, model-mask.png and mask.png' : 'an assemble output directory with parts.json and figure_rig.png'} is required`);
   }
@@ -386,6 +404,23 @@ export function growMask(mask: FigureMask, r: number): FigureMask {
     }
   }
   return { width: W, height: H, inside: out };
+}
+
+/** Clip declared prop pixels from the final background mask, on the painting grid before graph padding. */
+export function clipClassifiedProps(source: FigureMask, grown?: FigureMask): PlateMaskClassification | undefined {
+  const classification = source.classification;
+  if (classification === undefined) return undefined;
+  return {
+    manifest_sha256: classification.manifest_sha256,
+    prop_clips: classification.props.map(({ id, indices }) => {
+      let clipped_px = 0;
+      if (grown !== undefined) for (const index of indices) {
+        clipped_px += grown.inside[index];
+        grown.inside[index] = 0;
+      }
+      return { id, clipped_px };
+    }),
+  };
 }
 
 /** The mask as the PNG written beside the plate and uploaded to the box: opaque white inside, opaque black outside (LoadImageMask reads its red channel). */
@@ -562,21 +597,38 @@ export function cropCoreGrid(padded: Raster, transform: CoreGridTransform): Rast
 // ---------------------------------------------------------------------------
 
 /** The receipt's key order: occluder mode binds the occluder, an off-grid `core` run its `grid_transform`. */
-export function receiptKeys(occluder: boolean, gridTransform: boolean): readonly string[] {
+export function receiptKeys(occluder: boolean, gridTransform: boolean, classified = false): readonly string[] {
   if (occluder) return gridTransform ? PLATE_RECEIPT_OCCLUDER_GRID_TRANSFORM_KEYS : PLATE_RECEIPT_OCCLUDER_KEYS;
-  return gridTransform ? PLATE_RECEIPT_GRID_TRANSFORM_KEYS : PLATE_RECEIPT_KEYS;
+  const keys = gridTransform ? PLATE_RECEIPT_GRID_TRANSFORM_KEYS : PLATE_RECEIPT_KEYS;
+  return classified ? keys.flatMap(key => key === 'mask' ? [key, 'mask_classification'] : [key]) : keys;
 }
 
 /** The receipt's JSON text, its keys in `PLATE_RECEIPT_KEYS` (or `PLATE_RECEIPT_GRID_TRANSFORM_KEYS` when `grid_transform` is present) order. */
 export function receiptText(r: PlateReceipt): string {
   const ordered: Record<string, unknown> = {};
-  for (const k of receiptKeys(r.mode === 'occluder', r.grid_transform !== undefined)) ordered[k] = (r as unknown as Record<string, unknown>)[k];
+  for (const k of receiptKeys(r.mode === 'occluder', r.grid_transform !== undefined, r.mask.source === 'classified')) {
+    ordered[k] = (r as unknown as Record<string, unknown>)[k];
+  }
   return `${JSON.stringify(ordered, null, 2)}\n`;
 }
 
 /** A path as the receipt writes it: relative to the receipt's directory, POSIX separators. */
 export function receiptPath(receiptDir: string, path: string): string {
   return relative(resolve(receiptDir), resolve(path)).split('\\').join('/');
+}
+
+function validMaskClassification(value: unknown): value is PlateMaskClassification {
+  const digest = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{64}$/.test(v);
+  if (typeof value !== 'object' || value === null || !('manifest_sha256' in value) || !digest(value.manifest_sha256) ||
+      !('prop_clips' in value) || !Array.isArray(value.prop_clips) || Object.keys(value).join(',') !== 'manifest_sha256,prop_clips') return false;
+  const seen = new Set<string>();
+  return value.prop_clips.every((clip: unknown) => {
+    if (typeof clip !== 'object' || clip === null || !('id' in clip) || !digest(clip.id) || seen.has(clip.id) ||
+        !('clipped_px' in clip) || typeof clip.clipped_px !== 'number' || !Number.isSafeInteger(clip.clipped_px) ||
+        clip.clipped_px < 0 || Object.keys(clip).join(',') !== 'id,clipped_px') return false;
+    seen.add(clip.id);
+    return true;
+  });
 }
 
 /**
@@ -599,9 +651,33 @@ export function verifyPlateReceipt(receiptFile: string): Problem[] {
   }
   if (r.spec !== PLATE_RECEIPT_SPEC) problems.push({ code: 'PLATE_RECEIPT_SPEC', object: receiptFile, detail: `has spec ${JSON.stringify(r.spec)}; "${PLATE_RECEIPT_SPEC}" is required` });
   const keys = Object.keys(r).join(',');
-  const expectedKeys = receiptKeys(r.mode === 'occluder', 'grid_transform' in r);
+  const mask = r.mask as { source?: unknown; from?: unknown } | undefined;
+  const classified = mask?.source === 'classified';
+  const expectedKeys = receiptKeys(r.mode === 'occluder', 'grid_transform' in r, classified);
   if (keys !== expectedKeys.join(',')) problems.push({ code: 'PLATE_RECEIPT_KEYS', object: receiptFile, detail: `has keys ${keys}; ${expectedKeys.join(',')} in that order is required` });
   const base = dirname(receiptFile);
+  if (classified) {
+    const classification = r.mask_classification;
+    const from = mask?.from;
+    if (!validMaskClassification(classification) || typeof from !== 'string' || from === '') {
+      problems.push({
+        code: 'PLATE_RECEIPT_KEYS', object: `${receiptFile} mask_classification`,
+        detail: 'requires a manifest path, its lowercase SHA-256, and per-prop id and clipped_px counts',
+      });
+    } else {
+      const manifest = join(base, from);
+      let found: string | undefined;
+      try { found = sha256(readFileSync(manifest)); } catch { /* checked below */ }
+      if (found === undefined) {
+        problems.push({ code: 'PLATE_RECEIPT_FILE', object: manifest, detail: 'cannot read the classified plate manifest named by mask.from' });
+      } else if (found !== classification.manifest_sha256) {
+        problems.push({
+          code: 'PLATE_RECEIPT_HASH', object: manifest,
+          detail: `has sha256 ${found}; mask_classification declares ${classification.manifest_sha256}`,
+        });
+      }
+    }
+  }
   let paintingRaster: Raster | undefined;
   for (const field of r.mode === 'occluder' ? ['painting', 'occluder', 'mask', 'output'] as const : ['painting', 'mask', 'output'] as const) {
     const f = r[field] as { path?: unknown; sha256?: unknown } | undefined;
@@ -689,6 +765,7 @@ export interface PlateWrite {
   graph: string;
   gpu: string | null;
   gridTransform?: CoreGridTransform;
+  maskClassification?: PlateMaskClassification | undefined;
   /** `--mode occluder` only: the occluder file, bound into the receipt by path and sha256. */
   occluder?: { path: string; bytes: Uint8Array };
 }
@@ -716,6 +793,7 @@ export function publishPlate(w: PlateWrite): PlateReceipt {
       painting: { path: receiptPath(w.out, w.paintingPath), sha256: sha256(w.paintingBytes) },
       ...(w.occluder === undefined ? {} : { occluder: { path: receiptPath(w.out, w.occluder.path), sha256: sha256(w.occluder.bytes) } }),
       mask: { source: w.source, from: receiptPath(w.out, w.sourceDir), path: PLATE_MASK_FILE, sha256: mask.sha256 },
+      ...(w.maskClassification === undefined ? {} : { mask_classification: w.maskClassification }),
       model: w.model,
       params: w.params,
       graph: w.graph,
@@ -777,6 +855,7 @@ export function runForeground(run: ForegroundRun): PlateReceipt {
     source: from.source,
     sourceDir: from.dir,
     mask,
+    maskClassification: clipClassifiedProps(mask),
     plate: foregroundMatte(painting.raster, mask),
     model: null,
     params: { mask_alpha_above: OPAQUE_ALPHA_ABOVE },
