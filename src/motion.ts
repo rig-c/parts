@@ -132,6 +132,7 @@ export interface MotionKey {
 export interface MotionTrack {
   bone?: string;
   group?: string;
+  physics?: string;
   property: string;
   keys: MotionKey[];
 }
