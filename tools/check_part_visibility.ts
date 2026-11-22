@@ -11,6 +11,7 @@ import { checkPartsStage } from '../src/partscheck.ts';
 import { encodePngBytes, readPng } from '../src/raster/png.ts';
 import type { Raster } from '../src/raster/types.ts';
 import { writeVisibilityRecord } from '../src/visibility.ts';
+import { readSourceStateMap } from '../src/sourcestates.ts';
 
 type Say = (name: string, pass: boolean, detail: string, why: string) => void;
 type Pixel = (x: number, y: number) => number[];
@@ -254,4 +255,16 @@ export function runPartVisibilityChecks(dir: string, say: Say): void {
     Buffer.from(neighbour.image.data).equals(Buffer.from(before.images[1].image.data)),
     `body ${json(body.record.source_visibility)}, retained ${json(neighbour.record.source_visibility)}`,
     'The 12 by 8 donor region lies outside the full record. The retained neighbour preserves the pre-take pixels and their measurements.');
+
+  // Issue #1473: every recorded part's state map is written beside it, bound by SHA-256, its counts the record's own.
+  const mapped = readParts(partsPath);
+  const mapRead = mapped.parts.map(p => { try { return readSourceStateMap(join(output, 'parts'), p, readPng(join(output, 'parts', `${p.name}.png`))).length; } catch (e) { return e instanceof PartsError ? e.problems.map(q => q.code).join(',') : String(e); } });
+  const altRecord = readParts(join(alternateOut, 'parts.json')).alternates?.[0]?.records[0];
+  const altMap = altRecord?.source_state_map;
+  say('AS1473_RECORDED_PARTS_CARRY_A_STATE_MAP_THAT_MATCHES_THEIR_COUNTS', mapped.parts.every(p => p.source_state_map?.image === `${p.name}_source_states.png`) &&
+    mapRead.every(n => typeof n === 'number') &&
+    readParts(join(noRecordOut, 'parts.json')).parts.every(p => p.source_state_map === undefined) && !existsSync(join(noRecordOut, 'parts', 'back_source_states.png')) &&
+    altMap !== undefined && existsSync(join(alternateOut, 'parts', altMap.image)) && sha(readFileSync(join(alternateOut, 'parts', altMap.image))) === altMap.sha256,
+    json({ primary: mapRead, alternate: altMap?.image ?? null }),
+    'Each map is read back through the check-side reader: present, hashed as declared, and counted to the record. A part with no record writes no map.');
 }

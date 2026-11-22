@@ -445,7 +445,7 @@ array for matching or legacy manifests. See the workflow in
 `@rig-c/parts/src/parts.ts` exports `partsFileReferences(dir: string):
 PartsFileReference[]` and the `PartsFileReference` type. `dir` holds the assemble
 output's `parts.json`. Each row has `path: string`, relative to that directory,
-and `role: 'part' | 'alternate' | 'depth' | 'painting' | 'figure_mask'`. The paths use `/`.
+and `role: 'part' | 'alternate' | 'depth' | 'painting' | 'figure_mask' | 'source_state_map'`. The paths use `/`.
 The complete output-reference fields and their roles are below.
 
 | Field | Relative path | Role |
@@ -453,6 +453,7 @@ The complete output-reference fields and their roles are below.
 | `parts[].name` | `parts/<name>.png` | `part` |
 | `alternates[].name` with `records[].name` | `parts/<set>_<name>.png` | `alternate` |
 | Base or alternate record `depth.image` | `parts/<depth.image>` | `depth` |
+| Base or alternate record `source_state_map.image` | `parts/<source_state_map.image>` | `source_state_map` |
 | `painting_in_rig.path` | Exactly `painting_in_rig.png` | `painting` |
 | Base or alternate `scene.figure_mask` | Exactly `figure_rig.png` | `figure_mask` |
 
@@ -1684,6 +1685,32 @@ validation. Only this declared check composites source RGBA over white at its
 original resolution **before** existing Lanczos3 stage resampling. Setup RGBA
 is composited on the native stage grid. Source readers preserve alpha; the
 global RGB-only source helper and checks without this declaration are unchanged.
+
+The optional `source_exposure` key (issue #1473, additive) declares a limit for
+`check`'s `SOURCE_EXPOSURE` line: `{"max_px": <a nonnegative integer>}`, the
+most stage pixels of one recorded-hidden or undecided state one part may show
+in one frame. No default exists. Declared, a row over it is
+`CHECK_SOURCE_EXPOSURE` and a reading that cannot be taken is
+`CHECK_SOURCE_EXPOSURE_UNMEASURED`; the line is PASS or FAIL. Undeclared, the
+line is written only when some part carries a `source_state_map`, and then it
+is `REPORTED`, never a pass, and moves no exit code. A rig with no map and no
+declaration writes no `SOURCE_EXPOSURE` key in `check.json` and prints no line,
+so its bytes do not change. `SOURCE_EXPOSURE` is not one of `bar_outcomes`'
+bars, so `bar_outcomes` does not change either. The `check.json` block holds
+`status`, `instrument`, `reading`, `max_px`, `alternates`, `parts`, `texels`,
+`frames`, `animations`, `rows` (`part`, `state`, `px`, `frame`, `animation`,
+`index`, `time`, `row_scope`, `row_kind`, `row_subjects`) and `unmeasured`, in
+that order, then `reason` when no part was read.
+
+`parts.json` records with `source_visibility` gain an optional
+`source_state_map` (issue #1473, additive), `{ "image", "sha256" }`: the
+per-texel state map `assemble` writes in `parts/`, bound by the SHA-256 of its
+bytes. A record without `source_visibility` cannot carry one
+(`PARTS_FIELD_TYPE`). `check` refuses a map that is missing, changed, malformed
+or disagrees with its part or its counts, before anything is built
+(`PARTS_SOURCE_STATE_MAP_PRESENT`, `_SHA256`, `_FORMAT`, `_COUNTS`). The map's
+codes are listed in the
+[authoring guide](AUTHORING.md#see-through-layer-visibility).
 
 The optional `motion_seams` key in `spine-parts-requirements/1` (issue #1269,
 additive) is a bar-free array of `{part, neighbour}` declarations. Check reads

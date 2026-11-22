@@ -62,6 +62,8 @@ export const CHECK_ROW_PATHS = {
   'SEAM_OVER_RANGE.joints[].poses': ['SEAM_OVER_RANGE.joints[].poses'],
   'SETUP_MATCHES_PAINTING.regions': ['SETUP_MATCHES_PAINTING.regions'],
   'SETUP_MATCHES_PAINTING.regions[].slots': ['SETUP_MATCHES_PAINTING.regions[].slots'],
+  'SOURCE_EXPOSURE.rows': ['SOURCE_EXPOSURE.rows'],
+  'SOURCE_EXPOSURE.unmeasured': ['SOURCE_EXPOSURE.unmeasured'],
   'STILL_REGIONS_DARK.*.crossing': ['STILL_REGIONS_DARK.*.crossing'],
   'STILL_REGIONS_DARK.*.still_slots': ['STILL_REGIONS_DARK.*.still_slots'],
   'STRESS_OFF_CHAIN.not_read': ['STRESS_OFF_CHAIN.not_read'],

@@ -204,9 +204,9 @@ export function assembleOutputFiles(outDir: string, result: AssembleResult): str
     ...(result.edgeResiduals === undefined ? [] : [`rig/${EDGE_RESIDUAL_FILE}`]),
     ...(result.paintingEdges?.allocation === undefined ? [] : [`rig/${PAINTING_ALLOCATION_FILE}`, ...writtenAllocationReports(outDir)]),
     ...(existsSync(join(outDir, 'rig', CUT_MATERIAL_SOURCES)) ? [`rig/${CUT_MATERIAL_SOURCES}`] : []),
-    ...result.parts.parts.flatMap((p) => [`rig/parts/${p.name}.png`, ...(p.depth === undefined ? [] : [`rig/parts/${p.depth.image}`])]),
+    ...result.parts.parts.flatMap((p) => [`rig/parts/${p.name}.png`, ...(p.depth === undefined ? [] : [`rig/parts/${p.depth.image}`]), ...(p.source_state_map === undefined ? [] : [`rig/parts/${p.source_state_map.image}`])]),
     ...(result.parts.alternates ?? []).flatMap((alt) =>
-      alt.records.flatMap((p) => [`rig/parts/${alt.name}_${p.name}.png`, ...(p.depth === undefined ? [] : [`rig/parts/${p.depth.image}`])]),
+      alt.records.flatMap((p) => [`rig/parts/${alt.name}_${p.name}.png`, ...(p.depth === undefined ? [] : [`rig/parts/${p.depth.image}`]), ...(p.source_state_map === undefined ? [] : [`rig/parts/${p.source_state_map.image}`])]),
     ),
     'render/recomposite_rig.png',
     `render/${ERROR_MAP_FILE}`,

@@ -2,6 +2,7 @@ import { setupPaintingProblems, type SetupPainting } from './setuppainting.ts';
 import { jointMaterialProblems, type JointMaterial } from './cutmaterial.ts';
 import { fixedSkeletonProblems, type FixedSkeleton } from './artjoints.ts';
 import { boundaryColourProblems, type BoundaryColour } from './boundarycolour.ts';
+import { sourceExposureProblems, type SourceExposure } from './sourceexposure.ts';
 import { behindSeamsProblems, type BehindSeams } from './behindseams.ts';
 import { motionSeamProblems, type MotionSeamDeclaration } from './motionseams.ts';
 /**
@@ -217,6 +218,8 @@ export interface RequirementsFile {
   boundary_colour?: BoundaryColour;
   /** Issue #1314: required behind-part seam readings when declared; an absent threshold is unmeasured, never defaulted. */
   behind_seams?: BehindSeams;
+  /** Issue #1473: the limit on recorded-hidden or undecided source texels a pose shows; without it `check` reports a measurement. */
+  source_exposure?: SourceExposure;
 }
 
 /**
@@ -360,7 +363,7 @@ export function readRequirements(path: string): RequirementsFile {
     problems.push({ code: 'REQUIREMENTS_SELF_TARGET', object: `${label} field "target"`, detail });
   };
   if (raw.spec !== REQUIREMENTS_SPEC) field(`${at} field "spec"`, `is ${JSON.stringify(raw.spec)}; ${JSON.stringify(REQUIREMENTS_SPEC)} is required`);
-  for (const k of Object.keys(raw)) if (!['spec', 'fps', 'targets', 'requirements', ...EXCEPTION_LISTS, 'may_fold', 'fixed_skeleton', 'cut_material', 'setup_painting', 'pinholes', 'seam_over_motion', 'motion_seams', 'boundary_colour', 'behind_seams'].includes(k) && !freeKey(k, raw[k])) field(`${at} field "${k}"`, 'is not a field this format reads (spec, fps, targets, requirements, not_planted, not_swinging, rises, rests, may_fold, fixed_skeleton, cut_material, setup_painting, pinholes, seam_over_motion, motion_seams, boundary_colour, behind_seams; note or *_note as a string; x-<name> as a record)');
+  for (const k of Object.keys(raw)) if (!['spec', 'fps', 'targets', 'requirements', ...EXCEPTION_LISTS, 'may_fold', 'fixed_skeleton', 'cut_material', 'setup_painting', 'pinholes', 'seam_over_motion', 'motion_seams', 'boundary_colour', 'behind_seams', 'source_exposure'].includes(k) && !freeKey(k, raw[k])) field(`${at} field "${k}"`, 'is not a field this format reads (spec, fps, targets, requirements, source_exposure, not_planted, not_swinging, rises, rests, may_fold, fixed_skeleton, cut_material, setup_painting, pinholes, seam_over_motion, motion_seams, boundary_colour, behind_seams; note or *_note as a string; x-<name> as a record)');
   if ('motion_seams' in raw) {
     // Shape uses the shared reader; actual names resolve against the rig and parts below.
     const names = new Set<string>();
@@ -372,6 +375,7 @@ export function readRequirements(path: string): RequirementsFile {
   if ('pinholes' in raw) problems.push(...pinholesProblems(raw.pinholes, `${at} pinholes`));
   if ('seam_over_motion' in raw) problems.push(...seamOverMotionProblems(raw.seam_over_motion, `${at} seam_over_motion`));
   if ('boundary_colour' in raw) problems.push(...boundaryColourProblems(raw.boundary_colour, `${at} boundary_colour`));
+  if ('source_exposure' in raw) problems.push(...sourceExposureProblems(raw.source_exposure, `${at} source_exposure`));
   if ('behind_seams' in raw) problems.push(...behindSeamsProblems(raw.behind_seams, `${at} behind_seams`));
   if ('setup_painting' in raw) problems.push(...setupPaintingProblems(raw.setup_painting, `${at} setup_painting`));
   if ('cut_material' in raw) problems.push(...jointMaterialProblems(raw.cut_material, `${at} cut_material`));
@@ -561,7 +565,7 @@ export function readRequirements(path: string): RequirementsFile {
   }
   const fps = finite(raw.fps) ? raw.fps : undefined;
   refuseIfAny(problems);
-  return { path: at, fps, targets, requirements, not_planted: lists.not_planted, not_swinging: lists.not_swinging, rises: lists.rises, rests: lists.rests, may_fold: mayFold, ...(raw.motion_seams === undefined ? {} : { motion_seams: raw.motion_seams as MotionSeamDeclaration[] }), ...(raw.fixed_skeleton === undefined ? {} : { fixed_skeleton: raw.fixed_skeleton as FixedSkeleton }), ...(raw.cut_material === undefined ? {} : { cut_material: raw.cut_material as JointMaterial[] }), ...(raw.setup_painting === undefined ? {} : { setup_painting: raw.setup_painting as SetupPainting }), ...(raw.pinholes === undefined ? {} : { pinholes: { required: (raw.pinholes as PinholesDeclaration).required } }), ...(raw.seam_over_motion === undefined ? {} : { seam_over_motion: { required: (raw.seam_over_motion as SeamOverMotionDeclaration).required } }), ...(raw.boundary_colour === undefined ? {} : { boundary_colour: { max_step_excess: (raw.boundary_colour as BoundaryColour).max_step_excess } }), ...(raw.behind_seams === undefined ? {} : { behind_seams: raw.behind_seams as BehindSeams }) };
+  return { path: at, fps, targets, requirements, not_planted: lists.not_planted, not_swinging: lists.not_swinging, rises: lists.rises, rests: lists.rests, may_fold: mayFold, ...(raw.motion_seams === undefined ? {} : { motion_seams: raw.motion_seams as MotionSeamDeclaration[] }), ...(raw.fixed_skeleton === undefined ? {} : { fixed_skeleton: raw.fixed_skeleton as FixedSkeleton }), ...(raw.cut_material === undefined ? {} : { cut_material: raw.cut_material as JointMaterial[] }), ...(raw.setup_painting === undefined ? {} : { setup_painting: raw.setup_painting as SetupPainting }), ...(raw.pinholes === undefined ? {} : { pinholes: { required: (raw.pinholes as PinholesDeclaration).required } }), ...(raw.seam_over_motion === undefined ? {} : { seam_over_motion: { required: (raw.seam_over_motion as SeamOverMotionDeclaration).required } }), ...(raw.boundary_colour === undefined ? {} : { boundary_colour: { max_step_excess: (raw.boundary_colour as BoundaryColour).max_step_excess } }), ...(raw.behind_seams === undefined ? {} : { behind_seams: raw.behind_seams as BehindSeams }), ...(raw.source_exposure === undefined ? {} : { source_exposure: { max_px: (raw.source_exposure as SourceExposure).max_px } }) };
 }
 
 // ---------------------------------------------------------------------------

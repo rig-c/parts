@@ -51,6 +51,7 @@ import { runJointContactChecks } from './tools/check_joint_contact.ts';
 import { runBehindSeamChecks } from './tools/check_behind_seams.ts';
 import { runSetupPaintingChecks } from './tools/check_setup_painting.ts';
 import { runBoundaryColourChecks } from './tools/check_boundary_colour.ts';
+import { runSourceExposureChecks } from './tools/check_source_exposure.ts';
 import { BOUNDARY_COLOUR_LINE, UNDECLARED_BOUNDARY_COLOUR_REASON, measureBoundaryColour } from './src/boundarycolour.ts';
 import { BEHIND_SEAM_LINE, UNDECLARED_BEHIND_SEAM_REASON } from './src/behindseams.ts';
 import { runCutMaterialChecks } from './tools/check_cut_material.ts';
@@ -60195,7 +60196,7 @@ function runSetupPaintingSuite(): number {
 }
 
 function runBoundaryColourSuite(): number {
-  section('boundary-colour: part-boundary colour step against the rig\'s own pieces');
+  section('boundary-colour: part-boundary colour step against the rig\'s own pieces, and the source texels a pose exposes');
   const { say, bad } = counter();
   const dir = temp('boundary-colour');
   try {
@@ -60203,6 +60204,8 @@ function runBoundaryColourSuite(): number {
       'issue #942: the step at every part boundary of the setup and every idle frame against the rig\'s own flat pieces and their rest colours, under a declared allowance only; the stretch and notch plants refused by name'), rigcRunnerAt(suiteRigc(), spawnRigc));
     reportCheckBarPlant(say, 'BK1372_BOUNDARY_COLOUR_NOTCH_FAILS_ITS_OWN_BAR', BOUNDARY_COLOUR_LINE,
       join(dir, 'cli-notch', 'cli', 'check.json'), join(dir, 'declared-clean', 'out', 'check.json'), 'PASS');
+    runSourceExposureChecks(join(dir, 'source-exposure'), (name, pass, detail) => say(name, pass, detail,
+      'issue #1473: recorded-hidden and undecided source texels a pose shows, read through the renderer on a hand-counted rig; tampered and miscounted maps refused; no map writes nothing'), rigcRunnerAt(suiteRigc(), spawnRigc));
   }
   finally { rmSync(dir, { recursive: true, force: true }); }
   return bad();

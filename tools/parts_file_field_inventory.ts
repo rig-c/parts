@@ -41,6 +41,9 @@ const PART_STRING_FIELDS = [
   'provenance.edited_part.receipt.producer.tool',
   'provenance.edited_part.receipt.sha256',
   'provenance.edits[].edit',
+  // The source-state map beside a recorded part (#1473): a file in parts/, bound by its hash.
+  'source_state_map.image',
+  'source_state_map.sha256',
   // Original run-qualified layer identities.
   'source_visibility.source_layers[]',
   'taken_layers[].prompt_id',

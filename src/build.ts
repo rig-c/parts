@@ -11,6 +11,7 @@ import { DEFAULT_PROJECT_RULE } from './projectrule.ts';
 import { type PaintingAllocationReading, type PaintingAllocationEvent, EDGE_CONTRAST, PAINTING_ALLOCATION_FILE, PAINTING_EDGE_COVERAGE_TRANSFER } from './paintingedges.ts';
 import { SETUP_PAINTING_LINE, setupPaintingLines } from './setuppainting.ts';
 import { boundaryColourLines } from './boundarycolour.ts';
+import { SOURCE_EXPOSURE_LINE, sourceExposureLines } from './sourceexposure.ts';
 import { behindSeamLines } from './behindseams.ts';
 import { writeMaterialSources } from './cutmaterialio.ts';
 import { CUT_MATERIAL_LINE, CUT_MATERIAL_SOURCES, materialLines } from './cutmaterial.ts';
@@ -997,8 +998,12 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     }
     const keptImages = altRes.images
       .filter(({ record }) => coveredSet.has(record.name))
-      .flatMap(({ record, image, depthImage }) => [{ name: `${alt.name}_${record.name}`, image }, ...(depthImage === undefined || record.depth === undefined ? [] : [{ name: `${alt.name}_${record.depth.image.slice(0, -4)}`, image: depthImage }])]);
-    const keptRecords = altRes.parts.parts.filter((p) => coveredSet.has(p.name)).map(p => p.depth === undefined ? p : { ...p, depth: { ...p.depth, image: `${alt.name}_${p.depth.image}` } });
+      .flatMap(({ record, image, depthImage, sourceStates }) => [{ name: `${alt.name}_${record.name}`, image }, ...(depthImage === undefined || record.depth === undefined ? [] : [{ name: `${alt.name}_${record.depth.image.slice(0, -4)}`, image: depthImage }]),
+        ...(sourceStates === undefined || record.source_state_map === undefined ? [] : [{ name: `${alt.name}_${record.source_state_map.image.slice(0, -4)}`, image: sourceStates }])]);
+    const keptRecords = altRes.parts.parts.filter((p) => coveredSet.has(p.name)).map(p => {
+      const depth = p.depth === undefined ? p : { ...p, depth: { ...p.depth, image: `${alt.name}_${p.depth.image}` } };
+      return p.source_state_map === undefined ? depth : { ...depth, source_state_map: { ...p.source_state_map, image: `${alt.name}_${p.source_state_map.image}` } };
+    });
     if (result.stageMap !== undefined && altRes.stageMap !== undefined) {
       altRes.stageMap.parts = altRes.stageMap.parts.filter(p => coveredSet.has(p.name));
       (result.stageMap.alternates ??= []).push({ name: alt.name, map: altRes.stageMap });
@@ -1078,9 +1083,10 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     });
   }
   const emittedAssets = [
-    ...result.images.flatMap(({ record, depthImage }) => [
+    ...result.images.flatMap(({ record, depthImage, sourceStates }) => [
       `${record.name}.png`,
       ...(depthImage !== undefined && record.depth !== undefined ? [record.depth.image] : []),
+      ...(sourceStates !== undefined && record.source_state_map !== undefined ? [record.source_state_map.image] : []),
     ]),
     ...altBuilt.flatMap((b) => b.images.map(({ name }) => `${name}.png`)),
   ];
@@ -1196,6 +1202,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     else writeFileSync(join(outs.partsDir, `${record.name}.png`), encodedBytes);
     if (depthImage !== undefined && record.depth !== undefined) writePng(join(outs.partsDir, record.depth.image), depthImage);
   }
+  for (const { record, sourceStates } of result.images) if (sourceStates !== undefined && record.source_state_map !== undefined) writePng(join(outs.partsDir, record.source_state_map.image), sourceStates);
   for (const row of result.depthReadings ?? []) log(`  depth reading ${row.from}: ${row.reading.relation}; ordering median ${row.reading.orderingMedian}, source-sheet median ${row.reading.sheetMedian} (half-level quantization; reading only, polarity declared)`);
   for (const row of result.depthClamps ?? []) log(`  depth edge clamp ${row.part}: ${row.samples} visible samples less than 1 source pixel outside the crop; edge texels retained`);
   for (const b of altBuilt) for (const row of b.depthClamps ?? []) log(`  set "${b.record.name}" depth edge clamp ${row.part}: ${row.samples} visible samples less than 1 source pixel outside the crop; edge texels retained`);
@@ -2494,6 +2501,8 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
   if (setupPainting !== undefined) for (const line of setupPaintingLines(setupPainting)) log(`  ${line}`);
   for (const line of boundaryColourLines(r.boundaryColour)) log(`  ${line}`);
   for (const line of behindSeamLines(r.behindSeams)) log(`  ${line}`);
+  const sourceExposure = fig[SOURCE_EXPOSURE_LINE];
+  if (sourceExposure !== undefined) for (const line of sourceExposureLines(sourceExposure)) log(`  ${line}`);
   if (r.requirements !== null) {
     for (const [name, line] of Object.entries(r.requirements.lines)) log(`  ${requirementText(name, line)}`);
     log(`  ${summaryText(r.requirements.summary)}`);
