@@ -154,7 +154,9 @@ export function runPartVisibilityChecks(dir: string, say: Say): void {
     json(replaced.source_visibility), 'One occluded pixel is removed and one other occluded pixel is painted over by the outside-record replacement.');
 
   const noRecordOut = join(dir, 'no-record-parts');
-  renameSync(join(exact.full, 'visibility.json'), join(dir, 'withheld-visibility.json'));
+  const primaryManifest = join(exact.full, 'visibility.json');
+  const withheldPrimaryManifest = join(dir, 'withheld-visibility.json');
+  renameSync(primaryManifest, withheldPrimaryManifest);
   exact.run(noRecordOut);
   const noRecord = checkPartsStage(noRecordOut, join(dir, 'no-record-check'), () => {});
   say('AS1471_NO_RECORD_PRESERVES_LEGACY_FIELDS', readParts(join(noRecordOut, 'parts.json')).parts.every(p => p.source_visibility === undefined) &&
@@ -192,6 +194,20 @@ export function runPartVisibilityChecks(dir: string, say: Say): void {
   const alternate = fixture(join(dir, 'alternate'), plan, [back, front], [face]);
   const alts = [{ name: 'alt', source: alternate.source, full: alternate.full, head: alternate.head }];
   const legacy = exact.run(join(dir, 'legacy-alternate'), exact.full, alts).parts.alternates?.[0]?.records[0];
+  renameSync(withheldPrimaryManifest, primaryManifest);
+  const primaryOnlyOut = join(dir, 'recorded-primary');
+  exact.run(primaryOnlyOut, exact.full, alts);
+  renameSync(primaryManifest, withheldPrimaryManifest);
+  const primaryOnly = checkPartsStage(primaryOnlyOut, join(dir, 'primary-only-check'), () => {});
+  const primaryRows = primaryOnly.reported.filter(row => row.code === 'PARTS_INVENTED_MATERIAL');
+  const primaryHoles = primaryOnly.holes.filter(row => row.code === 'PARTS_INVENTED_MATERIAL');
+  say('AS1471_RECORDED_PRIMARY_REPORTS_UNMEASURED_ALTERNATE', primaryOnly.exit_code === 0 &&
+    same(primaryRows.map(row => [row.set, row.part]), [[null, 'back'], [null, 'front']]) &&
+    primaryRows[0]?.occluded_px === 64 && same(primaryHoles.map(row => row.reason), [
+      '2 parts lack validated source_visibility: part "back" in alternate set "alt", part "front" in alternate set "alt"',
+    ]), json({ reported: primaryRows, holes: primaryHoles }),
+    'Preserve both primary measurements and identify every alternate part that lacks a measurement.');
+
   record(alternate.full);
   const alternateOut = join(dir, 'recorded-alternate');
   exact.run(alternateOut, exact.full, alts);
@@ -201,7 +217,10 @@ export function runPartVisibilityChecks(dir: string, say: Say): void {
   say('AS1471_ALTERNATE_HAS_OWN_RECORD_AND_LEGACY_COUNTS', same(altBack?.source_visibility, expected) &&
     VISIBILITY_KEYS.every(key => altBack?.[key] === legacy?.[key]) &&
     alternateParts.parts.every(part => part.source_visibility === undefined) &&
-    altCheck.reported.some(row => row.code === 'PARTS_INVENTED_MATERIAL' && row.set === 'alt' && row.part === 'back'),
+    altCheck.reported.some(row => row.code === 'PARTS_INVENTED_MATERIAL' && row.set === 'alt' && row.part === 'back') &&
+    same(altCheck.holes.filter(row => row.code === 'PARTS_INVENTED_MATERIAL').map(row => row.reason), [
+      '2 parts lack validated source_visibility: part "back" in primary set, part "front" in primary set',
+    ]),
     json(altBack?.source_visibility), 'An alternate uses its own full run record while the primary set keeps its record-free fields.');
 
   const regionHome = join(dir, 'region'), regionFull = join(regionHome, 'full');

@@ -6687,7 +6687,7 @@ outside the consumed inputs pending [#1177](https://github.com/rig-c/parts/issue
 | <a id="PARTS_SOURCE_COVER"></a>`PARTS_SOURCE_COVER` | HOLE when source_cover.json is absent | re-run assemble when a cover inventory is required |
 | <a id="PARTS_PAINTING_ALLOCATION"></a>`PARTS_PAINTING_ALLOCATION` | HOLE when painting_allocation.json is absent | retain the missing transfer observation in review |
 | <a id="PARTS_PLATE_GHOST"></a><a id="PARTS_PLATE_STRUCTURE"></a><a id="PARTS_PLATE_SMEAR"></a><a id="PARTS_PLATE_STEPS"></a>`PARTS_PLATE_GHOST`, `PARTS_PLATE_STRUCTURE`, `PARTS_PLATE_SMEAR`, `PARTS_PLATE_STEPS` | HOLE; no adopted plate discriminator is available | carry these unmeasured classes to parts review |
-| <a id="PARTS_INVENTED_MATERIAL"></a>`PARTS_INVENTED_MATERIAL` | REPORTED per part with occluded and undecided counts when assembly verified a [See-through visibility record](#see-through-layer-visibility). HOLE when the output carries no such measurement. | read the counts as same-run visibility |
+| <a id="PARTS_INVENTED_MATERIAL"></a>`PARTS_INVENTED_MATERIAL` | REPORTED per part with a validated [See-through visibility record](#see-through-layer-visibility), with occluded and undecided counts. If only some parts have measurements, one HOLE counts and names every unmeasured part and its primary or alternate set. If no part has measurements, the legacy HOLE remains. | read the counts as same-run visibility |
 | <a id="PARTS_INVENTED_EXPOSURE"></a>`PARTS_INVENTED_EXPOSURE` | HOLE while posed-frame observations are unavailable | retain the frame-measurement gap in review |
 
 ### check and build

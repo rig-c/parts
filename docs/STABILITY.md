@@ -60,9 +60,12 @@ stepped fill and invented-material exposure always report HOLEs.
 `PARTS_INVENTED_MATERIAL` reports a measurement for each primary or alternate
 part with a validated `source_visibility` block from assembly. The measurement
 describes visibility within the producing See-through run. Painted-versus-
-invented material remains unknown. When neither the primary set nor any
-alternate has a measurement, the existing material HOLE remains and both
-the JSON report and command output keep their legacy bytes.
+invented material remains unknown. When only some parts have a measurement,
+the report keeps those rows and emits one material HOLE whose reason gives the
+count and names every unmeasured part and its primary or alternate set.
+When every part has a measurement, there is no material HOLE. When neither
+the primary set nor any alternate has a measurement, the existing material
+HOLE remains and both the JSON report and command output keep their legacy bytes.
 
 The top-level key order is `spec`, `stage`, `inputs`, `parts`, `refusals`,
 `reported`, `holes`, `exit_code`. `stage` is `parts`. `inputs` is sorted by

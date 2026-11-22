@@ -254,7 +254,16 @@ export function checkPartsStage(input: string, output: string, log: (line: strin
     return [{ code: 'PARTS_INVENTED_MATERIAL', set, part: part.name, occluded_px, undecided_px }];
   });
   for (const [code, reason] of PARTS_QUALITY_HOLES) {
-    if (code !== 'PARTS_INVENTED_MATERIAL' || materialRows.length === 0) hole(code, 'parts', reason);
+    if (code !== 'PARTS_INVENTED_MATERIAL' || materialRows.length === 0) {
+      hole(code, 'parts', reason);
+    } else if (materialRows.length < partRows.length) {
+      const unmeasured = partRows.filter(({ part }) => part.source_visibility === undefined).map(({ part, set }) => {
+        const location = set === null ? 'primary set' : `alternate set ${JSON.stringify(set)}`;
+        return `part ${JSON.stringify(part.name)} in ${location}`;
+      });
+      const noun = unmeasured.length === 1 ? 'part lacks' : 'parts lack';
+      hole(code, 'parts', `${unmeasured.length} ${noun} validated source_visibility: ${unmeasured.join(', ')}`);
+    }
   }
   if (file !== undefined) {
     for (const { part, path } of partRows) {
