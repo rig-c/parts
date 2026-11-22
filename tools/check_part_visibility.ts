@@ -7,12 +7,14 @@ import { writeFrontSlotFixture } from '../fixtures/front_slot.ts';
 import { writeTakeRegionFixture } from '../fixtures/take_region.ts';
 import { assembleStage, type AssembleStageInput } from '../src/build.ts';
 import { PartsError } from '../src/errors.ts';
+import { PartVisibility } from '../src/partvisibility.ts';
 import { readParts, VISIBILITY_KEYS } from '../src/parts.ts';
 import { checkPartsStage } from '../src/partscheck.ts';
 import { encodePngBytes, readPng } from '../src/raster/png.ts';
 import type { Raster } from '../src/raster/types.ts';
-import { writeVisibilityRecord } from '../src/visibility.ts';
+import { VISIBILITY_STATE, writeVisibilityRecord } from '../src/visibility.ts';
 import { readSourceStateMap } from '../src/sourcestates.ts';
+import { observeVisibilityCoverage, type CoverageRow } from './read_visibility_coverage.ts';
 
 type Say = (name: string, pass: boolean, detail: string, why: string) => void;
 type Pixel = (x: number, y: number) => number[];
@@ -85,7 +87,55 @@ function fixture(dir: string, plan: string[][], fullLayers: readonly Layer[], he
   return { full, head, source, assembly, run };
 }
 
+export function runVisibilityCoverageCheck(say: Say): void {
+  const strip = (...alpha: number[]): Raster => ({ width: alpha.length, height: 1,
+    data: Uint8ClampedArray.from(alpha.flatMap(a => [30, 40, 50, a])) });
+  const run = () => {
+    const live = new PartVisibility();
+    const full = strip(8, 10, 255), head = strip(64, 128), warp = strip(9, 132), missing = strip(0, 255);
+    live.layer(full, 'full:topwear', Uint8Array.of(0, 0, VISIBILITY_STATE.visible));
+    live.layer(head, 'head:face');
+    live.warp(full, warp, { sx: 1, sy: 1, tx: -0.5, ty: 0 }, 'bilinear');
+    const image = strip(255, 10, 9, 132, 128, 255, 255, 64, 255);
+    live.copy(image, 0, full, 2);
+    live.copy(image, 1, full, 1);
+    live.rows(image, warp, 0, 0, 2, 1, 2);
+    live.painting(image, 2, 'rgb', true);
+    live.copy(image, 4, head, 1);
+    live.painting(image, 4, 'rgb');
+    live.copy(image, 5, head, 0);
+    live.painting(image, 5, 'both');
+    live.copy(image, 6, missing, 1);
+    live.painting(image, 6, 'rgb', true);
+    live.painting(missing, 0, 'rgb'); // The live ID remains zero on this untracked raster.
+    const underfill = strip(64);
+    live.underfill(underfill, 0, head, missing, 64, 0);
+    live.copy(image, 7, underfill, 0);
+    const unmasked = strip(255);
+    live.layer(unmasked, 'full:hidden');
+    live.copy(image, 8, unmasked, 0);
+    const parts = [{ name: 'body', x: 0, y: 0, image }, { name: 'patch', x: 9, y: 0, image: strip(255) }];
+    return { state: [...live.states(image).codes], summary: live.summarize(image), overlaps: live.overlaps(parts) };
+  };
+  const baseline = run();
+  let observed: CoverageRow[] = [];
+  const restore = observeVisibilityCoverage(new Set(['patch']), rows => { observed = rows; });
+  let instrumented: ReturnType<typeof run>;
+  try { instrumented = run(); } finally { restore(); }
+  const [body, patch] = observed;
+  const counts = (row: CoverageRow) => Object.fromEntries(row.combinations.map(({ causes, px }) => [causes.join('+'), px]));
+  say('AS1480_COVERAGE_SEPARATES_SINGLE_AND_JOINT_CAUSES', same(instrumented, baseline) && body?.unrecorded_px === 8 &&
+    body.opaque_px === 9 && body.recorded_and_unrecorded_px === 1 && body.residual_px === 1 && same(body.first_residual_rig_xy, [6, 0]) &&
+    same(counts(body), { full_alpha_9_127: 2, 'full_alpha_1_8+full_alpha_9_127+painting_rgb': 1,
+      'head_alpha_128_255+painting_rgb': 1, painting_rgba: 1, 'painting_rgb+residual': 1, head_alpha_9_127: 1, full_without_mask: 1 }) &&
+    body.painting_touched_px === 4 && body.clearable_upper_bound_px.painting === 1 && body.clearable_upper_bound_px.full_floor_9 === 2 &&
+    patch?.unrecorded_px === 1 && same(counts(patch), { painting_rgba: 1 }),
+    json({ state: instrumented.state, coverage: observed.map(row => [row.part, counts(row)]) }),
+    'Hand-counts recorded, faint and mixed-support samples, both painting modes, and a planted residual without changing live state or layer IDs.');
+}
+
 export function runPartVisibilityChecks(dir: string, say: Say): void {
+  runVisibilityCoverageCheck(say);
   const face: Layer = { tag: 'face', left: 16, top: 16, width: 32, height: 32, order: 0.5, art: () => [40, 0, 0, 255], depth: gray(20) };
   const back: Layer = { tag: 'back hair', left: 16, top: 16, width: 16, height: 16, order: 0.8,
     art: x => [20, 35, 70, x === 15 ? 127 : 255], depth: gray(20) };
