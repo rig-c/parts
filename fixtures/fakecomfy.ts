@@ -32,7 +32,7 @@ import { decodePngBytes, encodePngBytes } from '../src/raster/png.ts';
 import { newRaster, type Raster } from '../src/raster/types.ts';
 import { CANVAS, layerRaster, WRAPPER_LAYERS } from './synthetic.ts';
 
-export type FakeMode = 'ok' | 'busy' | 'no-outputs' | 'no-seethrough' | 'stale-manifest' | 'missing-depth' | 'no-inpaint' | 'behind';
+export type FakeMode = 'ok' | 'busy' | 'no-outputs' | 'no-seethrough' | 'stale-manifest' | 'missing-depth' | 'no-depth-declaration' | 'no-inpaint' | 'behind';
 
 /** The LaMa model file the fake inpaint pack lists. */
 export const FAKE_LAMA = 'big-lama.pt';
@@ -191,7 +191,7 @@ export function startFakeComfy(mode: FakeMode): FakeComfy {
         for (let i = 0; i < l.width * l.height; i++) depth.data.set([level, level, level, 255], i * 4);
         if (mode !== 'missing-depth') files.set(`${prefix}_${stamp}_${l.name}_depth.png`, encodePngBytes(depth));
 
-        return { name: l.name, filename, left: l.left, top: l.top, right: l.left + l.width, bottom: l.top + l.height, depth_median: l.depth, depth_filename: `${prefix}_${stamp}_${l.name}_depth.png` };
+        return { name: l.name, filename, left: l.left, top: l.top, right: l.left + l.width, bottom: l.top + l.height, depth_median: l.depth, ...(mode === 'no-depth-declaration' ? {} : { depth_filename: `${prefix}_${stamp}_${l.name}_depth.png` }) };
       });
       const manifestName = `${prefix}_${stamp}_layers.json`;
       files.set(manifestName, new TextEncoder().encode(JSON.stringify({ prefix, timestamp: stamp, layers, width: canvas.w, height: canvas.h }, null, 2)));

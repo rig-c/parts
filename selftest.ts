@@ -65,6 +65,7 @@ import { runRequirementsNamedChecks } from './tools/check_requirements_named.ts'
 import { prepareSeeThroughInput } from './src/seethrough-transform.ts';
 import { runSeeThroughTransformChecks } from './tools/check_seethrough_transform.ts';
 import { runPlateChecks } from './tools/check_plate.ts';
+import { runVisibilityChecks } from './tools/check_visibility.ts';
 import { runEditorReceiptChecks } from './tools/check_editor_receipts.ts';
 import { writeEditorReceiptFixture } from './fixtures/editor_receipts.ts';
 import { runEditedPartChecks, runEditedReferenceCwdChecks } from './tools/check_edited_parts.ts';
@@ -40667,8 +40668,10 @@ function runComfySuite(): number {
   const { say, bad } = counter();
   const dir = temp('comfy');
   try {
+    runVisibilityChecks(join(dir, 'visibility-controls'), say);
+
     const depthProbe = spawnSync(process.execPath, [join(ROOT, 'tools/check_depthsheets.ts'), '--adapter-probe', join(dir, 'depth-probe')], { cwd: ROOT, encoding: 'utf8' });
-    say('CY_DEPTH_FETCH_AND_MISSING_FILE_PLANT', depthProbe.status === 0, `exit ${depthProbe.status}; ${depthProbe.stdout} ${depthProbe.stderr}`, 'API and CLI: inactive hints never fetch or activate; explicit config/run captures5 valid sheets and preserves the actual404 missing-file refusal');
+    say('CY_DEPTH_FETCH_AND_MISSING_FILE_PLANT', depthProbe.status === 0, `exit ${depthProbe.status}; ${depthProbe.stdout} ${depthProbe.stderr}`, 'API and CLI default to visibility records with valid writer depth; missing or undeclared depth falls back to art only, with a warning for missing files; active depth still refuses missing files');
 
     const h = spawnSync('bun', [join(ROOT, 'fixtures', 'comfyharness.ts'), dir], { cwd: ROOT, encoding: 'utf8', maxBuffer: 1 << 26 });
     let parsed: { image: string; platePainting: string; results: Record<string, HarnessResult> } | null = null;

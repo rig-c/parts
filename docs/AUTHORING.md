@@ -5905,6 +5905,55 @@ those settings. Changing a config seed alone cannot change a no-config run.
 | <a id="CONFIG_POSE_CANVAS"></a><a id="CONFIG_POSE_KEYPOINTS"></a><a id="CONFIG_POSE_IN_CANVAS"></a>`CONFIG_POSE_CANVAS`, `CONFIG_POSE_KEYPOINTS`, `CONFIG_POSE_IN_CANVAS` | the pose file `generation.control.skeleton` names states another canvas than `generation.latent`, holds other than the 18 body-18 keypoints, or puts one off its canvas | the pose file (§3, the `generation.control.skeleton` row) |
 
 
+#### See-through layer visibility
+
+The adapter writes a visibility record when the wrapper supplies a readable
+depth PNG for every drawn layer. A run without active geometry depth still
+publishes art when a writer sheet is missing or unusable. It writes one
+`VISIBILITY_SOURCE` warning naming the reason and omits the record. Without
+writer sheets the output is art-only with the same warning. Active geometry
+depth still requires its declared sources.
+
+A visibility record describes the layers returned by one See-through run.
+At each canvas coordinate, exact layer tags with alpha at least 128 are
+candidates. Smaller saved u8 depth levels are nearer. If the two nearest
+depth levels differ by at most one, all candidates are undecided with reason
+`depth-tie`. Otherwise, a nearest candidate with alpha 128–254 makes all
+candidates undecided with reason `partial-top`. An opaque nearest candidate is
+visible and the other candidates are occluded. The record makes no claim
+about order among the layers beneath the top one, how the painting is
+partitioned, or which material was painted or invented.
+
+The sibling `visibility.json` manifest uses these fields.
+
+| Field | Meaning |
+| --- | --- |
+| `spec` | `rig-parts-visibility/1` |
+| `prompt_id` | ComfyUI prompt ID for this run |
+| `input_sha256` | SHA-256 of the exact PNG uploaded to the box, after any input preparation |
+| `graph_sha256` | SHA-256 of the UTF-8 JSON of the submitted graph, with its actual upload reference and run prefix |
+| `layer_manifest` | `{path, sha256}` for the original wrapper `layers.json` |
+| `canvas` | Native run grid as `[width, height]` |
+| `alpha_floor`, `depth_tie` | Inclusive alpha floor of 128 and depth tie band of one u8 level |
+| `layers` | Entries for drawn layers, each with the exact `tag`, crop `offset` as `[left, top]`, and crop `size` as `[width, height]`, in native pixels |
+| `layers[].image`, `layers[].depth`, `layers[].record` | Each is a `{path, sha256}` reference to the layer PNG, saved depth PNG, or state file. Paths are relative to the run directory, and hashes cover the exact file bytes. |
+
+Each state file holds one byte per crop pixel in top-to-bottom, left-to-right
+order. Byte 0 is outside the alpha floor. Bytes 1 and 2 mean visible and
+occluded. Bytes 3 and 4 mean undecided due to partial top and depth tie,
+respectively. Add the layer's offset to a crop coordinate to locate it on
+the canvas. When the record is present, `meta.json` also carries
+`uploaded_image_sha256` and `graph_sha256` for its producer binding. Together
+with `meta.json`'s `prompt_id`, they are the expected identity for
+`readVisibilityRecord`. Its `image_sha256` still hashes the original
+`--image` file.
+
+| Rule | Means | Change |
+| --- | --- | --- |
+| <a id="VISIBILITY_SOURCE"></a>`VISIBILITY_SOURCE` | A required layer PNG, writer depth PNG or run identity is unavailable | recover the matching outputs and identity from the producing run |
+| <a id="VISIBILITY_MANIFEST"></a>`VISIBILITY_MANIFEST` | The visibility manifest is malformed or disagrees with the run identity or grids | use the producer's manifest for this run |
+| <a id="VISIBILITY_HASH"></a>`VISIBILITY_HASH` | A bound file differs from its recorded SHA-256 | restore the exact file from the producing run |
+
 #### Step-4 plates (`comfy plate`, issue #1183)
 
 `rig-parts comfy plate --mode background|foreground --painting <png>
@@ -9061,9 +9110,11 @@ context, raw export writes the legacy art-only manifest/files even if its input
 has already-bound in-memory sheets. `layers --export` retains that default.
 `comfy seethrough --config <file> --depth-run <full|head>` uses the early layers
 config loader before contacting the box. The config depth block and named run
-select binding; the run is never guessed from the uploaded image. Without the
-block no depth hints are checked or fetched, including fresh wrapper outputs.
-With it, declared downloads and the staging reader must pass before emission.
+select geometry binding; the run is never guessed from the uploaded image.
+Fresh wrapper outputs can include saved depth PNGs for the
+[visibility record](#see-through-layer-visibility) independently of geometry
+binding. With the depth block, declared geometry sources and the staging reader
+must pass before emission.
 Relative fallback paths use the actual config directory. `--depth-run` without
 a depth block is a usage error; a block without a named run is also refused.
 
@@ -9737,8 +9788,10 @@ differ between vertices. The [corrected #804 acceptance](https://github.com/rig-
 checks vertex correspondence and reports those residuals per fixture; the
 contract records the measured grid residual and preserves its seam readings.
 No-image builds keep the legacy output bytes. `comfy seethrough --config <file> --depth-run <full|head>`
-uses the same opt-in; its default captures art only. Standalone authored part
-references remain active declarations. See [the input contract and refusals](AUTHORING.md#per-layer-depth-sheets-773).
+uses the same opt-in for geometry. Default See-through capture also writes
+a [visibility record](#see-through-layer-visibility) when the wrapper supplies
+the required writer depth. Standalone authored part references remain active
+declarations. See [the input contract and refusals](AUTHORING.md#per-layer-depth-sheets-773).
 
 ### Whole-figure difference inventory
 

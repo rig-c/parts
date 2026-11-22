@@ -1083,19 +1083,36 @@ if (import.meta.main && process.argv[2] === '--adapter-probe') {
   const { startFakeComfy, fakePainting } = await import('../fixtures/fakecomfy.ts');
   const { ComfyClient } = await import('../src/comfy/client.ts');
   const { runSeeThrough } = await import('../src/comfy/seethrough.ts');
+  const { readVisibilityRecord } = await import('../src/visibility.ts');
+  const { sha256 } = await import('../src/plate.ts');
   const dir = process.argv[3]; mkdirSync(dir, { recursive: true });
   const file = join(dir, 'input.png'); writePng(file, fakePainting(4, 4));
   const results: Array<{ mode: string; active?: boolean; ok: boolean; sheets?: number; fetched?: number; codes?: string[]; exit?: number; raw?: { stdout: string; stderr: string } }> = [];
-  for (const active of [false, true]) for (const mode of ['ok', 'missing-depth'] as const) {
+  for (const active of [false, true]) for (const mode of ['ok', 'missing-depth', 'no-depth-declaration'] as const) {
     const fake = startFakeComfy(mode);
     try {
       const out = join(dir, `${mode}-${active}`), binding = { config: { zScale: 12 }, run: 'full' as const, base: dir };
+      const lines: string[] = [];
       try {
-        await runSeeThrough(new ComfyClient(fake.url, { request: 5, poll: 0.01 }), { image: file, out, prefix: 'depth_fixture', resolution: 512, steps: 1, seed: 0, offload: false, lama: false, quant: 'none', wait: 1, timeout: 5, ...(active ? { depth: binding } : {}) }, () => {});
+        const result = await runSeeThrough(new ComfyClient(fake.url, { request: 5, poll: 0.01 }), { image: file, out, prefix: 'depth_fixture', resolution: 512, steps: 1, seed: 0, offload: false, lama: false, quant: 'none', wait: 1, timeout: 5, ...(active ? { depth: binding } : {}) }, line => lines.push(line));
         const set = readWrapperLayers(out, active ? binding : undefined), sheets = set.layers.filter(l => l.depthSheet !== undefined).length;
         const fetched = fake.views.filter(f => f.endsWith('_depth.png')).length;
         const saved = readdirSync(join(out, 'parts')).filter(f => f.endsWith('_depth.png')).length;
-        results.push({ mode, active, ok: active ? mode === 'ok' && sheets === 5 && fetched === 5 && saved === 5 : sheets === 0 && fetched === 0 && saved === 0, sheets, fetched });
+        const warnings = lines.filter(line => line.includes('WARN  VISIBILITY_SOURCE:'));
+        let ok: boolean;
+        if (mode === 'ok') {
+          const upload = [...fake.uploads.values()][0];
+          const identity = { prompt_id: result.promptId, input_sha256: sha256(upload), graph_sha256: sha256(new TextEncoder().encode(JSON.stringify(fake.prompts[0]))) };
+          const record = readVisibilityRecord(out, identity);
+          const meta = JSON.parse(readFileSync(join(out, 'meta.json'), 'utf8')) as Record<string, unknown>;
+          ok = record.layers.length === 5 && meta.uploaded_image_sha256 === identity.input_sha256 && meta.graph_sha256 === identity.graph_sha256 &&
+            sheets === (active ? 5 : 0) && fetched === 5 && saved === 5 && warnings.length === 0;
+        } else {
+          const reason = mode === 'missing-depth' ? '_depth.png' : 'no depth';
+          ok = sheets === 0 && fetched === (mode === 'missing-depth' ? 1 : 0) && saved === 0 &&
+            !existsSync(join(out, 'visibility.json')) && warnings.length === 1 && warnings[0].includes(reason);
+        }
+        results.push({ mode, active, ok, sheets, fetched });
       } catch (error) {
         if (!(error instanceof PartsError)) throw error;
         results.push({ mode, active, ok: active && mode === 'missing-depth' && fake.views.some(f => f.endsWith('_depth.png')) && error.problems.some(p => p.code === 'COMFY_VIEW_PRESENT' && p.object.includes('_depth.png')), codes: error.problems.map(p => p.code) });
@@ -1105,14 +1122,17 @@ if (import.meta.main && process.argv[2] === '--adapter-probe') {
   const configFile = join(dir, 'config.json'), config = { ...rigConfig(), seethrough: { resolution: 512, steps: 1, seed: 0, offload: false }, depth: { zScale: 12 } };
   writeFileSync(configFile, JSON.stringify(config));
   const { depth: _depth, ...noDepthConfig } = config, noDepthFile = join(dir, 'no-depth-config.json'); writeFileSync(noDepthFile, JSON.stringify(noDepthConfig));
-  for (const test of [{ name: 'active-cli', mode: 'ok', args: ['--config', configFile, '--depth-run', 'full'], exit: 0, fetched: 5 }, { name: 'missing-cli', mode: 'missing-depth', args: ['--config', configFile, '--depth-run', 'full'], exit: 1, fetched: 1 }, { name: 'inactive-cli', mode: 'missing-depth', args: [], exit: 0, fetched: 0 }, { name: 'inactive-config-cli', mode: 'missing-depth', args: ['--config', noDepthFile], exit: 0, fetched: 0 }, { name: 'no-run-cli', mode: 'ok', args: ['--config', configFile], exit: 2, fetched: 0 }, { name: 'run-without-block-cli', mode: 'ok', args: ['--config', noDepthFile, '--depth-run', 'full'], exit: 2, fetched: 0 }] as const) {
+  for (const test of [{ name: 'active-cli', mode: 'ok', args: ['--config', configFile, '--depth-run', 'full'], exit: 0, fetched: 5 }, { name: 'missing-cli', mode: 'missing-depth', args: ['--config', configFile, '--depth-run', 'full'], exit: 1, fetched: 1 }, { name: 'default-cli', mode: 'ok', args: [], exit: 0, fetched: 5, visibility: true }, { name: 'inactive-cli', mode: 'missing-depth', args: [], exit: 0, fetched: 1, warned: true }, { name: 'inactive-config-cli', mode: 'missing-depth', args: ['--config', noDepthFile], exit: 0, fetched: 1, warned: true }, { name: 'no-writer-depth-cli', mode: 'no-depth-declaration', args: [], exit: 0, fetched: 0, warned: true }, { name: 'no-run-cli', mode: 'ok', args: ['--config', configFile], exit: 2, fetched: 0 }, { name: 'run-without-block-cli', mode: 'ok', args: ['--config', noDepthFile, '--depth-run', 'full'], exit: 2, fetched: 0 }] as const) {
     const fake = startFakeComfy(test.mode);
     try {
       const proc = Bun.spawn([process.execPath, resolve('cli.ts'), 'comfy', 'seethrough', '--image', file, '--out', join(dir, test.name), '--host', fake.url, '--steps', '1', '--resolution', '512', '--wait', '1', '--timeout', '5', '--poll', '0.01', ...test.args], { stdout: 'pipe', stderr: 'pipe' });
       const [stdout, stderr, exit] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
       writeFileSync(join(dir, `${test.name}.log`), stdout + stderr);
       const fetched = fake.views.filter(f => f.endsWith('_depth.png')).length;
-      results.push({ mode: test.name, exit, fetched, ok: exit === test.exit && fetched === test.fetched && (test.exit !== 1 || (stdout + stderr).includes('COMFY_VIEW_PRESENT')) && (test.exit !== 2 || fake.requests.length === 0), ...(test.exit === 1 ? { raw: { stdout, stderr } } : {}) });
+      const recordPresent = existsSync(join(dir, test.name, 'visibility.json'));
+      const expectedRecord = test.name === 'active-cli' || 'visibility' in test;
+      const oneWarning = (stdout.match(/WARN  VISIBILITY_SOURCE:/g) ?? []).length === 1;
+      results.push({ mode: test.name, exit, fetched, ok: exit === test.exit && fetched === test.fetched && recordPresent === expectedRecord && oneWarning === ('warned' in test) && (test.exit !== 1 || (stdout + stderr).includes('COMFY_VIEW_PRESENT')) && (test.exit !== 2 || fake.requests.length === 0), ...(test.exit === 1 ? { raw: { stdout, stderr } } : {}) });
     } finally { fake.stop(); }
   }
   console.log(JSON.stringify(results)); process.exit(results.every(r => r.ok) ? 0 : 1);
