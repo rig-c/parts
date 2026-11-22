@@ -50674,6 +50674,218 @@ function runSceneSuite(): number {
         `SC20 byteMatches=${byteMatches} (${relFiles.length} files); SC64 named-plates files=${namedSnapshot.size}, stableEqual=${namedParity.stableEqual}, differences=${JSON.stringify(namedParity.differences)}`,
         'issue #1350 bar 4: built bytes of existing scenes do not move',
       );
+
+      // Issue #1485: physics-keyed tracks in an animation beside the idle (the #1461 route) or in the idle
+      // are prefixed and placed under their character, scale-checked (nonzero wind/gravity refused at scale !== 1;
+      // dimensionless physics properties allowed), and play with the same physics response as the standalone build.
+      {
+        const physCon = (name: string) => ({
+          type: 'physics',
+          name,
+          bone: 'hem1',
+          x: 1,
+          rotate: 1,
+          inertia: 0.5,
+          strength: 50,
+          damping: 0.85,
+          wind: 0,
+          gravity: 0,
+          mass: 1,
+          mix: 1,
+        });
+        const windClip = (constraint: string, windPeak = 2, mixLow = 0.8) => ({
+          duration: 1,
+          loop: false,
+          tracks: [
+            { physics: constraint, property: 'wind', keys: [{ t: 0, v: [0] }, { t: 0.5, v: [windPeak], ease: 'shut' }, { t: 1, v: [0] }] },
+            { physics: constraint, property: 'mix', keys: [{ t: 0, v: [1] }, { t: 0.5, v: [mixLow] }, { t: 1, v: [1] }] },
+          ],
+        });
+        writeSceneBuild(join(dir, 'phys-a'), 'plain', {
+          rig: (r) => { r.constraints = [physCon('hem1_phys')]; },
+          motion: (m) => { (m.animations as Record<string, unknown>).wind = windClip('hem1_phys', 2, 0.8); },
+        });
+        writeSceneBuild(join(dir, 'phys-b'), 'reach', {
+          rig: (r) => { (r.constraints as Array<Record<string, unknown>>).push(physCon('sway_phys')); },
+          motion: (m) => { (m.animations as Record<string, unknown>).gust = windClip('sway_phys', -1.5, 0.9); },
+        });
+        writeSceneBuild(join(dir, 'phys-mix-only'), 'plain', {
+          rig: (r) => { r.constraints = [physCon('hem1_phys')]; },
+          motion: (m) => {
+            (m.animations as Record<string, unknown>).calm = {
+              duration: 1,
+              loop: false,
+              tracks: [
+                { physics: 'hem1_phys', property: 'mix', keys: [{ t: 0, v: [1] }, { t: 0.5, v: [0.5] }, { t: 1, v: [1] }] },
+                { physics: 'hem1_phys', property: 'wind', keys: [{ t: 0, v: [0] }, { t: 1, v: [0] }] },
+              ],
+            };
+          },
+        });
+        writeSceneBuild(join(dir, 'phys-cross'), 'plain', {
+          rig: (r) => { r.constraints = [physCon('hem1_phys')]; },
+          motion: (m) => { (m.animations as Record<string, unknown>).wind = windClip('sway_phys'); },
+        });
+        writeSceneBuild(join(dir, 'phys-unknown'), 'plain', {
+          rig: (r) => { r.constraints = [physCon('hem1_phys')]; },
+          motion: (m) => { (m.animations as Record<string, unknown>).wind = windClip('ghost_phys'); },
+        });
+        writeSceneBuild(join(dir, 'phys-bad-prop'), 'plain', {
+          rig: (r) => { r.constraints = [physCon('hem1_phys')]; },
+          motion: (m) => {
+            (m.animations as Record<string, unknown>).wind = {
+              duration: 1,
+              loop: false,
+              tracks: [{ physics: 'hem1_phys', property: 'bogus', keys: [{ t: 0, v: [0] }, { t: 1, v: [0] }] }],
+            };
+          },
+        });
+
+        const physBody = two({
+          characters: [
+            { id: 'a', build: 'phys-a', offset: [0, 20] },
+            { id: 'b', build: 'phys-b', offset: [50, 10] },
+          ],
+          order: ['a', 'b'],
+        });
+        const physComp = compose(physBody);
+        const physOut = join(dir, 'phys-composed');
+        const physCli = runCli(['compose', '--scene', scene(physBody), '--out', physOut]);
+        const physUnpref = physComp.ok === null ? ['not-composed'] : unprefixedNames(physComp.ok.rig, physComp.ok.motion, ['a', 'b'], true);
+        const aWind = (physComp.ok?.motion.animations as Record<string, unknown> | undefined)?.['a:wind'];
+        const bGust = (physComp.ok?.motion.animations as Record<string, unknown> | undefined)?.['b:gust'];
+        const wantAWind = {
+          duration: 1,
+          loop: false,
+          tracks: [
+            { physics: 'a:hem1_phys', property: 'wind', keys: [{ t: 0, v: [0] }, { t: 0.5, v: [2], ease: 'a:shut' }, { t: 1, v: [0] }] },
+            { physics: 'a:hem1_phys', property: 'mix', keys: [{ t: 0, v: [1] }, { t: 0.5, v: [0.8] }, { t: 1, v: [1] }] },
+          ],
+        };
+        const wantBGust = {
+          duration: 1,
+          loop: false,
+          tracks: [
+            { physics: 'b:sway_phys', property: 'wind', keys: [{ t: 0, v: [0] }, { t: 0.5, v: [-1.5], ease: 'b:shut' }, { t: 1, v: [0] }] },
+            { physics: 'b:sway_phys', property: 'mix', keys: [{ t: 0, v: [1] }, { t: 0.5, v: [0.9] }, { t: 1, v: [1] }] },
+          ],
+        };
+
+        // Plant 1: drop the prefix on the composed physics track target -> caught by unprefixedNames and refused by rigc gate.
+        const droppedMutant = physComp.ok === null ? null : structuredClone(physComp.ok);
+        const droppedGateDir = join(dir, 'phys-dropped-gate');
+        let droppedGateOut = '';
+        let droppedGateStatus: number | null = null;
+        if (droppedMutant !== null) {
+          ((droppedMutant.motion.animations as Record<string, { tracks: Array<{ physics?: string }> }>)['a:wind'].tracks[0]).physics = 'hem1_phys';
+          mkdirSync(join(droppedGateDir, 'images'), { recursive: true });
+          for (const [name, bytes] of droppedMutant.images) writeFileSync(join(droppedGateDir, 'images', name), bytes);
+          writeFileSync(join(droppedGateDir, 'rig.json'), rigJsonText(droppedMutant.rig));
+          writeFileSync(join(droppedGateDir, 'motion.json'), rigJsonText(droppedMutant.motion));
+          const gateRes = rigcRunnerAt(bin, spawnRigc)(['build', '--rig', join(droppedGateDir, 'rig.json'), '--motion', join(droppedGateDir, 'motion.json'), '--out', join(droppedGateDir, 'build'), '--profile', 'rig-play']);
+          droppedGateStatus = gateRes.status;
+          droppedGateOut = gateRes.out;
+        }
+        const droppedUnpref = droppedMutant === null ? [] : unprefixedNames(droppedMutant.rig, droppedMutant.motion, ['a', 'b'], true);
+
+        // Plant 2: character "a" names character "b"'s physics constraint ("sway_phys") or an unknown one ("ghost_phys").
+        const crossComp = compose(two({ characters: [{ id: 'a', build: 'phys-cross', offset: [0, 20] }, { id: 'b', build: 'phys-b', offset: [50, 10] }], order: ['a', 'b'] }));
+        const unkComp = compose(two({ characters: [{ id: 'a', build: 'phys-unknown', offset: [0, 20] }, { id: 'b', build: 'phys-b', offset: [50, 10] }], order: ['a', 'b'] }));
+
+        // Scale rules on physics tracks: nonzero keyed wind at scale 0.5 is SCENE_SCALE_EXACT; mix-only (and 0 wind) at scale 0.5 composes; unknown physics property at scale 0.5 is SCENE_SCALE_EXACT.
+        const scaledForce = compose(two({ characters: [{ id: 'a', build: 'phys-a', offset: [0, 20], scale: 0.5 }, { id: 'b', build: 'phys-b', offset: [50, 10] }], order: ['a', 'b'] }));
+        const scaledMixOnly = compose(two({ characters: [{ id: 'a', build: 'phys-mix-only', offset: [0, 20], scale: 0.5 }, { id: 'b', build: 'phys-b', offset: [50, 10] }], order: ['a', 'b'] }));
+        const scaledBadProp = compose(two({ characters: [{ id: 'a', build: 'phys-bad-prop', offset: [0, 20], scale: 0.5 }, { id: 'b', build: 'phys-b', offset: [50, 10] }], order: ['a', 'b'] }));
+
+        // Measure the physics response: play "wind" on standalone phys-a and "a:wind" on the composed build,
+        // and compare bone world transforms across all 13 frames (12 fps over 1 s), plus verify "b:hem1" stays at setup when "a:wind" plays.
+        interface PhysPoseGeom {
+          frames: Array<{ bones: Array<{ name: string; a: number; b: number; c: number; d: number; worldX: number; worldY: number }> }>;
+        }
+        const renderAnimGeom = (rigDir: string, animName: string, label: string): PhysPoseGeom => {
+          const bDir = join(dir, `phys-build-${label}`);
+          const rDir = join(dir, `phys-render-${label}`);
+          const bRes = spawnSync(bin, ['build', '--rig', join(rigDir, 'rig.json'), '--motion', join(rigDir, 'motion.json'), '--out', bDir, ...packedBuildArgs(DEFAULT_PACK_MODE)], { encoding: 'utf8', maxBuffer: 1 << 26 });
+          if (bRes.status !== 0) throw new Error(`rigc build (${label}) failed: ${bRes.stdout}\n${bRes.stderr}`);
+          const rRes = spawnSync(bin, ['render', '--candidate', bDir, '--animation', animName, '--fps', '12', '--geometry', '--out', rDir], { encoding: 'utf8', maxBuffer: 1 << 26 });
+          if (rRes.status !== 0) throw new Error(`rigc render (${label}) failed: ${rRes.stdout}\n${rRes.stderr}`);
+          const framesMeta = JSON.parse(readFileSync(join(rDir, 'frames.json'), 'utf8')) as { sets: Array<{ animation: string; dir: string }> };
+          const setDir = framesMeta.sets.find((s) => s.animation === animName)?.dir ?? animName;
+          return JSON.parse(readFileSync(join(rDir, setDir, 'geometry.json'), 'utf8')) as PhysPoseGeom;
+        };
+        const standaloneWind = renderAnimGeom(join(dir, 'phys-a', 'rig'), 'wind', 'standalone-a');
+        const composedWind = renderAnimGeom(join(physOut, 'rig'), 'a:wind', 'composed-a');
+        // Placed on 100x60 canvas at offset [0, 20], character "a"'s rootShift is [-30, 0] (SC17).
+        const [aShiftX, aShiftY] = physComp.ok?.report.characters.find((c) => c.id === 'a')?.shift ?? [0, 0];
+        let maxMatrixDiff = 0;
+        let maxDisp = 0;
+        let maxBDrift = 0;
+        const f0StandaloneHem1 = standaloneWind.frames[0]?.bones.find((x) => x.name === 'hem1');
+        const f0ComposedBHem1 = composedWind.frames[0]?.bones.find((x) => x.name === 'b:hem1');
+        standaloneWind.frames.forEach((fu, fi) => {
+          const fc = composedWind.frames[fi];
+          if (fc === undefined) { maxMatrixDiff = Infinity; return; }
+          for (const bu of fu.bones) {
+            if (bu.name === 'root') continue;
+            const bc = fc.bones.find((x) => x.name === `a:${bu.name}`);
+            if (bc === undefined) { maxMatrixDiff = Infinity; return; }
+            for (const k of ['a', 'b', 'c', 'd'] as const) maxMatrixDiff = Math.max(maxMatrixDiff, Math.abs(bu[k] - bc[k]));
+            maxMatrixDiff = Math.max(maxMatrixDiff, Math.abs(bu.worldX + aShiftX - bc.worldX), Math.abs(bu.worldY + aShiftY - bc.worldY));
+            if (bu.name === 'hem1' && f0StandaloneHem1 !== undefined) {
+              maxDisp = Math.max(maxDisp, Math.hypot(bu.worldX - f0StandaloneHem1.worldX, bu.worldY - f0StandaloneHem1.worldY));
+            }
+          }
+          const bHem1 = fc.bones.find((x) => x.name === 'b:hem1');
+          if (bHem1 !== undefined && f0ComposedBHem1 !== undefined) {
+            for (const k of ['a', 'b', 'c', 'd', 'worldX', 'worldY'] as const) maxBDrift = Math.max(maxBDrift, Math.abs(bHem1[k] - f0ComposedBHem1[k]));
+          }
+        });
+        // Plant 3: place character "a"'s wind track onto character "b"'s physics constraint ("b:sway_phys") -> "a:hem1" stops moving and "b:hem1" moves instead.
+        const wrongCharDir = join(dir, 'phys-wrong-char-rig');
+        cpSync(join(physOut, 'rig'), wrongCharDir, { recursive: true });
+        const wrongCharMotion = JSON.parse(readFileSync(join(wrongCharDir, 'motion.json'), 'utf8')) as { animations: Record<string, { tracks: Array<{ physics?: string }> }> };
+        wrongCharMotion.animations['a:wind'].tracks[0].physics = 'b:sway_phys';
+        wrongCharMotion.animations['a:wind'].tracks[1].physics = 'b:sway_phys';
+        writeFileSync(join(wrongCharDir, 'motion.json'), rigJsonText(wrongCharMotion));
+        const wrongCharWind = renderAnimGeom(wrongCharDir, 'a:wind', 'wrong-char');
+        let wrongCharADisp = 0;
+        let wrongCharBDisp = 0;
+        const f0WrongAHem1 = wrongCharWind.frames[0]?.bones.find((x) => x.name === 'a:hem1');
+        wrongCharWind.frames.forEach((fc) => {
+          const aHem1 = fc.bones.find((x) => x.name === 'a:hem1');
+          const bHem1 = fc.bones.find((x) => x.name === 'b:hem1');
+          if (aHem1 !== undefined && f0WrongAHem1 !== undefined) {
+            wrongCharADisp = Math.max(wrongCharADisp, Math.hypot(aHem1.worldX - f0WrongAHem1.worldX, aHem1.worldY - f0WrongAHem1.worldY));
+          }
+          if (bHem1 !== undefined && f0ComposedBHem1 !== undefined) {
+            wrongCharBDisp = Math.max(wrongCharBDisp, Math.hypot(bHem1.worldX - f0ComposedBHem1.worldX, bHem1.worldY - f0ComposedBHem1.worldY));
+          }
+        });
+
+        say(
+          'SC140_PHYSICS_KEYED_CLIPS_PREFIX_CONSTRAINTS_REFUSE_SCALED_FORCES_AND_MATCH_STANDALONE_PHYSICS_RESPONSE',
+          physComp.err === null &&
+            physCli.status === 0 &&
+            physUnpref.length === 0 &&
+            JSON.stringify(aWind) === JSON.stringify(wantAWind) &&
+            JSON.stringify(bGust) === JSON.stringify(wantBGust) &&
+            droppedUnpref.includes('track physics "hem1_phys"') &&
+            droppedGateStatus !== 0 &&
+            droppedGateOut.includes('CE_COMPILE_CONSTRAINT_TRACK_TARGET_UNKNOWN') &&
+            has(crossComp.err, 'SCENE_NAME_PREFIXED', 'names the physics constraint "sway_phys", which character "a" does not declare and "b" does') &&
+            has(unkComp.err, 'SCENE_NAME_RESOLVES', 'names the physics constraint "ghost_phys", which no character of the scene declares') &&
+            has(scaledForce.err, 'SCENE_SCALE_EXACT', 'physics "hem1_phys" wind') &&
+            scaledMixOnly.err === null &&
+            has(scaledBadProp.err, 'SCENE_SCALE_EXACT', 'tracks[0].property') &&
+            maxMatrixDiff < 1e-12 &&
+            maxDisp > 0.1 &&
+            maxBDrift === 0 &&
+            wrongCharADisp === 0 &&
+            wrongCharBDisp > 0.1,
+          `compose exit ${physCli.status}; unprefixed=${physUnpref.length}; maxMatrixDiff=${maxMatrixDiff.toExponential(2)} (< 1e-12), a:hem1 disp=${maxDisp.toFixed(4)} px, b:hem1 drift=${maxBDrift}; plant dropped prefix -> unprefixed=${JSON.stringify(droppedUnpref)}, gateExit=${String(droppedGateStatus)}; plant wrong character -> a:hem1 disp=${wrongCharADisp}, b:hem1 disp=${wrongCharBDisp.toFixed(4)} px; cross=${codes(crossComp.err)}; unknown=${codes(unkComp.err)}; scaledForce=${codes(scaledForce.err)}; scaledMixOnly=${codes(scaledMixOnly.err)}`,
+          'issue #1485: compose prefixes tracks[].physics and places the clip under its character, refuses cross-character or unknown physics constraint targets and nonzero keyed forces at scale !== 1, and reproduces the standalone physics response within float64 translation rounding (< 1e-12 world units)',
+        );
+      }
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });

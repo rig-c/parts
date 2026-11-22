@@ -19,10 +19,12 @@
  *   (its name and every bone or slot it names), `stops` entry (its `chain`,
  *   its `links` and its `against`; issue #431), `invariants.detached` bone,
  *   `invariants.axes` entry (its name, its `through` and its `bones`; issue #239),
- *   track, group and easing of character `<id>` is renamed `<id>:<name>`
+ *   track (its `bone`, `group` or `physics` constraint target; issue #1485),
+ *   group and easing of character `<id>` is renamed `<id>:<name>`
  *   ({@link prefixed}); `root` is the one shared root. A name resolves to
  *   exactly one character, and nothing resolves across characters without its
- *   prefix: a constraint or stop naming a bone its own build does not declare is
+ *   prefix: a constraint, stop or physics track naming a bone or physics
+ *   constraint its own build does not declare is
  *   refused (`SCENE_NAME_PREFIXED` when another character has it,
  *   `SCENE_NAME_RESOLVES` when none does).
  * - **Images are the one name that cannot carry `:`.** rig-c names an
@@ -58,9 +60,13 @@
  *   local frame ({@link scaledStop}; issue #431); the translate keys and their curves'
  *   values. Spine also scales the skeleton's `referenceScale`, which the
  *   composed skeleton holds once for every character, so a physics
- *   constraint with a nonzero `wind` or `gravity` cannot be scaled per
+ *   constraint with a nonzero `wind` or `gravity`, or a physics track keying
+ *   `wind` or `gravity` with a nonzero value (issue #1485), cannot be scaled per
  *   character and is refused (`SCENE_SCALE_EXACT`), as is a track property
- *   this module does not know to be a length or not. A mesh's `width` and
+ *   this module does not know to be a length or not. Dimensionless physics
+ *   track properties (`inertia`, `strength`, `damping`, `mass`, `mix`, `reset`)
+ *   are not scaled by Spine's loader (`readTimeline1(..., 1)` in
+ *   `SkeletonJson.js`) and stay as written. A mesh's `width` and
  *   `height` (its image's, nonessential) stay. At scale 1 nothing is
  *   computed: the bytes are the ones written before the field existed.
  * - **The order.** `order` lists character ids (all of that character's
@@ -464,7 +470,7 @@ const STOP_LOWER_KEYS = ['inward', 'outward'];
 const INVARIANT_KEYS = ['idleDrivesMeshes', 'detached', 'axes', 'meshSlots', 'meshTriangles', 'deformMayFold'];
 const MOTION_KEYS = ['spec', 'archetype', 'cut', 'easings', 'groups', 'animations'];
 const IDLE_KEYS = ['duration', 'loop', 'note', 'tracks', 'deform'];
-const TRACK_KEYS = ['bone', 'group', 'property', 'keys'];
+const TRACK_KEYS = ['bone', 'group', 'physics', 'property', 'keys'];
 const KEY_KEYS = ['t', 'v', 'curve', 'ease', 'derive'];
 // Only the turn producer's models, not Core's general transform vocabulary.
 const DERIVE_KEYS = ['kind', 'degrees', 'depth', 'carried', 'about', 'narrowing'];
@@ -837,6 +843,19 @@ export const SPINE_SLIDER_SCALE_DEFAULT = 1;
 export const SCALED_TRACK_PROPERTIES: readonly string[] = ['translate', 'translatex', 'translatey'];
 export const UNSCALED_TRACK_PROPERTIES: readonly string[] = ['rotate', 'scale', 'scalex', 'scaley', 'shear', 'shearx', 'sheary', 'inherit'];
 
+/**
+ * A physics track's properties (`SkeletonJson.js:1063-1094`): the six rate/ratio/event
+ * timelines Spine loads with `scale = 1` and steps independently of `referenceScale`
+ * (bone `length` is already scaled by `characters[].scale` at {@link composeScene}),
+ * and the two force timelines (`wind`, `gravity`) whose values Spine multiplies by
+ * `referenceScale` in translation (`wind * f`, `gravity * f`) and by `length / referenceScale`
+ * in rotation (`(ax * sn + ay * c) * (l / f)`), so a nonzero keyed force on a scaled
+ * character cannot be reproduced by a single timeline value when the constraint drives
+ * both or when `referenceScale` is shared across characters (issue #1485; see {@link physicsForce}).
+ */
+export const UNSCALED_PHYSICS_TRACK_PROPERTIES: readonly string[] = ['inertia', 'strength', 'damping', 'mass', 'mix', 'reset'];
+export const FORCE_PHYSICS_TRACK_PROPERTIES: readonly string[] = ['wind', 'gravity'];
+
 /** The two properties a transform constraint or a slider reads or drives in length (`propertyScale` in `SkeletonJson.js`). */
 function lengthProperty(name: string): boolean {
   return name === 'x' || name === 'y';
@@ -858,8 +877,9 @@ function physicsForce(con: Record<string, unknown>): string[] {
  * Why a character at `scale` other than 1 cannot be written exactly, each a
  * `SCENE_SCALE_EXACT` problem: a track whose property this module does not
  * know to be a length or not, a key whose `v` is neither a list of numbers
- * nor a map of them, and a physics constraint carrying a wind or a gravity
- * (see {@link physicsForce}). Nothing when `scale` is 1.
+ * nor a map of them, a physics constraint carrying a wind or a gravity
+ * (see {@link physicsForce}), and a physics track keying `wind` or `gravity`
+ * with a nonzero key or curve value (issue #1485). Nothing when `scale` is 1.
  */
 export function scaleProblems(c: SceneCharacter, b: CharacterBuild): Problem[] {
   if (c.scale === 1) return [];
@@ -868,7 +888,31 @@ export function scaleProblems(c: SceneCharacter, b: CharacterBuild): Problem[] {
   for (const [an, anim] of Object.entries(animationsOf(b.motion))) {
     anim.tracks.forEach((t, k) => {
       const where = `${who} motion.json animations.${an}.tracks[${k}]`;
+      const tr = t as unknown as Record<string, unknown>;
       const prop = String(t.property);
+      const isPhysics = 'physics' in tr;
+      if (isPhysics) {
+        if (!UNSCALED_PHYSICS_TRACK_PROPERTIES.includes(prop) && !FORCE_PHYSICS_TRACK_PROPERTIES.includes(prop)) {
+          out.push({ code: 'SCENE_SCALE_EXACT', object: `${where}.property`, detail: `is ${show(t.property)}, which compose does not know to be a scale-free physics timeline or a force; it leaves ${UNSCALED_PHYSICS_TRACK_PROPERTIES.join(', ')} and refuses nonzero ${FORCE_PHYSICS_TRACK_PROPERTIES.join(', ')} — compose this character at scale 1, or rebuild it at another assemble.rig_scale` });
+          return;
+        }
+        if (FORCE_PHYSICS_TRACK_PROPERTIES.includes(prop)) {
+          const nonzero = (t.keys as unknown as Array<Record<string, unknown>>).some((key) => {
+            const v = key.v;
+            const hasNonzero = (xs: unknown): boolean => Array.isArray(xs) && xs.some((n) => typeof n === 'number' && n !== 0);
+            const curveNonzero = Array.isArray(key.curve) && (key.curve as unknown[]).some((n, i) => i % 2 === 1 && typeof n === 'number' && n !== 0);
+            return hasNonzero(v) || (isRecord(v) && Object.values(v).some(hasNonzero)) || curveNonzero;
+          });
+          if (nonzero) {
+            out.push({
+              code: 'SCENE_SCALE_EXACT',
+              object: `${where} (physics "${String(tr.physics)}" ${prop})`,
+              detail: `keys ${prop} with a nonzero value; Spine applies ${prop} times the skeleton's referenceScale to the bone's position and times its length over referenceScale to its rotation, and the composed skeleton has one referenceScale for every character, so no value written here draws the character at ${c.scale} — compose it at scale 1, or rebuild it at another assemble.rig_scale`,
+            });
+          }
+        }
+        return;
+      }
       if (!SCALED_TRACK_PROPERTIES.includes(prop) && !UNSCALED_TRACK_PROPERTIES.includes(prop)) {
         out.push({ code: 'SCENE_SCALE_EXACT', object: `${where}.property`, detail: `is ${show(t.property)}, which compose does not know to be a length or not; it scales ${SCALED_TRACK_PROPERTIES.join(', ')} and leaves ${UNSCALED_TRACK_PROPERTIES.join(', ')} — compose this character at scale 1, or rebuild it at another assemble.rig_scale` });
         return;
@@ -1256,6 +1300,19 @@ export function composeScene(
       fail('SCENE_NAME_PREFIXED', where, `names the bone "${name}", which character "${id}" does not declare and ${other.map((x) => `"${x}"`).join(', ')} does${other.length > 1 ? ' each' : ''}; a name crosses characters only with its prefix — ${other.map((x) => `"${prefixed(x, name)}"`).join(' or ')} — and a build's constraint may name only its own bones`);
     } else fail('SCENE_NAME_RESOLVES', where, `names the bone "${name}", which no character of the scene declares`);
   };
+  const physicsOf = new Map(ready.map((b) => [b.id, new Set((b.rig.constraints ?? []).filter((c) => c.type === 'physics' && typeof c.name === 'string').map((c) => String(c.name)))]));
+  const physicsOwners = (name: string, own: string): string[] => ready.filter((b) => b.id !== own && (physicsOf.get(b.id)?.has(name) ?? false)).map((b) => b.id);
+  const ownPhysics = (id: string, name: unknown, where: string): void => {
+    if (typeof name !== 'string' || name === '') {
+      fail('SCENE_NAME_RESOLVES', where, `is ${show(name)}; a physics constraint name is required`);
+      return;
+    }
+    if (physicsOf.get(id)?.has(name) ?? false) return;
+    const other = physicsOwners(name, id);
+    if (other.length > 0) {
+      fail('SCENE_NAME_PREFIXED', where, `names the physics constraint "${name}", which character "${id}" does not declare and ${other.map((x) => `"${x}"`).join(', ')} does${other.length > 1 ? ' each' : ''}; a name crosses characters only with its prefix — ${other.map((x) => `"${prefixed(x, name)}"`).join(' or ')} — and a build's track may name only its own physics constraints`);
+    } else fail('SCENE_NAME_RESOLVES', where, `names the physics constraint "${name}", which no character of the scene declares`);
+  };
   for (const b of ready) {
     (b.rig.constraints ?? []).forEach((con, k) => {
       const type = con.type as keyof typeof CONSTRAINT_BONE_FIELDS;
@@ -1292,12 +1349,14 @@ export function composeScene(
     for (const [name, anim] of Object.entries(anims)) {
       for (const [i, tr] of anim.tracks.entries()) {
         const t = tr as unknown as Record<string, unknown>;
-        const members = typeof t.bone === 'string' ? [t.bone] : typeof t.group === 'string' ? b.motion.groups[t.group] : undefined;
+        if ('physics' in t) ownPhysics(b.id, t.physics, `character "${b.id}" motion.json animations.${name}.tracks[${i}].physics`);
+        const members = typeof t.bone === 'string' ? [t.bone] : typeof t.physics === 'string' ? [t.physics] : typeof t.group === 'string' ? b.motion.groups[t.group] : undefined;
         for (const [j, key] of (t.keys as Array<Record<string, unknown>>).entries()) {
           const at = `motion.json animations.${name}.tracks[${i}].keys[${j}]`;
           const maps: Array<[string, unknown]> = [['v', key.v], ['derive.depth', isRecord(key.derive) ? key.derive.depth : undefined]];
           for (const [field, map] of maps) if (isRecord(map)) for (const member of Object.keys(map)) {
-            ownBone(b.id, member, `character "${b.id}" ${at}.${field}.${member}`);
+            if ('physics' in t) ownPhysics(b.id, member, `character "${b.id}" ${at}.${field}.${member}`);
+            else ownBone(b.id, member, `character "${b.id}" ${at}.${field}.${member}`);
             if (members === undefined || !members.includes(member)) missing(`${at}.${field}.${member}`, `names "${member}", which is not a member of this track's target; a named member of that target is required`);
           }
         }
@@ -1527,6 +1586,7 @@ export function composeScene(
       const tr = { ...t } as Record<string, unknown>;
       if (typeof tr.bone === 'string') tr.bone = P(id, tr.bone);
       if (typeof tr.group === 'string') tr.group = prefixed(id, tr.group);
+      if (typeof tr.physics === 'string') tr.physics = prefixed(id, tr.physics);
       const memberMap = (v: Record<string, unknown>): Record<string, unknown> => Object.fromEntries(Object.entries(v).map(([n, value]) => [P(id, n), value]));
       tr.keys = (t.keys as unknown as Array<Record<string, unknown>>).map((k) => ({
         ...k,
@@ -1697,6 +1757,7 @@ export function unprefixedNames(rig: RigSpec, motion: MotionSpec, ids: readonly 
     const tr = t as unknown as Record<string, unknown>;
     if ('bone' in tr) name('track bone', tr.bone, sceneAnimations.includes(animation));
     if ('group' in tr) name('track group', tr.group, false);
+    if ('physics' in tr) name('track physics', tr.physics, false);
     for (const k of (tr.keys as Array<Record<string, unknown>>) ?? []) {
       if (typeof k.ease === 'string') name('key ease', k.ease, false);
       for (const map of [k.v, isRecord(k.derive) ? k.derive.depth : undefined]) if (isRecord(map)) for (const member of Object.keys(map)) name('key member', member, false);
