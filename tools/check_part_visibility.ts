@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { assembleConfig } from '../fixtures/assemble_fixture.ts';
+import { writeFrontSlotFixture } from '../fixtures/front_slot.ts';
 import { writeTakeRegionFixture } from '../fixtures/take_region.ts';
 import { assembleStage, type AssembleStageInput } from '../src/build.ts';
 import { PartsError } from '../src/errors.ts';
@@ -267,4 +268,112 @@ export function runPartVisibilityChecks(dir: string, say: Say): void {
     altMap !== undefined && existsSync(join(alternateOut, 'parts', altMap.image)) && sha(readFileSync(join(alternateOut, 'parts', altMap.image))) === altMap.sha256,
     json({ primary: mapRead, alternate: altMap?.image ?? null }),
     'Each map is read back through the check-side reader: present, hashed as declared, and counted to the record. A part with no record writes no map.');
+}
+
+/** Issue #1474: pixels where the record shows the part drawn behind and hides the part drawn in front. */
+export function runSourceOverlapChecks(dir: string, say: Say): void {
+  const face: Layer = { tag: 'face', left: 16, top: 16, width: 32, height: 32, order: 0.5, art: () => [40, 0, 0, 255], depth: gray(20) };
+  // The back layer is 16x16 at (16, 16); the front 8x16 at (24, 16) covers its right half: 8 columns by 16 rows.
+  // Row 3 is a thin stroke nearer than the front, crossing the front's left edge; row 6 ties the front's depth;
+  // row 9 is the front at alpha 200 on top (partial-top); row 12 is the back below the record's alpha floor.
+  const strokeRow = 3, tieRow = 6, partialRow = 9, faintRow = 12;
+  const back = (stroke: boolean): Layer => ({ tag: 'back hair', left: 16, top: 16, width: 16, height: 16, order: 0.8,
+    art: (_x, y) => [90, 110, 160, y === faintRow ? 127 : 255],
+    depth: (_x, y) => gray(stroke && y === strokeRow ? 5 : y === tieRow ? 20 : 30)(0, 0) });
+  const front: Layer = { tag: 'topwear', left: 24, top: 16, width: 8, height: 16, order: 0.2,
+    art: (_x, y) => [140, 30, 40, y === partialRow ? 200 : 255], depth: gray(20) };
+  const plan = [['back', 'full', back(true).tag], ['front', 'full', front.tag]];
+  const planted = fixture(join(dir, 'stroke'), plan, [back(true), front], [face]);
+  const manifest = record(planted.full);
+  const output = join(dir, 'stroke-parts'), partsPath = join(output, 'parts.json');
+  planted.run(output);
+  const [rear, ahead] = readParts(partsPath).parts;
+  const undecided = { 'partial-top': 8, 'depth-tie': 8, 'mixed-source-states': 0 };
+  const expected = [{ front: 'front', source_layers: ['full:back hair', 'full:topwear'], overlap_px: 128, inverted_px: 8,
+    agreeing_px: 96, unordered_px: 0, undecided_px: undecided, unrecorded_px: 8 }];
+  say('AS1474_PLANTED_STROKE_INVERSION_NAMES_BOTH_PARTS', same(rear.source_overlaps, expected) && same(ahead.source_overlaps, []) &&
+    rear.opaque_px === 256 && ahead.opaque_px === 128,
+    json({ back: rear.source_overlaps, front: ahead.source_overlaps }),
+    'The 8 overlap pixels of the stroke row are inverted. The tie row and the partial-top row are 8 each, counted apart. The faint row is unrecorded, and the other 12 rows (96 px) agree with the draw order.');
+  const lines: string[] = [];
+  const checked = checkPartsStage(output, join(dir, 'stroke-check'), line => lines.push(line));
+  const rows = checked.reported.filter(row => row.code === 'PARTS_DRAW_ORDER_INVERTED');
+  say('AS1474_CHECK_PARTS_REPORTS_INVERSION', checked.exit_code === 0 && same(rows, [{ code: 'PARTS_DRAW_ORDER_INVERTED', set: null, part: 'back', ...expected[0] }]) &&
+    lines.includes('PARTS_DRAW_ORDER_INVERTED: REPORTED part "back" behind part "front" — inverted 8 of 128 overlapping px (full:back hair, full:topwear); ' +
+      'agreeing 96, unordered 0, undecided (partial-top 8, depth-tie 8, mixed-source-states 0), unrecorded 8'),
+    json(rows), 'The pair is a measurement row with its line, not a pass.');
+
+  const agrees = fixture(join(dir, 'agrees'), plan, [back(false), front], [face]);
+  record(agrees.full);
+  const agreed = agrees.run(join(dir, 'agrees-parts')).parts.parts[0].source_overlaps;
+  say('AS1474_AGREEING_OVERLAP_READS_ZERO', same(agreed, [{ ...expected[0], source_layers: [], inverted_px: 0, agreeing_px: 104 }]),
+    json(agreed), 'Without the stroke, the stroke row agrees with the draw order too: 104 agreeing, 0 inverted, no layers.');
+
+  const rejectOut = join(dir, 'refused');
+  const maskPath = join(planted.full, manifest.layers.find(layer => layer.tag === front.tag)!.record.path);
+  const tampered = readFileSync(maskPath);
+  tampered[strokeRow * front.width] = 1;
+  const badRecord = plant(maskPath, tampered, () => planted.run(rejectOut));
+  const badParts = readParts(partsPath);
+  badParts.parts[0].source_overlaps![0].inverted_px++;
+  const miscount = plant(partsPath, json(badParts), () => readParts(partsPath));
+  badParts.parts[0].source_overlaps![0].inverted_px--;
+  badParts.parts[0].source_overlaps![0].front = 'back';
+  const backwards = plant(partsPath, json(badParts), () => readParts(partsPath));
+  say('AS1474_TAMPERED_RECORD_OR_ROW_REFUSED', badRecord === 'VISIBILITY_HASH' && !existsSync(rejectOut) &&
+    miscount === 'PARTS_COUNTS_ADD_UP' && backwards === 'PARTS_FIELD_TYPE',
+    `front state byte ${badRecord}, inverted count raised ${miscount}, front naming the carrying part ${backwards}`,
+    'A changed state byte is refused before emission; a row whose classes do not sum, or whose front is not drawn later, is refused on read.');
+
+  const noRecordOut = join(dir, 'no-record-parts');
+  renameSync(join(planted.full, 'visibility.json'), join(dir, 'withheld-visibility.json'));
+  planted.run(noRecordOut);
+  const legacy = readParts(join(noRecordOut, 'parts.json'));
+  const noLines: string[] = [];
+  const noRecord = checkPartsStage(noRecordOut, join(dir, 'no-record-check'), line => noLines.push(line));
+  say('AS1474_NO_RECORD_WRITES_NO_OVERLAPS', legacy.parts.every(p => p.source_overlaps === undefined) &&
+    !readFileSync(join(noRecordOut, 'parts.json'), 'utf8').includes('source_overlaps') &&
+    !noRecord.reported.some(row => row.code === 'PARTS_DRAW_ORDER_INVERTED') &&
+    !noRecord.holes.some(row => row.code === 'PARTS_DRAW_ORDER_INVERTED') && !noLines.some(line => line.includes('PARTS_DRAW_ORDER_INVERTED')),
+    json(noRecord.reported), 'With no record, parts.json has no overlap key and check-parts prints no row, line or HOLE for it.');
+
+  // The #664 front-slot fixture: plan order draws the arm behind the torso, and the set "chest" draws its forearm on
+  // forearm_r_front, after the face. Here the set also covers the torso, and its run is recorded with the arm layer
+  // nearer than the topwear, so where the gesture forearm [8, 28) x [29, 36) crosses the torso [18, 44) x [16, 50)
+  // (10 columns by 7 rows, 70 px) the forearm is visible and the torso occluded. Drawn on its front slot, that agrees.
+  const slotHome = join(dir, 'front-slot');
+  const slotCfg = writeFrontSlotFixture(slotHome);
+  const [chest] = (slotCfg.assemble as { alternates: Array<{ parts: string[] }> }).alternates;
+  chest.parts.push('torso');
+  writeFileSync(join(slotHome, 'config.json'), json(slotCfg));
+  const chestFull = join(slotHome, 'chest_full'), chestLayers = join(chestFull, 'layers.json');
+  const chestRun = JSON.parse(readFileSync(chestLayers, 'utf8')) as {
+    layers: { name: string; left: number; top: number; right: number; bottom: number; depth_filename?: string }[];
+  };
+  for (const layer of chestRun.layers) {
+    layer.depth_filename = `${layer.name}_depth.png`;
+    png(join(chestFull, 'parts', layer.depth_filename), layer.right - layer.left, layer.bottom - layer.top, gray(layer.name === 'topwear' ? 30 : 10));
+  }
+  writeFileSync(chestLayers, json(chestRun));
+  record(chestFull);
+  // A plain white set painting: projection then keeps the layer art (as in the stroke fixture) instead of painting
+  // pixels from outside the record over it.
+  png(join(slotHome, 'chest.png'), 128, 128, gray(255));
+  const slotOut = join(slotHome, 'out');
+  assembleStage({ source: join(slotHome, 'painting.png'), full: join(slotHome, 'full'), head: join(slotHome, 'head'), config: join(slotHome, 'config.json'), seam: 'near-white', project: 'core' },
+    { partsJson: join(slotOut, 'parts.json'), partsDir: join(slotOut, 'parts'), recomposite: join(slotOut, 'flat.png'), errorMap: join(slotOut, 'error.png') }, () => {});
+  const slotSet = readParts(join(slotOut, 'parts.json')).alternates?.find(set => set.name === 'chest');
+  const pairRows = (slotSet?.records ?? []).flatMap(part => (part.source_overlaps ?? []).map(row => ({ back: part.name, ...row })))
+    .filter(row => [row.back, row.front].includes('forearm_r') && [row.back, row.front].includes('torso'));
+  const slotParts = join(slotOut, 'parts.json');
+  const twice = readParts(slotParts);
+  const twiceSet = twice.alternates!.find(set => set.name === 'chest')!;
+  const torsoRow = twiceSet.records.find(part => part.name === 'torso')!.source_overlaps!.find(row => row.front === 'forearm_r')!;
+  twiceSet.records.find(part => part.name === 'forearm_r')!.source_overlaps!.push({ ...torsoRow, front: 'torso' });
+  const reversed = plant(slotParts, json(twice), () => readParts(slotParts));
+  say('AS1474_FRONT_SLOT_PAIR_FOLLOWS_THE_SET_DRAW_ORDER', same(slotSet?.front, ['forearm_r']) && pairRows.length === 1 &&
+    pairRows[0].back === 'torso' && pairRows[0].front === 'forearm_r' && pairRows[0].overlap_px === 70 &&
+    pairRows[0].agreeing_px === 70 && pairRows[0].inverted_px === 0 && reversed === 'PARTS_FIELD_TYPE',
+    `${json(pairRows)}; the same pair added back in the other direction: ${reversed}`,
+    'The set draws the forearm on its front slot after the torso, so the 70 crossing pixels agree; in plan order they read inverted. A set reports each pair of records once.');
 }

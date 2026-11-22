@@ -1,6 +1,6 @@
 /** Contributor identities and state sets, carried only while assembling a recorded run. */
 import { OPAQUE_ALPHA_ABOVE } from './layers.ts';
-import type { PartSourceVisibility } from './parts.ts';
+import type { PartSourceOverlap, PartSourceVisibility } from './parts.ts';
 import { visitWarpSupport, type ScaleTranslate, type WarpFilter } from './raster/warp.ts';
 import type { Raster } from './raster/types.ts';
 import { VISIBILITY_STATE } from './visibility.ts';
@@ -11,9 +11,12 @@ const VISIBLE = 1 << VISIBILITY_STATE.visible;
 const OCCLUDED = 1 << VISIBILITY_STATE.occluded;
 const PARTIAL_TOP = 1 << VISIBILITY_STATE.partialTop;
 const DEPTH_TIE = 1 << VISIBILITY_STATE.depthTie;
+const decided = (states: number): boolean => states === VISIBLE || states === OCCLUDED;
 
 interface Material { states: number; layers: readonly string[] }
 interface Pixels { rgb: Uint32Array; alpha: Uint32Array }
+/** A placed part in draw order: its rig-space box and its output image. */
+export interface PlacedImage { name: string; x: number; y: number; image: Raster }
 
 /** ID zero denotes material outside the record, with no known layer. */
 export class PartVisibility {
@@ -137,18 +140,62 @@ export class PartVisibility {
     });
   }
 
+  /** The material of an output pixel: the union of its colour and alpha contributors. */
+  private material(image: Raster, p: number): number {
+    const pixels = this.images.get(image);
+    return this.union(pixels?.rgb[p] ?? 0, pixels?.alpha[p] ?? 0);
+  }
+
+  /**
+   * Issue #1474: for each part, every later part (drawn in front of it) whose
+   * opaque output pixels (alpha above 8, as `opaque_px`) meet its own. A pixel
+   * is inverted when every contributor of the part drawn behind is visible in
+   * the record and every contributor of the part drawn in front is occluded:
+   * the painting shows the back part there and the draw order shows the front.
+   */
+  overlaps(parts: readonly PlacedImage[]): PartSourceOverlap[][] {
+    return parts.map((back, i) => parts.slice(i + 1).flatMap((front): PartSourceOverlap[] => {
+      const x0 = Math.max(back.x, front.x), y0 = Math.max(back.y, front.y);
+      const x1 = Math.min(back.x + back.image.width, front.x + front.image.width);
+      const y1 = Math.min(back.y + back.image.height, front.y + front.image.height);
+      const row: PartSourceOverlap = {
+        front: front.name, source_layers: [], overlap_px: 0, inverted_px: 0, agreeing_px: 0, unordered_px: 0,
+        undecided_px: { 'partial-top': 0, 'depth-tie': 0, 'mixed-source-states': 0 }, unrecorded_px: 0,
+      };
+      const layers = new Set<string>();
+      for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+        const b = (y - back.y) * back.image.width + x - back.x;
+        const f = (y - front.y) * front.image.width + x - front.x;
+        if (back.image.data[b * 4 + 3] <= OPAQUE_ALPHA_ABOVE || front.image.data[f * 4 + 3] <= OPAQUE_ALPHA_ABOVE) continue;
+        row.overlap_px++;
+        const bm = this.materials[this.material(back.image, b)], fm = this.materials[this.material(front.image, f)];
+        const bs = bm.states, fs = fm.states;
+        if (((bs | fs) & UNRECORDED) !== 0) row.unrecorded_px++;
+        else if (bs === VISIBLE && fs === OCCLUDED) {
+          row.inverted_px++;
+          for (const layer of [...bm.layers, ...fm.layers]) layers.add(layer);
+        } else if (bs === OCCLUDED && fs === VISIBLE) row.agreeing_px++;
+        else if (decided(bs) && decided(fs)) row.unordered_px++;
+        else if (bs === PARTIAL_TOP && fs === PARTIAL_TOP) row.undecided_px['partial-top']++;
+        else if (bs === DEPTH_TIE && fs === DEPTH_TIE) row.undecided_px['depth-tie']++;
+        else row.undecided_px['mixed-source-states']++;
+      }
+      row.source_layers = [...layers].sort();
+      return row.overlap_px === 0 ? [] : [row];
+    }));
+  }
+
   /**
    * Each texel's source state (#1473): `SOURCE_STATE.none` at alpha 8 or less,
    * otherwise the one state its material's contributors share — unrecorded
    * when any is outside the record, `mixed-source-states` when they differ.
    */
   states(image: Raster): { codes: Uint8Array; layers: string[] } {
-    const pixels = this.images.get(image);
     const codes = new Uint8Array(image.width * image.height);
     const used = new Set<number>();
     for (let p = 0; p < codes.length; p++) {
       if (image.data[p * 4 + 3] <= OPAQUE_ALPHA_ABOVE) continue;
-      const id = this.union(pixels?.rgb[p] ?? 0, pixels?.alpha[p] ?? 0);
+      const id = this.material(image, p);
       used.add(id);
       const { states } = this.materials[id];
       codes[p] = (states & UNRECORDED) !== 0 ? SOURCE_STATE.unrecorded

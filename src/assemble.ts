@@ -6794,12 +6794,17 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   const editedPartFrontColours = (input.editedParts?.length ?? 0) > 0
     ? replaceEditedParts(placed, input.editedParts!, new Set(input.plan.map(([name]) => name)), stageMap!, editContexts!, srcr, paintingOwner ?? rawPaintingOwnerForPlan(), ERROR_LIMIT, visibility)
     : [];
-  if (visibility !== undefined) for (const part of placed) {
-    part.record.source_visibility = visibility.summarize(part.image);
-    // Issue #1473: where each counted state lies, bound by the bytes build writes.
-    const map = encodeSourceStateMap(visibility.states(part.image).codes, part.image.width, part.image.height);
-    part.record.source_state_map = { image: sourceStateMapImage(part.record.name), sha256: map.sha256 };
-    part.sourceStates = map.image;
+  if (visibility !== undefined) {
+    for (const part of placed) {
+      part.record.source_visibility = visibility.summarize(part.image);
+      // Issue #1473: where each counted state lies, bound by the bytes build writes.
+      const map = encodeSourceStateMap(visibility.states(part.image).codes, part.image.width, part.image.height);
+      part.record.source_state_map = { image: sourceStateMapImage(part.record.name), sha256: map.sha256 };
+      part.sourceStates = map.image;
+    }
+    // Issue #1474: each pair of overlapping parts, in draw order.
+    const overlaps = visibility.overlaps(placed.map(({ record, image }) => ({ name: record.name, x: record.x, y: record.y, image })));
+    placed.forEach((part, i) => { part.record.source_overlaps = overlaps[i]; });
   }
   if (editContexts !== undefined) for (const p of placed) {
     const samples = editContexts.get(p)?.depthClampedSamples;

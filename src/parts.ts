@@ -119,6 +119,18 @@ export interface PartSourceStateMap {
   sha256: string;
 }
 
+/** One part drawn in front of the carrying part, over pixels both parts make opaque (issue #1474). */
+export interface PartSourceOverlap {
+  front: string;
+  source_layers: string[];
+  overlap_px: number;
+  inverted_px: number;
+  agreeing_px: number;
+  unordered_px: number;
+  undecided_px: Record<typeof SOURCE_UNDECIDED_REASONS[number], number>;
+  unrecorded_px: number;
+}
+
 export interface PartRecord {
   /** Verified donor sources, including sources of cuts, limbs and extensions. */
   taken_layers?: TakenLayerSource[];
@@ -143,6 +155,8 @@ export interface PartRecord {
   opaque_px: number;
   source_visibility?: PartSourceVisibility;
   source_state_map?: PartSourceStateMap;
+  /** With `source_visibility` only: every later part this one overlaps, in draw order (issue #1474). */
+  source_overlaps?: PartSourceOverlap[];
   /** Absent in a `parts.json` the reference wrote; `assemble` always writes it. */
   visible_px?: number;
   /** Absent in a `parts.json` the reference wrote; `assemble` always writes it. */
@@ -529,6 +543,7 @@ export const PART_KEYS = [
   'opaque_px',
   'source_visibility',
   'source_state_map',
+  'source_overlaps',
   'provenance',
   'painting_extension_px',
   'visible_px',
@@ -549,10 +564,10 @@ const FRINGE_KEY = 'fringe_pushed_back';
 const CUT_FROM_KEY = 'cut_from';
 /** The one part field that is a record of its own: a limb segment's provenance (issue #349), written only on one. */
 const LIMB_KEY = 'limb';
-const COUNT_KEYS = PART_KEYS.slice(2).filter((k) => k !== FRINGE_KEY && k !== CUT_FROM_KEY && k !== LIMB_KEY && k !== 'depth' && k !== 'provenance' && k !== 'taken_layers' && k !== 'source_visibility' && k !== 'source_state_map') as ReadonlyArray<(typeof PART_KEYS)[number]>;
+const COUNT_KEYS = PART_KEYS.slice(2).filter((k) => k !== FRINGE_KEY && k !== CUT_FROM_KEY && k !== LIMB_KEY && k !== 'depth' && k !== 'provenance' && k !== 'taken_layers' && k !== 'source_visibility' && k !== 'source_state_map' && k !== 'source_overlaps') as ReadonlyArray<(typeof PART_KEYS)[number]>;
 /** The port's own counts: all three or none (none = a record the reference wrote). */
 export const VISIBILITY_KEYS = ['visible_px', 'occluded_px', 'visible_not_projected_px'] as const;
-const REQUIRED_KEYS = PART_KEYS.filter((k) => k !== 'painting_extension_px' && !(VISIBILITY_KEYS as readonly string[]).includes(k) && k !== FRINGE_KEY && k !== CUT_FROM_KEY && k !== LIMB_KEY && k !== 'depth' && k !== 'provenance' && k !== 'taken_layers' && k !== 'source_visibility' && k !== 'source_state_map');
+const REQUIRED_KEYS = PART_KEYS.filter((k) => k !== 'painting_extension_px' && !(VISIBILITY_KEYS as readonly string[]).includes(k) && k !== FRINGE_KEY && k !== CUT_FROM_KEY && k !== LIMB_KEY && k !== 'depth' && k !== 'provenance' && k !== 'taken_layers' && k !== 'source_visibility' && k !== 'source_state_map' && k !== 'source_overlaps');
 
 /** Where a part came from: a See-through run and a v3 tag or an author-made layer's `author:<label>` (issue #256), or the painting itself for a patch. */
 export type From = { run: 'full' | 'head'; tag: string } | { run: 'painting'; patch: string };
@@ -707,9 +722,26 @@ export function orderedSourceVisibility(value: PartSourceVisibility): PartSource
   };
 }
 
+export function orderedSourceOverlap(value: PartSourceOverlap): PartSourceOverlap {
+  return {
+    front: value.front,
+    source_layers: [...value.source_layers].sort(),
+    overlap_px: value.overlap_px,
+    inverted_px: value.inverted_px,
+    agreeing_px: value.agreeing_px,
+    unordered_px: value.unordered_px,
+    undecided_px: {
+      'partial-top': value.undecided_px['partial-top'],
+      'depth-tie': value.undecided_px['depth-tie'],
+      'mixed-source-states': value.undecided_px['mixed-source-states'],
+    },
+    unrecorded_px: value.unrecorded_px,
+  };
+}
+
 function serializePartList(parts: readonly PartRecord[]): Array<Record<string, unknown>> {
   return parts.map((p) =>
-    Object.fromEntries(PART_KEYS.filter((k) => p[k] !== undefined).map((k) => [k, k === FRINGE_KEY ? (p.fringe_pushed_back ?? []).map((q) => ({ part: q.part, px: q.px })) : k === LIMB_KEY ? orderedLimb(p.limb as LimbRecord) : k === 'taken_layers' ? p.taken_layers?.map(orderedTakenSource) : k === 'provenance' ? orderedProvenance(p.provenance as PixelProvenance) : k === 'source_visibility' ? orderedSourceVisibility(p.source_visibility!) : k === 'source_state_map' ? { image: p.source_state_map!.image, sha256: p.source_state_map!.sha256 } : p[k]])),
+    Object.fromEntries(PART_KEYS.filter((k) => p[k] !== undefined).map((k) => [k, k === FRINGE_KEY ? (p.fringe_pushed_back ?? []).map((q) => ({ part: q.part, px: q.px })) : k === LIMB_KEY ? orderedLimb(p.limb as LimbRecord) : k === 'taken_layers' ? p.taken_layers?.map(orderedTakenSource) : k === 'provenance' ? orderedProvenance(p.provenance as PixelProvenance) : k === 'source_visibility' ? orderedSourceVisibility(p.source_visibility!) : k === 'source_overlaps' ? p.source_overlaps!.map(orderedSourceOverlap) : k === 'source_state_map' ? { image: p.source_state_map!.image, sha256: p.source_state_map!.sha256 } : p[k]])),
   );
 }
 
@@ -857,6 +889,63 @@ export function readParts(path: string): PartsFile {
     refuseIfAny(problems);
   }
   return file;
+}
+
+/**
+ * Pairwise source visibility over overlapping opaque pixels (issue #1474); names resolve within the carrying list.
+ * The primary list is the draw order, so a front part comes later in it. An alternate set draws a front-slot part
+ * after a target parts.json does not record (`pairs` is given): there a front is another record of the set, and
+ * each pair of records is reported once.
+ */
+function checkSourceOverlaps(raw: unknown, r: Record<string, unknown>, names: ReadonlyArray<unknown>, index: number, label: string, fail: (code: string, object: string, detail: string) => void, pairs?: Set<string>): void {
+  const at = label + ' source_overlaps';
+  if (!('source_visibility' in r)) fail('PARTS_FIELD_PRESENT', `${label} field "source_visibility"`, 'is absent; source_overlaps is written only beside it');
+  if (!Array.isArray(raw)) {
+    fail('PARTS_FIELD_TYPE', at, `is ${show(raw)}; an array of overlap rows is required`);
+    return;
+  }
+  const count = (n: unknown): n is number => Number.isSafeInteger(n) && Number(n) >= 0;
+  const fields = ['front', 'source_layers', 'overlap_px', 'inverted_px', 'agreeing_px', 'unordered_px', 'undecided_px', 'unrecorded_px'];
+  let previous = index;
+  raw.forEach((row: unknown, i) => {
+    const rowAt = `${at}[${i}]`;
+    const value = row as Record<string, unknown> | null;
+    if (value === null || typeof value !== 'object' || Array.isArray(value) ||
+        Object.keys(value).length !== fields.length || !fields.every(k => Object.hasOwn(value, k))) {
+      fail('PARTS_FIELD_TYPE', rowAt, `is ${show(row)}; requires exactly ${fields.join(', ')}`);
+      return;
+    }
+    const front = names.indexOf(value.front);
+    if (pairs !== undefined) {
+      const key = JSON.stringify([String(r.name), String(value.front)].sort());
+      if (typeof value.front !== 'string' || front < 0 || front === index || pairs.has(key)) {
+        fail('PARTS_FIELD_TYPE', `${rowAt} front`, `is ${show(value.front)}; another record of the set, each pair of records once, is required`);
+      } else pairs.add(key);
+    } else if (typeof value.front !== 'string' || front <= previous) {
+      const later = names.slice(index + 1).filter(n => typeof n === 'string').map(n => JSON.stringify(n)).join(', ') || 'none';
+      fail('PARTS_FIELD_TYPE', `${rowAt} front`, `is ${show(value.front)}; a part drawn later than this one, once each in draw order, is required (later parts: ${later})`);
+    } else previous = front;
+    const layers = value.source_layers;
+    if (!Array.isArray(layers) || layers.some(k => typeof k !== 'string' || !/^(full|head):.+$/.test(k)) ||
+        new Set(layers).size !== layers.length) {
+      fail('PARTS_FIELD_TYPE', `${rowAt} source_layers`, `is ${show(layers)}; requires unique full: or head: layer names`);
+    }
+    const undecided = value.undecided_px as Record<string, unknown> | null;
+    const counts = ['overlap_px', 'inverted_px', 'agreeing_px', 'unordered_px', 'unrecorded_px'];
+    if (undecided === null || typeof undecided !== 'object' || Array.isArray(undecided) ||
+        Object.keys(undecided).length !== SOURCE_UNDECIDED_REASONS.length || !SOURCE_UNDECIDED_REASONS.every(k => count(undecided[k])) ||
+        !counts.every(k => count(value[k]))) {
+      fail('PARTS_FIELD_TYPE', rowAt, `is ${show(row)}; overlap counts must be non-negative safe integers for each class and undecided reason`);
+      return;
+    }
+    const [overlap, inverted, agreeing, unordered, unrecorded] = counts.map(k => value[k] as number);
+    const total = inverted + agreeing + unordered + unrecorded + SOURCE_UNDECIDED_REASONS.reduce((n, k) => n + Number(undecided[k]), 0);
+    if (overlap === 0 || total !== overlap) fail('PARTS_COUNTS_ADD_UP', rowAt, `classes sum to ${total}; a positive overlap_px equal to that sum is required, found ${overlap}`);
+    if (count(r.opaque_px) && overlap > r.opaque_px) fail('PARTS_COUNTS_ADD_UP', rowAt, `overlap_px ${overlap} is above opaque_px ${r.opaque_px}; at most opaque_px is required`);
+    if (Array.isArray(layers) && (layers.length === 0) !== (inverted === 0)) {
+      fail('PARTS_COUNTS_ADD_UP', `${rowAt} source_layers`, `lists ${layers.length} layer(s) for inverted_px ${inverted}; the layers of the inverted pixels, none exactly when there are none, are required`);
+    }
+  });
 }
 
 /** Additive ownership census; not another term in the value partition. */
@@ -1036,6 +1125,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
   if ('parts' in o && !(Array.isArray(o.parts) && o.parts.length > 0)) fail('PARTS_FIELD_TYPE', `${path} field "parts"`, `is ${show(o.parts)}; a non-empty array is required`);
   if (Array.isArray(o.parts)) {
     const seen = new Map<string, { index: number; name: string }>();
+    const partNames = o.parts.map(p => (p as Record<string, unknown> | null)?.name);
     o.parts.forEach((p, i) => {
       const at = `${path} parts[${i}]`;
       if (typeof p !== 'object' || p === null || Array.isArray(p)) {
@@ -1069,6 +1159,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
       checkPaintingExtensionCount(r, label, fail);
       if ('source_visibility' in r) checkSourceVisibility(r.source_visibility, r.opaque_px, label, fail);
       if ('source_state_map' in r) checkSourceStateMap(r, label, fail);
+      if ('source_overlaps' in r) checkSourceOverlaps(r.source_overlaps, r, partNames, i, label, fail);
       const [op, vis, occ, vnp] = ['opaque_px', 'visible_px', 'occluded_px', 'visible_not_projected_px'].map(count);
       if (held.length === VISIBILITY_KEYS.length && op !== null && vis !== null && occ !== null && vnp !== null) {
         if (vis + occ !== op) fail('PARTS_COUNTS_ADD_UP', `${label}`, `visible_px ${vis} + occluded_px ${occ} = ${vis + occ}; opaque_px ${op} is required`);
@@ -1293,6 +1384,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
       }
       if (!Array.isArray(set.records)) return;
       if (set.records.some((p) => typeof p === 'object' && p !== null && !Array.isArray(p) && typeof p.limb === 'object' && p.limb !== null && ('hybrid' in p.limb || 'band' in p.limb))) checkLimbRecords(set.records, `${at} `, fail, false);
+      const setPairs = new Set<string>();
       set.records.forEach((p, j) => {
         if (typeof p !== 'object' || p === null || Array.isArray(p)) {
           fail('PARTS_FIELD_TYPE', `${at} records[${j}]`, `is ${show(p)}; a part object is required`);
@@ -1307,6 +1399,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
         checkPaintingExtensionCount(r, `${at} ${part817}`, fail);
         if ('source_visibility' in r) checkSourceVisibility(r.source_visibility, r.opaque_px, `${at} ${part817}`, fail);
         if ('source_state_map' in r) checkSourceStateMap(r, `${at} ${part817}`, fail);
+        if ('source_overlaps' in r) checkSourceOverlaps(r.source_overlaps, r, (set.records as unknown[]).map(q => (q as Record<string, unknown> | null)?.name), j, `${at} ${part817}`, fail, setPairs);
         const l = r[LIMB_KEY];
         if (typeof l !== 'object' || l === null || Array.isArray(l) || !('cap' in l)) return;
         const part = typeof r.name === 'string' ? `part "${r.name}"` : `records[${j}]`;

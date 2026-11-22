@@ -44,7 +44,9 @@ const PART_STRING_FIELDS = [
   // The source-state map beside a recorded part (#1473): a file in parts/, bound by its hash.
   'source_state_map.image',
   'source_state_map.sha256',
-  // Original run-qualified layer identities.
+  // Original run-qualified layer identities and the part names they overlap.
+  'source_overlaps[].front',
+  'source_overlaps[].source_layers[]',
   'source_visibility.source_layers[]',
   'taken_layers[].prompt_id',
   'taken_layers[].run',
