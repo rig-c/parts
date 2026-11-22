@@ -53,6 +53,14 @@ export interface ExposureRigOptions {
   map?: boolean;
   /** Replace the map's codes before it is hashed (the record's counts stay the true ones). */
   codes?: Uint8Array;
+  /**
+   * How the back part is drawn (issue #1473 review). `region` (the default) is a region; `overlap` is a four-vertex
+   * mesh over the same box whose two triangles are each listed twice, so every posed triangle overlaps its copy;
+   * `linked` draws the slot through a linked mesh whose source is that mesh, an attachment the source lookup refuses.
+   */
+  back?: 'region' | 'overlap' | 'linked';
+  /** `linked` draws the unrecorded front part through a linked mesh too: a refused lookup proven to carry no mapped part. */
+  front?: 'region' | 'linked';
 }
 
 /** The rig directory `check --rig` reads: rig.json, motion.json, parts.json, images/ and parts/. */
@@ -67,14 +75,26 @@ export function writeSourceExposureRig(dir: string, opts: ExposureRigOptions = {
   }
   const stage = { x: -W / 2, y: 0, width: W, height: H };
   const centre = (p: { x: number; y: number }): { x: number; y: number } => ({ x: stage.x + p.x + BOX / 2, y: stage.y + cropToSpineY(p.y + BOX / 2, H) });
+  // A mesh over the back box, every vertex weighted wholly to root and its UV its own place in the box, so every
+  // triangle samples the art exactly as the region does. Box-local points: the corners, then (for the fold) two
+  // interior vertices placed on the wrong sides of each other, so the posed triangles overlap without warping.
+  const mesh = (points: number[][], triangles: number[], p = BACK, bone = 'root'): Record<string, unknown> => ({
+    type: 'mesh', image: `${p.name}.png`, width: BOX, height: BOX, uvs: points.flatMap(([u, v]) => [u / BOX, v / BOX]), triangles, hull: 4,
+    weights: points.map(([u, v]) => [{ bone, x: stage.x + p.x + u, y: stage.y + cropToSpineY(p.y + v, H), weight: 1 }]),
+  });
+  const corners = [[0, 0], [BOX, 0], [BOX, BOX], [0, BOX]];
+  const backDrawings = (how: 'region' | 'overlap' | 'linked'): Record<string, Record<string, unknown>> =>
+    how === 'region' ? { back: { image: 'back.png', ...centre(BACK) } }
+      : how === 'overlap' ? { back: mesh([...corners, [5, 10], [15, 10]], [0, 1, 4, 1, 2, 4, 2, 5, 4, 2, 3, 5, 3, 0, 5, 0, 4, 5]) }
+      : { back_src: mesh(corners, [0, 1, 2, 2, 3, 0]), back: { type: 'linkedmesh', image: 'back.png', source: 'back_src' } };
   const rig = {
     spec: 'rigc-rig/1',
     name: 'source_exposure_probe',
     images: 'images',
     skeleton: stage,
-    bones: [{ name: 'root', x: 0, y: 0 }, { name: 'front', parent: 'root', x: 0, y: 0 }],
-    slots: [{ name: 'back', bone: 'root', attachment: 'back' }, { name: 'front', bone: 'front', attachment: 'front' }],
-    skins: { default: { back: { back: { image: 'back.png', ...centre(BACK) } }, front: { front: { image: 'front.png', ...centre(FRONT) } } } },
+    bones: [{ name: 'root', x: 0, y: 0 }, { name: 'front', parent: 'root', x: 0, y: 0 }, ...(opts.front === 'linked' ? [{ name: 'front_mesh', parent: 'front', x: 0, y: 0 }] : [])],
+    slots: [{ name: 'back', bone: 'root', attachment: 'back' }, { name: 'front', bone: opts.front === 'linked' ? 'front_mesh' : 'front', attachment: 'front' }],
+    skins: { default: { back: backDrawings(opts.back ?? 'region'), front: opts.front === 'linked' ? { front_src: mesh(corners, [0, 1, 2, 2, 3, 0], FRONT, 'front_mesh'), front: { type: 'linkedmesh', image: 'front.png', source: 'front_src' } } : { front: { image: 'front.png', ...centre(FRONT) } } } },
   };
   writeFileSync(join(dir, 'rig.json'), `${JSON.stringify(rig, null, 2)}\n`);
   const motion = {
@@ -194,4 +214,28 @@ export function runSourceExposureChecks(dir: string, say: Say, rigc: RigcRunner)
   const cliFail = cli('cli-fail', mapped, req('cli-below', { max_px: 53 }));
   say('SX14_CLI_REPORTED_EXIT_0_AND_LIMIT_EXIT_1_BY_NAME', cliReported.status === 0 && cliReported.stdout.includes(`${SOURCE_EXPOSURE_LINE}: REPORTED`) && cliFail.status === 1 && cliFail.stdout.split('\n').some(l => l.includes(`FAIL  ${SOURCE_EXPOSURE_CODE}: part "back"`)),
     JSON.stringify({ reported: cliReported.status, fail: cliFail.status }));
+
+  // 7. Review of #1475: a mapped part whose drawing the source lookup cannot resolve is unmeasured, never silently
+  // unmapped; and overlapping posed triangles count each stage pixel once.
+  const linked = join(dir, 'linked', 'input');
+  writeSourceExposureRig(linked, { back: 'linked' });
+  const linkedRun = run('linked', linked, req('linked', { max_px: 0 }));
+  const ll = linkedRun.figures[SOURCE_EXPOSURE_LINE];
+  const linkedRefused = linkedRun.problems.filter(p => p.code === SOURCE_EXPOSURE_UNMEASURED_CODE);
+  say('SX15_A_MAPPED_PART_ON_AN_UNRESOLVED_ATTACHMENT_IS_UNMEASURED_AND_FAILS', !linkedRun.figures.PASS && ll?.status === 'FAIL' &&
+    (ll.unmeasured ?? []).some(u => u.slot === 'back' && u.part === 'back' && u.attachment === 'back' && u.frame === 'setup') &&
+    linkedRefused.some(p => p.object === 'part "back", slot "back", attachment "back" (setup)' && p.detail.includes('SOURCE_MAPPING_UNSUPPORTED')),
+    JSON.stringify({ status: ll?.status, unmeasured: ll?.unmeasured?.slice(0, 2), refused: linkedRefused.slice(0, 1).map(p => `${p.object}: ${p.detail.slice(0, 120)}`) }));
+  const linkedFront = join(dir, 'linked-front', 'input');
+  writeSourceExposureRig(linkedFront, { front: 'linked' });
+  const lf = run('linked-front', linkedFront, req('linked-front', { max_px: 54 })).figures[SOURCE_EXPOSURE_LINE];
+  say('SX17_A_REFUSED_LOOKUP_PROVEN_UNMAPPED_IS_NOT_READ_AND_STILL_COVERS', lf?.status === 'PASS' && lf.unmeasured.length === 0 && JSON.stringify(lf.rows) === JSON.stringify(rows.map(r => ({ ...r, row_kind: 'evidence' }))),
+    JSON.stringify({ status: lf?.status, unmeasured: lf?.unmeasured, rows: lf?.rows.length }));
+  const overlap = join(dir, 'overlap', 'input');
+  writeSourceExposureRig(overlap, { back: 'overlap' });
+  const overlapRun = run('overlap', overlap);
+  const ol = overlapRun.figures[SOURCE_EXPOSURE_LINE];
+  const olPeak = (ol?.rows ?? []).filter(r => r.animation === 'idle' && r.index === 6).map(r => `${r.part}:${r.state}:${r.px}`).sort();
+  say('SX16_OVERLAPPING_POSED_TRIANGLES_COUNT_EACH_PIXEL_ONCE', JSON.stringify(olPeak) === JSON.stringify(['back:occluded:54', 'back:partial-top:18']) && (ol?.rows ?? []).every(r => r.px <= 54) && (ol?.unmeasured.length ?? 1) === 0,
+    JSON.stringify({ peak: olPeak, worst: Math.max(0, ...(ol?.rows ?? []).map(r => r.px)) }));
 }

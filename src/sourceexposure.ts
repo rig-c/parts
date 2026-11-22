@@ -76,7 +76,8 @@ export interface SourceExposureRow {
   index: number;
   time: number;
 }
-export interface SourceExposureUnmeasured { slot: string; frame: string; reason: string }
+/** A drawing whose exposure cannot be read: its slot, the mapped part it may carry (null when none is named), the attachment the frame drew, the frame and why. */
+export interface SourceExposureUnmeasured { slot: string; part: string | null; attachment: string; frame: string; reason: string }
 
 export interface SourceExposureMeasured {
   /** REPORTED without a declared limit — a measurement, never a pass. */
@@ -125,6 +126,26 @@ export function readSourceStateMaps(parts: PartsFile, partsDir: string): Map<str
   }
   if (problems.length > 0) throw new PartsError(problems);
   return maps;
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/**
+ * The mapped part a drawing the source lookup refused may carry, or null when it is proven to carry none: every
+ * default-skin entry it can be (the one named as the drawn attachment, or every entry of the slot when the frame
+ * named none or several) names an image, and no image is a mapped part's PNG or a sequence frame of one
+ * (`<part><digits>.png`). Anything less is not proof, and the drawing is unmeasured with `part` the first mapped
+ * part an entry names, else the slot's mapped part, else "unknown".
+ */
+function refusedDrawingPart(rig: Record<string, unknown>, slot: string, attachment: string | null, mapped: ReadonlySet<string>, slotPart: string | undefined): string | null {
+  const skin = isRecord(rig.skins) && isRecord(rig.skins.default) ? rig.skins.default : null;
+  const drawings = skin !== null && isRecord(skin[slot]) ? skin[slot] : {};
+  const entries = Object.entries(drawings).filter(([key, value]) => isRecord(value) && (attachment === null || (typeof value.name === 'string' ? value.name : key) === attachment)).map(([, value]) => value as Record<string, unknown>);
+  const named = (image: string): string | undefined => [...mapped].find(part => image.startsWith(part) && /^\d*(\.png)?$/.test(image.slice(part.length)));
+  const hits = entries.map(e => (typeof e.image === 'string' ? named(e.image) : undefined)).filter((p): p is string => p !== undefined);
+  const proven = skin !== null && entries.length > 0 && (attachment === null || entries.length === 1) && entries.every(e => typeof e.image === 'string' && e.image.length > 0) && hits.length === 0;
+  if (proven) return null;
+  return hits[0] ?? slotPart ?? 'unknown';
 }
 
 const frameLabel = (animation: string | null, frame: Frame): string =>
@@ -198,26 +219,42 @@ export function measureSourceExposure(api: Api, input: SourceExposureInput, decl
     const counts = new Map<string, number>();
     frame.pieces.forEach((piece, i) => {
       const drawn = (frame.attachments ?? []).filter(a => a.slot === piece.slot);
-      let image: string;
-      try { image = drawn.length === 1 ? String(seamSourceAttachment(input.rig, piece.slot, String(drawn[0].attachment)).image) : ''; }
-      catch { image = ''; }
-      const source = image === '' ? '' : indicatorsOf(image);
-      if (source === '') return; // a piece no mapped part draws: it covers, and is not read
-      const fail = (reason: string): void => {
-        const key = `${piece.slot}\u0000${reason}`;
-        if (!unmeasuredSeen.has(key)) { unmeasuredSeen.add(key); unmeasured.push({ slot: piece.slot, frame: label, reason }); }
+      const attachment = drawn.length === 1 ? String(drawn[0].attachment) : null;
+      const shownAttachment = attachment ?? (drawn.length === 0 ? '(none named by the frame)' : drawn.map(a => String(a.attachment)).join(', '));
+      const fail = (part: string | null, reason: string): void => {
+        const key = `${piece.slot}\u0000${shownAttachment}\u0000${reason}`;
+        if (!unmeasuredSeen.has(key)) { unmeasuredSeen.add(key); unmeasured.push({ slot: piece.slot, part, attachment: shownAttachment, frame: label, reason }); }
       };
-      if (typeof source === 'string') { fail(source); return; }
-      if (piece.kind === 'mesh' && piece.source !== undefined) { fail('the piece is clipped; a clipped piece has no art-UV source map'); return; }
-      if (piece.texture === undefined || piece.texture.artUvs.length !== piece.uvs.length) { fail('the renderer gave no art UVs for the piece'); return; }
+      let image: string | null = null;
+      let refused = attachment === null ? `the frame names ${drawn.length === 0 ? 'no attachment' : `${drawn.length} attachments`} for the slot` : '';
+      if (attachment !== null) {
+        try { image = String(seamSourceAttachment(input.rig, piece.slot, attachment).image); }
+        catch (e) { refused = `the source lookup refused it (${e instanceof Error ? e.message : String(e)}): a linked mesh, a sequence or a non-image attachment has no part image to map`; }
+      }
+      if (image === null) {
+        // A refused lookup is not proof the drawing is unmapped: it is skipped only when it is proven to carry no mapped part.
+        const part = refusedDrawingPart(input.rig, piece.slot, attachment, new Set(maps.keys()), slotParts.get(piece.slot));
+        if (part !== null) fail(part, refused);
+        return;
+      }
+      const source = indicatorsOf(image);
+      if (source === '') return; // a resolved image that is no mapped part: it covers, and is not read
+      if (typeof source === 'string') { fail(image.replace(/\.png$/, ''), source); return; }
+      if (piece.kind === 'mesh' && piece.source !== undefined) { fail(source.part, 'the piece is clipped; a clipped piece has no art-UV source map'); return; }
+      if (piece.texture === undefined || piece.texture.artUvs.length !== piece.uvs.length) { fail(source.part, 'the renderer gave no art UVs for the piece'); return; }
       for (const state of EXPOSED_SOURCE_STATES) {
         const plate = source.pages[state];
         if (plate === undefined) continue;
         const page = `source-exposure:${state}`;
         const { uvWindow: _window, dark: _dark, ...rest } = piece;
         const seated = { ...rest, page, tint: [1, 1, 1, 1], uvs: piece.texture.artUvs } as Piece;
+        // Posed triangles of one mesh can overlap, and the rasteriser then calls back once per triangle: count pixels, not fragments.
+        const touched = new Uint8Array(W * H);
         let n = 0;
-        api.rasterisePiece(plate, seated, project, vp, (x, y, _r, _g, _b, a) => { if (a > 0 && top[y * W + x] === i) n++; });
+        api.rasterisePiece(plate, seated, project, vp, (x, y, _r, _g, _b, a) => {
+          const q = y * W + x;
+          if (a > 0 && top[q] === i && touched[q] === 0) { touched[q] = 1; n++; }
+        });
         if (n > 0) counts.set(`${source.part}\u0000${state}`, (counts.get(`${source.part}\u0000${state}`) ?? 0) + n);
       }
     });
@@ -238,7 +275,7 @@ export function measureSourceExposure(api: Api, input: SourceExposureInput, decl
   const over = declared === undefined ? [] : rows.filter(r => r.px > declared.max_px);
   if (declared !== undefined) {
     for (const r of over) problems.push({ code: SOURCE_EXPOSURE_CODE, object: `part "${r.part}"`, detail: `shows ${r.px} stage px of ${r.state} source material at ${r.frame}; declared max_px ${declared.max_px} is required — keep the covering part over that material in this pose, paint the material (an under image or an edited part, so its texels leave the record), or raise source_exposure.max_px knowingly (AUTHORING, failure map)` });
-    for (const u of unmeasured) problems.push({ code: SOURCE_EXPOSURE_UNMEASURED_CODE, object: `slot "${u.slot}" (${u.frame})`, detail: `${u.reason}; the exposure of its mapped part cannot be read, and an untaken reading is never a pass` });
+    for (const u of unmeasured) problems.push({ code: SOURCE_EXPOSURE_UNMEASURED_CODE, object: `${u.part === null ? '' : `part "${u.part}", `}slot "${u.slot}", attachment "${u.attachment}" (${u.frame})`, detail: `${u.reason}; the exposure of its mapped part cannot be read, and an untaken reading is never a pass` });
   }
   const mapped = parts.parts.filter(p => maps.has(p.name)).map(p => p.name);
   const texels = Object.fromEntries(mapped.map(name => {
@@ -267,6 +304,6 @@ export function sourceExposureLines(line: SourceExposureMeasured): string[] {
   return [
     head,
     ...line.rows.map(r => `  shown part "${r.part}" ${r.state} ${r.px} px — ${r.frame}${line.max_px !== null && r.px > line.max_px ? ` > max_px ${line.max_px}` : ''}`),
-    ...line.unmeasured.map(u => `  unmeasured slot "${u.slot}" — ${u.frame}: ${u.reason}`),
+    ...line.unmeasured.map(u => `  unmeasured ${u.part === null ? '' : `part "${u.part}" `}slot "${u.slot}" attachment "${u.attachment}" — ${u.frame}: ${u.reason}`),
   ];
 }

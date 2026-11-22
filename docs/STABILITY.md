@@ -1699,7 +1699,8 @@ so its bytes do not change. `SOURCE_EXPOSURE` is not one of `bar_outcomes`'
 bars, so `bar_outcomes` does not change either. The `check.json` block holds
 `status`, `instrument`, `reading`, `max_px`, `alternates`, `parts`, `texels`,
 `frames`, `animations`, `rows` (`part`, `state`, `px`, `frame`, `animation`,
-`index`, `time`, `row_scope`, `row_kind`, `row_subjects`) and `unmeasured`, in
+`index`, `time`, `row_scope`, `row_kind`, `row_subjects`) and `unmeasured`
+(`slot`, `part`, `attachment`, `frame`, `reason`, then the same row fields), in
 that order, then `reason` when no part was read. `texels` is keyed by part
 name, in `parts.json` order, each value the part's texel count per state.
 
