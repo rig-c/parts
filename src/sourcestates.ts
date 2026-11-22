@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { OPAQUE_ALPHA_ABOVE } from './layers.ts';
 import { PartsError, type Problem } from './errors.ts';
-import { SOURCE_UNDECIDED_REASONS, type PartRecord, type PartSourceVisibility } from './parts.ts';
+import type { PartRecord, PartSourceVisibility, SOURCE_UNDECIDED_REASONS } from './parts.ts';
 import { decodePngBytes, encodePngBytes } from './raster/png.ts';
 import { newRaster, type Raster } from './raster/types.ts';
 
@@ -32,8 +32,15 @@ export const SOURCE_STATE = {
   unrecorded: 6,
 } as const;
 export type SourceStateName = keyof typeof SOURCE_STATE;
-/** The states `check` reports when a pose shows them, in report order. */
-export const EXPOSED_SOURCE_STATES = ['occluded', ...SOURCE_UNDECIDED_REASONS] as const;
+/**
+ * The states `check` reports when a pose shows them, in report order: `occluded`, then `source_visibility`'s
+ * undecided reasons in their order. Spelled out rather than spread from `SOURCE_UNDECIDED_REASONS`, because
+ * parts.ts reaches this module through partvisibility.ts and a value import back would read it before it is
+ * initialised; the type below holds the two lists equal.
+ */
+export const EXPOSED_SOURCE_STATES = ['occluded', 'partial-top', 'depth-tie', 'mixed-source-states'] as const;
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+export const EXPOSED_STATES_MATCH_RECORD: Same<typeof EXPOSED_SOURCE_STATES, readonly ['occluded', ...typeof SOURCE_UNDECIDED_REASONS]> = true;
 export type ExposedSourceState = typeof EXPOSED_SOURCE_STATES[number];
 
 /** The map's file name in `parts/`, beside `<part>.png`. */

@@ -86,8 +86,8 @@ export interface SourceExposureMeasured {
   max_px: number | null;
   /** Primary parts whose map was read, in parts.json order. */
   parts: string[];
-  /** How many of each mapped part's texels hold each reported state. */
-  texels: Array<{ part: string } & Record<ExposedSourceState, number>>;
+  /** How many of each mapped part's texels hold each reported state, keyed by part in parts.json order. */
+  texels: Record<string, Record<ExposedSourceState, number>>;
   frames: number;
   animations: string[];
   rows: SourceExposureRow[];
@@ -142,7 +142,7 @@ export function measureSourceExposure(api: Api, input: SourceExposureInput, decl
   if (input.parts === null || !hasSourceStateMaps(input.parts)) {
     const reason = input.parts === null ? 'no parts.json was read' : 'no part in parts.json carries a source_state_map; assemble writes one for each part from a See-through run with a visibility record';
     if (declared !== undefined) problems.push({ code: SOURCE_EXPOSURE_UNMEASURED_CODE, object: 'requirements.source_exposure', detail: `${reason}; an untaken reading is never a pass` });
-    return { status: declared === undefined ? 'REPORTED' : 'FAIL', ...base, parts: [], texels: [], frames: 0, animations: [], rows: [], unmeasured: [], reason };
+    return { status: declared === undefined ? 'REPORTED' : 'FAIL', ...base, parts: [], texels: {}, frames: 0, animations: [], rows: [], unmeasured: [], reason };
   }
   const parts = input.parts;
   const maps = readSourceStateMaps(parts, input.partsDir);
@@ -240,14 +240,15 @@ export function measureSourceExposure(api: Api, input: SourceExposureInput, decl
     for (const r of over) problems.push({ code: SOURCE_EXPOSURE_CODE, object: `part "${r.part}"`, detail: `shows ${r.px} stage px of ${r.state} source material at ${r.frame}; declared max_px ${declared.max_px} is required — keep the covering part over that material in this pose, paint the material (an under image or an edited part, so its texels leave the record), or raise source_exposure.max_px knowingly (AUTHORING, failure map)` });
     for (const u of unmeasured) problems.push({ code: SOURCE_EXPOSURE_UNMEASURED_CODE, object: `slot "${u.slot}" (${u.frame})`, detail: `${u.reason}; the exposure of its mapped part cannot be read, and an untaken reading is never a pass` });
   }
-  const texels = parts.parts.filter(p => maps.has(p.name)).map(p => {
-    const codes = maps.get(p.name) as Uint8Array;
-    return { part: p.name, ...Object.fromEntries(EXPOSED_SOURCE_STATES.map(state => [state, codes.filter(c => c === SOURCE_STATE[state]).length])) } as { part: string } & Record<ExposedSourceState, number>;
-  });
+  const mapped = parts.parts.filter(p => maps.has(p.name)).map(p => p.name);
+  const texels = Object.fromEntries(mapped.map(name => {
+    const codes = maps.get(name) as Uint8Array;
+    return [name, Object.fromEntries(EXPOSED_SOURCE_STATES.map(state => [state, codes.filter(c => c === SOURCE_STATE[state]).length])) as Record<ExposedSourceState, number>];
+  }));
   return {
     status: declared === undefined ? 'REPORTED' : over.length === 0 && unmeasured.length === 0 ? 'PASS' : 'FAIL',
     ...base,
-    parts: texels.map(t => t.part),
+    parts: mapped,
     texels,
     frames,
     animations,

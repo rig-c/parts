@@ -1700,7 +1700,8 @@ bars, so `bar_outcomes` does not change either. The `check.json` block holds
 `status`, `instrument`, `reading`, `max_px`, `alternates`, `parts`, `texels`,
 `frames`, `animations`, `rows` (`part`, `state`, `px`, `frame`, `animation`,
 `index`, `time`, `row_scope`, `row_kind`, `row_subjects`) and `unmeasured`, in
-that order, then `reason` when no part was read.
+that order, then `reason` when no part was read. `texels` is keyed by part
+name, in `parts.json` order, each value the part's texel count per state.
 
 `parts.json` records with `source_visibility` gain an optional
 `source_state_map` (issue #1473, additive), `{ "image", "sha256" }`: the

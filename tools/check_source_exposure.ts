@@ -131,7 +131,7 @@ export function runSourceExposureChecks(dir: string, say: Say, rigc: RigcRunner)
   const rows = line?.rows ?? [];
   const setupRows = rows.filter(r => r.animation === null);
   const peak = rows.filter(r => r.animation === 'idle' && r.index === 6).map(r => `${r.part}:${r.state}:${r.px}`).sort();
-  say('SX03_SETUP_POSE_SHOWS_NOTHING_RECORDED_HIDDEN', line !== undefined && setupRows.length === 0 && line.texels.length === 1 && line.texels[0].part === 'back' && line.texels[0].occluded === 126 && line.texels[0]['partial-top'] === 18,
+  say('SX03_SETUP_POSE_SHOWS_NOTHING_RECORDED_HIDDEN', line !== undefined && setupRows.length === 0 && JSON.stringify(line.parts) === JSON.stringify(['back']) && JSON.stringify(line.texels) === JSON.stringify({ back: { occluded: 126, 'partial-top': 18, 'depth-tie': 0, 'mixed-source-states': 0 } }),
     JSON.stringify({ setup: setupRows, texels: line?.texels }));
   say('SX04_THE_MOVED_FRAME_NAMES_PART_STATE_TEXELS_AND_FRAME', JSON.stringify(peak) === JSON.stringify(['back:occluded:54', 'back:partial-top:18']) && rows.some(r => r.frame === 'idle frame 6 (t 0.5 s)' && r.part === 'back' && r.state === 'occluded' && r.px === 54) && rows.every(r => r.part === 'back' && r.px <= 54),
     JSON.stringify({ peak, rows: rows.length, frames: line?.frames }));
