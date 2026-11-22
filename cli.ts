@@ -934,15 +934,17 @@ usage:
       unchanged. A selector alone is not installation: model files are checked.
 
   rig-parts comfy plate --mode background|foreground|occluder --painting <png>
-                    --mask-from seethrough:<dir>|figure-mask:<dir>|matte:<dir> | --occluder <rgba png> [--holes]
+                    --mask-from seethrough:<dir>|figure-mask:<dir>|matte:<dir>|classified:<manifest.json>
+                    | --occluder <rgba png> [--holes]
                     --out <dir> [--graph lama|core] [--model <name>] [--checkpoint-sha256 <hex>]
                     [--seed 0] [--grow 8] [--steps 30] [--cfg 6] [--prompt <text>] [--negative <text>]
                     [--host <url>] [--wait 1800] [--timeout 3600] [--poll 3]
       A step-4 plate with a receipt: <out>/plate.png, mask.png and receipt.json
       (spec rig-parts-plate-receipt/1). The mask comes from a source only — the
-      figure layers of a See-through run, or the figure_rig.png an assemble with
-      config.scene wrote — on the painting's own grid; with none, the command is
-      refused and writes nothing. background inpaints the grown mask on a ComfyUI
+      figure layers of a See-through run, an assemble scene figure, a receipted
+      matte, or an assemble-backed manifest with explicit component roles.
+      background grows on the painting grid and clips declared background prop
+      pixels from a classified source before inpainting on a ComfyUI
       box (--graph lama, the default: the inpaint pack's LaMa model, --model
       big-lama.pt unless named; --graph core: the checkpoint --model names, core
       nodes only), checks every node and model against /object_info before

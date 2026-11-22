@@ -586,7 +586,7 @@ and do not certify visibility. See the
 | `inputs` | `--source`, `--config`, `--out`; optional `--help` (`-h`) |
 | `comfy` | `paint`: `--config`, `--out`; optional `--seeds`, `--seed0`, `--host`, `--wait`, `--timeout`, `--poll`, `--help` (`-h`) |
 | `comfy` | `matte`: `--painting`, `--out`, `--node` (`BiRefNetRMBG`), `--model` (`BiRefNet-HR-matting`), `--checkpoint-sha256` (declared, required); optional `--resolution`, `--threshold`, `--host`, `--wait`, `--timeout`, `--poll`, `--help` (`-h`) (issue #1204) |
-| `comfy` | `plate`: `--mode` (`background`, `foreground` or `occluder`), `--painting`, `--mask-from` (`seethrough:<dir>`, `figure-mask:<dir>` or `matte:<dir>`; not with `occluder`), `--out`; with `--mode occluder`, `--occluder` (an RGBA PNG on the painting's grid, required) and optional `--holes` (issue #1230), and the background flags below; with `--mode background` also `--checkpoint-sha256` (required) and optional `--graph` (`lama` or `core`), `--model` (required with `core`), `--seed`, `--grow`, `--steps`, `--cfg`, `--prompt`, `--negative` (the last four with `core` only), `--host`, `--wait`, `--timeout`, `--poll`, `--help` (`-h`) (issue #1183, additive) |
+| `comfy` | `plate`: `--mode` (`background`, `foreground` or `occluder`), `--painting`, `--mask-from` (`seethrough:<dir>`, `figure-mask:<dir>`, `matte:<dir>` or `classified:<manifest.json>`; not with `occluder`), `--out`; with `--mode occluder`, `--occluder` (an RGBA PNG on the painting's grid, required) and optional `--holes` (issue #1230), and the background flags below; with `--mode background` also `--checkpoint-sha256` (required) and optional `--graph` (`lama` or `core`), `--model` (required with `core`), `--seed`, `--grow`, `--steps`, `--cfg`, `--prompt`, `--negative` (the last four with `core` only), `--host`, `--wait`, `--timeout`, `--poll`, `--help` (`-h`) (issue #1183, additive) |
 | `comfy` | `seethrough`: `--image`, `--out`; optional `--resolution`, `--steps`, `--seed`, `--prefix`, `--offload`, `--no-offload`, `--lama`, `--nf4`, `--host`, `--wait`, `--timeout`, `--poll`, `--config` (See-through settings and optional depth block), `--depth-run` (`full` or `head`, required with the block), `--help` (`-h`) |
 | `assemble` | `--propose-plan` with `--source`, `--full`, `--config`, optional `--head`, `--write-config` (must name `--config` itself, issue #356); or `--source`, `--full`, `--config`, `--out`, optional `--head` (without it, one run: issue #359), `--seam` (near-white, silhouette), `--project` (core, visible), `--alt` (repeatable `<name>=<source>:<full>[:<head>]`, issue #454), `--requirements` (source-bound cut-material evidence only when the file declares `cut_material`, issue #888); or `--emit-fill-masks` (a directory) with `--source`, `--full`, `--config`, optional `--head` (each cut's hidden-band mask on the painting grid, issue #1230); or `--help` (`-h`) |
 | `head-crop-preflight` | `--full`, `--canvas`, `--head-box` (JSON coordinate array); optional `--help` (`-h`); read-only advice before the head run, original alpha > 8 samples (issue #1082) |
@@ -944,9 +944,9 @@ The field semantics are documented in AUTHORING's source projection cover entry.
 ### Plate receipt
 
 `comfy plate` (issue #1183) writes `receipt.json` beside `plate.png` and
-`mask.png`, spec `rig-parts-plate-receipt/1`. Its keys, their order and their
-meaning do not change within the spec; a key added, removed or redefined is a
-new spec version. Every path in it is relative to the receipt's directory.
+`mask.png`, spec `rig-parts-plate-receipt/1`. The keys, order and meaning are
+fixed for each mode and source variant documented below. Incompatible changes
+require a new spec version. Paths are relative to the receipt's directory.
 
 | key | meaning |
 | --- | --- |
@@ -954,13 +954,16 @@ new spec version. Every path in it is relative to the receipt's directory.
 | `mode` | `"background"`, `"foreground"` or `"occluder"` (issue #1230, additive) |
 | `painting` | `{ path, sha256 }` of the painting read |
 | `occluder` | present only when `mode` is `"occluder"` (issue #1230, additive), right after `painting`: `{ path, sha256 }` of the `--occluder` RGBA image the mask was read from |
-| `mask` | `{ source, from, path, sha256 }`: `source` is `"seethrough"`, `"figure-mask"`, `"matte"` or `"occluder"`, `from` the source directory (the occluder image for `"occluder"`), `path` the mask actually used (`mask.png`, opaque white inside) |
+| `mask` | `{ source, from, path, sha256 }`: `source` is `"seethrough"`, `"figure-mask"`, `"matte"`, `"classified"` or `"occluder"`, `from` the source directory (the declaration file for `"classified"` or the occluder image for `"occluder"`), `path` the mask actually used (`mask.png`, opaque white inside) |
+| `mask_classification` | classified sources only (issue #1267, additive): `{manifest_sha256, prop_clips: [{id, clipped_px}]}`. `manifest_sha256` hashes the exact declaration bytes. Each `background-prop` has an entry counting its pixels clipped after background mask growth. Foreground records zero clips for each prop |
 | `model` | `{ name, checkpoint_sha256, checkpoint_sha256_from }`, or null for `foreground`. `checkpoint_sha256` is the `--checkpoint-sha256` value, lower-cased; `checkpoint_sha256_from` is `"declared"`: the box reports no hash, so this field is **declared, not measured** |
 | `params` | every parameter of the run, the seed included, in a fixed order per graph: `lama` — `seed`, `grow_px`, `mask_alpha_above`; `core` — `seed`, `grow_px`, `steps`, `cfg` (`--cfg`, default `6`), `sampler`, `scheduler`, `denoise`, `prompt`, `negative`, `mask_alpha_above`; `foreground` — `mask_alpha_above`; `occluder` — the `lama` or `core` list with `holes` (`--holes`) before `mask_alpha_above`, which is `0` |
 | `graph` | `"rig-parts/plate-background-lama/1"`, `"rig-parts/plate-background-core/1"`, or the fixed local id `"rig-parts/plate-foreground/1"` |
 | `gpu` | the device `/system_stats` names (the same seed gives other pixels on another GPU), or null for `foreground` |
 | `grid_transform` | present only when `mode` is `"background"` or `"occluder"`, `graph` is `"rig-parts/plate-background-core/1"`, and the painting's width or height is not a multiple of 8 (issue #1209, additive): `{ source: [width, height], padded: [ceil(width/8)*8, ceil(height/8)*8], pad: [0, 0], pad_fill: "edge-replicate", mask_pad_fill: "zero", inverse: "crop" }` in that key order. Omitted for on-grid `core`, `lama`, and `foreground` |
 | `output` | `{ path, sha256 }` of `plate.png` |
+
+Existing mask sources retain their defaults and receipt bytes.
 
 The receipt is read back against the bytes on disk before `<out>` is published;
 a hash that is not its file's refuses the run. `verifyPlateReceipt` also
@@ -973,8 +976,34 @@ zero (`mask_pad_fill: "zero"`, kept as context outside the hole), the box's
 output is required at `padded` dimensions (`COMFY_PLATE_SIZE` otherwise) and
 cropped at `[0, 0]` back to `source` before pasting inside the native mask, so
 pixels outside the hole equal the painting byte for byte. On-grid `core`
-paintings retain their original upload bytes, graph and 9-key receipt. Because
+paintings retain their original upload bytes and graph. Existing mask sources
+still write the 9-key receipt for on-grid `core`. Because
 every painting grid is covered by this transform, `PLATE_CORE_GRID` is retired.
+
+### Classified plate mask source
+
+`--mask-from classified:<manifest.json>` is additive for background and
+foreground plates (issue #1267). The declaration has these fields.
+
+| field | meaning |
+| --- | --- |
+| `spec` | `"rig-parts-plate-components/1"` |
+| `parts_dir` | directory containing `parts.json` and its scene's `figure_rig.png`, relative to the directory containing the declaration |
+| `painting_sha256` | SHA-256 of the exact `--painting` bytes, bound to the source input of the completed `rig-run/1` assemble stamp |
+| `figure_mask_sha256` | SHA-256 of `figure_rig.png`, bound to the stamp's output |
+| `parts_manifest_sha256` | SHA-256 of `parts.json`, bound to the stamp's output |
+| `components` | `[{id, role}]` with exactly one entry per current component ID and role exactly `"background-prop"` or `"figure-accessory"` |
+
+Every emitted part PNG must also match the assemble stamp's output hash.
+On the native painting grid, using the existing pixel-centre map, components
+are the 8-connected regions of the scene mask minus the union of emitted part
+pixels with alpha greater than 8, with no minimum size. An ID is the SHA-256
+of the UTF-8 compact JSON array of the component's pixel indices sorted in
+row-major order. Empty declarations with components to classify and declarations
+missing IDs report the IDs, boxes and counts and a paste-ready `components`
+array with blank roles. Source failures use `PLATE_COMPONENT_SOURCE` and role
+assignment failures use `PLATE_COMPONENT_ROLE`. See
+[Classified plate mask](AUTHORING.md#classified-plate-mask).
 
 ### Matte source receipt
 
