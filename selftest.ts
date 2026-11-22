@@ -40671,7 +40671,7 @@ function runComfySuite(): number {
     runVisibilityChecks(join(dir, 'visibility-controls'), say);
 
     const depthProbe = spawnSync(process.execPath, [join(ROOT, 'tools/check_depthsheets.ts'), '--adapter-probe', join(dir, 'depth-probe')], { cwd: ROOT, encoding: 'utf8' });
-    say('CY_DEPTH_FETCH_AND_MISSING_FILE_PLANT', depthProbe.status === 0, `exit ${depthProbe.status}; ${depthProbe.stdout} ${depthProbe.stderr}`, 'API and CLI default to visibility records with valid writer depth; missing or undeclared depth falls back to art only, with a warning for missing files; active depth still refuses missing files');
+    say('CY_DEPTH_FETCH_AND_MISSING_FILE_PLANT', depthProbe.status === 0, `exit ${depthProbe.status}; ${depthProbe.stdout} ${depthProbe.stderr}`, 'API and CLI default to visibility records with valid writer depth; missing or undeclared depth falls back to art only and records the same warning in the console and meta.json; active depth still refuses missing files');
 
     const h = spawnSync('bun', [join(ROOT, 'fixtures', 'comfyharness.ts'), dir], { cwd: ROOT, encoding: 'utf8', maxBuffer: 1 << 26 });
     let parsed: { image: string; platePainting: string; results: Record<string, HarnessResult> } | null = null;

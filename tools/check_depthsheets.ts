@@ -1099,18 +1099,19 @@ if (import.meta.main && process.argv[2] === '--adapter-probe') {
         const fetched = fake.views.filter(f => f.endsWith('_depth.png')).length;
         const saved = readdirSync(join(out, 'parts')).filter(f => f.endsWith('_depth.png')).length;
         const warnings = lines.filter(line => line.includes('WARN  VISIBILITY_SOURCE:'));
+        const meta = JSON.parse(readFileSync(join(out, 'meta.json'), 'utf8')) as Record<string, unknown>;
         let ok: boolean;
         if (mode === 'ok') {
           const upload = [...fake.uploads.values()][0];
           const identity = { prompt_id: result.promptId, input_sha256: sha256(upload), graph_sha256: sha256(new TextEncoder().encode(JSON.stringify(fake.prompts[0]))) };
           const record = readVisibilityRecord(out, identity);
-          const meta = JSON.parse(readFileSync(join(out, 'meta.json'), 'utf8')) as Record<string, unknown>;
           ok = record.layers.length === 5 && meta.uploaded_image_sha256 === identity.input_sha256 && meta.graph_sha256 === identity.graph_sha256 &&
-            sheets === (active ? 5 : 0) && fetched === 5 && saved === 5 && warnings.length === 0;
+            sheets === (active ? 5 : 0) && fetched === 5 && saved === 5 && warnings.length === 0 && meta.visibility_warning === undefined;
         } else {
           const reason = mode === 'missing-depth' ? '_depth.png' : 'no depth';
           ok = sheets === 0 && fetched === (mode === 'missing-depth' ? 1 : 0) && saved === 0 &&
-            !existsSync(join(out, 'visibility.json')) && warnings.length === 1 && warnings[0].includes(reason);
+            !existsSync(join(out, 'visibility.json')) && warnings.length === 1 && warnings[0].includes(reason) &&
+            meta.visibility_warning === warnings[0].trim();
         }
         results.push({ mode, active, ok, sheets, fetched });
       } catch (error) {
@@ -1131,8 +1132,13 @@ if (import.meta.main && process.argv[2] === '--adapter-probe') {
       const fetched = fake.views.filter(f => f.endsWith('_depth.png')).length;
       const recordPresent = existsSync(join(dir, test.name, 'visibility.json'));
       const expectedRecord = test.name === 'active-cli' || 'visibility' in test;
-      const oneWarning = (stdout.match(/WARN  VISIBILITY_SOURCE:/g) ?? []).length === 1;
-      results.push({ mode: test.name, exit, fetched, ok: exit === test.exit && fetched === test.fetched && recordPresent === expectedRecord && oneWarning === ('warned' in test) && (test.exit !== 1 || (stdout + stderr).includes('COMFY_VIEW_PRESENT')) && (test.exit !== 2 || fake.requests.length === 0), ...(test.exit === 1 ? { raw: { stdout, stderr } } : {}) });
+      const warnings = stdout.split('\n').filter(line => line.includes('WARN  VISIBILITY_SOURCE:'));
+      const metaPath = join(dir, test.name, 'meta.json');
+      const meta = existsSync(metaPath) ? JSON.parse(readFileSync(metaPath, 'utf8')) as Record<string, unknown> : undefined;
+      const warningMatches = 'warned' in test
+        ? warnings.length === 1 && meta?.visibility_warning === warnings[0].trim()
+        : warnings.length === 0 && meta?.visibility_warning === undefined;
+      results.push({ mode: test.name, exit, fetched, ok: exit === test.exit && fetched === test.fetched && recordPresent === expectedRecord && warningMatches && (test.exit !== 1 || (stdout + stderr).includes('COMFY_VIEW_PRESENT')) && (test.exit !== 2 || fake.requests.length === 0), ...(test.exit === 1 ? { raw: { stdout, stderr } } : {}) });
     } finally { fake.stop(); }
   }
   console.log(JSON.stringify(results)); process.exit(results.every(r => r.ok) ? 0 : 1);

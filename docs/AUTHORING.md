@@ -5911,8 +5911,9 @@ The adapter writes a visibility record when the wrapper supplies a readable
 depth PNG for every drawn layer. A run without active geometry depth still
 publishes art when a writer sheet is missing or unusable. It writes one
 `VISIBILITY_SOURCE` warning naming the reason and omits the record. Without
-writer sheets the output is art-only with the same warning. Active geometry
-depth still requires its declared sources.
+writer sheets the output is art-only with the same warning. The run's
+`meta.json` records the same warning text in `visibility_warning`. Active
+geometry depth still requires its declared sources.
 
 A visibility record describes the layers returned by one See-through run.
 At each canvas coordinate, exact layer tags with alpha at least 128 are

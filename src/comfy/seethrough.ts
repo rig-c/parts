@@ -84,11 +84,11 @@ function safeName(name: string): boolean {
  */
 async function captureVisibility(
   client: ComfyClient, stage: string, set: LayerSet, depth: DepthBinding | undefined,
-  identity: VisibilityIdentity, say: (line: string) => void,
-): Promise<boolean> {
-  const skip = (detail: string): false => {
-    say(`  WARN  VISIBILITY_SOURCE: visibility.json — ${detail}; the run has no visibility record${guidePointer('VISIBILITY_SOURCE')}`);
-    return false;
+  identity: VisibilityIdentity,
+): Promise<string | undefined> {
+  const skip = (detail: string): string => {
+    const reason = detail.replaceAll(stage + '/', '').replaceAll(client.host, 'the box');
+    return `WARN  VISIBILITY_SOURCE: visibility.json — ${reason}; the run has no visibility record${guidePointer('VISIBILITY_SOURCE')}`;
   };
   const missing = set.layers.find(layer => layer.depthHint === undefined);
   if (depth === undefined && missing !== undefined) {
@@ -117,7 +117,7 @@ async function captureVisibility(
     }
     if (missing !== undefined) return skip(`layer "${missing.name}" has no depth_filename`);
     writeVisibilityRecord(stage, identity);
-    return true;
+    return undefined;
   } catch (error) {
     if (!(error instanceof PartsError) || depth !== undefined) throw error;
     for (const file of fetched) rmSync(file);
@@ -202,8 +202,9 @@ export async function runSeeThrough(client: ComfyClient, run: SeeThroughRun, say
       refuse('COMFY_MANIFEST_NAMED', `output/${infoLog}`, `canvas is ${set.canvas.w}x${set.canvas.h}; the prepared ${run.resolution}x${run.resolution} input grid is required`);
     }
     const identity = { prompt_id: id, input_sha256: sha256(uploadBytes), graph_sha256: sha256(new TextEncoder().encode(JSON.stringify(graph))) };
-    const visibility = await captureVisibility(client, stage, set, depth, identity, say);
+    const visibilityWarning = await captureVisibility(client, stage, set, depth, identity);
     if (depth !== undefined) bindDepthRun(set, depth.run, depth.config, depth.base);
+    if (visibilityWarning !== undefined) say(`  ${visibilityWarning}`);
     const meta = {
       prompt_id: id,
       image: run.image,
@@ -222,7 +223,9 @@ export async function runSeeThrough(client: ComfyClient, run: SeeThroughRun, say
       layer_names: layers.map((l) => l.name as string),
       layers: layerHashes,
       canvas: [set.canvas.w, set.canvas.h],
-      ...(visibility ? { uploaded_image_sha256: identity.input_sha256, graph_sha256: identity.graph_sha256 } : {}),
+      ...(visibilityWarning === undefined
+        ? { uploaded_image_sha256: identity.input_sha256, graph_sha256: identity.graph_sha256 }
+        : { visibility_warning: visibilityWarning }),
       ...(prepared.transform === undefined ? {} : { input_transform: prepared.transform }),
     };
     writeFileSync(join(stage, 'meta.json'), `${JSON.stringify(meta, null, 2)}\n`);
