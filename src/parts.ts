@@ -129,6 +129,8 @@ export interface PartSourceOverlap {
   unordered_px: number;
   undecided_px: Record<typeof SOURCE_UNDECIDED_REASONS[number], number>;
   unrecorded_px: number;
+  /** Directly attributable overlap and inversions on the registered full run's native grid. */
+  native_samples?: { overlap_px: number; inverted_px: number };
 }
 
 export interface PartRecord {
@@ -736,6 +738,9 @@ export function orderedSourceOverlap(value: PartSourceOverlap): PartSourceOverla
       'mixed-source-states': value.undecided_px['mixed-source-states'],
     },
     unrecorded_px: value.unrecorded_px,
+    ...(value.native_samples === undefined ? {} : { native_samples: {
+      overlap_px: value.native_samples.overlap_px, inverted_px: value.native_samples.inverted_px,
+    } }),
   };
 }
 
@@ -911,8 +916,8 @@ function checkSourceOverlaps(raw: unknown, r: Record<string, unknown>, names: Re
     const rowAt = `${at}[${i}]`;
     const value = row as Record<string, unknown> | null;
     if (value === null || typeof value !== 'object' || Array.isArray(value) ||
-        Object.keys(value).length !== fields.length || !fields.every(k => Object.hasOwn(value, k))) {
-      fail('PARTS_FIELD_TYPE', rowAt, `is ${show(row)}; requires exactly ${fields.join(', ')}`);
+        !fields.every(k => Object.hasOwn(value, k)) || Object.keys(value).some(k => k !== 'native_samples' && !fields.includes(k))) {
+      fail('PARTS_FIELD_TYPE', rowAt, `is ${show(row)}; requires ${fields.join(', ')} and accepts optional native_samples`);
       return;
     }
     const front = names.indexOf(value.front);
@@ -944,6 +949,17 @@ function checkSourceOverlaps(raw: unknown, r: Record<string, unknown>, names: Re
     if (count(r.opaque_px) && overlap > r.opaque_px) fail('PARTS_COUNTS_ADD_UP', rowAt, `overlap_px ${overlap} is above opaque_px ${r.opaque_px}; at most opaque_px is required`);
     if (Array.isArray(layers) && (layers.length === 0) !== (inverted === 0)) {
       fail('PARTS_COUNTS_ADD_UP', `${rowAt} source_layers`, `lists ${layers.length} layer(s) for inverted_px ${inverted}; the layers of the inverted pixels, none exactly when there are none, are required`);
+    }
+    if (Object.hasOwn(value, 'native_samples')) {
+      const native = value.native_samples as Record<string, unknown> | null;
+      const nativeAt = `${rowAt} native_samples`;
+      if (native === null || typeof native !== 'object' || Array.isArray(native) ||
+          Object.keys(native).length !== 2 || !count(native.overlap_px) || !count(native.inverted_px)) {
+        fail('PARTS_FIELD_TYPE', nativeAt, `is ${show(native)}; requires exactly overlap_px and inverted_px as non-negative safe integers`);
+      } else if (native.overlap_px === 0 || native.inverted_px > native.overlap_px) {
+        fail('PARTS_COUNTS_ADD_UP', nativeAt,
+          `has inverted_px ${native.inverted_px} and overlap_px ${native.overlap_px}; a positive overlap_px at least as large as inverted_px is required`);
+      }
     }
   });
 }

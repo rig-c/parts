@@ -70,6 +70,12 @@ HOLE remains and both the JSON report and command output keep their legacy bytes
 overlapping parts, from the carrying part's `source_overlaps`. It counts the
 pixels where the record shows the part drawn behind and hides the part drawn in
 front. It is never a pass, and a part set with no record has no such row.
+The optional `native_samples` block in an overlap row and its corresponding
+`check-parts` measurement has `overlap_px` then `inverted_px`, in native
+full-run samples (issue #1477). It covers directly attributable material at a
+non-unit registration scale. It does not enter the output-pixel partition or
+change `source_layers`. See the
+[sample coverage rules](AUTHORING.md#draw-order-inversions-source_overlaps-issue-1474).
 
 The top-level key order is `spec`, `stage`, `inputs`, `parts`, `refusals`,
 `reported`, `holes`, `exit_code`. `stage` is `parts`. `inputs` is sorted by
