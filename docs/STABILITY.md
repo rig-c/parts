@@ -66,6 +66,10 @@ count and names every unmeasured part and its primary or alternate set.
 When every part has a measurement, there is no material HOLE. When neither
 the primary set nor any alternate has a measurement, the existing material
 HOLE remains and both the JSON report and command output keep their legacy bytes.
+`PARTS_DRAW_ORDER_INVERTED` reports one measurement for each recorded pair of
+overlapping parts, from the carrying part's `source_overlaps`. It counts the
+pixels where the record shows the part drawn behind and hides the part drawn in
+front. It is never a pass, and a part set with no record has no such row.
 
 The top-level key order is `spec`, `stage`, `inputs`, `parts`, `refusals`,
 `reported`, `holes`, `exit_code`. `stage` is `parts`. `inputs` is sorted by
@@ -95,7 +99,11 @@ rows, with primary parts first and alternate records in manifest order.
 They have `code`, `set`, `part`, `occluded_px`, `undecided_px` in that order.
 `set` is null for a primary part and the set name for an alternate.
 `undecided_px` gives counts for `partial-top`, `depth-tie`, and
-`mixed-source-states` in that order. `holes` rows have
+`mixed-source-states` in that order. `PARTS_DRAW_ORDER_INVERTED` rows follow
+the material rows in the same set order, with each part's overlaps in draw
+order. They have `code`, `set`, `part`, `front`, `source_layers`,
+`overlap_px`, `inverted_px`, `agreeing_px`, `unordered_px`, `undecided_px`,
+`unrecorded_px` in that order. `part` is drawn behind `front`. `holes` rows have
 `code`, `object`, `reason`, `line`. Absent source cover or allocation adds its
 own HOLE; malformed present reports are refused. A HOLE carries no measured zero.
 
@@ -133,6 +141,7 @@ compare this list with the command's allowlist, and plant an undeclared code.
 - `PARTS_COUNTS_ADD_UP`
 - `PARTS_CUT_FROM_KNOWN`
 - `PARTS_DEPTH_REFERENCE`
+- `PARTS_DRAW_ORDER_INVERTED`
 - `PARTS_FIELD_PRESENT`
 - `PARTS_FIELD_TYPE`
 - `PARTS_FILE_PRESENT`

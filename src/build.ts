@@ -1000,8 +1000,10 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       .filter(({ record }) => coveredSet.has(record.name))
       .flatMap(({ record, image, depthImage, sourceStates }) => [{ name: `${alt.name}_${record.name}`, image }, ...(depthImage === undefined || record.depth === undefined ? [] : [{ name: `${alt.name}_${record.depth.image.slice(0, -4)}`, image: depthImage }]),
         ...(sourceStates === undefined || record.source_state_map === undefined ? [] : [{ name: `${alt.name}_${record.source_state_map.image.slice(0, -4)}`, image: sourceStates }])]);
+    // Issue #1474: an overlap row names a part of the same record list, so rows against a part the set does not keep go.
     const keptRecords = altRes.parts.parts.filter((p) => coveredSet.has(p.name)).map(p => {
-      const depth = p.depth === undefined ? p : { ...p, depth: { ...p.depth, image: `${alt.name}_${p.depth.image}` } };
+      const overlaps = p.source_overlaps === undefined ? p : { ...p, source_overlaps: p.source_overlaps.filter(row => coveredSet.has(row.front)) };
+      const depth = overlaps.depth === undefined ? overlaps : { ...overlaps, depth: { ...overlaps.depth, image: `${alt.name}_${overlaps.depth.image}` } };
       return p.source_state_map === undefined ? depth : { ...depth, source_state_map: { ...p.source_state_map, image: `${alt.name}_${p.source_state_map.image}` } };
     });
     if (result.stageMap !== undefined && altRes.stageMap !== undefined) {

@@ -5989,6 +5989,39 @@ map. A part with no record gets no map, and its bytes do not change. `check`
 uses the map to say which of these texels a pose shows; see
 [Source texels a pose exposes](#source-texels-a-pose-exposes-issue-1473).
 
+##### Draw-order inversions (`source_overlaps`, issue #1474)
+
+A recorded set also gives every part `source_overlaps`: one row for each later
+part in `parts.json` (a part drawn in front of it, as the recomposite draws)
+whose opaque output pixels (alpha above 8) meet its own. A part with no such
+overlap has an empty list. Each row classifies the shared pixels by the
+recorded state of each part's contributors at that pixel, as
+`source_visibility` reads them.
+
+| Field | Meaning |
+| --- | --- |
+| `front` | The part drawn in front of this one. Rows follow draw order. |
+| `source_layers` | Sorted layers that contributed to the inverted pixels, from both parts. Empty exactly when `inverted_px` is 0. |
+| `overlap_px` | Pixels both parts make opaque. The six classes below partition it. |
+| `inverted_px` | This part is visible in the record and the front part is occluded: the painting shows the part that is drawn behind. |
+| `agreeing_px` | This part is occluded and the front part is visible: the record agrees with the draw order. |
+| `unordered_px` | Both parts are visible, or both are occluded, so the record does not order the pair here. Both occluded means a third layer covers them. Both visible happens where resampling draws the two parts from different native pixels. |
+| `undecided_px` | `partial-top` and `depth-tie` when both parts carry that one producer reason. Any other mix of recorded states is `mixed-source-states`. |
+| `unrecorded_px` | Either part has material outside the record at that pixel. |
+
+An inversion is a contradiction between two of the run's own layers. It holds
+only among the layers of that See-through run, and says nothing about material
+the run did not separate. A pixel counts as inverted only when every
+resampling tap of both parts agrees. Where a stroke thinner than the filter's
+support mixes with occluded neighbours, its pixels read `mixed-source-states`,
+and under a downscale a stroke one native pixel wide can drop out of
+`inverted_px` altogether, so read `mixed-source-states` beside it. Nothing moves: assembly keeps every pixel and the
+draw order. To remove an inversion, change the input so the material sits in a
+layer whose part is drawn in front, for example with an author layer or a
+`take`, or change the plan order when the whole overlap reads inverted. Then
+re-run assemble and read the count again. `check-parts` reports each row under
+[`PARTS_DRAW_ORDER_INVERTED`](#PARTS_DRAW_ORDER_INVERTED).
+
 #### Step-4 plates (`comfy plate`, issue #1183)
 
 `rig-parts comfy plate --mode background|foreground --painting <png>
@@ -6699,6 +6732,7 @@ outside the consumed inputs pending [#1177](https://github.com/rig-c/parts/issue
 | <a id="PARTS_PLATE_GHOST"></a><a id="PARTS_PLATE_STRUCTURE"></a><a id="PARTS_PLATE_SMEAR"></a><a id="PARTS_PLATE_STEPS"></a>`PARTS_PLATE_GHOST`, `PARTS_PLATE_STRUCTURE`, `PARTS_PLATE_SMEAR`, `PARTS_PLATE_STEPS` | HOLE; no adopted plate discriminator is available | carry these unmeasured classes to parts review |
 | <a id="PARTS_INVENTED_MATERIAL"></a>`PARTS_INVENTED_MATERIAL` | REPORTED per part with a validated [See-through visibility record](#see-through-layer-visibility), with occluded and undecided counts. If only some parts have measurements, one HOLE counts and names every unmeasured part and its primary or alternate set. If no part has measurements, the legacy HOLE remains. | read the counts as same-run visibility |
 | <a id="PARTS_INVENTED_EXPOSURE"></a>`PARTS_INVENTED_EXPOSURE` | HOLE: `check-parts` reads an assembled directory, which has no rig, motion or build to pose. The measurement lives in `check`, as [`SOURCE_EXPOSURE`](#SOURCE_EXPOSURE), over the gated build's setup pose and every animation | run `rig-parts check` on the rig, and read its `SOURCE_EXPOSURE` line |
+| <a id="PARTS_DRAW_ORDER_INVERTED"></a>`PARTS_DRAW_ORDER_INVERTED` | REPORTED for each recorded pair of overlapping parts: inverted pixels, where the [record](#draw-order-inversions-source_overlaps-issue-1474) shows the part drawn behind and hides the part drawn in front, with the other classes of the shared pixels. Never a pass; a set with no record has no row. | read the inverted pixels; move the material to a layer drawn in front, or change the plan order |
 
 ### check and build
 

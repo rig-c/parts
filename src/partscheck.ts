@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { failLine, PartsError, type Problem } from './errors.ts';
-import { FIGURE_MASK_FILE, orderedSourceVisibility, partImageReference, partsFileReferences, readParts, type PartsFile, type PartSourceVisibility } from './parts.ts';
+import { FIGURE_MASK_FILE, orderedSourceOverlap, orderedSourceVisibility, partImageReference, partsFileReferences, readParts, type PartsFile, type PartSourceOverlap, type PartSourceVisibility } from './parts.ts';
 import { readPng } from './raster/png.ts';
 import { RasterError } from './raster/types.ts';
 import { NotAPngError } from '@rig-c/core/png';
@@ -29,6 +29,7 @@ export const PARTS_CHECK_CODES: readonly string[] = [
   'PARTS_COUNTS_ADD_UP',
   'PARTS_CUT_FROM_KNOWN',
   'PARTS_DEPTH_REFERENCE',
+  'PARTS_DRAW_ORDER_INVERTED',
   'PARTS_FIELD_PRESENT',
   'PARTS_FIELD_TYPE',
   'PARTS_FILE_PRESENT',
@@ -84,13 +85,14 @@ interface MaterialRow {
   occluded_px: number;
   undecided_px: PartSourceVisibility['undecided_px'];
 }
+type OverlapRow = { code: 'PARTS_DRAW_ORDER_INVERTED'; set: string | null; part: string } & PartSourceOverlap;
 export interface PartsCheckReport {
   spec: typeof PARTS_CHECK_SPEC;
   stage: 'parts';
   inputs: PartsCheckInput[];
   parts: { primary: string[]; alternates: unknown[]; source_cover: unknown; painting_allocation: unknown[] };
   refusals: Refusal[];
-  reported: (CoverRow | MaterialRow)[];
+  reported: (CoverRow | MaterialRow | OverlapRow)[];
   holes: Hole[];
   exit_code: number;
 }
@@ -253,6 +255,8 @@ export function checkPartsStage(input: string, output: string, log: (line: strin
     const { occluded_px, undecided_px } = orderedSourceVisibility(part.source_visibility);
     return [{ code: 'PARTS_INVENTED_MATERIAL', set, part: part.name, occluded_px, undecided_px }];
   });
+  const overlapRows: OverlapRow[] = partRows.flatMap(({ part, set }) => (part.source_overlaps ?? [])
+    .map(row => ({ code: 'PARTS_DRAW_ORDER_INVERTED' as const, set, part: part.name, ...orderedSourceOverlap(row) })));
   for (const [code, reason] of PARTS_QUALITY_HOLES) {
     if (code !== 'PARTS_INVENTED_MATERIAL' || materialRows.length === 0) {
       hole(code, 'parts', reason);
@@ -418,7 +422,7 @@ export function checkPartsStage(input: string, output: string, log: (line: strin
     spec: PARTS_CHECK_SPEC, stage: 'parts', inputs: before,
     parts: { primary: file?.parts.map(part => part.name) ?? [], alternates: canonical(file?.alternates ?? []) as unknown[],
       source_cover: canonical(cover), painting_allocation: allocations },
-    refusals, reported: [...reported, ...materialRows], holes, exit_code: refusals.length === 0 ? 0 : 1,
+    refusals, reported: [...reported, ...materialRows, ...overlapRows], holes, exit_code: refusals.length === 0 ? 0 : 1,
   };
   if (JSON.stringify(before) !== JSON.stringify(inventory(false))) {
     fatal('PARTS_CHECK_INPUT_CHANGED', '--parts', 'input inventory changed during the read; no report was published');
@@ -443,6 +447,13 @@ export function checkPartsStage(input: string, output: string, log: (line: strin
     const set = row.set === null ? '' : ` in set "${row.set}"`;
     const undecided = Object.entries(row.undecided_px).map(([reason, px]) => `${reason} ${px}`).join(', ');
     log(`${row.code}: REPORTED part "${row.part}"${set} — occluded ${row.occluded_px} px, undecided (${undecided})`);
+  }
+  for (const row of overlapRows) {
+    const set = row.set === null ? '' : ` in set "${row.set}"`;
+    const undecided = Object.entries(row.undecided_px).map(([reason, px]) => `${reason} ${px}`).join(', ');
+    const layers = row.source_layers.length === 0 ? '' : ` (${row.source_layers.join(', ')})`;
+    log(`${row.code}: REPORTED part "${row.part}" behind part "${row.front}"${set} — inverted ${row.inverted_px} of ${row.overlap_px} overlapping px${layers}; ` +
+      `agreeing ${row.agreeing_px}, unordered ${row.unordered_px}, undecided (${undecided}), unrecorded ${row.unrecorded_px}`);
   }
   for (const row of holes) log(row.line);
   return report;
