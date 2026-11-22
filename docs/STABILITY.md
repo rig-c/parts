@@ -1189,6 +1189,13 @@ plate` with `--mask-from seethrough:<dir>` binds every layer file read and
 `--painting` against those hashes and refuses a legacy `meta.json` that lacks
 them.
 
+When the wrapper supplies readable writer depth for every drawn layer, the
+adapter also emits a [visibility record](AUTHORING.md#see-through-layer-visibility)
+for the run's own layers (issue #1469). Its metadata adds the uploaded PNG and
+submitted graph hashes. Geometry depth remains separately opt-in. Runs without
+optional writer depth still publish art with a named warning in the console
+and in `meta.json` as `visibility_warning`.
+
 Non-square inputs are prepared by parts before upload (issues #1197, #1205).
 Their additive `input_transform` records `source: [width,height]`,
 `padded: [side,side]`, `pad: [left,top]` in padded pixels, `scale` (target

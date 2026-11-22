@@ -29,13 +29,14 @@
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, rmdirSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import { refuseIfAny } from '../errors.ts';
+import { foldName, guidePointer, PartsError, refuseIfAny } from '../errors.ts';
 import { checkGraph, fillSeeThrough, type SeeThroughParams } from '../graphs.ts';
-import { readWrapperLayers } from '../layers.ts';
-import type { DepthBinding } from '../depthsheets.ts';
+import { readWrapperLayers, type LayerSet } from '../layers.ts';
+import { bindDepthRun, type DepthBinding } from '../depthsheets.ts';
 import { sha256 } from '../plate.ts';
 import { prepareSeeThroughInput } from '../seethrough-transform.ts';
 import { decodePngBytes, encodePngBytes } from '../raster/png.ts';
+import { writeVisibilityRecord, type VisibilityIdentity } from '../visibility.ts';
 import { ComfyClient, historyImages, refuse } from './client.ts';
 
 export const SEETHROUGH_WORKFLOW = new URL('../../workflows/seethrough.json', import.meta.url);
@@ -76,6 +77,53 @@ export function assertOutFree(out: string): void {
 
 function safeName(name: string): boolean {
   return name !== '' && !name.startsWith('.') && !/[\\/]/.test(name);
+}
+
+/** Fetch the writer sheets once for visibility and optional geometry binding.
+ * An art-only run can finish when its optional writer sheets are unavailable.
+ */
+async function captureVisibility(
+  client: ComfyClient, stage: string, set: LayerSet, depth: DepthBinding | undefined,
+  identity: VisibilityIdentity,
+): Promise<string | undefined> {
+  const skip = (detail: string): string => {
+    const reason = detail.replaceAll(stage + '/', '').replaceAll(client.host, 'the box');
+    return `WARN  VISIBILITY_SOURCE: visibility.json — ${reason}; the run has no visibility record${guidePointer('VISIBILITY_SOURCE')}`;
+  };
+  const missing = set.layers.find(layer => layer.depthHint === undefined);
+  if (depth === undefined && missing !== undefined) {
+    return skip(set.layers.every(layer => layer.depthHint === undefined)
+      ? 'the wrapper declared no depth PNGs'
+      : `layer "${missing.name}" has no depth_filename`);
+  }
+  const occupied = new Set([...set.layers, ...set.hidden].map(layer => foldName(`${layer.name}.png`)));
+  const fetched: string[] = [];
+  try {
+    const entries = depth === undefined ? set.layers : [...set.layers, ...set.hidden];
+    for (const layer of entries) {
+      if (layer.depthHint === undefined) continue;
+      const filename = layer.depthHint.filename;
+      if (typeof filename !== 'string' || !safeName(filename)) {
+        refuse('COMFY_LAYER_NAME', `layer "${layer.name}" depth_filename`, 'requires a plain file name for the writer depth PNG');
+      }
+      const name = `${layer.name}_depth.png`;
+      const local = join(stage, 'parts', name);
+      if (occupied.has(foldName(name))) {
+        refuse('DEPTH_SHEET_UNAMBIGUOUS', name, 'the writer depth PNG collides with an art or depth PNG in this run; use distinct layer names');
+      }
+      writeFileSync(local, await client.view(filename), { flag: 'wx' });
+      occupied.add(foldName(name));
+      fetched.push(local);
+    }
+    if (missing !== undefined) return skip(`layer "${missing.name}" has no depth_filename`);
+    writeVisibilityRecord(stage, identity);
+    return undefined;
+  } catch (error) {
+    if (!(error instanceof PartsError) || depth !== undefined) throw error;
+    for (const file of fetched) rmSync(file);
+    const [first] = error.problems;
+    return skip(first === undefined ? 'the writer depth is unavailable' : `${first.object} — ${first.detail}`);
+  }
 }
 
 export async function runSeeThrough(client: ComfyClient, run: SeeThroughRun, say: (line: string) => void): Promise<SeeThroughResult> {
@@ -148,12 +196,15 @@ export async function runSeeThrough(client: ComfyClient, run: SeeThroughRun, say
       writeFileSync(join(stage, rel), layerBytes);
       layerHashes.push({ path: rel, sha256: sha256(layerBytes) });
     }
-    if (depth !== undefined) for (const l of layers) if ('depth_filename' in l) writeFileSync(join(stage, 'parts', `${l.name as string}_depth.png`), await client.view(l.depth_filename as string));
     writeFileSync(join(stage, 'layers.json'), manifestBytes);
-    const set = readWrapperLayers(stage, depth);
+    const set = readWrapperLayers(stage);
     if (prepared.transform !== undefined && (set.canvas.w !== run.resolution || set.canvas.h !== run.resolution)) {
       refuse('COMFY_MANIFEST_NAMED', `output/${infoLog}`, `canvas is ${set.canvas.w}x${set.canvas.h}; the prepared ${run.resolution}x${run.resolution} input grid is required`);
     }
+    const identity = { prompt_id: id, input_sha256: sha256(uploadBytes), graph_sha256: sha256(new TextEncoder().encode(JSON.stringify(graph))) };
+    const visibilityWarning = await captureVisibility(client, stage, set, depth, identity);
+    if (depth !== undefined) bindDepthRun(set, depth.run, depth.config, depth.base);
+    if (visibilityWarning !== undefined) say(`  ${visibilityWarning}`);
     const meta = {
       prompt_id: id,
       image: run.image,
@@ -172,6 +223,9 @@ export async function runSeeThrough(client: ComfyClient, run: SeeThroughRun, say
       layer_names: layers.map((l) => l.name as string),
       layers: layerHashes,
       canvas: [set.canvas.w, set.canvas.h],
+      ...(visibilityWarning === undefined
+        ? { uploaded_image_sha256: identity.input_sha256, graph_sha256: identity.graph_sha256 }
+        : { visibility_warning: visibilityWarning }),
       ...(prepared.transform === undefined ? {} : { input_transform: prepared.transform }),
     };
     writeFileSync(join(stage, 'meta.json'), `${JSON.stringify(meta, null, 2)}\n`);
