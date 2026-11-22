@@ -5948,7 +5948,7 @@ with `meta.json`'s `prompt_id`, they are the expected identity for
 `readVisibilityRecord`. Its `image_sha256` still hashes the original
 `--image` file.
 
-| Rule | Means | Change |
+| rule | means | change |
 | --- | --- | --- |
 | <a id="VISIBILITY_SOURCE"></a>`VISIBILITY_SOURCE` | A required layer PNG, writer depth PNG or run identity is unavailable | recover the matching outputs and identity from the producing run |
 | <a id="VISIBILITY_MANIFEST"></a>`VISIBILITY_MANIFEST` | The visibility manifest is malformed or disagrees with the run identity or grids | use the producer's manifest for this run |
