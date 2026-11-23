@@ -48352,8 +48352,8 @@ function runCanvasClipSceneControls(dir: string, say: FixtureCaseReporter): void
   const small = writeCanvasClipSceneFixture(smallDir, 'small');
   const exact = writeCanvasClipSceneFixture(exactDir, 'exact');
   const compose = (source: string, out: string) => runCli(['compose', '--scene', source, '--out', out]);
-  const green = (home: string, source: string, name: string, bounds: number[], clipped: number[], backdrop = false): string => {
-    const out = join(home, 'green');
+  const green = (home: string, source: string, name: string, bounds: number[], clipped: number[], backdrop = false, outputName = 'green'): string => {
+    const out = join(home, outputName);
     const sourceImages = join(home, 'figure', 'rig', 'images');
     const imagePairs = sceneOutputFiles(sourceImages).filter(file => file.endsWith('.png'))
       .map(file => ({ source: join(sourceImages, file), emitted: `figure.${file}` }));
@@ -48442,6 +48442,13 @@ function runCanvasClipSceneControls(dir: string, say: FixtureCaseReporter): void
     { offset: [-10, -10] }, { canvas: { width: 16, height: 18 } });
   plant('edge-only', 'SCENE_CHARACTER_CLIP_EMPTY', 'SC146_CANVAS_CLIP_REFUSES_EDGE_ONLY_INTERSECTION', { offset: [-26, -12] });
   plant('false', 'SCENE_FIELD_TYPE', 'SC147_CANVAS_CLIP_REQUIRES_LITERAL_TRUE', { canvas_clip: false }, {}, 'scene.characters[0].canvas_clip');
+
+  const bottomSource = join(exactDir, 'canvas-clip-bottom.json');
+  const exactBody = readJsonFile(exact.source)!;
+  const [exactCharacter, ...otherCharacters] = exactBody.characters as Array<Record<string, unknown>>;
+  writeFileSync(bottomSource, sceneText({ ...exactBody, characters: [{ ...exactCharacter, offset: [-88, 0] }, ...otherCharacters] }));
+  green(exactDir, bottomSource, 'SC149_EXACT_CANVAS_CLIP_COMPOSES_WITH_BOTTOM_OVERFLOW',
+    [-88, 0, 1832, 1080], [0, 0, 1744, 981], true, 'green-bottom');
 }
 
 function runSceneSuite(): number {
