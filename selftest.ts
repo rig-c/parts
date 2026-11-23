@@ -789,7 +789,7 @@ import { type ComposedScene, checkBarsFailed, composeFromFiles, composeStage, IM
 import { mergeSceneAnimations, readSceneAnimations, sceneClipLoopProblems, scenePoseState, sceneKeyedModel } from './src/sceneclips.ts';
 import { poseRawAnimation } from '@rig-c/core/core';
 import { compareSceneBytes } from './scripts/scene_parity.ts';
-import { sceneOutputFiles, sceneClip, writeCanvasClipSceneFixture, writeSceneClipBuild, sceneCharacterRig, sceneText, writeFlatPlate, writeSceneBuild, writeTurnSceneBuild, sceneTurnFixture, sceneFoldProducerFixture, writeSceneProducerInput } from './fixtures/scene.ts';
+import { sceneOutputFiles, sceneClip, writeCanvasClipSceneFixture, writeSceneClipBuild, sceneCharacterRig, sceneText, writeFlatPlate, writeSceneBuild, writeTurnSceneBuild, sceneTurnFixture, sceneFoldProducerFixture, writeSceneProducerInput, writePlacementPivotProducerInput, writePlacementPivotRootBuild } from './fixtures/scene.ts';
 import { localInfluences, regionWeight } from './src/localweights.ts';
 import { boneHeat as solveBoneHeat, HEAT_MAX_ITERATIONS, HEAT_SOURCE_BAND, HEAT_TOLERANCE, latticeSilhouette } from './src/heat.ts';
 import { influences } from './src/weights.ts';
@@ -48489,6 +48489,220 @@ function runCanvasClipSceneControls(dir: string, legacyReceiptOut: string, say: 
     [-88, 0, 1832, 1080], [0, 0, 1744, 981], true, 'green-bottom');
 }
 
+/** The issue #1498 controls also run independently of the larger scene suite. */
+export function runPlacementPivotSceneControls(dir: string, say: FixtureCaseReporter): void {
+  const why = 'issue #1498: a scene can translate an explicitly declared character pivot through the ordinary Core gate';
+  const { config, parts } = writePlacementPivotProducerInput(dir);
+  const build = join(dir, 'build');
+  // Produce real admission evidence for the one-level RED/GREEN pair.
+  const rigDir = join(build, 'rig');
+  const rigRun = runCli(['rig', '--config', config, '--parts', parts, '--out', rigDir]);
+  mkdirSync(build, { recursive: true });
+  cpSync(join(parts, 'parts.json'), join(build, 'parts.json'));
+  const checkRun = runCli(['check', '--rig', rigDir, '--parts', parts, '--out', join(build, 'check')]);
+  const figure = { id: 'figure', build: 'build', offset: [8, 6] };
+  const opted = { ...figure, placement_pivot: true };
+  const pivot = 'figure:placement', carrier = 'figure:root';
+  const base = { canvas: { width: 64, height: 64 }, characters: [figure], order: ['figure'] };
+  const posed = { ...base, characters: [opted] };
+  const track = (bone: string, property = 'translate', values: number[][] = [[0, 0], [-4, 0], [0, 0], [4, 0], [0, 0]]) =>
+    ({ bone, property, keys: values.map((v, i) => ({ t: i / (values.length - 1), v })) });
+  const idle = (...tracks: ReturnType<typeof track>[]) => ({ idle: { duration: 1, loop: true, tracks } });
+  const source = join(dir, 'scene.json');
+  const write = (body: Record<string, unknown>) => writeFileSync(source, sceneText(body));
+  const cli = (tag: string, body: Record<string, unknown>) => {
+    write(body);
+    const out = join(dir, tag);
+    const sha256 = createHash('sha256').update(readFileSync(source)).digest('hex');
+    return { ...runCli(['compose', '--scene', source, '--out', out]), dir: out, sha256 };
+  };
+  const refused = (body: Record<string, unknown>) => {
+    write(body);
+    return refusals(() => composeFromFiles(source));
+  };
+  const named = (err: PartsError | null, code: string, ...fragments: string[]) => err?.problems.some(problem =>
+    problem.code === code && fragments.every(fragment => problemLine(problem).includes(fragment))) === true;
+  const noFiles = (run: ReturnType<typeof cli>) => sceneOutputFiles(run.dir).length === 0;
+  const reportRow = (run: ReturnType<typeof cli>) =>
+    (readJsonFile(join(run.dir, SCENE_REPORT_FILE))?.characters as Array<Record<string, unknown>> | undefined)?.[0];
+  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  const errorLines = (run: ReturnType<typeof cli>) => run.out.split('\n').filter(line => line.includes('FAIL  ')).slice(0, 2).join(' | ').slice(0, 390);
+
+  const sourceRig = readJsonFile(join(build, 'rig', 'rig.json')) as unknown as RigSpec | null;
+  const cloth = sourceRig?.skins.default.cloth.cloth as MeshAttachment | undefined;
+  const direct = cli('direct', { ...base, animations: idle(track('figure:hip')) });
+  const a15 = '[compose]     FAIL  A15_IDLE_NO_MESH_BONE_KEYS: idle keys bone "figure:hip"';
+  say('SPV01_ONE_LEVEL_MESH_DRIVER_REFUSES_REAL_IDLE_TRANSLATION',
+    rigRun.status === 0 && checkRun.status === 0 && readJsonFile(join(build, 'check', 'check.json'))?.PASS === true &&
+      sourceRig?.bones.find(b => b.name === 'hip')?.parent === 'root' && sourceRig.slots.find(s => s.name === 'cloth')?.bone === 'hip' &&
+      cloth?.weights.flat().some(bind => bind.bone === 'hip') === true && direct.status === 1 && direct.out.includes(a15) &&
+      composeFail(direct.out, 'COMPOSE_RIGC_GREEN') !== null && noFiles(direct),
+    `source rig/check ${rigRun.status}/${checkRun.status}; direct compose ${direct.status}; files ${sceneOutputFiles(direct.dir).length}; ` +
+      (rigRun.status === 0 && checkRun.status === 0 ? errorLines(direct) : lastLines(rigRun.out + checkRun.out, 4).join(' | ').slice(0, 500)), why);
+  if (sourceRig === null || checkRun.status !== 0) return;
+
+  const legacy = cli('legacy', base);
+  const motion = idle(track(pivot));
+  const green = cli('pivot', { ...posed, animations: motion });
+  const row = reportRow(green), defaultRow = reportRow(legacy);
+  const emittedRig = (run: ReturnType<typeof cli>) => readJsonFile(join(run.dir, 'rig', 'rig.json')) as unknown as RigSpec | null;
+  const legacyRig = emittedRig(legacy), greenRig = emittedRig(green);
+  const bone = (rig: RigSpec | null, name: string) => rig?.bones.find(b => b.name === name);
+  const identity = (rig: RigSpec | null, name: string, parent: string) => {
+    const b = bone(rig, name);
+    return b?.parent === parent && b.x === 0 && b.y === 0 && (b.rotation ?? 0) === 0 && b.length === undefined;
+  };
+  const emittedMotion = readJsonFile(join(green.dir, 'rig', 'motion.json')) as { animations: ReturnType<typeof idle> } | null;
+  const check = readJsonFile(join(green.dir, 'check', 'check.json'));
+  const setupMatches = ['figure:hip', 'figure:eye'].every(name => {
+    const original = bone(legacyRig, name);
+    return original?.parent === 'root' && same(bone(greenRig, name), { ...original, parent: pivot });
+  });
+  const boundsKeys = Object.keys(row ?? {}).slice(Object.keys(row ?? {}).indexOf('bounds'), Object.keys(row ?? {}).indexOf('shift'));
+  say('SPV02_PLACEMENT_PIVOT_GATES_AND_REPARENTS_AT_THE_SAME_SETUP',
+    legacy.status === 0 && green.status === 0 && check?.PASS === true && check.gate_spine_html_green === true &&
+      greenRig?.invariants?.idleDrivesMeshes === undefined && identity(greenRig, pivot, 'root') && bone(greenRig, carrier) === undefined &&
+      setupMatches && same(emittedMotion?.animations.idle.tracks.find(t => t.bone === pivot), motion.idle.tracks[0]) &&
+      defaultRow?.bones === 2 && row?.bones === 3 && row?.placement_pivot === pivot && !Object.hasOwn(defaultRow, 'placement_pivot') &&
+      same(boundsKeys, ['bounds', 'placement_pivot']) && same(row.bounds, [18, 16, 34, 34]) && same(defaultRow.bounds, row.bounds) && same(row.shift, [-4, 18]),
+    `legacy/pivot compose ${legacy.status}/${green.status}; ${defaultRow?.bones}/${row?.bones} bones; placement keys ${boundsKeys.join(',')}; setup matches ${setupMatches}; ${errorLines(green)}`, why);
+
+  const modelPath = (run: ReturnType<typeof cli>) => join(run.dir, 'check', 'build', RIGC_MODEL_DOCUMENT);
+  const poses = (run: ReturnType<typeof cli>) => existsSync(modelPath(run))
+    ? poseRawAnimation(sceneKeyedModel(readFileSync(modelPath(run), 'utf8')).doc, 'idle', [0.25, 0.25, 0.25, 0.25]) : [];
+  const closed = (frames: ReturnType<typeof poses>) => frames.length === 5 && scenePoseState(frames[0]) === scenePoseState(frames[4]);
+  const observed = (frames: ReturnType<typeof poses>, slot: string, travel: number[][], reference = frames[0]) => {
+    const vertices = reference?.drawn.find(s => s.slot === slot)?.vertices;
+    if (vertices === undefined || vertices.length === 0 || frames.length !== travel.length) return Infinity;
+    return Math.max(...frames.map((frame, i) => {
+      const moved = frame.drawn.find(s => s.slot === slot)?.vertices;
+      return moved?.length !== vertices.length ? Infinity : Math.max(...moved.map((point, j) => Math.abs(point - vertices[j] - travel[i][j % 2])));
+    }));
+  };
+  // Four float32 units at 8 px allow for the packed setup coordinates and world evaluation.
+  const tolerance = 2 ** -18;
+  const greenFrames = poses(green), defaultSetup = poses(legacy)[0];
+  const deltas = motion.idle.tracks[0].keys.map(key => key.v);
+  const errors = ['figure:cloth', 'figure:eye'].map(slot => observed(greenFrames, slot, deltas, defaultSetup));
+  say('SPV03_PACKED_MESH_AND_REGION_FOLLOW_TRANSLATION_WITH_EXACT_CLOSURE',
+    defaultSetup !== undefined && errors.every(error => error <= tolerance) && closed(greenFrames),
+    `five keyed samples; cloth/eye maximum residuals ${errors.join('/')}; tolerance ${tolerance}; endpoint equality ${closed(greenFrames)}`, why);
+
+  const receipt = (run: ReturnType<typeof cli>) => readJsonFile(join(run.dir, COMPOSE_RUN_FILE)) as unknown as ComposeRun | null;
+  const bindsScene = (record: ComposeRun | null, run: ReturnType<typeof cli>) => record?.spec === COMPOSE_RUN_SPEC &&
+    Object.keys(record).join(',') === 'spec,scene,characters,plate,plates' && same(record.scene, { path: source, sha256: run.sha256 });
+  const originalReceipt = receipt(legacy), optReceipt = receipt(green);
+  const receiptKeys = (record: ComposeRun | null) => Object.keys(record?.characters[0] ?? {}).join(',');
+  say('SPV04_PIVOT_CHANGES_ONLY_THE_SCENE_HASH_IN_THE_WIRE_RECEIPT',
+    bindsScene(originalReceipt, legacy) && bindsScene(optReceipt, green) && legacy.sha256 !== green.sha256 &&
+      receiptKeys(originalReceipt) === 'id,build,files' && receiptKeys(optReceipt) === 'id,build,files' &&
+      originalReceipt !== null && optReceipt !== null && same(optReceipt, { ...originalReceipt, scene: { ...originalReceipt.scene, sha256: green.sha256 } }),
+    `same input path; distinct raw hashes ${legacy.sha256 !== green.sha256}; character keys ${receiptKeys(originalReceipt)} / ${receiptKeys(optReceipt)}`, why);
+
+  const badValues = [false, null, 0, 'true', [], {}];
+  const fieldProblems = badValues.map(placement_pivot => refused({ ...base, characters: [{ ...figure, placement_pivot }] }));
+  say('SPV05_EXPLICIT_PIVOT_VALUES_REQUIRE_LITERAL_TRUE',
+    fieldProblems.every(err => named(err, 'SCENE_FIELD_TYPE', 'scene.characters[0].placement_pivot')),
+    `${fieldProblems.filter(err => named(err, 'SCENE_FIELD_TYPE', 'scene.characters[0].placement_pivot')).length}/${badValues.length} malformed values name the field; omitted ${legacy.status}`, why);
+  const unused = [posed, { ...posed, animations: idle(track('figure:eye', 'translatex', [[0], [0]])) }].map(refused);
+  say('SPV06_A_DECLARED_PIVOT_MUST_HAVE_ITS_OWN_SCENE_TRANSLATION',
+    unused.every(err => named(err, 'SCENE_PIVOT_UNUSED', pivot)), unused.map(codes).join(' / '), why);
+
+  const rootBuild = join(dir, 'rooted');
+  writePlacementPivotRootBuild(rootBuild, join(dir, 'still.png'));
+  const rooted = { ...opted, build: 'rooted', offset: [-6, 6], scale: 0.5, canvas_clip: true };
+  const plate = { name: 'still', image: 'still.png', provenance: 'generated', at: [40, 40] };
+  const rootScene = { ...base, characters: [rooted], plates: [plate], order: ['figure', 'still'] };
+  const forbidden = [track(pivot, 'rotate', [[0], [0]]), track(pivot, 'scale', [[1, 1], [1, 1]]), track(carrier)];
+  const trackProblems = forbidden.map(t => refused({ ...rootScene, animations: idle(track(pivot), t) }));
+  say('SPV07_ONLY_PIVOT_TRANSLATION_AND_NO_CARRIER_KEYS_ARE_ADMITTED',
+    trackProblems.every((err, i) => named(err, 'SCENE_PIVOT_TRACK', forbidden[i].bone, forbidden[i].property)), trackProblems.map(codes).join(' / '), why);
+
+  const collisionBuild = join(dir, 'collision');
+  cpSync(build, collisionBuild, { recursive: true });
+  const collisionRig = structuredClone(sourceRig);
+  collisionRig.bones.push({ name: 'placement', parent: 'root', x: 1, y: 2 });
+  writeFileSync(join(collisionBuild, 'rig', 'rig.json'), rigJsonText(collisionRig));
+  const collisionScene = { ...base, characters: [{ ...figure, build: 'collision' }], animations: motion };
+  const collision = refused({ ...collisionScene, characters: [{ ...collisionScene.characters[0], placement_pivot: true }] });
+  write(collisionScene);
+  const existing = composeFromFiles(source);
+  say('SPV08_OPT_IN_REFUSES_A_SOURCE_BONE_NAMED_PLACEMENT',
+    named(collision, 'SCENE_PIVOT_NAME_FREE', pivot) && bone(existing.rig, pivot)?.parent === 'root' &&
+      bone(existing.rig, pivot)?.x === -3 && existing.report.characters[0].bones === 3,
+    `${codes(collision)}; existing target still resolves with parent ${bone(existing.rig, pivot)?.parent}`, why);
+
+  const undeclared = cli('undeclared', { ...base, animations: motion });
+  say('SPV09_UNDECLARED_TARGET_KEEPS_THE_CORE_UNKNOWN_BONE_REFUSAL',
+    undeclared.status === 1 && undeclared.out.includes('CE_COMPILE_ANIMATION_BONE_UNKNOWN') &&
+      undeclared.out.includes('keys unknown bone "figure:placement"') && noFiles(undeclared),
+    `exit ${undeclared.status}; files ${sceneOutputFiles(undeclared.dir).length}; ${errorLines(undeclared)}`, why);
+  const plateProblems = [pivot, carrier].map(name => refused({ ...rootScene, animations: motion, plates: [{ ...plate, name }], order: ['figure', name] }));
+  say('SPV10_NAMED_PLATES_KEEP_THE_EXISTING_GENERATED_NAME_COLLISION_REFUSAL',
+    plateProblems.every((err, i) => named(err, 'SCENE_PLATE_NAME_FREE', [pivot, carrier][i]) && !named(err, 'SCENE_ORDER_COMPLETE')),
+    plateProblems.map(codes).join(' / '), why);
+
+  const x = [0, 2, 0, -2, 0], y = [0, -3, 0, 3, 0];
+  const rootGreen = cli('root-carrier', { ...rootScene, animations: idle(track(pivot, 'translatex', x.map(n => [n])), track(pivot, 'translatey', y.map(n => [n]))) });
+  const rootRig = emittedRig(rootGreen), rootRow = reportRow(rootGreen), rootFrames = poses(rootGreen);
+  const rootMotion = readJsonFile(join(rootGreen.dir, 'rig', 'motion.json')) as { animations: ReturnType<typeof idle> } | null;
+  const eye = rootRig?.skins.default['figure:eye']['figure:eye'] as RegionAttachment | undefined;
+  const weighted = rootRig?.skins.default['figure:cloth']['figure:cloth'] as MeshAttachment | undefined;
+  const [rootBind] = weighted?.weights[0] ?? [];
+  const travel = x.map((n, i) => [n, y[i]]);
+  const rootErrors = [observed(rootFrames, 'figure:cloth', travel), observed(rootFrames, 'figure:eye', travel), observed(rootFrames, 'still', x.map(() => [0, 0]))];
+  // For scale 0.5 the stage-corner shift is (-28, 38). The source root bind is (-14, 34).
+  say('SPV11_UNKEYED_ROOT_CARRIER_PRESERVES_BIND_PLACEMENT_AND_PLATE_ISOLATION',
+    rootGreen.status === 0 && identity(rootRig, pivot, 'root') && identity(rootRig, carrier, pivot) && bone(rootRig, 'still')?.parent === 'root' &&
+      rootMotion?.animations.idle.tracks.filter(t => t.bone === pivot).map(t => t.property).join(',') === 'translatex,translatey' &&
+      rootMotion.animations.idle.tracks.every(t => t.bone !== carrier) && rootRig?.slots.find(slot => slot.name === 'figure:eye')?.bone === carrier &&
+      eye?.x === -29 && eye.y === 44.5 && rootBind?.bone === carrier && rootBind.x === -35 && rootBind.y === 55 && rootBind.weight === 1 &&
+      weighted?.weights.slice(1).flat().every(bind => bind.bone === 'figure:hip') === true &&
+      bone(rootRig, 'figure:hip')?.x === -28 && bone(rootRig, 'figure:hip')?.y === 43 && rootRow?.bones === 4 &&
+      rootErrors.every(error => error <= tolerance) && closed(rootFrames),
+    `compose ${rootGreen.status}; ${rootRow?.bones} bones; eye ${eye?.x},${eye?.y}; first bind ${JSON.stringify(rootBind)}; mesh/eye/plate residuals ${rootErrors.join('/')}; ${errorLines(rootGreen)}`, why);
+
+  const clippedReceipt = receipt(rootGreen), placement = clippedReceipt?.characters[0]?.placement;
+  const layout = Object.keys(rootRow ?? {}).filter(key => ['bounds', 'canvas_clip', 'clipped_bounds', 'placement_pivot'].includes(key));
+  const preview = readJsonFile(join(rootGreen.dir, 'check', 'idle_frames', 'frames.json'));
+  const viewport = preview?.viewport as { x: number; y: number; width: number; height: number; pixelWidth: number; pixelHeight: number } | undefined;
+  const sample = (preview?.sets as Array<{ fps: number; sampled: number; written: number }> | undefined)?.[0];
+  say('SPV12_CLIPPED_PIVOT_KEEPS_PLACEMENT_SHAPE_AND_PREVIEW_LIMITS',
+    bindsScene(clippedReceipt, rootGreen) && receiptKeys(clippedReceipt) === 'id,build,files,placement' &&
+      same(layout, ['bounds', 'canvas_clip', 'clipped_bounds', 'placement_pivot']) && rootRow?.placement_pivot === pivot &&
+      same(placement, { canvas_clip: true, bounds: [-1, 11, 7, 20], clipped_bounds: [0, 11, 7, 20] }) &&
+      same(rootRow.bounds, placement?.bounds) && same(rootRow.clipped_bounds, placement?.clipped_bounds) &&
+      viewport?.x === -32 && viewport.y === 0 && viewport.width === 64 && viewport.height === 64 &&
+      viewport.pixelWidth === 640 && viewport.pixelHeight === 640 && sample?.fps === 12 && sample.written === 13 && sample.sampled === 13,
+    `report keys ${layout.join(',')}; receipt keys ${receiptKeys(clippedReceipt)}; placement ${JSON.stringify(placement)}; preview ${viewport?.pixelWidth}x${viewport?.pixelHeight}, ${sample?.written}/${sample?.sampled} at ${sample?.fps} fps`, why);
+
+  const open = cli('unclosed', { ...posed, animations: idle(track(pivot, 'translatex', [[0], [1]])) });
+  const duration = refused({ ...posed, animations: { idle: { ...motion.idle, duration: 2 } } });
+  say('SPV13_PIVOT_TRACKS_KEEP_IDLE_DURATION_AND_POSED_ENDPOINT_CHECKS',
+    open.status === 1 && composeFail(open.out, 'SCENE_ANIMATION_LOOP_CLOSES')?.includes(pivot) === true && noFiles(open) &&
+      named(duration, 'SCENE_DURATION_AGREES', 'scene.animations.idle.duration'),
+    `open endpoint ${open.status}; files ${sceneOutputFiles(open.dir).length}; wrong duration ${codes(duration)}; ${errorLines(open)}`, why);
+
+  const collisionMotionFile = join(collisionBuild, 'rig', 'motion.json');
+  writeFileSync(join(collisionBuild, 'rig', 'rig.json'), rigJsonText(sourceRig));
+  const imported = readJsonFile(collisionMotionFile)!;
+  const importedAnims = imported.animations as Record<string, unknown>;
+  const rootTrack = track('root', 'translatex', [[0], [0]]);
+  const { bone: _root, ...groupTrack } = rootTrack;
+  const rootKeys = [rootTrack, { ...groupTrack, group: 'shared' }].map(t => {
+    writeFileSync(collisionMotionFile, rigJsonText({ ...imported, groups: { shared: ['root'] }, animations: {
+      ...importedAnims, hop: { duration: 1, loop: true, tracks: [t] },
+    } }));
+    return refused({ ...base, characters: [{ ...opted, build: 'collision' }], animations: motion });
+  });
+  write({ ...posed, animations: idle(track(pivot), rootTrack) });
+  const authored = composeFromFiles(source);
+  say('SPV14_IMPORTED_SHARED_ROOT_REMAINS_REFUSED_AND_AUTHORED_ROOT_REMAINS_VALID',
+    rootKeys.every(err => named(err, 'SCENE_ROOT_SHARED', 'animations.hop.tracks[0]', '"root"')) &&
+      authored.motion.animations.idle.tracks.some(t => t.bone === 'root' && t.property === 'translatex'),
+    `imported direct/group ${rootKeys.map(codes).join(' / ')}; authored shared root retained`, why);
+}
+
 function runSceneSuite(): number {
   section('scene: finished builds composed into one rig, a plate and a declared order (issue #74)');
   const { say, bad } = counter();
@@ -49356,6 +49570,7 @@ function runSceneSuite(): number {
       "issue #74 §2: the bounds are the union of the character's part boxes, placed — computed by hand from fixtures/rig.ts — and x1, y1 exclusive, so a box ending on the canvas edge is inside",
     );
     runCanvasClipSceneControls(dir, legacyOut, say);
+    runPlacementPivotSceneControls(join(dir, 'placement-pivot'), say);
 
     // ---- the order -----------------------------------------------------------
     const unresolved = compose(two({ order: ['plain', 'reach', 'ghost', 'plain:nose', 'ghost:cloth'] }));
