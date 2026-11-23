@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.54.0 (2026-11-23)
+
+`compose` can frame characters that extend past the scene canvas. `check` uses local filenames in SKIP reasons for missing parts, idle and idle geometry.
+
+**Read before upgrading:**
+
+* **`characters[].canvas_clip` opts a character into intentional overflow in `spine-parts-scene/1`.** Set it to literal `true`. Any other explicit value is `SCENE_FIELD_TYPE` at `scene.characters[i].canvas_clip`. The union of the part boxes after scale and offset must be finite (`SCENE_CHARACTER_CLIP_BOUNDS`), extend past at least one edge (`SCENE_CHARACTER_CLIP_UNUSED` for fully contained or flush bounds), and overlap the canvas with positive width and height (`SCENE_CHARACTER_CLIP_EMPTY` for edge-only contact or entirely outside). Omit the key to keep the existing `SCENE_CHARACTER_INSIDE_CANVAS` refusal for overflow.
+* **Opted-in characters record both placement boxes.** `scene.json` adds `characters[].canvas_clip` and `characters[].clipped_bounds` after `characters[].bounds`. `bounds` is the full placed part-box union and `clipped_bounds` is its canvas intersection. Both use `[x0, y0, x1, y1]` in canvas pixels, y down, with exclusive right and bottom edges. The character's console line appends `clipped bounds`. A green `compose-run.json` (`rig-compose-run/1`) adds `characters[].placement` after `files` with keys `canvas_clip`, `bounds`, `clipped_bounds` in that order. Only opted-in rows carry these additions.
+* **Any opt-in pins compose's check previews to the authored stage.** Explicit diagnostic viewports take precedence. `check/idle_frames/frames.json` records the stage in `viewport` and sets `pinned.by` to `--viewport`. The retained idle frames and `check/contact.png` keep the existing preview size cap and sampling rate. The gate and packed build retain full art, geometry and motion. For playback and native-size export, clip the whole scene, including plates, to `[-width/2, 0, width, height]` in rig-c world coordinates, y up. For a native-size `rigc render`, pass that rectangle to `--viewport` and the larger canvas dimension to `--max`.
+* **Scenes without `canvas_clip` keep their output paths and stable bytes relative to the feature's immediate base, `e14d97a`.** The same-path comparison in `#1495` found byte-identical outputs and console streams for the public example defaults and a two-character public scene, with only Core's `started_at` and `finished_at` timestamps in `check/build/run.json` differing. The base already includes the SKIP text fix below.
+* **`check.json`'s free-text SKIP reasons use filenames relative to the directory that owns the file.** The affected fields are:
+  * Missing `parts.json` with no `--parts`: `skipped.seam`, `RECOMPOSITE_HOLES.reason`, `BREATH_VISIBLE.reason`, `BLINK_NO_HOLE.reason`, `TIP_OVER_ROOT.reason`, `STILL_REGIONS_DARK.reason`, and `SEAM_OVER_MOTION.reason` when the required motion-seam block retains it. `no parts.json: <absolute-rig-dir>/parts.json does not exist` becomes `no parts.json: parts.json does not exist`.
+  * Missing idle: `skipped.loop`, `CHAIN_LAG.reason`, `TEXTURE_STRETCH.reason`, `BREATH_VISIBLE.reason`, `BLINK_NO_HOLE.reason`, `TIP_OVER_ROOT.reason` and `STILL_REGIONS_DARK.reason`. `no idle: <absolute-rig-dir>/motion.json field "animations"` becomes `no idle: motion.json field "animations"`.
+  * Missing idle geometry: `TEXTURE_STRETCH.reason`, `STILL_REGIONS_DARK.reason` and `CLOTH_SETTLES.reason` when those readings need it. `<absolute-idle-frame-set-dir>/geometry.json does not exist` becomes `geometry.json does not exist`.
+
+  Statuses, `bar_outcomes` reason codes and verdicts stay the same. Reports without these reasons keep their bytes. All 40 tracked public-example expected files matched the `#1493` base by hash, including all five expected check reports.
+
+### Features
+
+* **compose:** accept per-character `canvas_clip: true`, record the clipped bounds and frame the check previews to the authored canvas (`#1491`, `#1495`, `2c1a480`).
+
+### Bug Fixes
+
+* **check:** write location-independent SKIP reasons for missing parts, idle and idle geometry. Identical relative invocations on the relocated merged-rig fixture write byte-identical `check.json` files (`#1492`, `#1493`, `e14d97a`).
+
 ## 2.53.0 (2026-11-23)
 
 See-through runs now record which of their own layers are visible. Assembly carries that evidence into the parts, and the checks report draw-order inversions and source material exposed during motion. `compose` accepts physics-keyed animations, and `comfy plate` can keep declared background props out of the removal mask.
