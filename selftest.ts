@@ -789,7 +789,7 @@ import { type ComposedScene, checkBarsFailed, composeFromFiles, composeStage, IM
 import { mergeSceneAnimations, readSceneAnimations, sceneClipLoopProblems, scenePoseState, sceneKeyedModel } from './src/sceneclips.ts';
 import { poseRawAnimation } from '@rig-c/core/core';
 import { compareSceneBytes } from './scripts/scene_parity.ts';
-import { sceneOutputFiles, sceneClip, writeSceneClipBuild, sceneCharacterRig, sceneText, writeFlatPlate, writeSceneBuild, writeTurnSceneBuild, sceneTurnFixture, sceneFoldProducerFixture, writeSceneProducerInput } from './fixtures/scene.ts';
+import { sceneOutputFiles, sceneClip, writeCanvasClipSceneFixture, writeSceneClipBuild, sceneCharacterRig, sceneText, writeFlatPlate, writeSceneBuild, writeTurnSceneBuild, sceneTurnFixture, sceneFoldProducerFixture, writeSceneProducerInput } from './fixtures/scene.ts';
 import { localInfluences, regionWeight } from './src/localweights.ts';
 import { boneHeat as solveBoneHeat, HEAT_MAX_ITERATIONS, HEAT_SOURCE_BAND, HEAT_TOLERANCE, latticeSilhouette } from './src/heat.ts';
 import { influences } from './src/weights.ts';
@@ -48362,6 +48362,133 @@ function compiledSlots(buildDir: string): string[] {
   return ((sk?.slots as Array<{ name: string }> | undefined) ?? []).map((s) => s.name);
 }
 
+/** Setup placement is reported and receipted, with native art kept for animation. */
+function runCanvasClipSceneControls(dir: string, legacyReceiptOut: string, say: FixtureCaseReporter): void {
+  const smallDir = join(dir, 'clip-small');
+  const exactDir = join(dir, 'clip-exact');
+  const small = writeCanvasClipSceneFixture(smallDir, 'small');
+  const exact = writeCanvasClipSceneFixture(exactDir, 'exact');
+  const compose = (source: string, out: string) => runCli(['compose', '--scene', source, '--out', out]);
+  const green = (home: string, source: string, name: string, bounds: number[], clipped: number[], backdrop = false, outputName = 'green'): string => {
+    const out = join(home, outputName);
+    const sourceImages = join(home, 'figure', 'rig', 'images');
+    const imagePairs = sceneOutputFiles(sourceImages).filter(file => file.endsWith('.png'))
+      .map(file => ({ source: join(sourceImages, file), emitted: `figure.${file}` }));
+    if (backdrop) imagePairs.push({ source: join(home, 'backdrop.png'), emitted: 'scene-plate.0.png' });
+    const originals = imagePairs.map(pair => readFileSync(pair.source));
+    const sceneSha = createHash('sha256').update(readFileSync(source)).digest('hex');
+    const run = compose(source, out);
+    const check = readJsonFile(join(out, 'check', 'check.json'));
+    const report = readJsonFile(join(out, SCENE_REPORT_FILE));
+    const receipt = readJsonFile(join(out, COMPOSE_RUN_FILE));
+    const row = (report?.characters as Array<Record<string, unknown>> | undefined)?.[0];
+    const receiptRow = (receipt?.characters as Array<{ id: string; placement?: Record<string, unknown> }> | undefined)?.[0];
+    const binding = receipt?.scene as { path?: string; sha256?: string } | undefined;
+    const placement = receiptRow?.placement;
+    const correctPlacement = (value: Record<string, unknown> | undefined) =>
+      value?.canvas_clip === true && JSON.stringify(value.bounds) === JSON.stringify(bounds) &&
+      JSON.stringify(value.clipped_bounds) === JSON.stringify(clipped);
+    const reportMatches = row?.id === 'figure' && correctPlacement(row);
+    const receiptMatches = receipt?.spec === COMPOSE_RUN_SPEC && receiptRow?.id === 'figure' && placement !== undefined &&
+      correctPlacement(placement) && Object.keys(placement).length === 3 &&
+      binding?.path === source && binding.sha256 === sceneSha;
+    const consoleRow = run.out.split('\n').find(line => line.startsWith('[compose]   figure:'));
+    const clippedAt = consoleRow?.search(/\bclipped\b/) ?? -1;
+    const consoleMatches = clippedAt >= 0 && consoleRow?.slice(0, clippedAt).includes(`bounds [${bounds.join(', ')}]`) === true &&
+      consoleRow?.endsWith(`[${clipped.join(', ')}]`) === true;
+    const outputImages = join(out, 'rig', 'images');
+    const imagesMatch = originals.length > 0 && sceneOutputFiles(outputImages).length === originals.length &&
+      imagePairs.every((pair, i) => {
+        const emitted = join(outputImages, pair.emitted);
+        return existsSync(emitted) && readFileSync(emitted).equals(originals[i]) && readFileSync(pair.source).equals(originals[i]);
+      });
+    const gate = run.out.split('\n').some(line => line.startsWith('[compose]   rigc build --profile rig-play --pack') && line.endsWith('exit 0')) &&
+      check?.gate_spine_html_green === true && check.PASS === true &&
+      existsSync(join(out, 'check', 'build', 'skeleton.json'));
+    const diagnostic = run.status === 0 ? '' : `; ${lastLines(run.out, 4).join(' | ').slice(0, 400)}`;
+    say(name, run.status === 0 && gate && reportMatches && receiptMatches && consoleMatches && imagesMatch,
+      `exit ${run.status}; gate and check ${gate}; scene row ${reportMatches}; receipt ${receiptMatches}; console ${consoleMatches}; ${originals.length} PNGs equal ${imagesMatch}${diagnostic}`,
+      'issue #1491: explicit clipping records the placed box and canvas intersection through the real gate and check, and preserves every consumed PNG byte');
+    return out;
+  };
+  green(smallDir, small.source, 'SC141_SMALL_CANVAS_CLIP_COMPOSES_WITH_PLACEMENT_AND_NATIVE_ART', [-2, -2, 14, 16], [0, 0, 12, 14]);
+  const exactOut = green(exactDir, exact.source, 'SC142_EXACT_CANVAS_CLIP_COMPOSES_WITH_PLACEMENT_AND_NATIVE_ART',
+    [-88, -99, 1832, 981], [0, 0, 1744, 981], true);
+
+  type ReceiptRow = Record<string, unknown> & { placement?: Record<string, unknown> };
+  const receiptRows = (out: string): ReceiptRow[] =>
+    (readJsonFile(join(out, COMPOSE_RUN_FILE))?.characters as ReceiptRow[] | undefined) ?? [];
+  const [clippedRow] = receiptRows(exactOut);
+  const placement = clippedRow?.placement;
+  const characterKeys = (row: ReceiptRow | undefined): string => JSON.stringify(Object.keys(row ?? {}));
+  const placementKeys = (row: ReceiptRow | undefined): string => JSON.stringify(Object.keys(row?.placement ?? {}));
+  const hasPlacementOrder = (row: ReceiptRow | undefined): boolean =>
+    characterKeys(row) === '["id","build","files","placement"]' && placementKeys(row) === '["canvas_clip","bounds","clipped_bounds"]';
+  const reverseKeys = (row: Record<string, unknown>): Record<string, unknown> =>
+    Object.fromEntries(Object.entries(row).reverse());
+  const rejectsCharacterReorder = clippedRow !== undefined && !hasPlacementOrder(reverseKeys(clippedRow));
+  const rejectsPlacementReorder = placement !== undefined && !hasPlacementOrder({ ...clippedRow, placement: reverseKeys(placement) });
+  const legacyRows = receiptRows(legacyReceiptOut);
+  const legacyOmitsPlacement = legacyRows.length > 0 && legacyRows.every(row => !Object.hasOwn(row, 'placement'));
+  say('SC150_COMPOSE_RUN_PLACEMENT_KEYS_KEEP_WIRE_ORDER',
+    hasPlacementOrder(clippedRow) && rejectsCharacterReorder && rejectsPlacementReorder && legacyOmitsPlacement,
+    `character ${characterKeys(clippedRow)}; placement ${placementKeys(clippedRow)}; ` +
+      `default ${legacyRows.length} row(s) omit placement ${legacyOmitsPlacement}; reordered character/placement refused ${rejectsCharacterReorder}/${rejectsPlacementReorder}`,
+    'issue #1491: read the written compose receipts and reject either key order changing independently');
+
+  const frameDir = join(exactOut, 'check', 'idle_frames');
+  const idle = existsSync(join(frameDir, 'frames.json')) ? readFrameSet(frameDir) : null;
+  const vp = idle?.viewport;
+  // A 16:9 canvas at the existing 640 px preview limit measures 640 by 360.
+  const stageBox = vp?.x === -872 && vp.y === 0 && vp.width === 1744 && vp.height === 981;
+  const raster = vp?.pixelWidth === 640 && vp.pixelHeight === 360 && idle?.frames.every(f => f.image.width === 640 && f.image.height === 360) === true;
+  say('SC148_CANVAS_CLIP_IDLE_PREVIEWS_USE_THE_STAGE_VIEWPORT',
+    stageBox && raster && idle?.fps === 12 && idle.sampled === 13 && idle.written === 13,
+    `viewport ${JSON.stringify(vp)}; frames ${idle?.written ?? 0} at ${idle?.fps ?? 'unknown'} fps; PNG sizes match ${raster}`,
+    'issue #1491: the stage clips the retained preview raster at the existing size and frame rate while the compiled rig retains the full art');
+
+  const refuse = (source: string, out: string, code: string, name: string, matches: (line: string) => boolean): void => {
+    const run = compose(source, out);
+    const line = composeFail(run.out, code);
+    const failures = run.out.split('\n').filter(l => l.startsWith('[compose]   FAIL  '));
+    const emitted = entries(out);
+    say(name, run.status === 1 && failures.length === 1 && line !== null && matches(line) && emitted.length === 0,
+      `exit ${run.status}; ${failures.length} refusal(s); ${emitted.length} output entries; ${(line ?? lastLines(run.out, 3).join(' | ')).slice(0, 420)}`,
+      'issue #1491: a refused placement names the offending declaration before gate or output');
+  };
+  const legacyLine = '[compose]   FAIL  SCENE_CHARACTER_INSIDE_CANVAS: scene.characters[0] "figure" — ' +
+    "its parts' boxes (rig px [0, 0, 1920, 1080]) at offset [-88, -99] cover canvas px [-88, -99, 1832, 981], " +
+    'which leaves the 1744x981 canvas; 0 <= x0, 0 <= y0, x1 <= 1744 and y1 <= 981 are required (see rig-parts guide SCENE_CHARACTER_INSIDE_CANVAS)';
+  refuse(exact.legacy, join(exactDir, 'legacy-red'), 'SCENE_CHARACTER_INSIDE_CANVAS', 'SC143_EXACT_OVERFLOW_WITHOUT_OPT_IN_KEEPS_ITS_LEGACY_REFUSAL',
+    line => line === legacyLine);
+
+  const body = readJsonFile(small.source)!;
+  const character = (body.characters as Array<Record<string, unknown>>)[0];
+  const plant = (tag: string, code: string, name: string, edit: Record<string, unknown>, sceneEdit: Record<string, unknown> = {}, field = 'scene.characters[0]'): void => {
+    const source = join(smallDir, `${tag}.json`);
+    writeFileSync(source, sceneText({ ...body, ...sceneEdit, characters: [{ ...character, ...edit }] }));
+    refuse(source, join(smallDir, tag), code, name, line => line.includes(field));
+  };
+  const brokenBuild = join(smallDir, 'nonfinite-build');
+  cpSync(join(smallDir, 'figure'), brokenBuild, { recursive: true });
+  const parts = rigParts();
+  // Both numbers are finite in JSON. Their sum in the manifest union overflows.
+  Object.assign(parts.parts[0], { x: 1e308, w: 1e308 });
+  writeFileSync(join(brokenBuild, 'parts.json'), serializeParts(parts));
+  plant('nonfinite', 'SCENE_CHARACTER_CLIP_BOUNDS', 'SC144_CANVAS_CLIP_REFUSES_NONFINITE_BOUNDS', { build: 'nonfinite-build' });
+  plant('contained', 'SCENE_CHARACTER_CLIP_UNUSED', 'SC145_CANVAS_CLIP_REFUSES_FULL_CONTAINMENT_AT_THE_EDGE',
+    { offset: [-10, -10] }, { canvas: { width: 16, height: 18 } });
+  plant('edge-only', 'SCENE_CHARACTER_CLIP_EMPTY', 'SC146_CANVAS_CLIP_REFUSES_EDGE_ONLY_INTERSECTION', { offset: [-26, -12] });
+  plant('false', 'SCENE_FIELD_TYPE', 'SC147_CANVAS_CLIP_REQUIRES_LITERAL_TRUE', { canvas_clip: false }, {}, 'scene.characters[0].canvas_clip');
+
+  const bottomSource = join(exactDir, 'canvas-clip-bottom.json');
+  const exactBody = readJsonFile(exact.source)!;
+  const [exactCharacter, ...otherCharacters] = exactBody.characters as Array<Record<string, unknown>>;
+  writeFileSync(bottomSource, sceneText({ ...exactBody, characters: [{ ...exactCharacter, offset: [-88, 0] }, ...otherCharacters] }));
+  green(exactDir, bottomSource, 'SC149_EXACT_CANVAS_CLIP_COMPOSES_WITH_BOTTOM_OVERFLOW',
+    [-88, 0, 1832, 1080], [0, 0, 1744, 981], true, 'green-bottom');
+}
+
 function runSceneSuite(): number {
   section('scene: finished builds composed into one rig, a plate and a declared order (issue #74)');
   const { say, bad } = counter();
@@ -48611,6 +48738,7 @@ function runSceneSuite(): number {
 
 
     // Scene animation controls (#1346): names allocated after the live SC01..SC75 scan.
+    const legacyOut = join(dir, 'clips-legacy-parity');
     {
       const why = 'issue #1346: declared final names, additive idle, Core refusals and posed endpoint closure before emission';
       writeSceneClipBuild(join(dir, 'clip-character'));
@@ -48736,7 +48864,7 @@ function runSceneSuite(): number {
       say('SC86_MISSING_DURATION_KEYS_VALUES_AND_TIMES_ARE_CORE_NAMED_REFUSALS',
         invalid.every((r, i) => r.err !== null && r.err.problems.some(p => p.code === 'CE_MOTION_FIELD_SHAPE' && p.detail.includes(invalidFields[i]))) && missingValue.status === 1 && missingValue.empty && missingValue.out.includes('CE_COMPILE_TIMELINE_VALUE_CHANNEL_COUNT') && separate !== null,
         invalid.map(diagnosis).join('; ') + `; missing value ${cliDiagnosis(missingValue)}; positive separate ${separate !== null}`, why);
-      const legacyPath = scene(body()); const legacyOut = join(dir, 'clips-legacy-parity');
+      const legacyPath = scene(body());
       const first = runCli(['compose', '--scene', legacyPath, '--out', legacyOut]);
 
       const files = sceneOutputFiles(legacyOut).filter(p => p !== COMPOSE_RUN_FILE);
@@ -49227,6 +49355,7 @@ function runSceneSuite(): number {
       `parts at [84, 42, 100, 60] and [0, 20, 16, 38]: ${edge.err === null ? 'composes' : codes(edge.err)}; one px further each way -> ${codes(off.err)}`,
       "issue #74 §2: the bounds are the union of the character's part boxes, placed — computed by hand from fixtures/rig.ts — and x1, y1 exclusive, so a box ending on the canvas edge is inside",
     );
+    runCanvasClipSceneControls(dir, legacyOut, say);
 
     // ---- the order -----------------------------------------------------------
     const unresolved = compose(two({ order: ['plain', 'reach', 'ghost', 'plain:nose', 'ghost:cloth'] }));
@@ -49570,12 +49699,16 @@ function runSceneSuite(): number {
     const written = ['rig/rig.json', 'rig/motion.json', `rig/images/${PLATE_IMAGE}`, 'rig/images/plain.cloth.png', SCENE_REPORT_FILE, 'check/check.json', 'check/build/skeleton.json'].filter((f) => !existsSync(join(out, f)));
     const compiled = compiledSlots(join(out, 'check', 'build'));
     const report = readJsonFile(join(out, SCENE_REPORT_FILE));
+    const legacyRows = report?.characters as Array<Record<string, unknown>> | undefined;
+    const legacyCharacterLogs = run.out.split('\n').filter(line => /^\[compose\]   (plain|reach):/.test(line));
+    const legacyClipAbsent = legacyRows?.length === 2 && legacyRows.every(row => !('canvas_clip' in row || 'clipped_bounds' in row)) &&
+      legacyCharacterLogs.length === 2 && legacyCharacterLogs.every(line => !line.includes('clipped'));
     const writtenRig = existsSync(join(out, 'rig', 'rig.json')) ? (readJsonAt(join(out, 'rig', 'rig.json')) as RigSpec) : null;
     const writtenLeft = writtenRig === null ? ['no rig.json'] : unprefixedNames(writtenRig, readJsonAt(join(out, 'rig', 'motion.json')) as MotionSpec, ['plain', 'reach'], true);
     say(
       'SC20_THE_COMPOSED_SCENE_GATES_GREEN_THROUGH_RIGC_AND_ITS_CHECK_REPORTS_EVERY_BAR',
-      run.status === 0 && written.length === 0 && compiled.join(',') === 'plate,plain:cloth,reach:cloth,plain:eye,reach:eye' && (report?.order as { slots?: string[] } | undefined)?.slots?.join(',') === compiled.join(',') && (report?.plate as { provenance?: string } | undefined)?.provenance === 'generated' && writtenLeft.length === 0 && run.out.includes('[compose]   rigc build --profile rig-play --pack'),
-      `exit ${run.status}; missing ${written.length === 0 ? 'none' : written.join(', ')}; the compiled skeleton draws ${compiled.join(', ')}; written rig.json unprefixed: ${writtenLeft.length === 0 ? 'none' : writtenLeft.join('; ')}; ${sceneBarLines(run.out, join(out, 'check'))}`,
+      run.status === 0 && written.length === 0 && compiled.join(',') === 'plate,plain:cloth,reach:cloth,plain:eye,reach:eye' && (report?.order as { slots?: string[] } | undefined)?.slots?.join(',') === compiled.join(',') && (report?.plate as { provenance?: string } | undefined)?.provenance === 'generated' && writtenLeft.length === 0 && run.out.includes('[compose]   rigc build --profile rig-play --pack') && legacyClipAbsent,
+      `exit ${run.status}; missing ${written.length === 0 ? 'none' : written.join(', ')}; the compiled skeleton draws ${compiled.join(', ')}; written rig.json unprefixed: ${writtenLeft.length === 0 ? 'none' : writtenLeft.join('; ')}; legacy clip metadata absent ${legacyClipAbsent}; ${sceneBarLines(run.out, join(out, 'check'))}`,
       'issue #74 §3: the same path build uses — rigc\'s gate on the compile and on the packed pages, emit only after green — then check over a rig it did not build (#77); the order is read off the compiled skeleton, where rigc put it, not off what compose meant',
     );
     writeSceneBuild(join(dir, 'ungated'), 'reach', { rig: (r) => ((r.slots as Array<Record<string, unknown>>)[0].attachment = 'ghost') });

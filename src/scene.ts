@@ -164,6 +164,8 @@ export interface SceneCharacter {
   offset: [number, number];
   /** {@link SceneCharacter.scale}: the character's size on the canvas, 1 (as built) when the file leaves it out (issue #197). */
   scale: number;
+  /** Allow placed part bounds to cross the canvas edge (issue #1491). */
+  canvas_clip?: true;
   /** The bars this character's own check may have failed and still be taken (issue #203), as the file lists them; empty when it lists none. */
   accept: string[];
 }
@@ -364,7 +366,7 @@ export function loadScene(path: string): SceneFile {
         fail('SCENE_FIELD_TYPE', where, `is ${show(c)}; {"id", "build", "offset"} is required`);
         return;
       }
-      known(c, where, ['id', 'build', 'offset', 'scale', 'accept']);
+      known(c, where, ['id', 'build', 'offset', 'scale', 'accept', 'canvas_clip']);
       let ok = true;
       for (const k of ['id', 'build', 'offset']) {
         if (!(k in c)) {
@@ -402,6 +404,10 @@ export function loadScene(path: string): SceneFile {
         fail('SCENE_FIELD_TYPE', `${where}.scale`, `is ${show(sc)}; a positive finite number is required — the character's size on the canvas about its stage's top-left corner, 1 drawing it as built (the default when the key is absent)`);
         ok = false;
       }
+      if ('canvas_clip' in c && c.canvas_clip !== true) {
+        fail('SCENE_FIELD_TYPE', `${where}.canvas_clip`, `is ${show(c.canvas_clip)}; literal true is required when the key is present — omit it to require containment on the canvas`);
+        ok = false;
+      }
       const acc = c.accept;
       if ('accept' in c) {
         if (!(Array.isArray(acc) && acc.every((v) => typeof v === 'string'))) {
@@ -413,7 +419,15 @@ export function loadScene(path: string): SceneFile {
           if (named.length > 0) ok = false;
         }
       }
-      if (ok) characters.push({ id: id as string, build: c.build as string, buildDir: resolve(base, c.build as string), offset: [(off as number[])[0], (off as number[])[1]], scale: 'scale' in c ? (sc as number) : 1, accept: 'accept' in c ? [...(acc as string[])] : [] });
+      if (ok) characters.push({
+        id: id as string,
+        build: c.build as string,
+        buildDir: resolve(base, c.build as string),
+        offset: [(off as number[])[0], (off as number[])[1]],
+        scale: 'scale' in c ? (sc as number) : 1,
+        accept: 'accept' in c ? [...(acc as string[])] : [],
+        ...(c.canvas_clip === true ? { canvas_clip: true } : {}),
+      });
     });
   }
 
@@ -1063,6 +1077,9 @@ export interface SceneCharacterReport {
   rig_scale: number;
   /** The union of the character's part boxes, placed: canvas px, [x0, y0, x1, y1], x1 and y1 exclusive. */
   bounds: [number, number, number, number];
+  canvas_clip?: true;
+  /** Intersection of the placed bounds and the canvas, in the same coordinates as bounds. */
+  clipped_bounds?: [number, number, number, number];
   /** {@link rootShift}: what was added to the x and y of everything the character places in root's frame (after its scale), in Spine units (canvas px, y up). */
   shift: [number, number];
   /** What the shift was added to: the first-level bones, the slots on `root` whose regions moved, and the count of mesh weights bound to `root`. */
@@ -1194,11 +1211,31 @@ export function composeScene(
     const [x0, y0, x1, y1] = b.artBox;
     const s = c.scale;
     const bounds: [number, number, number, number] = [scaledBy(x0, s) + c.offset[0], scaledBy(y0, s) + c.offset[1], scaledBy(x1, s) + c.offset[0], scaledBy(y1, s) + c.offset[1]];
-    if (bounds[0] < 0 || bounds[1] < 0 || bounds[2] > canvas.width || bounds[3] > canvas.height) {
+    const overflow = bounds[0] < 0 || bounds[1] < 0 || bounds[2] > canvas.width || bounds[3] > canvas.height;
+    const where = `scene.characters[${i}] "${c.id}"`;
+    const placement = `its parts' boxes (rig px [${x0}, ${y0}, ${x1}, ${y1}]) at offset [${c.offset.join(', ')}]${s === 1 ? '' : ` and scale ${s}`} cover canvas px [${bounds.join(', ')}]`;
+    let clippedBounds: SceneCharacterReport['clipped_bounds'];
+    if (c.canvas_clip === true) {
+      if (!bounds.every(Number.isFinite)) {
+        fail('SCENE_CHARACTER_CLIP_BOUNDS', where, `${placement}; canvas_clip requires four finite bounds`);
+      } else if (!overflow) {
+        fail('SCENE_CHARACTER_CLIP_UNUSED', where, `${placement}, entirely within the ${canvas.width}x${canvas.height} canvas; canvas_clip requires overflow past at least one edge`);
+      } else {
+        const left = Math.max(0, bounds[0]);
+        const top = Math.max(0, bounds[1]);
+        const right = Math.min(canvas.width, bounds[2]);
+        const bottom = Math.min(canvas.height, bounds[3]);
+        if (left >= right || top >= bottom) {
+          fail('SCENE_CHARACTER_CLIP_EMPTY', where, `${placement}; canvas_clip requires positive intersection width and height on the ${canvas.width}x${canvas.height} canvas`);
+        } else {
+          clippedBounds = [left, top, right, bottom];
+        }
+      }
+    } else if (overflow) {
       fail(
         'SCENE_CHARACTER_INSIDE_CANVAS',
-        `scene.characters[${i}] "${c.id}"`,
-        `its parts' boxes (rig px [${x0}, ${y0}, ${x1}, ${y1}]) at offset [${c.offset.join(', ')}]${s === 1 ? '' : ` and scale ${s}`} cover canvas px [${bounds.join(', ')}], which leaves the ${canvas.width}x${canvas.height} canvas; 0 <= x0, 0 <= y0, x1 <= ${canvas.width} and y1 <= ${canvas.height} are required`,
+        where,
+        `${placement}, which leaves the ${canvas.width}x${canvas.height} canvas; 0 <= x0, 0 <= y0, x1 <= ${canvas.width} and y1 <= ${canvas.height} are required`,
       );
     }
     problems.push(...scaleProblems(c, b));
@@ -1211,6 +1248,7 @@ export function composeScene(
       rig_size: [...b.rigSize],
       rig_scale: b.rigScale,
       bounds,
+      ...(clippedBounds === undefined ? {} : { canvas_clip: true, clipped_bounds: clippedBounds }),
       shift,
       shifted: {
         bones: b.rig.bones.filter((x) => x.parent === ROOT_BONE).map((x) => prefixed(c.id, x.name)),
@@ -1838,7 +1876,12 @@ export function composeFromFiles(scenePath: string, requirementsPath?: string, m
   const runRecord: ComposeRun = {
     spec: COMPOSE_RUN_SPEC,
     scene: { path: scenePath, sha256: scene.sha256 },
-    characters: scene.characters.map(c => ({ id: c.id, build: c.build, files: builds.find(b => b?.id === c.id)!.files }))
+    characters: composed.report.characters.map(c => ({
+      id: c.id,
+      build: c.build,
+      files: builds.find(b => b?.id === c.id)!.files,
+      ...(c.clipped_bounds === undefined ? {} : { placement: { canvas_clip: true as const, bounds: c.bounds, clipped_bounds: c.clipped_bounds } }),
+    }))
       .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
     plate: scene.plate === null || plate === null ? null : { path: scene.plate.image, sha256: createHash('sha256').update(plate.bytes).digest('hex') },
     plates: (scene.plates ?? []).map((p, i) => ({ name: p.name, path: p.image, sha256: createHash('sha256').update(plateLayers[i]!.bytes).digest('hex') }))
@@ -1920,7 +1963,8 @@ export function composeStage(input: ComposeInput, run: ComposeRunners, log: Log)
           : ', no plate';
   say(`${r.characters.length} character(s) on a ${r.canvas.width}x${r.canvas.height} canvas, rig "${r.rig_name}"${plateClause}`);
   for (const c of r.characters) {
-    say(`  ${c.id}: ${c.build} at offset [${c.offset.join(', ')}], scale ${c.scale ?? 1}, bounds [${c.bounds.join(', ')}], shift [${c.shift.join(', ')}] on ${c.shifted.bones.length} first-level bone(s), ${c.shifted.root_regions.length} region(s) on root and ${c.shifted.root_weights} weight(s) bound to root; ${c.bones} bone(s), ${c.slots} slot(s), ${c.tracks} track(s), ${c.constraints} constraint(s), rig_scale ${c.rig_scale}, idle ${c.idle_duration} s${c.accepted === undefined ? '' : `; its own check FAILED ${c.accepted.join(', ')}, accepted — the scene is for looking, not shipping`}`);
+    const clipped = c.clipped_bounds === undefined ? '' : `; clipped bounds [${c.clipped_bounds.join(', ')}]`;
+    say(`  ${c.id}: ${c.build} at offset [${c.offset.join(', ')}], scale ${c.scale ?? 1}, bounds [${c.bounds.join(', ')}], shift [${c.shift.join(', ')}] on ${c.shifted.bones.length} first-level bone(s), ${c.shifted.root_regions.length} region(s) on root and ${c.shifted.root_weights} weight(s) bound to root; ${c.bones} bone(s), ${c.slots} slot(s), ${c.tracks} track(s), ${c.constraints} constraint(s), rig_scale ${c.rig_scale}, idle ${c.idle_duration} s${c.accepted === undefined ? '' : `; its own check FAILED ${c.accepted.join(', ')}, accepted — the scene is for looking, not shipping`}${clipped}`);
   }
   say(`  order (declared, judged by nothing): ${r.order.declared.join(', ')} -> ${r.order.slots.length} slot(s), back to front`);
   const texts: Array<[string, string]> = [
@@ -1960,9 +2004,17 @@ export function composeStage(input: ComposeInput, run: ComposeRunners, log: Log)
   for (const [file, text] of texts) writeFileSync(join(rigDir, file), text);
   writeFileSync(join(input.out, SCENE_REPORT_FILE), rigJsonText(r));
   say(`wrote ${join(rigDir, 'rig.json')}, motion.json and ${composed.images.length} image(s) under ${join(rigDir, 'images')}, and ${join(input.out, SCENE_REPORT_FILE)}`);
+  let checkRigc = run.check;
+  if (r.characters.some(c => c.canvas_clip === true)) {
+    const stage = composed.rig.skeleton;
+    const viewport = [stage.x, stage.y, stage.width, stage.height].join(',');
+    checkRigc = args => run.check(args[0] === 'render' && !args.includes('--viewport') && !args.includes('--viewport-from')
+      ? [...args, '--viewport', viewport]
+      : args);
+  }
   let report: CheckReport;
   try {
-    report = checkStage({ rig: rigDir, out: join(input.out, 'check'), pageEdges: mode.pageEdges, packShape: mode.packShape, ...(pageSize === undefined ? {} : { pageSize }), ...(input.requirements === undefined ? {} : { requirements: input.requirements }) }, run.check, run.checkBin, prefix('check'));
+    report = checkStage({ rig: rigDir, out: join(input.out, 'check'), pageEdges: mode.pageEdges, packShape: mode.packShape, ...(pageSize === undefined ? {} : { pageSize }), ...(input.requirements === undefined ? {} : { requirements: input.requirements }) }, checkRigc, run.checkBin, prefix('check'));
   } catch (err) {
     return refused('check', err, composed);
   }

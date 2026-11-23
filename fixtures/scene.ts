@@ -136,6 +136,62 @@ export function sceneText(body: Record<string, unknown>): string {
   return `${JSON.stringify({ spec: 'spine-parts-scene/1', ...body }, null, 1)}\n`;
 }
 
+/** A clipped scene and its undeclared twin, with synthetic inputs and the same placement. */
+export function writeCanvasClipSceneFixture(dir: string, size: 'small' | 'exact'): { source: string; legacy: string } {
+  const id = 'figure';
+  const build = join(dir, id);
+  const offset = size === 'small' ? [-12, -12] : [-88, -99];
+  const body = {
+    canvas: size === 'small' ? { width: 12, height: 14 } : { width: 1744, height: 981 },
+    characters: [{ id, build: id, offset, scale: 1 }],
+    order: [id],
+  };
+  let layers: Record<string, unknown> = {};
+  if (size === 'small') {
+    // The cloth mesh spans the tiny stage and trips rigc's full-frame mesh gate.
+    // Use the same native part boxes and images as regions for a placement control.
+    const config = rigConfig();
+    config.meshes = {};
+    config.regions = { cloth: 'body', eye: 'eye' };
+    const parts = rigParts();
+    writeSceneOutput(build, buildRig(parseConfig(config), parts, rigImages(), undefined, 'ctl'), parts, {});
+  } else {
+    const width = 1920;
+    const height = 1080;
+    // A one-second idle gives the checker fewer frames while keeping both travel extremes on its sample grid.
+    const duration = 1;
+    const parts = rigParts();
+    parts.rig_size = [width, height];
+    Object.assign(parts.parts.find(p => p.name === 'eye')!, { x: 0, y: 0, w: width, h: height, opaque_px: width * height });
+    const image = newRaster(width, height);
+    for (let y = 0; y < height; y++) {
+      const green = y < height / 2 ? 96 : 130;
+      const left = [184, green, 62, 255], right = [220, green, 62, 255];
+      for (let x = 0; x < width; x++) image.data.set(x < width / 2 ? left : right, (y * width + x) * 4);
+    }
+    const images = rigImages();
+    images.set('eye', image);
+    const config = rigConfig();
+    config.motion = { duration, tracks: [] };
+    writeSceneOutput(build, buildRig(parseConfig(config), parts, images), parts, {});
+    writeFlatPlate(join(dir, 'backdrop.png'), width, height, [72, 112, 164]);
+    const travel = (bone: string, amplitude: number) => ({
+      bone, property: 'translate',
+      keys: [0, -amplitude, 0, amplitude, 0].map((x, i) => ({ t: i * duration / 4, v: [x, 0] })),
+    });
+    body.order.unshift('backdrop');
+    layers = {
+      plates: [{ name: 'backdrop', image: 'backdrop.png', provenance: 'generated', at: offset, opaque_backdrop: true }],
+      animations: { idle: { duration, loop: true, tracks: [travel('backdrop', 24), travel('figure:body', 48)] } },
+    };
+  }
+  const source = join(dir, 'canvas-clip.json');
+  const legacy = join(dir, 'canvas-clip-undeclared.json');
+  writeFileSync(source, sceneText({ ...body, ...layers, characters: [{ ...body.characters[0], canvas_clip: true }] }));
+  writeFileSync(legacy, sceneText({ ...body, ...layers }));
+  return { source, legacy };
+}
+
 /** A real turn producer with a declared custom body dial and retained physics/deform idle payload. */
 export function writeSceneClipBuild(dir: string, bodySlider?: string): string {
   const f = sceneTurnFixture();
