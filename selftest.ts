@@ -48704,6 +48704,73 @@ export function runPlacementPivotSceneControls(dir: string, say: FixtureCaseRepo
     `imported direct/group ${rootKeys.map(codes).join(' / ')}; authored shared root retained`, why);
 }
 
+/** Exercise scene-authored root motion independently of the placement-pivot controls. */
+export function runSceneSharedRootControl(dir: string, say: FixtureCaseReporter): void {
+  const figures = ['left', 'right'];
+  const plate = 'marker';
+  const duration = 1;
+  for (const id of figures) writeSceneBuild(join(dir, id), 'plain', { motion: raw => {
+    const motion = raw as unknown as MotionSpec;
+    motion.animations.idle = { duration, loop: true, note: 'Static figure', tracks: [
+      { bone: 'eye', property: 'rotate', keys: [{ t: 0, v: [0] }, { t: duration, v: [0] }] },
+    ] };
+  } });
+  const marker = newRaster(8, 8);
+  for (let i = 4; i < marker.data.length; i += 4) marker.data.set([72, 112, 164, 255], i);
+  writeFileSync(join(dir, 'marker.png'), encodePngBytes(marker));
+  const body = {
+    canvas: { width: 80, height: 64 },
+    characters: figures.map((id, i) => ({ id, build: id, offset: [i * 36, 8] })),
+    plates: [{ name: plate, image: 'marker.png', provenance: 'generated', at: [34, 40] }],
+    order: [...figures, plate],
+  };
+  const shift = [4, 3]; // Spine world pixels, y up.
+  const zero = [0, 0];
+  const keys = [{ t: 0, v: zero }, { t: 0.5, v: shift }, { t: duration, v: zero }];
+  const compose = (bone: string) => {
+    const source = join(dir, `${bone}.json`);
+    const out = join(dir, `compose-${bone}`);
+    writeFileSync(source, sceneText({ ...body, animations: { idle: { duration, loop: true, tracks: [{ bone, property: 'translate', keys }] } } }));
+    const run = runCli(['compose', '--scene', source, '--out', out]);
+    if (run.status !== 0) return { status: run.status, frames: [], poser: null, error: lastLines(run.out, 4).join(' | ') };
+    const build = join(out, 'check', 'build');
+    const skeleton = join(build, 'skeleton.json'), atlas = join(build, 'skeleton.atlas');
+    const candidate = loadRootCandidate({ skeletonText: readFileSync(skeleton, 'utf8'), atlasText: readFileSync(atlas, 'utf8'), atlasDir: build,
+      label: 'scene shared-root control' }, { skeleton, atlas }, 'core');
+    const posed = throughRootPoser(candidate.choice, poser => sampleRootAnimation(poser, 'idle', 2, { geometry: true }));
+    return { status: run.status, frames: posed.value, poser: posed.poser };
+  };
+
+  const slots = [...figures.flatMap(id => [`${id}:cloth`, `${id}:eye`]), plate];
+  // Four float32 steps at 32 px cover packed coordinate rounding during world evaluation.
+  const tolerance = 2 ** -16;
+  const measure = ({ frames }: ReturnType<typeof compose>) => slots.map(slot => {
+    const [start, middle, end] = frames.map(frame => frame.attachments?.find(a => a.slot === slot));
+    if (frames.length !== 3 || frames[0].time !== 0 || frames[1].time !== 0.5 || frames[2].time !== 1 ||
+      start === undefined || middle === undefined || end === undefined || start.vertices.length < 8 ||
+      middle.vertices.length !== start.vertices.length || end.vertices.length !== start.vertices.length ||
+      middle.attachment !== start.attachment || end.attachment !== start.attachment) return null;
+    const delta = middle.vertices.map((v, i) => v - start.vertices[i]);
+    const closed = end.vertices.every((v, i) => v === start.vertices[i]);
+    const follows = (offset: number[]) => closed && delta.every((v, i) => Math.abs(v - offset[i % 2]) <= tolerance);
+    return { follows, evidence: { slot, vertices: delta.length / 2, midpoint: delta.slice(0, 2), closed, moved: follows(shift), stayed: follows(zero) } };
+  });
+  const root = compose('root'), planted = compose(plate);
+  const rootShapes = measure(root), plantedShapes = measure(planted);
+  const allFollowRoot = (shapes: ReturnType<typeof measure>) => shapes.every(shape => shape?.follows(shift) === true);
+  const plantedIsolated = plantedShapes.slice(0, -1).every(shape => shape?.follows(zero) === true && !shape.follows(shift)) &&
+    plantedShapes.at(-1)?.follows(shift) === true;
+  const evidence = (run: ReturnType<typeof compose>, shapes: ReturnType<typeof measure>) => ({
+    exit: run.status, poser: run.poser, times: run.frames.map(frame => frame.time),
+    shapes: shapes.map((shape, i) => shape?.evidence ?? { slot: slots[i], geometry: 'unavailable' }), error: run.error,
+  });
+  say('SPV30_SCENE_IDLE_ROOT_TRANSLATES_BOTH_FIGURES_AND_NAMED_PLATE',
+    root.status === 0 && planted.status === 0 && root.poser === 'core' && planted.poser === 'core' &&
+      allFollowRoot(rootShapes) && !allFollowRoot(plantedShapes) && plantedIsolated,
+    JSON.stringify({ root: evidence(root, rootShapes), plateTarget: evidence(planted, plantedShapes) }),
+    'issue #1503: all packed vertices follow the shared root by [+4,+3] at 0.5 s and close at 1 s; retargeting the same keys to the plate leaves both figures stationary');
+}
+
 function runSceneSuite(): number {
   section('scene: finished builds composed into one rig, a plate and a declared order (issue #74)');
   const { say, bad } = counter();
@@ -49572,6 +49639,7 @@ function runSceneSuite(): number {
     );
     runCanvasClipSceneControls(dir, legacyOut, say);
     runPlacementPivotSceneControls(join(dir, 'placement-pivot'), say);
+    runSceneSharedRootControl(join(dir, 'shared-root'), say);
 
     // ---- the order -----------------------------------------------------------
     const unresolved = compose(two({ order: ['plain', 'reach', 'ghost', 'plain:nose', 'ghost:cloth'] }));
