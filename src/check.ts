@@ -726,7 +726,7 @@ export function readCheckInputs(rigDir: string, partsHome?: string, sourcePath?:
         object: partsPath,
         detail: `no such file; ${PARTS_HOME_SENTENCE} (the seam check composites the parts parts.json lists)${hint}`,
       });
-    } else noParts = `no parts.json: ${partsPath} does not exist and no --parts was named, so there are no parts to composite and no See-through tags to choose regions by`;
+    } else noParts = 'no parts.json: parts.json does not exist and no --parts was named, so there are no parts to composite and no See-through tags to choose regions by';
   }
   else {
     try {
@@ -826,7 +826,7 @@ export function readCheckInputs(rigDir: string, partsHome?: string, sourcePath?:
     const anims = motion.animations;
     const idle = isRecord(anims) ? anims.idle : undefined;
     if (idle === undefined) {
-      noIdle = `no idle: ${motionPath} field "animations" holds ${isRecord(anims) ? `[${Object.keys(anims).join(', ')}]` : JSON.stringify(anims) ?? 'nothing'} and no "idle", so there is no loop to close and no idle frame to read`;
+      noIdle = `no idle: motion.json field "animations" holds ${isRecord(anims) ? `[${Object.keys(anims).join(', ')}]` : JSON.stringify(anims) ?? 'nothing'} and no "idle", so there is no loop to close and no idle frame to read`;
     } else if (!isRecord(idle)) {
       problems.push({ code: 'CHECK_IDLE_PRESENT', object: `${motionPath} animation "idle"`, detail: `is ${JSON.stringify(idle)}; an animation object is required — the loop is measured on it` });
     } else if (!(typeof idle.duration === 'number' && idle.duration > 0)) {
@@ -7228,7 +7228,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     const geometry = readGeometry(geometryPath, idle.written);
     idleGeometry = geometry;
     const beforeStretch = problems.length;
-    stretch = stretchLine(geometry, geometryPath, problems, { ...inp, config }, checkSlotParts(inp.rig, inp.parts?.parts.map(p => p.name) ?? [], inp.parts?.alternates?.map(set => set.name) ?? []), readingSkip('TEXTURE_STRETCH'));
+    stretch = stretchLine(geometry, GEOMETRY_FILE, problems, { ...inp, config }, checkSlotParts(inp.rig, inp.parts?.parts.map(p => p.name) ?? [], inp.parts?.alternates?.map(set => set.name) ?? []), readingSkip('TEXTURE_STRETCH'));
     stretchFailedWithoutReading = stretch.status === 'SKIP' && problems.length > beforeStretch;
     if (full !== null) still = stillLine(full, idle, geometry, geometryPath, problems, notPlanted, readingSkip('STILL_REGIONS_DARK'));
   }
@@ -7458,7 +7458,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     const rows: ClothRow[] = [];
     let unread: string | undefined;
     for (const c of clothChains(inp.rig, stripped.physics)) {
-      const track = boneTrackOf(idleGeometry, geometryPath, idle, c.tip);
+      const track = boneTrackOf(idleGeometry, idleGeometry === null ? GEOMETRY_FILE : geometryPath, idle, c.tip);
       if (typeof track === 'string') {
         unread = track;
         break;
@@ -9300,7 +9300,7 @@ export function stillLine(inp: FullInputs, idle: FrameSet, geo: IdleGeometry | n
   const { all: allFeet, held: feet, declared } = plantedFeet(inp.parts, notPlanted);
   const eligible = face.length > 0 || feet.length > 0;
   if (face.length === 0 && allFeet.length === 0) return skipped(`no part comes from a See-through ${tagWords([...FACE_TAGS, ...FEET_TAGS])} layer, so there is no still region to read`, 'no-eligible-region');
-  if (geo === null) return skipped(`${geometryPath} does not exist; \`rigc render --geometry\` (rig-c ${RIGC_GEOMETRY_VERSION} or later) writes it, and the still regions are read off it`, eligible ? 'no-reading' : 'no-eligible-region');
+  if (geo === null) return skipped(`${GEOMETRY_FILE} does not exist; \`rigc render --geometry\` (rig-c ${RIGC_GEOMETRY_VERSION} or later) writes it, and the still regions are read off it`, eligible ? 'no-reading' : 'no-eligible-region');
   const H = inp.parts.rig_size[1];
   const W = inp.parts.rig_size[0];
   const poses = attachmentPoses(geometryPath, idle.written);
