@@ -7001,7 +7001,7 @@ and stay absent).
 
 | rule | means | change |
 | --- | --- | --- |
-| <a id="SCENE_FILE"></a><a id="SCENE_SPEC"></a><a id="SCENE_FIELD_PRESENT"></a><a id="SCENE_FIELD_TYPE"></a><a id="SCENE_KEY_KNOWN"></a>`SCENE_FILE`, `SCENE_SPEC`, `SCENE_FIELD_PRESENT`, `SCENE_FIELD_TYPE`, `SCENE_KEY_KNOWN` | the scene file is missing, not a JSON object, not `spine-parts-scene/1`, or a field is missing, of the wrong type or not one the format reads (`canvas` two positive integers; `characters` at least one, each `id`, `build`, `offset` — an offset is never assumed (0, 0) — and an optional `scale`, a positive finite number: 0, a negative number or a non-number is refused at `characters[i].scale`; `order` a list of strings). `note`, `*_note` (strings) and `x-…` (any value) are read by nothing | the field |
+| <a id="SCENE_FILE"></a><a id="SCENE_SPEC"></a><a id="SCENE_FIELD_PRESENT"></a><a id="SCENE_FIELD_TYPE"></a><a id="SCENE_KEY_KNOWN"></a>`SCENE_FILE`, `SCENE_SPEC`, `SCENE_FIELD_PRESENT`, `SCENE_FIELD_TYPE`, `SCENE_KEY_KNOWN` | the scene file is missing, not a JSON object, not `spine-parts-scene/1`, or a field is missing, of the wrong type or not one the format reads (`canvas` two positive integers; `characters` at least one, each `id`, `build`, `offset` — an offset is never assumed (0, 0) — optional `scale` as a positive finite number, and optional `canvas_clip` as literal `true`; `order` a list of strings). `note`, `*_note` (strings) and `x-…` (any value) are read by nothing | the field |
 | <a id="SCENE_ID_UNIQUE"></a><a id="SCENE_ID_FORM"></a>`SCENE_ID_UNIQUE`, `SCENE_ID_FORM` | an `id` repeated, empty, or holding `:` — the separator of a prefixed name — or `/`, `\` or a leading `.`, because an id begins every image file of its character | another id |
 | <a id="SCENE_EDITOR_RECEIPT"></a>`SCENE_EDITOR_RECEIPT` | `scene.plate.editor_receipts` has a malformed ledger or receipt (issue #966) | use `{receipts: [{file, sha256, from_sha256, editor}], required?}` with the same shape rules as assemble editor receipts |
 | <a id="SCENE_EDITOR_RECEIPT_FILE"></a>`SCENE_EDITOR_RECEIPT_FILE` | a plate receipt names a missing file | supply the edited image relative to the scene file |
@@ -7026,7 +7026,10 @@ and stay absent).
 | <a id="SCENE_DIAL_KEY_DECLARED"></a>`SCENE_DIAL_KEY_DECLARED` | a scene key uses `derive` on a slider's input property, including one that also carries a raw `v`; derived slider inputs are not a supported scene dial dialect | declare an explicit numeric `v` for the named dial, within the named slider's own range; group member values are checked separately |
 | <a id="SCENE_ANIMATION_LOOP_CLOSES"></a>`SCENE_ANIMATION_LOOP_CLOSES` | the gated posed samples at 0 and the scene clip's declared duration differ, for a new clip or an idle extension | close the posed bone, slot, geometry, alpha, clip and draw-order state; comparison omits physics simulation only and never wraps the endpoint to zero |
 | <a id="SCENE_ANIMATION_POSE_READABLE"></a>`SCENE_ANIMATION_POSE_READABLE` | Core cannot read or pose the compiled scene clip for its endpoint comparison | correct the construct named by Core; unreadable poses never count as closed and no scene is emitted |
-| <a id="SCENE_CHARACTER_INSIDE_CANVAS"></a>`SCENE_CHARACTER_INSIDE_CANVAS` | a character's part boxes, placed at its offset, leave the canvas (the boxes and the canvas px quoted) | the offset, or the canvas |
+| <a id="SCENE_CHARACTER_INSIDE_CANVAS"></a>`SCENE_CHARACTER_INSIDE_CANVAS` | a character without `canvas_clip` has placed part bounds that leave the canvas | adjust its scale, offset or canvas, or declare `canvas_clip: true` for intentional overflow |
+| <a id="SCENE_CHARACTER_CLIP_BOUNDS"></a>`SCENE_CHARACTER_CLIP_BOUNDS` | a character with `canvas_clip: true` has nonfinite placed part bounds | check the build's part bounds and the scene's scale and offset |
+| <a id="SCENE_CHARACTER_CLIP_UNUSED"></a>`SCENE_CHARACTER_CLIP_UNUSED` | a character with `canvas_clip: true` has placed part bounds wholly inside or flush with the canvas | omit `canvas_clip` or place the character so its bounds cross a canvas edge |
+| <a id="SCENE_CHARACTER_CLIP_EMPTY"></a>`SCENE_CHARACTER_CLIP_EMPTY` | a character with `canvas_clip: true` has placed part bounds whose canvas intersection has zero width or height, or lies entirely outside | place the character so its bounds overlap the canvas with positive width and height |
 | <a id="SCENE_ORDER_RESOLVES"></a>`SCENE_ORDER_RESOLVES` | an order entry names no character, or `<id>:<slot>` names a slot that character does not have (its slots listed) | the entry |
 | <a id="SCENE_ORDER_ONCE"></a><a id="SCENE_ORDER_COMPLETE"></a>`SCENE_ORDER_ONCE`, `SCENE_ORDER_COMPLETE` | a slot is drawn twice (a slot entry repeated, or an id listed twice), or never (the character's id is absent and some of its slots are named nowhere — they are listed) | name each slot once, or the id for the slots not named elsewhere |
 | <a id="SCENE_NAME_PREFIXED"></a><a id="SCENE_NAME_RESOLVES"></a>`SCENE_NAME_PREFIXED`, `SCENE_NAME_RESOLVES` | a build's constraint, `stops` entry, `invariants.detached` or physics track names a bone or physics constraint its own character does not declare — one another character does (`…_PREFIXED`, naming the prefixed names it could have meant) or none does (`…_RESOLVES`); or a `--requirements` name (bone, target bone, constraint, slot, attachment, seam part) is a bare name some character holds, which the composed rig holds only prefixed | a bone or physics constraint of the same character; in a requirements file, `<id>:<name>` |
@@ -7808,6 +7811,7 @@ single-character path (§4, steps 0–9) on its own, already isolated input to a
 | `plates` | optional list of named layers (issue #1345); may coexist with legacy `plate`. Every layer requires `name`, `image`, `provenance` and `at: [x, y]`. `image` resolves against the scene file and keeps its native dimensions and PNG bytes, with no scale or canvas containment requirement. `at` is two finite integers locating the image **top-left in canvas pixels, y down, origin top-left**; negative/outside positions are allowed. Missing, fractional and nonfinite placement is `SCENE_PLATE_AT`. Optional `note` and `editor_receipts` have the legacy plate meanings; every ledger is verified independently. `opaque_backdrop: true` exempts only that declared layer from compose's alpha requirement; otherwise at least one decoded texel must have alpha below 255 (`SCENE_PLATE_ALPHA`), even for an oversized image. An opaque declared backdrop must also have width at least `canvas.width` **and** height at least `canvas.height`, the composed rig's stage dimensions, matching core 3.8.0 A19's rig-spec size inference. A smaller opaque backdrop is refused before output by `SCENE_PLATE_BACKDROP_SIZE`; a transparent layer has no size floor. **Size is the only check on `opaque_backdrop`:** whether `at: [x, y]` positions the backdrop to cover the stage is the scene author's job (a canvas-sized backdrop at `[400, 0]` passes size while leaving part of the stage uncovered). rigc's A19 remains enabled |
 | `plates[].name` | the layer's bone, slot and attachment name and exact `order` token. Names must be unique, nonempty and distinct from `root`, legacy `plate`, shared `idle`, every character id and every prefixed character bone/slot/animation (`SCENE_PLATE_NAME_UNIQUE`, `SCENE_PLATE_NAME_FREE`; a name refused by either does not also draw a cascaded `SCENE_ORDER_COMPLETE`). Emitted image files and packed atlas regions are named by 0-based declaration index (`scene-plate.<index>.png`, atlas region `scene-plate.<index>`, Spine attachment `path: "scene-plate.<index>"`), separately from character images (`SCENE_IMAGE_NAME_FREE` on any collision) — so **reordering `plates[]` renames the `scene-plate.<index>` atlas regions** even when `plates[].name` and `order` are unchanged |
 | `characters[].scale` | optional, a positive number; absent is 1, and 1 composes to the bytes a scene without the key writes. The character's size on the canvas, about its stage's top-left corner: a rig px `p` lands at canvas px `scale * p + offset` (issue #197). A character scaled up past its art is drawn soft — the art is not resampled; rebuild it at a higher `assemble.rig_scale` if that matters |
+| `characters[].canvas_clip` | optional literal `true` for intentional overflow (issue #1491). The placed part bounds must be finite, extend past at least one canvas edge and overlap the canvas with positive width and height. Omitting the key requires containment, with flush edges allowed. Every explicit value other than `true` is `SCENE_FIELD_TYPE` |
 | `characters[].accept` | optional, a list of bar names: the bars this character's own check may have failed and still be composed (issue #203). `compose --accept <bar>[,<bar>…]` is the same list for every character; the two are joined, so the command line applies to every character and a character's list adds to it. Each name is one of the bars `check`'s summary names, less the gate — `loop`, `seam`, `BREATH_VISIBLE`, `BLINK_NO_HOLE`, `CHAIN_LAG`, `TIP_OVER_ROOT`, `STILL_REGIONS_DARK`, `TEXTURE_STRETCH`, `ANIMATIONS_DO_NOT_FOLD` (issue #320), `STRESS_OFF_CHAIN` (issue #347), `SEAM_OVER_MOTION` (the body-root bar, issue #686); anything else is `SCENE_ACCEPT_KNOWN`. When `check/check.json` declares `spec: "rig-parts-check/1"`, `compose` reads its `bar_outcomes` for the bars whose outcome status is `FAIL` in the report's order (issue #1373); without that spec it keeps the legacy `barsNotMet` reading. A build is taken when every bar its `check.json` failed is named; its gate red, a declared requirement not PASS, or a bar not named is `SCENE_BUILD_GREEN` as before. **It is for looking, not for shipping:** the `[compose]` line says which failing bars were accepted, `scene.json` records them as the character's `accepted`, the composed rig's own check measures them again and reports them as it finds them, and the run exits 1 even when that check is PASS (a composed rig has no `parts.json`, so the seam and four judgement lines say SKIP there). A list that accepts nothing — every build green — composes to the bytes a scene without one writes |
 | `animations` | optional map by scene clip name, each value a rigc `MotionAnimation` (`duration`, `tracks`, optional `loop`, `note`, and core timeline collections). Names resolve against the final scene without another prefix or unit conversion: `plate`, declared named plate bones and `<id>:<bone>`, including generated dials. A new name adds; `idle` appends tracks/timelines to the composed idle, preserving its metadata and every existing character track, deform and physics constraint. Its duration must exactly equal the composed idle (`SCENE_DURATION_AGREES`); no retiming. An imported animation name cannot be replaced (`SCENE_ANIMATION_NAME_FREE`). Absent declaration preserves legacy bytes and output paths (issue #1346) |
 | `order` | the draw order, back to front: a character id (its slots not named elsewhere, in its own order) or one `<id>:<slot>`. Every slot of every character is drawn exactly once. Interleaving is written by naming slots: `["a", "b:arm_l", "b"]` draws `b`'s left arm between `a` and the rest of `b` |
@@ -8056,7 +8060,8 @@ What is composed:
   image, provenance, note, bone, slot, size, `sha256` of the PNG's bytes as compose read them — issue #1183, additive —
   and `judged_by: "nothing"`), `plates` when `scene.plates` is declared (each named plate's declaration, bone, slot, size, `sha256` and `judged_by: "nothing"`; the `[compose]` header line also names them in declaration order as `<N> named plate(s): <name>, ...`, and prints `no plate` only when neither `plate` nor `plates[]` is present), per character
   its build, offset, `scale` (only when it is not 1), `rig_size`, `rig_scale`, placed bounds (the union of its part
-  boxes, canvas px), shift and what it moved (`shifted`: the first-level bones, the
+  boxes, canvas px), `canvas_clip: true` and `clipped_bounds` for opted-in characters,
+  shift and what it moved (`shifted`: the first-level bones, the
   regions on `root`, the count of weights bound to `root`), its counts and `accepted`
   (the failing bars of its own check that an accept list took, only when there are any), and the
   order —
@@ -8079,22 +8084,50 @@ character's input arrives isolated); a composed `parts.json`, so the bars that
 read See-through tags are measured per character by its own `build`, not over the
 scene; a rig `build` did not write.
 
+#### Canvas framing for intentional overflow (issue #1491)
+
+`bounds` is the full placed part-box union. `clipped_bounds` is its intersection
+with the canvas. Both are `[x0, y0, x1, y1]` in canvas pixels, y down, with
+exclusive right and bottom edges. The `[compose]` character line appends the
+clipped box for each opted-in character. These boxes record static placement.
+The rig-c gate, composed rig and packed atlas retain the full art, geometry and
+motion so offstage parts can enter the canvas during playback.
+
+When any character opts in, compose gives check renders the authored stage as
+their viewport. Explicit diagnostic viewports take precedence. The retained
+`check/idle_frames/` and `check/contact.png` use check's existing preview size
+cap and sampling rate. `check/idle_frames/frames.json` records the stage in
+`viewport` and identifies the pin in `pinned.by` as `--viewport`. Extremes use
+their existing explicit diagnostic grid over the same stage box.
+The stage rectangle is `[-width/2, 0, width, height]` in rig-c world coordinates,
+y up. To verify native canvas pixels, render the packed build with the stage
+rectangle as `--viewport` and the larger canvas dimension as `--max`.
+
+```sh
+rigc render --candidate <compose-out>/check/build --animation idle \
+  --viewport <stage-x>,0,<canvas-width>,<canvas-height> \
+  --max <larger-canvas-dimension> --out <render-out>
+```
+
+The consumer's player must pin its viewport to the authored stage and clip the
+whole scene to that rectangle throughout playback. This includes the plates and
+every character in the declared draw order.
 
 #### Compose input record (issue #1348)
 
 A fully green compose writes `compose-run.json` at the `--out` root, beside
 `scene.json`, with spec `rig-compose-run/1`. It removes a previous record before
 the stage begins, including before stage option validation; a refused input,
-rig-c gate, check or accepted failing character leaves no record. The existing
-rig, scene report and check keep their bytes and paths. Core's nested
-`check/build/run.json` retains its own clocks; it is a different record.
+rig-c gate, check or accepted failing character leaves no record. Scenes without
+canvas clipping retain the existing rig, scene report and check bytes and paths.
+Core's separate `check/build/run.json` retains its own clocks.
 
 The fixed top-level key order is `spec`, `scene`, `characters`, `plate`, `plates`:
 
 | entry | exact binding |
 | --- | --- |
 | `scene` | `{path, sha256}`: `path` as supplied to compose and SHA-256 of the raw scene JSON bytes parsed, including whitespace |
-| `characters` | sorted by `id` in code-unit order; each `{id, build, files}`, with `build` as declared in the scene, and `files` sorted by build-relative `path`; each file is `{path, sha256}` |
+| `characters` | sorted by `id` in code-unit order. Each row has `id`, `build`, `files`, then `placement` only for `canvas_clip: true`. `build` is as declared and `files` contains `{path, sha256}` entries sorted by build-relative `path`. `placement` holds `{canvas_clip: true, bounds, clipped_bounds}` from the scene report |
 | `plate` | legacy plate `{path, sha256}`, with its image path as declared relative to the scene file, or `null` when absent |
 | `plates` | every named plate `{name, path, sha256}`, sorted by `name` in code-unit order; image paths as declared relative to the scene file; `[]` when absent |
 

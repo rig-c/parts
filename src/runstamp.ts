@@ -33,11 +33,20 @@ export interface RunStampFileEntry {
   sha256: string;
 }
 
-/** Compose's consumed inputs, captured before its gate; no clock or output inventory. */
+/** Compose's consumed inputs and opted-in placement, captured before its gate. */
 export interface ComposeRun {
   spec: typeof COMPOSE_RUN_SPEC;
   scene: RunStampFileEntry;
-  characters: Array<{ id: string; build: string; files: RunStampFileEntry[] }>;
+  characters: Array<{
+    id: string;
+    build: string;
+    files: RunStampFileEntry[];
+    placement?: {
+      canvas_clip: true;
+      bounds: [number, number, number, number];
+      clipped_bounds: [number, number, number, number];
+    };
+  }>;
   plate: RunStampFileEntry | null;
   plates: Array<{ name: string; path: string; sha256: string }>;
 }
