@@ -48346,7 +48346,7 @@ function compiledSlots(buildDir: string): string[] {
 }
 
 /** Setup placement is reported and receipted, with native art kept for animation. */
-function runCanvasClipSceneControls(dir: string, say: FixtureCaseReporter): void {
+function runCanvasClipSceneControls(dir: string, legacyReceiptOut: string, say: FixtureCaseReporter): void {
   const smallDir = join(dir, 'clip-small');
   const exactDir = join(dir, 'clip-exact');
   const small = writeCanvasClipSceneFixture(smallDir, 'small');
@@ -48397,6 +48397,27 @@ function runCanvasClipSceneControls(dir: string, say: FixtureCaseReporter): void
   green(smallDir, small.source, 'SC141_SMALL_CANVAS_CLIP_COMPOSES_WITH_PLACEMENT_AND_NATIVE_ART', [-2, -2, 14, 16], [0, 0, 12, 14]);
   const exactOut = green(exactDir, exact.source, 'SC142_EXACT_CANVAS_CLIP_COMPOSES_WITH_PLACEMENT_AND_NATIVE_ART',
     [-88, -99, 1832, 981], [0, 0, 1744, 981], true);
+
+  type ReceiptRow = Record<string, unknown> & { placement?: Record<string, unknown> };
+  const receiptRows = (out: string): ReceiptRow[] =>
+    (readJsonFile(join(out, COMPOSE_RUN_FILE))?.characters as ReceiptRow[] | undefined) ?? [];
+  const [clippedRow] = receiptRows(exactOut);
+  const placement = clippedRow?.placement;
+  const characterKeys = (row: ReceiptRow | undefined): string => JSON.stringify(Object.keys(row ?? {}));
+  const placementKeys = (row: ReceiptRow | undefined): string => JSON.stringify(Object.keys(row?.placement ?? {}));
+  const hasPlacementOrder = (row: ReceiptRow | undefined): boolean =>
+    characterKeys(row) === '["id","build","files","placement"]' && placementKeys(row) === '["canvas_clip","bounds","clipped_bounds"]';
+  const reverseKeys = (row: Record<string, unknown>): Record<string, unknown> =>
+    Object.fromEntries(Object.entries(row).reverse());
+  const rejectsCharacterReorder = clippedRow !== undefined && !hasPlacementOrder(reverseKeys(clippedRow));
+  const rejectsPlacementReorder = placement !== undefined && !hasPlacementOrder({ ...clippedRow, placement: reverseKeys(placement) });
+  const legacyRows = receiptRows(legacyReceiptOut);
+  const legacyOmitsPlacement = legacyRows.length > 0 && legacyRows.every(row => !Object.hasOwn(row, 'placement'));
+  say('SC150_COMPOSE_RUN_PLACEMENT_KEYS_KEEP_WIRE_ORDER',
+    hasPlacementOrder(clippedRow) && rejectsCharacterReorder && rejectsPlacementReorder && legacyOmitsPlacement,
+    `character ${characterKeys(clippedRow)}; placement ${placementKeys(clippedRow)}; ` +
+      `default ${legacyRows.length} row(s) omit placement ${legacyOmitsPlacement}; reordered character/placement refused ${rejectsCharacterReorder}/${rejectsPlacementReorder}`,
+    'issue #1491: read the written compose receipts and reject either key order changing independently');
 
   const frameDir = join(exactOut, 'check', 'idle_frames');
   const idle = existsSync(join(frameDir, 'frames.json')) ? readFrameSet(frameDir) : null;
@@ -48700,6 +48721,7 @@ function runSceneSuite(): number {
 
 
     // Scene animation controls (#1346): names allocated after the live SC01..SC75 scan.
+    const legacyOut = join(dir, 'clips-legacy-parity');
     {
       const why = 'issue #1346: declared final names, additive idle, Core refusals and posed endpoint closure before emission';
       writeSceneClipBuild(join(dir, 'clip-character'));
@@ -48825,7 +48847,7 @@ function runSceneSuite(): number {
       say('SC86_MISSING_DURATION_KEYS_VALUES_AND_TIMES_ARE_CORE_NAMED_REFUSALS',
         invalid.every((r, i) => r.err !== null && r.err.problems.some(p => p.code === 'CE_MOTION_FIELD_SHAPE' && p.detail.includes(invalidFields[i]))) && missingValue.status === 1 && missingValue.empty && missingValue.out.includes('CE_COMPILE_TIMELINE_VALUE_CHANNEL_COUNT') && separate !== null,
         invalid.map(diagnosis).join('; ') + `; missing value ${cliDiagnosis(missingValue)}; positive separate ${separate !== null}`, why);
-      const legacyPath = scene(body()); const legacyOut = join(dir, 'clips-legacy-parity');
+      const legacyPath = scene(body());
       const first = runCli(['compose', '--scene', legacyPath, '--out', legacyOut]);
 
       const files = sceneOutputFiles(legacyOut).filter(p => p !== COMPOSE_RUN_FILE);
@@ -49316,7 +49338,7 @@ function runSceneSuite(): number {
       `parts at [84, 42, 100, 60] and [0, 20, 16, 38]: ${edge.err === null ? 'composes' : codes(edge.err)}; one px further each way -> ${codes(off.err)}`,
       "issue #74 §2: the bounds are the union of the character's part boxes, placed — computed by hand from fixtures/rig.ts — and x1, y1 exclusive, so a box ending on the canvas edge is inside",
     );
-    runCanvasClipSceneControls(dir, say);
+    runCanvasClipSceneControls(dir, legacyOut, say);
 
     // ---- the order -----------------------------------------------------------
     const unresolved = compose(two({ order: ['plain', 'reach', 'ghost', 'plain:nose', 'ghost:cloth'] }));
