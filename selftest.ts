@@ -18198,6 +18198,23 @@ function runSourceCases(dir: string, say: (name: string, ok: boolean, detail: st
     "rigc builds a motion spec with no animations green, so the gate needs no idle; a run where only the gate measured is a PASS that says on the same line how much it did not look at — and the setup pose does not depend on the idle, so the source line must not move with it",
   );
 
+  const relocated = ['a', 'b'].map(home => {
+    const cwd = join(dir, 'report-location', home);
+    writeMergedCheckRig(join(cwd, 'rig'), { idle: false, plate: true });
+    const run = spawnSync('bun', [join(ROOT, 'cli.ts'), 'check', '--rig', 'rig', '--out', 'check', '--no-extremes'], { cwd, encoding: 'utf8' });
+    const path = join(cwd, 'check', 'check.json');
+    return { status: run.status, report: existsSync(path) ? readFileSync(path) : null };
+  });
+  const [firstReport, secondReport] = relocated.map(run => run.report);
+  const sameBytes = firstReport !== null && secondReport !== null && firstReport.equals(secondReport);
+  say(
+    'CK1492_CHECK_REPORT_BYTES_MATCH_ACROSS_WORKING_DIRECTORIES',
+    relocated.every(run => run.status === 0) && sameBytes &&
+      firstReport.includes('no parts.json: parts.json does not exist') && firstReport.includes('no idle: motion.json field'),
+    `exits ${relocated.map(run => String(run.status)).join(', ')}; reports byte-identical: ${sameBytes}`,
+    'the same merged rig checked with relative arguments from two separate homes must write identical reports, including both named SKIP reasons',
+  );
+
   // The source line on the aligned pose: error pixels only where a colour edge is within the resamplers' reach.
   const painting = mergedStack({ plate: true });
   const aligned = sourceBounds(painting, painting);
@@ -50403,9 +50420,6 @@ function runSceneSuite(): number {
       const sc20Snapshot = new Map(relFiles.map((rel) => [rel, readFileSync(join(out, rel))]));
       const sameAtOtherOut = relFiles.every((rel) => {
         if (!existsSync(join(withoutPs.outDir, rel))) return false;
-        if (rel === 'check/check.json') {
-          return readFileSync(join(withoutPs.outDir, rel), 'utf8').replaceAll(withoutPs.outDir, out) === sc20Snapshot.get(rel)?.toString('utf8');
-        }
         return readFileSync(join(withoutPs.outDir, rel)).equals(sc20Snapshot.get(rel)!);
       });
       composeStage(
