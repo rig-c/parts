@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.55.0 (2026-11-23)
+
+`compose` can animate an opted-in character's placement independently of the rest of the scene.
+
+**Read before upgrading:**
+
+* **`characters[].placement_pivot` is optional in `spine-parts-scene/1` and accepts only literal `true`.** Any other explicit value is `SCENE_FIELD_TYPE`. Omit it to keep the shared-root placement. Opting in creates an identity `<id>:placement` under `root`, above the character's original first-level bones. When slots or mesh weights bind to the source root, an unkeyed identity `<id>:root` under the pivot carries them. The character's setup placement and scale still apply once. Scene-authored `translate`, `translatex` and `translatey` values on the pivot are offsets in final scene pixels, x right and y up, independent of the character's scale.
+* **Each opted-in pivot requires a translation key in `animations`.** `SCENE_PIVOT_UNUSED` names a pivot with no such key, `SCENE_PIVOT_TRACK` refuses a non-translation key on the pivot or any key on its generated carrier, and `SCENE_PIVOT_NAME_FREE` refuses a source bone named `placement`. The existing `SCENE_PLATE_NAME_FREE` also refuses a named plate that collides with a generated bone. Scene clip timing, posed endpoint checks and Core's gate still apply.
+* **For opted-in characters, `scene.json` records `placement_pivot` as the generated bone name after the bounds fields and includes the new bones in `bones`.** The generated bones appear in `rig.json` and the authored tracks appear in `motion.json`. `compose-run.json` binds the declaration and tracks through `scene.sha256` and keeps its existing fields and key order. Scenes without `placement_pivot` keep their output paths and bytes, apart from Core's existing `started_at` and `finished_at` clocks in `check/build/run.json`.
+
+### Features
+
+* **compose:** key a character's placement in a scene clip while retaining its setup placement and imported motion (`#1498`, `#1501`, `07c2f9b`).
+
+### Bug Fixes
+
+None.
+
 ## 2.54.0 (2026-11-23)
 
 `compose` can frame characters that extend past the scene canvas. `check` uses local filenames in SKIP reasons for missing parts, idle and idle geometry.
