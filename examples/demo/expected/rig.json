@@ -15,8 +15,14 @@
    "y": 0
   },
   {
-   "name": "hip",
+   "name": "body_motion",
    "parent": "root",
+   "x": 0,
+   "y": 0
+  },
+  {
+   "name": "hip",
+   "parent": "body_motion",
    "x": 0,
    "y": 796
   },
@@ -440,7 +446,7 @@
   },
   {
    "name": "shoes",
-   "bone": "root",
+   "bone": "body_motion",
    "attachment": "shoes"
   },
   {

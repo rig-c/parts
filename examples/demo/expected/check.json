@@ -33,7 +33,7 @@
   },
   "FEET_STAY_LEVEL": {
    "status": "SKIP",
-   "reason": "no-hanging-footwear"
+   "reason": "no-posed-footwear"
   },
   "STRESS_OFF_CHAIN": {
    "status": "PASS"
@@ -72,7 +72,7 @@
   }
  },
  "build": {
-  "model_sha256": "596afa5b6a7c3a0cc36e5a3ec2569d466375d38264752389a031e6ee70b04879"
+  "model_sha256": "42494079bd715c377170b5ff4129a0382b0bde96fd2aefe8b7069f226ee89c3f"
  },
  "gate_spine_html_green": true,
  "rigc_entry": {
@@ -350,29 +350,29 @@
      "frames": 2,
      "pieces": 46,
      "bounds": {
-      "minX": -298.00002649277525,
-      "minY": 0.9999999999999998,
-      "maxX": 300.00000713312636,
-      "maxY": 1193.9999999999995
+      "minX": -298.0000481199319,
+      "minY": 0.9999999999999996,
+      "maxX": 299.99998968288816,
+      "maxY": 1193.999999999999
      },
-     "pose_sha256": "48fd0b0b00eb2dcb39b3cb2de675e59748a9df85622c1462ba141e9dcfa6d5a1"
+     "pose_sha256": "b3f5ebb4db595359edf0604b1a6f7fccfca625408453343a22f2e03bfd9586a9"
     }
    ]
   },
   "denominator_px": 1011712,
   "auto_frame_raw": {
-   "mean": 0.1473555872641035,
+   "mean": 0.1473610627944777,
    "display_mean": 0.147,
    "denominator_px": 795264,
    "px_over_40": 0,
    "px_over_80": 0,
-   "frame_scale": 0.9437769706001059,
+   "frame_scale": 0.9437769706001062,
    "viewport": {
-    "x": -345.7200264927752,
-    "y": -46.719999999999985,
-    "width": 693.4400336259016,
-    "height": 1288.4399999999996,
-    "scale": 0.9437769706001059,
+    "x": -345.72004811993185,
+    "y": -46.71999999999996,
+    "width": 693.4400378028199,
+    "height": 1288.4399999999991,
+    "scale": 0.9437769706001062,
     "pixelWidth": 654,
     "pixelHeight": 1216
    }
@@ -1388,13 +1388,13 @@
       "face"
      ],
      "slot": "face",
-     "max_rig_px": 4.205e-13,
-     "rms_rig_px": 1.233e-13
+     "max_rig_px": 4.488e-13,
+     "rms_rig_px": 1.496e-13
     }
    ],
-   "max_rig_px": 4.205e-13,
+   "max_rig_px": 4.488e-13,
    "at": null,
-   "rms_rig_px": 1.233e-13,
+   "rms_rig_px": 1.496e-13,
    "tolerance_rig_px": 2.286e-11,
    "crossing": [
     {
@@ -1555,7 +1555,7 @@
     "max_ratio": 1.008,
     "max_at": "triangle 22 (vertices 10 12 11), edge 11-10, idle frame 10",
     "min_ratio": 1,
-    "min_at": "triangle 100 (vertices 24 22 21), edge 22-21, idle frame 30",
+    "min_at": "triangle 1 (vertices 0 45 42), edge 0-45, idle frame 30",
     "severity": 1.008
    },
    {
@@ -1567,7 +1567,7 @@
     "slot": "hairpin",
     "triangles": 190,
     "max_ratio": 1.008,
-    "max_at": "triangle 52 (vertices 15 17 16), edge 16-15, idle frame 10",
+    "max_at": "triangle 133 (vertices 77 75 129), edge 75-129, idle frame 10",
     "min_ratio": 1,
     "min_at": "triangle 186 (vertices 71 69 68), edge 69-68, idle frame 30",
     "severity": 1.008
@@ -1606,6 +1606,39 @@
   "folding_undeclared": 0,
   "declared_not_folding": [],
   "bar": 0
+ },
+ "FEET_STAY_LEVEL": {
+  "status": "SKIP",
+  "animations": [
+   "idle",
+   "tilt",
+   "look_l",
+   "look_r",
+   "smile",
+   "startled",
+   "wave",
+   "hop"
+  ],
+  "fps": 12,
+  "physics_left_out": 29,
+  "bar_degrees": 10,
+  "bar": "HQ's line (rig-c/parts#347 ruling 4), not a figure measured here",
+  "feet": [
+   {
+    "part": "shoes",
+    "bone": "body_motion",
+    "hangs_from": "root",
+    "status": "SKIP",
+    "frames_posed": 0,
+    "worst": null,
+    "row_scope": "part",
+    "row_kind": "evidence",
+    "row_subjects": [
+     "shoes"
+    ]
+   }
+  ],
+  "reason": "no frame of \"idle\", \"tilt\", \"look_l\", \"look_r\", \"smile\", \"startled\", \"wave\", \"hop\" turns a bone above \"body_motion\" (which \"shoes\" rides), so no foot was seen while its leg was posed"
  },
  "STRESS_OFF_CHAIN": {
   "status": "PASS",
@@ -26039,7 +26072,7 @@
  },
  "config": {
   "path": "examples/demo/config.json",
-  "sha256": "f2913f67c07e2757d6a35991c31f84c9355a6d1f2ea709694da5b40b6d3ae2ef"
+  "sha256": "eae7f56204348586e03504edddd58d39a90578b504b7f1aca8c12081e2177255"
  },
  "PASS": true
 }

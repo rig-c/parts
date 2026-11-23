@@ -182,13 +182,13 @@ ones `patches_note` records):
 | --- | --- | --- | --- | --- |
 | `hair_side_r` | 349,81 – 416,214 | `back` | `head` | `uncovered hole 1: 976 px at 351,83 63x129 (between "hair_back" 172 px, "topwear" 22 px, "hair_front" 20 px)` |
 | `hair_side_l` | 456,126 – 484,216 | `back` | `head` | `uncovered hole 2: 244 px at 458,128 24x86 (between "hair_back" 101 px, "topwear" 12 px)` |
-| `shoe_gap_r` | 370,1090 – 410,1131 | before `shoes` | `root` | with the hair patches in: `uncovered hole 5: 62 px at 372,1095 8x34` and `uncovered hole 2: 111 px at 397,1092 11x37` (both between `shoes` and `legwear`) |
-| `shoe_gap_l` | 416,1089 – 458,1150 | before `shoes` | `root` | with the hair patches in: `uncovered hole 1: 125 px at 418,1095 18x45` and `uncovered hole 3: 82 px at 447,1091 9x57` (both between `shoes` and `legwear`) |
+| `shoe_gap_r` | 370,1090 – 410,1131 | before `shoes` | `body_motion` | with the hair patches in: `uncovered hole 5: 62 px at 372,1095 8x34` and `uncovered hole 2: 111 px at 397,1092 11x37` (both between `shoes` and `legwear`) |
+| `shoe_gap_l` | 416,1089 – 458,1150 | before `shoes` | `body_motion` | with the hair patches in: `uncovered hole 1: 125 px at 418,1095 18x45` and `uncovered hole 3: 82 px at 447,1091 9x57` (both between `shoes` and `legwear`) |
 
 All four take `"alpha": "silhouette"`; each box is its hole (or the union of its two
 holes) grown by 2 px. The side hair is in neither run (the head run's back hair stops
 inside it, the full run's is haze); the proposer, run on the patched parts, proposes
-`hip` for the two shoe patches, and the config keeps them on `root`, the shoes' own
+`hip` for the two shoe patches, and the config keeps them on `body_motion`, the shoes' own
 bone. With all four, the recomposite's uncovered error is 1,365 px in 291 holes, the
 largest 63 px at 347,803 3x60 beside `topwear` (`check.json`, `RECOMPOSITE_HOLES`;
 2,921 px with no patch, 1,752 px with the hair patches alone).
@@ -207,7 +207,7 @@ strands, with the values this figure takes:
 | `smile` | 1.4 | `mouth` scale 1.3 × 0.7 and up 3; `eye_r`, `eye_l` scaley 0.72; `brow_r`, `brow_l` up 4; `head` 3° |
 | `startled` | 1.4 | anticipation at 0.12 s, the start at 0.24 s (brows up 12, eyes 1.25, `mouth` 0.75 × 1.8, `chest` up 8), a held beat, a settle; `head` is not keyed (below) |
 | `bow` | 1.8 | `chest` down 18 and scaley 0.94, `head` down 18 and scaley 0.86, held, back |
-| `hop` | 1.2 | as `demo`'s: `hip` down 14, `root` up 90 at 0.42 s, `hip` down 18.2 on landing, a rebound; `chest` squash and stretch |
+| `hop` | 1.2 | as `demo`'s: `hip` down 14, `body_motion` up 90 at 0.42 s, `hip` down 18.2 on landing, a rebound; `chest` squash and stretch |
 
 The head moves less than `demo`'s, and `startled` does not lift it, because the face's
 lower edge is not covered: there is no neck part (*Known limits*), and the `hair_back`

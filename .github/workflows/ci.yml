@@ -115,13 +115,10 @@ jobs:
   # Issue #1439: the five examples' expected/ and wind's expected-wave/ are this
   # package's own builds, written on Linux by tools/regenerate_examples.ts. Here
   # they are rebuilt and compared whole, byte for byte, machine-class fields
-  # included (this runner is Linux). It is a job, not a selftest suite: #1113
-  # took fetched-art builds out of the suites so the suites read no network and
-  # no fetched painting, and that still holds. It runs beside the shards so it
-  # adds no wall time: on the Linux pool the six builds and the comparison took
-  # 381 s, and shard 3 plus that would outlast the longest shard. The fetched
-  # inputs come from the cache shard 3 uses, keyed by the fetch script (its
-  # pinned commit); the tool refuses inputs that are not the pinned blobs.
+  # included (this runner is Linux). Each public build also composes (#1500).
+  # Fetched-art builds run beside the selftest shards as in #1113. The job
+  # uses the same cache as shard 3, keyed by the fetch script that pins the
+  # input commit. The tool refuses inputs that are not the pinned blobs.
   expected-files:
     needs: tree-verdict
     if: needs.tree-verdict.outputs.reused != 'true'
@@ -141,7 +138,7 @@ jobs:
       - name: Fetch pinned painting allocation examples
         if: steps.examples.outputs.cache-hit != 'true'
         run: bun run fetch-examples
-      - name: Check the public examples' expected files against a build
+      - name: Build and compose the public examples and compare the expected files
         run: bun tools/regenerate_examples.ts --check --set examples
 
   # Fresh runs replay every available shard even after a shard failure, so

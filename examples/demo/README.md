@@ -224,7 +224,7 @@ proposes either, and of the clips `check` judges one thing: that no mesh folds i
 starts and ends at the setup pose, so it plays over the idle on a second track of the
 player. None keys a constraint, the draw order, a deform or an attachment. They key the
 bones the idle leaves alone — `head` (the idle turns `head_ctl` and `neck`), `chest`
-(the idle breathes `chest_ctl`), `hip`, `root`, `mouth`, and the chain links `sleeve_l0`
+(the idle breathes `chest_ctl`), `hip`, `body_motion`, `mouth`, and the chain links `sleeve_l0`
 to `sleeve_l2` (the idle turns the `*_ctl` bones above them) — so the idle's sway, breath
 and chain swing stay alive under every clip. Every key carries an ease-in-out Bézier
 (`curve`, control points at a quarter and three quarters of the span).
@@ -236,7 +236,7 @@ and chain swing stay alive under every clip. Every key carries an ease-in-out B�
 | `smile` | 1.4 | `mouth` scale 1.3 × 0.7 and up 3; `eye_r`, `eye_l` scaley 0.72 (the eyes narrow); `brow_r`, `brow_l` up 4; `head` 5° |
 | `startled` | 1.4 | anticipation at 0.12 s (brows down, eyes 0.85, `head` and `chest` down), the start at 0.24 s (brows up 12, eyes 1.25, `mouth` 0.75 × 1.8, `head` and `chest` up 8), a held beat, a settle |
 | `wave` | 2.21 | `sleeve_l0` +48°, `sleeve_l1` +20° (the arm out to the side), `sleeve_l2` +10°, −10°, +10° (the hand), back down |
-| `hop` | 1.2 | `hip` down 14 (anticipation), `root` up 90 at 0.42 s (`root` carries the shoes, which ride `root`, with the body), `hip` down 18.2 on landing (squash), a small rebound; `chest` scale squashes and stretches 2–4 % |
+| `hop` | 1.2 | `hip` down 14 (anticipation), `body_motion` up 90 at 0.42 s (this bone carries both the body and the shoes), `hip` down 18.2 on landing (squash), a small rebound; `chest` scale squashes and stretches 2–4 % |
 
 An expression is what the bones can do, and here that is not much. Every slot holds one
 attachment, the part's own image: the mouth widens, narrows and lifts, the eyes narrow
