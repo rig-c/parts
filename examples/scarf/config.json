@@ -200,12 +200,20 @@
         }
       }
     ],
-    "patches_note": "hand correction after the first assemble: uncovered hole 1 (976 px at 351,83 63x129, between hair_back 172 px) and hole 2 (244 px at 458,128 24x86, between hair_back 101 px) are the side hair neither run holds (the head run back hair stops inside them, the full run back hair is 75 px of haze); each box is the hole box grown by 2 px to reach under its neighbours; shoe_gap_r and shoe_gap_l: the first lattice build's uncovered holes 5 (372,1095 8x34) with 2 (397,1092 11x37), and 1 (418,1095 18x45) with 3 (447,1091 9x57), each pair's union grown by 2 px, between shoes and legwear: legwear's alpha fades out above the shoe collar where the painting's tights run into the shoe; drawn before shoes, on root like the shoes"
+    "patches_note": "hand correction after the first assemble: uncovered hole 1 (976 px at 351,83 63x129, between hair_back 172 px) and hole 2 (244 px at 458,128 24x86, between hair_back 101 px) are the side hair neither run holds (the head run back hair stops inside them, the full run back hair is 75 px of haze); each box is the hole box grown by 2 px to reach under its neighbours; shoe_gap_r and shoe_gap_l: the first lattice build's uncovered holes 5 (372,1095 8x34) with 2 (397,1092 11x37), and 1 (418,1095 18x45) with 3 (447,1091 9x57), each pair's union grown by 2 px, between shoes and legwear: legwear's alpha fades out above the shoe collar where the painting's tights run into the shoe; drawn before shoes, on body_motion like the shoes"
   },
   "bones": [
     {
-      "name": "hip",
+      "name": "body_motion",
       "parent": "root",
+      "at": [
+        416,
+        1216
+      ]
+    },
+    {
+      "name": "hip",
+      "parent": "body_motion",
       "at": [
         414,
         657
@@ -612,7 +620,7 @@
   "regions": {
     "eyewhite_r": "eye_r",
     "eyewhite_l": "eye_l",
-    "shoes": "root",
+    "shoes": "body_motion",
     "brow_r": "brow_r",
     "brow_l": "brow_l",
     "ear_r": "head",
@@ -626,8 +634,8 @@
     "hair_side_r": "head",
     "hair_side_l": "head",
     "legwear": "hip",
-    "shoe_gap_r": "root",
-    "shoe_gap_l": "root"
+    "shoe_gap_r": "body_motion",
+    "shoe_gap_l": "body_motion"
   },
   "motion": {
     "duration": 3.3333333333333335,

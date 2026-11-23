@@ -20,18 +20,22 @@
  * `--check` writes nothing: it builds and compares whole files, byte for byte. On
  * Linux every difference fails; on another platform a difference in one of those
  * fields is printed as `differs by machine class: held to Linux` and does not.
- * CI runs `--check` on Linux (`.github/workflows/ci.yml`, shard 3). Fetched-art
- * builds stay out of the selftest (#1113); this tool is not a suite.
+ * CI runs `--check` on Linux in the expected-files job. Each public build
+ * also has to compose at its own stage size (issue #1500). Fetched-art builds
+ * stay out of the selftest (#1113); this tool is not a suite.
  *
  * Every directory holding a `check.json` carries `machine-class.txt`, one line:
  * the note above, and the sha256 of check.json's key paths in document order,
  * which the tree suite's EXP02 holds the file to without a build.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { flattenRig, rigJsonText, type RigSpec } from '../src/rig.ts';
+import { readParts } from '../src/parts.ts';
+import { COMPOSE_RUN_FILE } from '../src/runstamp.ts';
+import { SCENE_SPEC } from '../src/scene.ts';
 import { checkExampleInputs, pinnedExamplesCommit } from '../scripts/example_inputs.ts';
 import { VALIDATION_VARIANTS, validationBuild, validationHead } from '../fixtures/validation_cache.ts';
 import { validationCheckText } from '../fixtures/regenerate_validation.ts';
@@ -42,7 +46,7 @@ const ROOT = resolve(import.meta.dir, '..');
 
 type Produce = (out: string) => string | Uint8Array;
 interface ExpectedFile { name: string; produce: Produce; json: boolean; serialize?: (value: unknown) => string }
-interface Target { label: string; dir: string; build: (scratch: string) => string; files: ExpectedFile[]; checkJson: boolean }
+interface Target { label: string; dir: string; build: (scratch: string) => string; files: ExpectedFile[]; checkJson: boolean; example?: string }
 
 const text = (path: string): string => readFileSync(path, 'utf8');
 const writerJson = (value: unknown): string => `${JSON.stringify(value, null, 1)}\n`;
@@ -60,9 +64,25 @@ function exampleBuild(key: string, config: string): (scratch: string) => string 
   };
 }
 
+/** Compose the already-built example through the real CLI at its native stage size. */
+export function composePublicExample(label: string, build: string, scratch: string): void {
+  const [width, height] = readParts(join(build, 'parts.json')).rig_size;
+  const scene = join(scratch, `${label}-scene.json`);
+  const out = join(scratch, `${label}-compose`);
+  writeFileSync(scene, writerJson({ spec: SCENE_SPEC, canvas: { width, height },
+    characters: [{ id: label, build: resolve(build), offset: [0, 0] }], order: [label] }));
+  const r = spawnSync(process.execPath, [join(ROOT, 'cli.ts'), 'compose', '--scene', scene, '--out', out],
+    { cwd: ROOT, encoding: 'utf8', maxBuffer: 1 << 28 });
+  if (r.status !== 0) {
+    const output = `${r.stdout ?? ''}${r.stderr ?? ''}`.trim().split('\n').slice(-8).join(' | ');
+    throw new Error(`Example ${label} compose exit ${String(r.status)}: ${r.error?.message ?? output}`);
+  }
+  if (!existsSync(join(out, COMPOSE_RUN_FILE))) throw new Error(`Example ${label} compose exited 0 without ${COMPOSE_RUN_FILE}`);
+}
+
 function exampleTargets(): Target[] {
   const full = (key: string): Target => ({
-    label: key, dir: `examples/${key}/expected`, build: exampleBuild(key, 'config.json'), checkJson: true,
+    label: key, example: key, dir: `examples/${key}/expected`, build: exampleBuild(key, 'config.json'), checkJson: true,
     files: [
       copied('parts.json'),
       { name: 'rig.json', json: true, serialize: rigJsonText, produce: (out) => rigJsonText(flattenRig(JSON.parse(text(join(out, 'rig', 'rig.json'))) as RigSpec)) },
@@ -71,10 +91,13 @@ function exampleTargets(): Target[] {
     ],
   });
   const wave: Target = {
-    label: 'wind-wave', dir: 'examples/wind/expected-wave', build: exampleBuild('wind', 'config.wave.json'), checkJson: false,
+    label: 'wind-wave', example: 'wind', dir: 'examples/wind/expected-wave', build: exampleBuild('wind', 'config.wave.json'), checkJson: false,
     files: [copied('parts.json'), copied('rig/rig.json'), copied('rig/motion.json'), copied('rig/mesh_report.json'), copied('rig/sets.json'), copied('painting_in_rig.png', false)],
   };
-  return [...['demo', 'reference-demo', 'reference-sample', 'scarf', 'wind'].map(full), wave];
+  const keys = readdirSync(join(ROOT, 'examples'), { withFileTypes: true })
+    .filter(entry => entry.isDirectory() && existsSync(join(ROOT, 'examples', entry.name, 'config.json')))
+    .map(entry => entry.name).sort();
+  return [...keys.map(full), wave];
 }
 
 function validationTargets(): Target[] {
@@ -121,7 +144,8 @@ function main(): number {
   const targets = args.only === null ? all : all.filter((t) => (args.only as string[]).includes(t.label));
   if (args.set !== 'validation') {
     const pin = pinnedExamplesCommit(text(join(ROOT, 'scripts', 'fetch-examples.sh')));
-    const missing = ['demo', 'reference-demo', 'reference-sample', 'scarf', 'wind'].flatMap((key) => checkExampleInputs(join(ROOT, 'examples', key, 'inputs'), `examples/${key}/inputs`, pin));
+    const inputs = new Set(all.flatMap(target => target.example === undefined ? [] : [target.example]));
+    const missing = [...inputs].flatMap(key => checkExampleInputs(join(ROOT, 'examples', key, 'inputs'), `examples/${key}/inputs`, pin));
     if (missing.length > 0) { console.error(`${missing.join('\n')}\nEXPECTED_INPUTS_FETCHED: run \`bun run fetch-examples\` first`); return 1; }
   }
   const scratch = mkdtempSync(join(tmpdir(), 'rig-parts-examples-'));
@@ -135,6 +159,11 @@ function main(): number {
       if (target.checkJson) files.set(MACHINE_CLASS_FILE, machineClassLine(files.get('check.json') as string));
       produced.push({ target, out: files });
       console.log(`built ${target.label} in ${((performance.now() - started) / 1000).toFixed(1)} s`);
+      if (args.check && target.example !== undefined) {
+        const startedCompose = performance.now();
+        composePublicExample(target.label, out, scratch);
+        console.log(`composed ${target.label} in ${((performance.now() - startedCompose) / 1000).toFixed(1)} s`);
+      }
     }
     if (!args.check) {
       // Emit after green: every build passed before one file is written.

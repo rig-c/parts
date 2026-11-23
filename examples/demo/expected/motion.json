@@ -4916,7 +4916,7 @@
    "loop": false,
    "tracks": [
     {
-     "bone": "root",
+     "bone": "body_motion",
      "property": "translatey",
      "keys": [
       {

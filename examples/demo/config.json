@@ -181,8 +181,16 @@
   },
   "bones": [
     {
-      "name": "hip",
+      "name": "body_motion",
       "parent": "root",
+      "at": [
+        416,
+        1216
+      ]
+    },
+    {
+      "name": "hip",
+      "parent": "body_motion",
       "at": [
         416,
         420
@@ -662,7 +670,7 @@
   "regions": {
     "eyewhite_r": "eye_r",
     "eyewhite_l": "eye_l",
-    "shoes": "root",
+    "shoes": "body_motion",
     "ear_r": "head",
     "ear_l": "head",
     "brow_l": "brow_l",

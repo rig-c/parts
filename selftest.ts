@@ -118,6 +118,7 @@ import { runSetAnchorChecks } from './tools/check_set_anchor.ts';
 import { runSetFocusChecks } from './tools/check_set_focus.ts';
 import { runRemeshGateCopyChecks, runRetuneGateCopyChecks, runRevisionChainChecks } from './tools/check_revision_chain.ts';
 import { compareExpected, firstKeyOutOfOrder, keyOrderDigest, machineClass, MACHINE_CLASS_FILE, machineClassLine, recordedKeyOrder } from './tools/expected_form.ts';
+import { composePublicExample } from './tools/regenerate_examples.ts';
 import { runConfigWriteChecks } from './tools/check_configwrite.ts';
 import { readConfigWriteTarget, stageConfigWrite } from './tools/configwrite.ts';
 import { BLINK_ANIMATION } from './src/check.ts';
@@ -49796,6 +49797,22 @@ function runSceneSuite(): number {
       `plain with a "hop" beside its idle: ${withHop.err === null ? 'composes' : codes(withHop.err)}, animations ${Object.keys(hopAnims).join(', ')}, "plain:hop" ${JSON.stringify(carried) === JSON.stringify(hopWant) ? 'is the planted animation with its bone and easing prefixed' : `is ${JSON.stringify(carried)?.slice(0, 160)}`}; the rest of the motion and the rig ${sameElse ? 'byte-identical to' : 'differ from'} the scene whose plain has no hop, which holds ${Object.keys(plainMotion?.animations ?? {}).join(', ')}; a hop track carrying "slot" -> ${codes(slotted.err)}`,
       "issue #183: build writes the animations motion.animations_from names after the idle, and compose refused any of them; the scene schedules none — each rides along for the consumer, named under its character as the idle's tracks are, and read with the idle's own key lists so no name in it goes unprefixed",
     );
+
+    const rootHopper = writeSceneBuild(join(dir, 'root-hopper'), 'plain', { motion: (m) => {
+      (m.animations as Record<string, unknown>).hop = { ...hop, tracks: [{ ...hop.tracks[0], bone: 'root' }] };
+    } });
+    composePublicExample('local-hop', join(dir, 'hopper'), dir);
+    let rootRefusal = '';
+    try { composePublicExample('root-hop', rootHopper, dir); }
+    catch (e) { rootRefusal = (e as Error).message; }
+    say('SC122_PUBLIC_EXAMPLE_GATE_REQUIRES_GREEN_COMPOSE',
+      existsSync(join(dir, 'local-hop-compose', COMPOSE_RUN_FILE)) &&
+        !existsSync(join(dir, 'root-hop-compose', COMPOSE_RUN_FILE)) &&
+        rootRefusal.startsWith('Example root-hop compose exit 1:') &&
+        rootRefusal.includes('SCENE_ROOT_SHARED: character "root-hop" motion.json animations.hop.tracks[0]'),
+      `character-local hop receipt; shared-root hop: ${rootRefusal.includes('SCENE_ROOT_SHARED') ? 'SCENE_ROOT_SHARED' : rootRefusal || 'accepted'}`,
+      'issue #1500: CI composes each public example through the CLI; a failing example must fail the gate by name');
+
     // A one-character scene at its own stage: canvas 40x40, offset (0, 0), no plate.
     const solo: string[] = [];
     for (const kind of ['plain', 'reach'] as const) {
