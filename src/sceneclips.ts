@@ -8,6 +8,47 @@ import type { RigSpec } from './rig.ts';
 
 export type SceneAnimations = CoreMotion['animations'];
 
+export interface ScenePlacementPivot {
+  name: string;
+  rootBinding?: string;
+  field: string;
+}
+
+const PLACEMENT_TRANSLATIONS: readonly string[] = ['translate', 'translatex', 'translatey'];
+
+function placementTrackProblems(clips: SceneAnimations, pivots: readonly ScenePlacementPivot[]): Problem[] {
+  if (pivots.length === 0) return [];
+  const problems: Problem[] = [];
+  const targets = new Map<string, ScenePlacementPivot>();
+  const unused = new Set(pivots);
+  for (const pivot of pivots) {
+    targets.set(pivot.name, pivot);
+    if (pivot.rootBinding !== undefined) targets.set(pivot.rootBinding, pivot);
+  }
+  for (const [name, clip] of Object.entries(clips)) for (const [i, track] of clip.tracks.entries()) {
+    if (track.bone === undefined) continue;
+    const pivot = targets.get(track.bone);
+    if (pivot === undefined) continue;
+    const onPivot = track.bone === pivot.name;
+    if (!onPivot || !PLACEMENT_TRANSLATIONS.includes(track.property)) {
+      problems.push({
+        code: 'SCENE_PIVOT_TRACK', object: `scene.animations.${name}.tracks[${i}]`,
+        detail: `keys ${JSON.stringify(track.bone)} with ${JSON.stringify(track.property)}. ${onPivot
+          ? `Its scene motion must use ${PLACEMENT_TRANSLATIONS.join(', ')} in final scene units`
+          : `The root binding must stay unkeyed. Key translation on ${JSON.stringify(pivot.name)}`}`,
+      });
+      unused.delete(pivot); // The track refusal already explains how to key this pivot.
+    } else if (track.keys.length > 0) {
+      unused.delete(pivot); // Core validates the key values, times, curves and target shape.
+    }
+  }
+  for (const pivot of unused) problems.push({
+    code: 'SCENE_PIVOT_UNUSED', object: pivot.field,
+    detail: `adds bone ${JSON.stringify(pivot.name)} with no scene translation key. Key it with ${PLACEMENT_TRANSLATIONS.join(', ')} in scene.animations or omit the opt-in`,
+  });
+  return problems;
+}
+
 /** Core owns shape, required numbers, key times and all target families. */
 export function readSceneAnimations(raw: unknown, where: string): SceneAnimations {
   try {
@@ -32,8 +73,8 @@ function sliderInputChannel(source: unknown, property: string): number | null {
 }
 
 /** Append timelines without changing existing idle payloads or character physics. */
-export function mergeSceneAnimations(rig: RigSpec, motion: MotionSpec, clips: SceneAnimations): void {
-  const problems: Problem[] = [];
+export function mergeSceneAnimations(rig: RigSpec, motion: MotionSpec, clips: SceneAnimations, pivots: readonly ScenePlacementPivot[] = []): void {
+  const problems = placementTrackProblems(clips, pivots);
   const animations = motion.animations as unknown as SceneAnimations;
   for (const [name, clip] of Object.entries(clips)) {
     const existing = Object.hasOwn(animations, name) ? animations[name] : undefined;

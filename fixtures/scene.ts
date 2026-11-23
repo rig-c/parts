@@ -27,7 +27,7 @@ import { parseConfig } from '../src/config.ts';
 import { type PartsFile, serializeParts } from '../src/parts.ts';
 import { encodePngBytes } from '../src/raster/png.ts';
 import { newRaster } from '../src/raster/types.ts';
-import { buildRig, type IdleKeys, rigJsonText, type RigOutput } from '../src/rig.ts';
+import { buildRig, type IdleKeys, type MeshAttachment, rigJsonText, type RigOutput } from '../src/rig.ts';
 import { constraintConfig, rigConfig, rigImages, rigParts } from './rig.ts';
 import { weightedSurfaceEarFixture } from './turn_surface.ts';
 import { syntheticPolicy } from './automesh.ts';
@@ -87,6 +87,44 @@ export function writeSceneProducerInput(dir: string, fixture: { config: Record<s
   writeFileSync(join(parts, 'parts.json'), serializeParts(fixture.parts));
   for (const [name, image] of fixture.images) writeFileSync(join(parts, 'parts', name.endsWith('.png') ? name : `${name}.png`), encodePngBytes(image));
   return { config: join(dir, 'config.json'), parts };
+}
+
+/** A one-level mesh driver and a region, with a neutral one-second source idle (issue #1498). */
+function placementPivotFixture() {
+  const config: Record<string, unknown> = {
+    ...rigConfig(),
+    assemble: { rig_scale: 0.5, plan: [['cloth', 'full', 'author:block'], ['eye', 'head', 'face']] },
+    bones: [{ name: 'hip', parent: 'root', at: [20, 30] }, { name: 'eye', parent: 'root', at: [17, 28] }],
+    meshes: { cloth: { grid: 8, r: 8, segments: [['hip', [14, 14], [30, 14]]] } },
+    regions: { eye: 'eye' },
+    motion: { duration: 1, tracks: [{ bone: 'eye', prop: 'rotate', amp: 0, period: 1, phase: 0 }] },
+  };
+  const parts = rigParts();
+  parts.parts[0].from = 'full:author:block';
+  return { config, parts, images: rigImages() };
+}
+
+export function writePlacementPivotProducerInput(dir: string): { config: string; parts: string } {
+  return writeSceneProducerInput(dir, placementPivotFixture());
+}
+
+/** Plant both root-binding families at their original setup coordinates and add a stationary plate. */
+export function writePlacementPivotRootBuild(dir: string, platePath: string): void {
+  const f = placementPivotFixture();
+  writeSceneOutput(dir, buildRig(parseConfig(f.config), f.parts, f.images), f.parts, { rig: raw => {
+    const rig = raw as unknown as RigOutput['rig'];
+    rig.slots.find(slot => slot.name === 'eye')!.bone = 'root';
+    // The eye centre (18, 27) on the source 40x40 canvas is (-2, 13) in root's frame.
+    rig.skins.default.eye.eye = { image: 'eye.png', x: -2, y: 13 };
+    const weights = (rig.skins.default.cloth.cloth as MeshAttachment).weights;
+    // Hip translates (0, 10) with zero rotation. Keep the first vertex at the same world point.
+    const [bind] = weights[0];
+    if (weights[0].length !== 1 || bind.bone !== 'hip') throw new Error('placement fixture needs a single hip bind on its first vertex');
+    weights[0] = [{ ...bind, bone: 'root', y: bind.y + 10 }];
+  } });
+  const plate = newRaster(8, 8);
+  plate.data.set([72, 112, 164, 255], 4 * (4 * plate.width + 4));
+  writeFileSync(platePath, encodePngBytes(plate));
 }
 
 /** The existing automatic cloth policy with its explicit fold declaration, through buildRig. */

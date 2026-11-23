@@ -49,6 +49,10 @@
  *   through `src/coords.ts`. The root is shared, so a character whose idle
  *   keys it, or whose constraint or stop names it, is refused
  *   (`SCENE_ROOT_SHARED`): it would move every character.
+ * - **Placement motion (issue #1498).** `characters[].placement_pivot: true`
+ *   adds an identity `<id>:placement` above those already placed bones. Direct
+ *   root bindings move to an unkeyed `<id>:root` beneath it. Scene tracks key
+ *   only translation on the pivot, in final scene units.
  * - **The scale, with the offset (issue #197).** `characters[].scale`, a
  *   positive number and 1 when absent, sizes the character about its stage's
  *   top-left corner: a point p of its root frame lands at `scale * p + shift`
@@ -114,7 +118,7 @@ import { clearComposeRun, COMPOSE_RUN_FILE, COMPOSE_RUN_SPEC, type ComposeRun, t
 import { readRequirements, type RequirementsFile } from './requirements.ts';
 import { OFFSET_PLACES, rigJsonText, type RigSpec } from './rig.ts';
 import { pyRound } from './round.ts';
-import { mergeSceneAnimations, readSceneAnimations, sceneBoneContext, sceneClipLoopProblems, type SceneAnimations } from './sceneclips.ts';
+import { mergeSceneAnimations, readSceneAnimations, sceneBoneContext, sceneClipLoopProblems, type SceneAnimations, type ScenePlacementPivot } from './sceneclips.ts';
 
 /** The scene file's `spec`. */
 export const SCENE_SPEC = 'spine-parts-scene/1';
@@ -134,6 +138,8 @@ export const IMAGE_SEP = '.';
 /** The plate's bone, slot and attachment name, and its image file. */
 export const PLATE = 'plate';
 export const PLATE_IMAGE = 'plate.png';
+
+const PLACEMENT_BONE = 'placement';
 
 /** What the author says the plate's pixels are. Recorded; judged by nothing. */
 export const PROVENANCES = ['observed', 'generated', 'unknown'] as const;
@@ -166,6 +172,8 @@ export interface SceneCharacter {
   scale: number;
   /** Allow placed part bounds to cross the canvas edge (issue #1491). */
   canvas_clip?: true;
+  /** Add a character-local translation target for scene-authored motion. */
+  placement_pivot?: true;
   /** The bars this character's own check may have failed and still be taken (issue #203), as the file lists them; empty when it lists none. */
   accept: string[];
 }
@@ -366,7 +374,9 @@ export function loadScene(path: string): SceneFile {
         fail('SCENE_FIELD_TYPE', where, `is ${show(c)}; {"id", "build", "offset"} is required`);
         return;
       }
-      known(c, where, ['id', 'build', 'offset', 'scale', 'accept', 'canvas_clip']);
+      const keys = ['id', 'build', 'offset', 'scale', 'accept', 'canvas_clip'];
+      if ('placement_pivot' in c) keys.push('placement_pivot'); // Keep the default unknown-key diagnostic byte-stable.
+      known(c, where, keys);
       let ok = true;
       for (const k of ['id', 'build', 'offset']) {
         if (!(k in c)) {
@@ -408,6 +418,10 @@ export function loadScene(path: string): SceneFile {
         fail('SCENE_FIELD_TYPE', `${where}.canvas_clip`, `is ${show(c.canvas_clip)}; literal true is required when the key is present — omit it to require containment on the canvas`);
         ok = false;
       }
+      if ('placement_pivot' in c && c.placement_pivot !== true) {
+        fail('SCENE_FIELD_TYPE', `${where}.placement_pivot`, `is ${show(c.placement_pivot)}. Literal true is required when the key is present`);
+        ok = false;
+      }
       const acc = c.accept;
       if ('accept' in c) {
         if (!(Array.isArray(acc) && acc.every((v) => typeof v === 'string'))) {
@@ -427,6 +441,7 @@ export function loadScene(path: string): SceneFile {
         scale: 'scale' in c ? (sc as number) : 1,
         accept: 'accept' in c ? [...(acc as string[])] : [],
         ...(c.canvas_clip === true ? { canvas_clip: true } : {}),
+        ...(c.placement_pivot === true ? { placement_pivot: true } : {}),
       });
     });
   }
@@ -1080,6 +1095,8 @@ export interface SceneCharacterReport {
   canvas_clip?: true;
   /** Intersection of the placed bounds and the canvas, in the same coordinates as bounds. */
   clipped_bounds?: [number, number, number, number];
+  /** Final bone name of the opted-in scene translation target. */
+  placement_pivot?: string;
   /** {@link rootShift}: what was added to the x and y of everything the character places in root's frame (after its scale), in Spine units (canvas px, y up). */
   shift: [number, number];
   /** What the shift was added to: the first-level bones, the slots on `root` whose regions moved, and the count of mesh weights bound to `root`. */
@@ -1152,6 +1169,24 @@ export function composeScene(
   const ready = builds.filter((b): b is CharacterBuild => b !== null);
   const byId = new Map(ready.map((b) => [b.id, b]));
   const ids = scene.characters.map((c) => c.id);
+  const pivots = new Map<string, ScenePlacementPivot>();
+  const generatedBones = new Set<string>();
+  scene.characters.forEach((c, i) => {
+    if (c.placement_pivot !== true) return;
+    const name = prefixed(c.id, PLACEMENT_BONE);
+    generatedBones.add(name);
+    const b = byId.get(c.id);
+    if (b === undefined) return;
+    const field = `scene.characters[${i}].placement_pivot`;
+    if (b.rig.bones.some(bone => bone.name === PLACEMENT_BONE)) {
+      fail('SCENE_PIVOT_NAME_FREE', field, `would emit bone ${show(name)}, already taken by source bone ${show(PLACEMENT_BONE)}. Rename that source bone or omit the opt-in`);
+    }
+    const bindsRoot = b.rig.slots.some(slot => slot.bone === ROOT_BONE) || Object.values(b.rig.skins.default).some(atts =>
+      Object.values(atts).some(att => 'weights' in att && att.weights.some(vertex => vertex.some(weight => weight.bone === ROOT_BONE))));
+    const rootBinding = bindsRoot ? prefixed(c.id, ROOT_BONE) : undefined;
+    if (rootBinding !== undefined) generatedBones.add(rootBinding);
+    pivots.set(c.id, { name, rootBinding, field });
+  });
 
   // ---- the plate ----------------------------------------------------------
   if (scene.plate !== null && plate !== null && (plate.width !== canvas.width || plate.height !== canvas.height)) {
@@ -1160,7 +1195,7 @@ export function composeScene(
 
   const layers = scene.plates ?? [];
   const layerNames = new Set(layers.map(p => p.name));
-  const reserved = new Set([ROOT_BONE, PLATE, 'idle', ...ids, ...ready.flatMap(b => [
+  const reserved = new Set([ROOT_BONE, PLATE, 'idle', ...ids, ...generatedBones, ...ready.flatMap(b => [
     ...b.rig.bones.map(x => prefixed(b.id, x.name)),
     ...b.rig.slots.map(x => prefixed(b.id, x.name)),
     ...Object.keys(b.motion.animations).map(n => prefixed(b.id, n)),
@@ -1240,6 +1275,7 @@ export function composeScene(
     }
     problems.push(...scaleProblems(c, b));
     const shift = rootShift(b.rig.skeleton, stage, c.offset, s);
+    const pivot = pivots.get(c.id);
     rows.push({
       id: c.id,
       build: c.build,
@@ -1249,13 +1285,14 @@ export function composeScene(
       rig_scale: b.rigScale,
       bounds,
       ...(clippedBounds === undefined ? {} : { canvas_clip: true, clipped_bounds: clippedBounds }),
+      ...(pivot === undefined ? {} : { placement_pivot: pivot.name }),
       shift,
       shifted: {
         bones: b.rig.bones.filter((x) => x.parent === ROOT_BONE).map((x) => prefixed(c.id, x.name)),
         root_regions: b.rig.slots.filter((s) => s.bone === ROOT_BONE && Object.values(b.rig.skins.default[s.name] ?? {}).some((a) => !('weights' in a))).map((s) => prefixed(c.id, s.name)),
         root_weights: Object.values(b.rig.skins.default).flatMap((atts) => Object.values(atts)).reduce((n, a) => n + ('weights' in a ? a.weights.flat().filter((w) => w.bone === ROOT_BONE).length : 0), 0),
       },
-      bones: b.rig.bones.length - 1,
+      bones: b.rig.bones.length - 1 + (pivot === undefined ? 0 : 1) + (pivot?.rootBinding === undefined ? 0 : 1),
       slots: b.rig.slots.length,
       tracks: b.motion.animations.idle.tracks.length,
       constraints: b.rig.constraints?.length ?? 0,
@@ -1298,6 +1335,7 @@ export function composeScene(
     const own = slotsOf.get(id);
     if (own === undefined) return;
     if (!own.includes(slot)) {
+      if (layerNames.has(e) && generatedBones.has(e)) return; // The plate collision already names this entry.
       fail('SCENE_ORDER_RESOLVES', at, `is "${e}"; character "${id}" has no slot "${slot}" — its slots are ${own.map((s) => `"${s}"`).join(', ')}`);
       return;
     }
@@ -1351,6 +1389,33 @@ export function composeScene(
       fail('SCENE_NAME_PREFIXED', where, `names the physics constraint "${name}", which character "${id}" does not declare and ${other.map((x) => `"${x}"`).join(', ')} does${other.length > 1 ? ' each' : ''}; a name crosses characters only with its prefix — ${other.map((x) => `"${prefixed(x, name)}"`).join(' or ')} — and a build's track may name only its own physics constraints`);
     } else fail('SCENE_NAME_RESOLVES', where, `names the physics constraint "${name}", which no character of the scene declares`);
   };
+  // A generated pivot must not resolve an undeclared source bone reference.
+  // Group members can also be slots or physics constraints, depending on the property.
+  const isBoneProperty = (property: string): boolean => SCALED_TRACK_PROPERTIES.includes(property) || UNSCALED_TRACK_PROPERTIES.includes(property);
+  const sceneBoneGroups = new Set<string>();
+  if (pivots.size > 0) for (const clip of Object.values(scene.animations ?? {})) for (const track of clip.tracks) {
+    if (track.group !== undefined && isBoneProperty(track.property)) sceneBoneGroups.add(track.group);
+  }
+  for (const b of ready) if (pivots.has(b.id) && !bonesOf.get(b.id)?.has(PLACEMENT_BONE)) {
+    const check = (name: unknown, where: string): void => {
+      if (name === PLACEMENT_BONE) ownBone(b.id, name, `character "${b.id}" ${where}`);
+    };
+    for (const [i, bone] of b.rig.bones.entries()) check(bone.parent, `rig.json bones[${i}].parent`);
+    for (const [i, slot] of b.rig.slots.entries()) check(slot.bone, `rig.json slots[${i}].bone`);
+    for (const [slot, atts] of Object.entries(b.rig.skins.default)) for (const [name, att] of Object.entries(atts)) {
+      if ('weights' in att && att.weights.some(vertex => vertex.some(weight => weight.bone === PLACEMENT_BONE))) {
+        check(PLACEMENT_BONE, `rig.json skins.default.${slot}.${name}.weights`);
+      }
+    }
+    const boneGroups = new Set(Object.keys(b.motion.groups).filter(group => sceneBoneGroups.has(prefixed(b.id, group))));
+    for (const [name, anim] of Object.entries(animationsOf(b.motion))) for (const [i, track] of anim.tracks.entries()) {
+      check(track.bone, `motion.json animations.${name}.tracks[${i}].bone`);
+      if (track.group !== undefined && isBoneProperty(track.property)) boneGroups.add(track.group);
+    }
+    for (const group of boneGroups) {
+      if (b.motion.groups[group]?.includes(PLACEMENT_BONE)) check(PLACEMENT_BONE, `motion.json groups.${group}`);
+    }
+  }
   for (const b of ready) {
     (b.rig.constraints ?? []).forEach((con, k) => {
       const type = con.type as keyof typeof CONSTRAINT_BONE_FIELDS;
@@ -1497,6 +1562,12 @@ export function composeScene(
     const id = c.id;
     const s = c.scale;
     const [dx, dy] = rootShift(b.rig.skeleton, stage, c.offset, s);
+    const pivot = pivots.get(id);
+    const rootBinding = pivot?.rootBinding ?? ROOT_BONE;
+    if (pivot !== undefined) {
+      bones.push({ name: pivot.name, parent: ROOT_BONE, x: 0, y: 0 });
+      if (pivot.rootBinding !== undefined) bones.push({ name: pivot.rootBinding, parent: pivot.name, x: 0, y: 0 });
+    }
     // At a scale other than 1 every length the character carries is scaled (issue #197): each bone's x, y and length,
     // each region's x, y (and its drawn size, by scaleX/scaleY), each weight's bind x, y, the constraints' lengths
     // (scaledConstraint), each stop's at offset in against's local frame (scaledStop; issue #431) and the translate keys
@@ -1505,9 +1576,13 @@ export function composeScene(
       if (bone.name === ROOT_BONE) continue;
       const first = bone.parent === ROOT_BONE;
       const sized = s === 1 ? {} : { x: scaledBy(bone.x, s), y: scaledBy(bone.y, s), ...(bone.length === undefined ? {} : { length: scaledBy(bone.length, s) }) };
-      bones.push({ ...bone, name: P(id, bone.name), ...(bone.parent === undefined ? {} : { parent: P(id, bone.parent) }), ...sized, ...(first ? { x: placed(bone.x, dx, s), y: placed(bone.y, dy, s) } : {}) });
+      const parent = first ? pivot?.name ?? ROOT_BONE : bone.parent === undefined ? undefined : P(id, bone.parent);
+      bones.push({ ...bone, name: P(id, bone.name), ...(parent === undefined ? {} : { parent }), ...sized, ...(first ? { x: placed(bone.x, dx, s), y: placed(bone.y, dy, s) } : {}) });
     }
-    for (const s of b.rig.slots) slotDefs.set(prefixed(id, s.name), { ...s, name: prefixed(id, s.name), bone: P(id, s.bone), attachment: s.attachment === null ? null : prefixed(id, s.attachment) });
+    for (const slot of b.rig.slots) {
+      const bone = slot.bone === ROOT_BONE ? rootBinding : P(id, slot.bone);
+      slotDefs.set(prefixed(id, slot.name), { ...slot, name: prefixed(id, slot.name), bone, attachment: slot.attachment === null ? null : prefixed(id, slot.attachment) });
+    }
     // Everything the character places in root's own frame moves with it: a region on a slot root carries, and a
     // weight bound to root. Every other offset is local to a bone the shift already moved.
     const slotBone = new Map(b.rig.slots.map((s) => [s.name, s.bone]));
@@ -1527,7 +1602,7 @@ export function composeScene(
           a.weights = (att.weights as Array<Array<Record<string, unknown>>>).map((v) =>
             v.map((w) =>
               w.bone === ROOT_BONE
-                ? { ...w, x: placed(w.x as number, dx, s), y: placed(w.y as number, dy, s) }
+                ? { ...w, bone: rootBinding, x: placed(w.x as number, dx, s), y: placed(w.y as number, dy, s) }
                 : { ...w, bone: P(id, w.bone as string), ...(s === 1 ? {} : { x: scaledBy(w.x as number, s), y: scaledBy(w.y as number, s) }) },
             ),
           );
@@ -1646,7 +1721,7 @@ export function composeScene(
   const note = notes.size === 1 ? [...notes][0] : ready.map((b) => `${b.id}: ${b.motion.animations.idle.note}`).join(' | ');
   const motion: MotionSpec = { spec: 'rigc-motion/1', archetype: name, cut: name, easings, groups, animations: { idle: { duration: durations[0], loop: true, note, tracks, ...(idleDeform.length === 0 ? {} : { deform: idleDeform }) }, ...beside } };
 
-  if (scene.animations !== undefined) mergeSceneAnimations(rig, motion, scene.animations);
+  if (scene.animations !== undefined || pivots.size > 0) mergeSceneAnimations(rig, motion, scene.animations ?? {}, [...pivots.values()]);
 
   const report: SceneReport = {
     spec: SCENE_REPORT_SPEC,
