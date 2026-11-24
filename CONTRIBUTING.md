@@ -115,6 +115,54 @@ a green checkout cannot see. Its four planted broken packages (a module, each
 dependency, removed; the Spine runtime added) run beside the two green cases,
 so a run that passes has watched the check fail four times.
 
+## Development commands
+
+```sh
+bun install
+bun run typecheck        # tsc --noEmit, strict
+bun run lint             # one rule: no explicit any
+bun run fetch-examples   # the public examples' paintings and layers, into examples/*/inputs (needs a network); each file held to its blob id at the pinned commit, a stale one replaced by name
+bun run selftest         # every gate's controls; with the examples fetched, build on each of them against its expected/
+bun run selftest -- --summary-json summary.json  # also write rig-selftest-summary/1 (per-suite PASS/FAIL/SKIP counts, holes, partial flag and exit)
+bun run smoke            # pack, install into an empty directory, run from the install (needs a network)
+```
+
+`bun run selftest -- --summary-json <file>` writes a machine-readable summary (`spec: "rig-selftest-summary/1"`, `tool: "rig-parts"`) derived from the same `RunTally` that prints the console summary: `exit` (`0 | 1 | 2`), `partial` (`boolean`), `only` (`string[] | null`), `faults`, `totals` (`suites`, `ran`, `skipped_suites`, `controls`, `passed`, `failed`, `skipped`, `holes`), per-suite `suites` entries (`suite`, `ran`, `controls`, `passed`, `failed`, `skipped`, `status`, `reason`), `skips` (`{ suite, name, reason, hole }`), and `holes` (`{ suite, name, reason }`). See [AUTHORING §8](docs/AUTHORING.md#machine-readable-selftest-summary---summary-json-issue-725) for the full shape.
+
+The generated `foot-ownership` suite can be run alone with
+`bun run selftest -- --only foot-ownership` (exit 2 means a green partial run,
+not a full-tree verdict). Issue #638's revised acceptance requires zero foreign-leg
+components and reports historical own-cap components separately; it was changed
+after measurement, and the historical case did not pass the original second-island
+1% bar. Issue #637 additionally preserves assigned own-cap connections under covers:
+the generated default is now one connected component, retaining the historical
+own-cap pixels and their bridge. The controls require both historical measurements
+and current connected ownership, with no foreign-leg pixels.
+[AUTHORING's limb section](docs/AUTHORING.md#limbs-cut-at-their-joints-limbs-issue-349)
+records the generated default-cap case and its preservation controls.
+
+## The README loop, as the selftest runs it
+
+The command-order controls exercise the hand-copy route of the README's loop block on each fetched
+example from a config holding only what the first step reads (`RL01`). The optional
+`--write-config` forms save the proposed fields; `RL01` does not exercise
+that flag. On `demo` the
+proposal pasted uncorrected stops at the last step, naming its `bottomwear` on
+`CHECK_TIP_OVER_ROOT` — the correction its tracked config records there, the two outer
+skirt chains moved (issue #227, [its README](examples/demo/README.md)); on `scarf`,
+since issue #262, it builds green, and on `wind` too. `wind`'s config declares the cloth
+recipe and its limbs, so the block runs on it again with that `cloth` block authored,
+`--cloth config.json` on the drafting `propose` line and its tracked `keypoints.json` on both
+`propose --parts` lines (`RL05`): it pastes `limbs` and `constraints` with the rest and gives
+back the tracked config, section for section ([its README](examples/wind/README.md)).
+On `demo`, which tracks the pose file it was painted on, the block runs again with
+`--keypoints` on both `propose --parts` lines (`RL03`): the proposal then also drafts
+`limbs`, the step's list carries them, and the run ends where `RL01` ends. The joints
+are that pose file scaled to the painting, not read off it, so this shows what the
+loop carries, not where the joints are. On `wind`, which tracks the joints read off its
+painting (`keypoints.json`), `RL03` runs with those. The list as it stood before issue #375, four
+sections, stops at `--from-config` naming every limb part (`RL04`).
+
 ## What a change has to clear
 
 - **No `any`, no `as any`, in `src/` or `cli.ts`.**
