@@ -7940,9 +7940,11 @@ physics through the splice and repeats only explicit interior reset keys.
 Prefixed side clips keep their timing. The composed idle also closes at its
 stored playback end.
 
-Check internal seams separately from outer loop closure by comparing keyed
-poses before, at and after each splice to the one-period source and comparing
-physics to a continuous control with matched placement and history.
+The synthetic seam control compares physics tip displacement vectors into and
+out of each internal splice and the outer wrap against a native one-period loop
+with matched carrier placement, clock and history. A planted reset fails the
+vector comparison. Keyed pose checks around each internal splice catch defects
+even when the outer endpoints close.
 
 What is composed:
 
@@ -7983,8 +7985,10 @@ What is composed:
   offset only when it is not 1, and the `[compose]` line always prints it.
 - **The plate** is a region on the bone `plate` under `root`, the first slot, its
   image at canvas (0, 0).
-- **One `idle`** holds every character's tracks; the characters' idles must be of one
-  duration. Constraints and `stops` entries are carried in character order with their
+- **One `idle`** holds every character's tracks over the shared scene duration.
+  Source idles can differ in duration. Each fills the scene idle in one period
+  or, with `idle_repeats`, in exactly the declared number of periods.
+  Constraints and `stops` entries are carried in character order with their
   `invariants.detached`; `invariants.idleDrivesMeshes` once, when any character
   declares it.
 - **Every animation beside a character's idle** — what `motion.animations_from`
@@ -8128,7 +8132,7 @@ one-second idle extension whose pose returns to setup at both ends.
 Use `translate` for `[x, y]` or `translatex` and `translatey` for single values.
 The values are offsets in final scene pixels, x right and y up. The character's
 placement scale applies to its setup art and imported tracks. These authored
-translation values are already in scene units. The existing idle duration,
+translation values are already in scene units. The authored scene idle duration,
 posed endpoint and rig-c checks apply. Check previews use the existing size
 and sampling limits.
 
