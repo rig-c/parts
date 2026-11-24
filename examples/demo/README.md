@@ -192,21 +192,11 @@ The README loop pasted uncorrected stops where the README says to read
 
 ## The build, by figure
 
-`check` 11 of 11 bars measured, PASS (the tenth, issues #320 and #333, reads the idle and the clips beside it for folds; the eleventh, issue #347, turns each sleeve's chain far):
-
-| | |
-| --- | --- |
-| gate | `50 assertions: 25 measured (25 passed, 0 failed), 25 skipped, 0 not in profile "rig-play"` |
-| pack | `skeleton.png 1051x972, 23 region(s), 96.9% covered, padding 2, page edges free, shape polygon` |
-| seam | mean 0.147, 0 px over 40, frame scale 0.943777 |
-| loop | max \|d\| 0 |
-| `TIP_OVER_ROOT` | `bottomwear` 2.426, `handwear_r` 6.932, `handwear_l` 6.525 (floor 1.4725) |
-| `TEXTURE_STRETCH` | severity 1.097, `hair_front` (ceiling 1.926544) |
-| `BLINK_NO_HOLE` | idle frame 29 closed, hole 0 px |
-| `ANIMATIONS_DO_NOT_FOLD` | the idle and the seven clips at 12 fps, the 29 physics constraints left out: no folding mesh |
-| `STRESS_OFF_CHAIN` | `handwear_r` and `handwear_l`, each chain's first link turned 90°, −90° and 180°: 1.0000 at every turn (bar 1.0000) |
-| `RECOMPOSITE_HOLES` | error px 14,570; uncovered 2,939 in 1,020 holes, the largest 48 px at 204,519 27x25 beside `bottomwear` |
-| meshes | 9, 1,192 vertices (`mesh_report.json`) |
+The current build's gate and pack lines are in [`expected/gate_spine-html.txt`](expected/gate_spine-html.txt),
+its seam, loop and `check` bar figures (`BREATH_VISIBLE`, `BLINK_NO_HOLE`, `CHAIN_LAG`,
+`TIP_OVER_ROOT`, `STILL_REGIONS_DARK`, `TEXTURE_STRETCH`, `ANIMATIONS_DO_NOT_FOLD`,
+`STRESS_OFF_CHAIN` and `RECOMPOSITE_HOLES`) in [`expected/check.json`](expected/check.json),
+and its per-mesh vertex and triangle counts in [`expected/mesh_report.json`](expected/mesh_report.json).
 
 `--seam silhouette` changes little here: recomposite error pixels 14,570 → 14,534,
 uncovered 2,939 under both. The README's animation is the default build's.
@@ -214,8 +204,8 @@ uncovered 2,939 under both. The README's animation is the default build's.
 ### The picture on the package README
 
 The package README shows the painting, this build's idle loop and the contact sheet of its
-parts. The corrections behind the build are in *The two corrections* above and the lines
-`check` printed are in the table above.
+parts. The corrections behind the build are in *The two corrections* above and the build's
+`check`, gate and mesh figures are in `expected/` above.
 
 The loop is that build's indexed APNG, 40 frames at 12 fps, 703,909 bytes, one
 256-entry palette at a measured error of max 71, mean 0.636 per channel over every
