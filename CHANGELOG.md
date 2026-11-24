@@ -417,7 +417,7 @@ The assembly reading now covers the tolerance a region take reads, and `assemble
 
 ### Bug Fixes
 
-* **release:** restore the independent 2.x package version line for `@rig-c/parts` (`rig-hq#22`). The core dependency remains pinned to `@rig-c/core` 3.7.0. This release carries the validated manual version-tag release support recorded under 3.7.0 below.
+* **release:** restore the independent 2.x package version line for `@rig-c/parts`. The core dependency remains pinned to `@rig-c/core` 3.7.0. This release carries the validated manual version-tag release support recorded under 3.7.0 below.
 
 ## 3.7.0
 

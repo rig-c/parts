@@ -1518,14 +1518,14 @@ prepared-reference implementation, packaged locally with `rig-c` metadata versio
 Its grid-selection replays bind one exact reference and schedule, then compare each
 fresh gated candidate.
 The number of candidate probes, gated builds and packed-page checks is
-unchanged; a changed bound or reference input is refused. In one exclusive Nova
+unchanged; a changed bound or reference input is refused. In one exclusive remote-pool
 WSL ABBA invocation, using the same rig-c tarball in both arms and two runs per
 arm, the strict switched `bottomwear` input derived from public `reference-demo` took 56.00–56.28 s
 with one-shot comparison and 50.55–51.40 s with preparation included; the similarly switched public
 `reference-sample` input took 18.96–20.41 s and 16.39–18.71 s respectively.
 The paired differences were 4.59–5.74 s and 1.70–2.57 s. These are observed
 wall times for those inputs, not an execution limit or a machine-wide idle
-measurement; load outside the Nova pool was not measured. The prior count
+measurement; load outside the remote job pool was not measured. The prior count
 bounds remain the termination guarantee.
 
 ## Determinism
