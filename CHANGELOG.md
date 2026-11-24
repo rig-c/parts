@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.56.0 (2026-11-24)
+
+`compose` can repeat a character's idle within a scene clip and names the opt-in required to key a missing placement pivot.
+
+**Read before upgrading:**
+
+* **`characters[].idle_repeats` is optional in `spine-parts-scene/1`.** Set it to a JavaScript safe integer of at least 2. Omission plays one source period. With any opt-in, declare `animations.idle` and set its duration to exactly each character's source idle period times its count, including a count of one for characters that omit the key. A repeated source idle must have `loop: true`, close at its stored endpoints and splice without changing keyed motion or introducing a physics reset. `SCENE_REPEAT_COUNT` refuses an invalid count, `SCENE_REPEAT_IDLE_REQUIRED` names the missing scene idle, `SCENE_REPEAT_DURATION` names an inexact duration, `SCENE_REPEAT_SOURCE_LOOP_CLOSES` names a non-looping or open source, and `SCENE_REPEAT_KEY_SEAM` names a splice the source channels cannot preserve. The composed clip still has to pass its existing closure check.
+* **Opted-in rows add `idle_repeats` to `scene.json`.** The row's `idle_duration` remains the source period and the top-level `idle_duration` gives the scene period. `motion.json` repeats the character's idle keys and absolute Bézier time handles on the source clock, shares equivalent endpoint keys, and keeps physics continuous across periods. Scene-authored keys are appended once. `compose-run.json` keeps its shape and key order, with `scene.sha256` binding the changed input. Scenes without `idle_repeats` keep their successful compose output paths and deterministic bytes, apart from Core's existing `started_at` and `finished_at` clocks in `check/build/run.json`. The existing duration checks still apply on that path.
+* **An unresolved `<id>:placement` target without `placement_pivot: true` now reports `SCENE_PIVOT_DECLARED`.** It names the affected character and scene track, including a target reached through a bone group. That case previously surfaced as Core's `CE_COMPILE_ANIMATION_BONE_UNKNOWN`. Other unknown bone names still go through Core's check. Successful scenes keep their output bytes for the same inputs, subject to Core's existing receipt clocks.
+* **The packaged README and guides have updated command links, outfit instructions and reference text.** The outfit recipe is now under “Outfit alternates” in `docs/AUTHORING.md`. Scene-authored keys on `root` already move the entire scene, including the plates. The documentation changes preserve generated output bytes.
+* **`rig-parts --version` and the `package.version` field in `assemble` and `rig` run stamps now read `2.56.0`.** The version bump changes those receipt bytes. The receipt fields and output hashes retain their meaning.
+
+### Features
+
+* **compose:** repeat each opted-in character's closed idle for whole source periods, preserve its keyed timing and continuous physics, and report the repeat count beside its source duration (`#1511`, `#1512`, `580f948`).
+
+### Bug Fixes
+
+* **compose:** explain how to declare the placement pivot when a scene track targets a missing `<id>:placement` directly or through a group (`#1504`, `#1508`, `3ac8798`).
+* **docs:** describe scene-wide `root` animation and identify the controls for moving plates and characters independently (`#1503`, `#1506`, `b134a1a`).
+* **docs:** correct the `EDGE_SPLIT_ALPHA` name, refresh repository and guide links, and describe `SEAM_OVER_MOTION` without a stale dependency reference (`#1513`, `#1515`, `9bc8667`).
+* **docs:** use neutral job-pool wording in the authoring and measurement guides (`#1514`, `#1517`, `f50c94e`).
+* **docs:** list every CLI command in the packaged README and link the configuration for outfit alternates and authored visemes (`#1518`, `#1520`, `8bbddbb`).
+* **docs:** put the outfit-alternate recipe, current refusals and measured fixture evidence in `docs/AUTHORING.md` (`#1522`, `#1523`, `525adde`).
+
 ## 2.55.0 (2026-11-23)
 
 `compose` can animate an opted-in character's placement independently of the rest of the scene.
