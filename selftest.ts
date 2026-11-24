@@ -45270,7 +45270,7 @@ function runDocumentReadCases(text: ReadonlyArray<readonly [string, string]>, sa
   const planted = rawHeadingReadFaults([[path, raw]]);
   const allowed = rawHeadingReadFaults([[path, shared + '\n' + quiet], ['src/plant_document.ts', raw]]);
   const fault = (line: number): string => 'tools/plant_document.ts:' + line + ': Markdown heading reads must use readDocument';
-  say('TY42_MARKDOWN_HEADING_READS_USE_THE_SHARED_READER',
+  say('TY44_MARKDOWN_HEADING_READS_USE_THE_SHARED_READER',
     live.length === 0 && planted.join('\n') === [fault(4), fault(6), fault(9)].join('\n') && allowed.length === 0,
     JSON.stringify({ live, planted, allowed }),
     'Issue #1524: direct Markdown heading reads in selftest.ts and tools use the shared reader before slicing.');
@@ -45285,7 +45285,7 @@ function runDocumentReadCases(text: ReadonlyArray<readonly [string, string]>, sa
     writeFileSync(copy, crlf);
     const actual = sourceBeforeScissors(readDocument(copy));
     const rawSection = sourceBeforeScissors(crlf);
-    say('TY43_THE_REAL_AUTHORING_SECTION_SURVIVES_CRLF',
+    say('TY45_THE_REAL_AUTHORING_SECTION_SURVIVES_CRLF',
       real.includes('Scissors are for structure, never for repair') && actual === real && rawSection === '',
       'Source before scissors: ' + real.length + ' LF characters, ' + actual.length +
         ' normalized CRLF characters, ' + rawSection.length + ' raw CRLF characters',
