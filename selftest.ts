@@ -47090,7 +47090,6 @@ function aliasSpans(): RegExp[] {
 const FORMER_NAME_LINES: ReadonlyArray<readonly [string, string, string]> = [
   ['package.json', `    "${FORMER_PACKAGE_NAME}": "./bin/${COMMAND_NAME}.cjs"`, 'the transition bin: the former command on the same launcher'],
   ['.gitignore', `/${FORMER_PACKAGE_NAME}-*.tgz`, 'npm pack in a checkout of a tag before the rename writes the tarball under the former name'],
-  ['README.md', `as \`${FORMER_PACKAGE_NAME}\`, the legacy install name**, and the install keeps a \`${FORMER_PACKAGE_NAME}\` command`, 'the install section names the legacy install name and says its command is kept'],
   ['scripts/alias_tarball.ts', `export const ALIASES: readonly string[] = ['${COMMAND_NAME}', '${FORMER_PACKAGE_NAME}'];`, 'the one place a program reads the aliases the package is also published as (AL01)'],
   ['.github/workflows/release.yml', `          for name in ${[PACKAGE_NAME, COMMAND_NAME, FORMER_PACKAGE_NAME].join(' ')}; do`, 'the pre-checkout registry plan checks every publish name (AL09)'],
   ['.github/workflows/release.yml', `              case "$name" in ${PACKAGE_NAME}) canonical=true;; ${COMMAND_NAME}) rig_parts=true;; ${FORMER_PACKAGE_NAME}) spine_parts=true;; esac`, 'the registry plan maps each missing name to its own publish flag (AL09)'],
