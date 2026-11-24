@@ -88,8 +88,8 @@ required references are explicit inventory rows. Symlinks and special files
 are refused. Inputs are hashed again before atomic publication.
 
 Base and alternate `scene.figure_mask` are declared but not consumed, read,
-hashed or bound by this command. Standalone `assemble` writes the figure's mask
-`figure_rig.png` beside `parts.json` (issue #1177). The plate is outside this
+hashed or bound by this command. Standalone `assemble` on a scene painting writes
+the figure's mask `figure_rig.png` beside `parts.json` (issue #1177). The plate is outside this
 command's inputs. `painting_in_rig` is written beside `parts.json` in both
 standalone assemble and build layouts and is consumed and hash-checked.
 
