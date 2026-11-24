@@ -79,8 +79,8 @@
  * - **The plate**: a region on the bone `plate` under `root`, its image at
  *   canvas (0, 0), the canvas's size exactly. Its `provenance` (`observed`,
  *   `generated`, `unknown`) is copied into `scene.json` and nothing reads it.
- * - **The idle**: one `idle` holding every character's tracks, which needs
- *   every character's idle to be the same length (`SCENE_DURATION_AGREES`).
+ * - **The idle**: one `idle` holding every character's tracks. It can play
+ *   whole source periods per character when the scene declares `idle_repeats`.
  * - **A failing bar, by name (issue #203).** A build whose own check is not
  *   green is refused (`SCENE_BUILD_GREEN`) unless every bar it failed is named
  *   in `compose --accept` or the character's `accept` — the two lists are
@@ -118,7 +118,8 @@ import { clearComposeRun, COMPOSE_RUN_FILE, COMPOSE_RUN_SPEC, type ComposeRun, t
 import { readRequirements, type RequirementsFile } from './requirements.ts';
 import { OFFSET_PLACES, rigJsonText, type RigSpec } from './rig.ts';
 import { pyRound } from './round.ts';
-import { mergeSceneAnimations, readSceneAnimations, sceneBoneContext, sceneClipLoopProblems, type SceneAnimations, type ScenePlacementPivot } from './sceneclips.ts';
+import { mergeSceneAnimations, readSceneAnimations, sceneBoneContext, sceneClipLoopProblems, sceneRepeatSourceLoopProblems, type SceneAnimations, type ScenePlacementPivot } from './sceneclips.ts';
+import { repeatSceneKeys } from './scenerepeat.ts';
 
 /** The scene file's `spec`. */
 export const SCENE_SPEC = 'spine-parts-scene/1';
@@ -174,6 +175,8 @@ export interface SceneCharacter {
   canvas_clip?: true;
   /** Add a character-local translation target for scene-authored motion. */
   placement_pivot?: true;
+  /** Total number of source idle periods within the declared scene idle. */
+  idle_repeats?: number;
   /** The bars this character's own check may have failed and still be taken (issue #203), as the file lists them; empty when it lists none. */
   accept: string[];
 }
@@ -376,6 +379,7 @@ export function loadScene(path: string): SceneFile {
       }
       const keys = ['id', 'build', 'offset', 'scale', 'accept', 'canvas_clip'];
       if ('placement_pivot' in c) keys.push('placement_pivot'); // Keep the default unknown-key diagnostic byte-stable.
+      if ('idle_repeats' in c) keys.push('idle_repeats');
       known(c, where, keys);
       let ok = true;
       for (const k of ['id', 'build', 'offset']) {
@@ -422,6 +426,11 @@ export function loadScene(path: string): SceneFile {
         fail('SCENE_FIELD_TYPE', `${where}.placement_pivot`, `is ${show(c.placement_pivot)}. Literal true is required when the key is present`);
         ok = false;
       }
+      const repeats = c.idle_repeats;
+      if ('idle_repeats' in c && !(typeof repeats === 'number' && Number.isSafeInteger(repeats) && repeats >= 2)) {
+        fail('SCENE_REPEAT_COUNT', `${where}.idle_repeats`, `is ${show(repeats)}. Declare a safe integer of 2 or more, or omit the field to use one source period`);
+        ok = false;
+      }
       const acc = c.accept;
       if ('accept' in c) {
         if (!(Array.isArray(acc) && acc.every((v) => typeof v === 'string'))) {
@@ -442,6 +451,7 @@ export function loadScene(path: string): SceneFile {
         accept: 'accept' in c ? [...(acc as string[])] : [],
         ...(c.canvas_clip === true ? { canvas_clip: true } : {}),
         ...(c.placement_pivot === true ? { placement_pivot: true } : {}),
+        ...(typeof repeats === 'number' ? { idle_repeats: repeats } : {}),
       });
     });
   }
@@ -462,6 +472,11 @@ export function loadScene(path: string): SceneFile {
     catch (err) {
       if (!(err instanceof PartsError)) throw err;
       problems.push(...err.problems);
+    }
+  }
+  if (!(isRecord(o.animations) && Object.hasOwn(o.animations, 'idle'))) {
+    for (const c of characters) if (c.idle_repeats !== undefined) {
+      fail('SCENE_REPEAT_IDLE_REQUIRED', 'scene.animations.idle', `is absent for character ${show(c.id)} with idle_repeats ${c.idle_repeats}. Declare the scene idle and its duration`);
     }
   }
   refuseIfAny(problems);
@@ -486,6 +501,8 @@ export interface CharacterBuild {
   images: Array<[string, Uint8Array]>;
   /** Build-relative paths and hashes of the JSON and image bytes consumed here. */
   files: RunStampFileEntry[];
+  /** Exact parsed input texts for the opted-in pre-emission source gate. */
+  repeatSource?: Array<[string, string]>;
   /** The bars its own check failed that were accepted (issue #203), in check's order; empty for a green build. */
   accepted: string[];
 }
@@ -506,7 +523,7 @@ const DERIVE_KEYS = ['kind', 'degrees', 'depth', 'carried', 'about', 'narrowing'
 const DEFORM_KEYS = ['skin', 'slot', 'attachment', 'keys'];
 const DEFORM_KEY_KEYS = ['t', 'vertices', 'transform'];
 const TURN_TRANSFORM_KEYS = ['kind', 'degrees', 'depth', 'narrowing'];
-type SceneDeform = { skin?: string; slot: string; attachment: string; keys: Array<Record<string, unknown>> };
+type SceneDeform = { skin?: string; slot: string; attachment: string; keys: Array<{ t: number } & Record<string, unknown>> };
 
 /** One animation of a motion.json: the idle, or one beside it as the file `motion.animations_from` named it (issue #183). */
 type SceneAnimation = { duration: number; loop?: boolean; note?: string; tracks: MotionSpec['animations']['idle']['tracks']; deform?: SceneDeform[] };
@@ -569,8 +586,15 @@ export function readCharacterBuild(c: SceneCharacter, problems: Problem[], accep
   const dir = c.buildDir;
   const who = `character "${c.id}" (${c.build})`;
   const files: RunStampFileEntry[] = [];
+  const repeatSource: Array<[string, string]> = [];
+  const repeating = c.idle_repeats !== undefined;
   const consumed = (path: string, bytes: Uint8Array): void => {
     files.push({ path, sha256: createHash('sha256').update(bytes).digest('hex') });
+    if (repeating && (path === 'rig/rig.json' || path === 'rig/motion.json')) {
+      const text = Buffer.from(bytes).toString('utf8');
+      if (!Buffer.from(text).equals(bytes)) problems.push({ code: 'SCENE_BUILD_FIELD_KNOWN', object: `${who} ${path}`, detail: 'is not UTF-8; the source gate must read the exact input bytes' });
+      repeatSource.push([path.slice('rig/'.length), text]);
+    }
   };
   const json = (path: string, what: string): unknown => readJson(join(dir, path), what, problems, bytes => consumed(path, bytes));
   if (!existsSync(dir) || !statSync(dir).isDirectory()) {
@@ -766,10 +790,10 @@ export function readCharacterBuild(c: SceneCharacter, problems: Problem[], accep
       }
       if (isRecord(anims.idle)) {
         unknown('motion.json animations.idle', anims.idle, IDLE_KEYS);
-        if (anims.idle.loop !== true) problems.push({ code: 'SCENE_BUILD_FIELD_KNOWN', object: `${who} motion.json animations.idle.loop`, detail: `is ${show(anims.idle.loop)}; the rig stage writes true` });
+        if (anims.idle.loop !== true && !repeating) problems.push({ code: 'SCENE_BUILD_FIELD_KNOWN', object: `${who} motion.json animations.idle.loop`, detail: `is ${show(anims.idle.loop)}; the rig stage writes true` });
         const tracks = Array.isArray(anims.idle.tracks) ? anims.idle.tracks : [];
         tracks.forEach((t, i) => {
-          unknown(`motion.json animations.idle.tracks[${i}]`, t, TRACK_KEYS);
+          unknown(`motion.json animations.idle.tracks[${i}]`, t, repeating ? [...TRACK_KEYS, 'lag', 'stagger'] : TRACK_KEYS);
           const keys = isRecord(t) && Array.isArray(t.keys) ? t.keys : [];
           keys.forEach((k, j) => unknown(`motion.json animations.idle.tracks[${i}].keys[${j}]`, k, KEY_KEYS));
         });
@@ -811,7 +835,7 @@ export function readCharacterBuild(c: SceneCharacter, problems: Problem[], accep
         if (!Array.isArray(deform.keys)) { shape(`${where}.keys`, `is ${show(deform.keys)}; a list of turn deform keys is required`); continue; }
         for (const [j, key] of deform.keys.entries()) {
           const keyAt = `${where}.keys[${j}]`;
-          unknown(keyAt, key, DEFORM_KEY_KEYS);
+          unknown(keyAt, key, repeating && name === 'idle' ? [...DEFORM_KEY_KEYS, 'ease', 'curve'] : DEFORM_KEY_KEYS);
           if (!isRecord(key)) continue;
           if (!finite(key.t)) shape(`${keyAt}.t`, `is ${show(key.t)}; a finite time is required`);
           if ('vertices' in key && !(Array.isArray(key.vertices) && key.vertices.every(finite))) shape(`${keyAt}.vertices`, `is ${show(key.vertices)}; finite offset pairs are required`);
@@ -823,7 +847,7 @@ export function readCharacterBuild(c: SceneCharacter, problems: Problem[], accep
   }
   if (problems.length > before) return null;
   files.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
-  return { id: c.id, dir, rig: rigRaw as RigSpec, motion: motionRaw as MotionSpec, rigSize, rigScale, artBox, images, files, accepted };
+  return { id: c.id, dir, rig: rigRaw as RigSpec, motion: motionRaw as MotionSpec, rigSize, rigScale, artBox, images, files, accepted, ...(repeating ? { repeatSource } : {}) };
 }
 
 // ---------------------------------------------------------------------------
@@ -1106,6 +1130,7 @@ export interface SceneCharacterReport {
   tracks: number;
   constraints: number;
   idle_duration: number;
+  idle_repeats?: number;
   /** The bars the character's own check failed that `--accept` or its `accept` took (issue #203); written only when there are any, so a scene of green builds writes the bytes it wrote before the field existed. */
   accepted?: string[];
 }
@@ -1159,6 +1184,7 @@ export function composeScene(
   mode: PackMode = { pageEdges: DEFAULT_PAGE_EDGES, packShape: DEFAULT_PACK_SHAPE },
   requirements: RequirementsFile | null = null,
   plateLayers: ReadonlyArray<PlateImage | null> = [],
+  verifyRepeatSource?: (build: CharacterBuild, object: string) => void,
 ): ComposedScene {
   const pageSize = parsePageSize(mode.pageSize);
   const fail = (code: string, object: string, detail: string): void => {
@@ -1228,13 +1254,32 @@ export function composeScene(
     }
   });
 
-  // ---- one rig_scale, one idle length -------------------------------------
+  // ---- one rig_scale, one scene idle clock ---------------------------------
   const scales = ready.map((b) => `"${b.id}" ${b.rigScale}`);
   if (new Set(ready.map((b) => b.rigScale)).size > 1) {
     fail('SCENE_RIG_SCALE_AGREES', 'scene.characters', `were built at assemble.rig_scale ${scales.join(', ')} (parts.json's scale_rig_per_source); one rig_scale is required — offsets are canvas px and a character's rig px are canvas px at scale 1, and a character's scale (characters[].scale) sizes it on the canvas but does not make two rig_scales one`);
   }
   const durations = ready.map((b) => b.motion.animations.idle.duration);
-  if (new Set(durations).size > 1) {
+  const hasRepeats = scene.characters.some(c => c.idle_repeats !== undefined);
+  const clip = scene.animations?.idle;
+  const idleDuration = hasRepeats ? clip?.duration ?? 0 : durations[0];
+  if (hasRepeats) scene.characters.forEach((c, i) => {
+    if (clip === undefined) {
+      if (c.idle_repeats !== undefined) fail('SCENE_REPEAT_IDLE_REQUIRED', 'scene.animations.idle', `is absent for character ${show(c.id)} with idle_repeats ${c.idle_repeats}. Declare the scene idle and its duration`);
+      return;
+    }
+    const idle = byId.get(c.id)?.motion.animations.idle;
+    if (idle === undefined) return;
+    const count = c.idle_repeats ?? 1;
+    const period = idle.duration;
+    if (!Number.isFinite(period) || period <= 0 || !Number.isFinite(idleDuration) || idleDuration <= 0 || idleDuration !== count * period) {
+      fail('SCENE_REPEAT_DURATION', 'scene.animations.idle.duration', `is ${idleDuration} s for character ${show(c.id)}. Its ${period} s idle repeated ${count} times requires exactly ${count * period} s (tolerance 0 s)`);
+    }
+    if (c.idle_repeats !== undefined && idle.loop !== true) {
+      fail('SCENE_REPEAT_SOURCE_LOOP_CLOSES', `scene.characters[${i}] motion.json animations.idle`, `loop is ${show(idle.loop)}; repeating requires a closed source idle with loop: true`);
+    }
+  });
+  else if (new Set(durations).size > 1) {
     fail('SCENE_DURATION_AGREES', 'scene.characters', `have idles of ${ready.map((b, i) => `"${b.id}" ${durations[i]} s`).join(', ')}; one idle holds every character's tracks, so one duration is required — rebuild with one motion.duration`);
   }
 
@@ -1297,6 +1342,7 @@ export function composeScene(
       tracks: b.motion.animations.idle.tracks.length,
       constraints: b.rig.constraints?.length ?? 0,
       idle_duration: b.motion.animations.idle.duration,
+      ...(c.idle_repeats === undefined ? {} : { idle_repeats: c.idle_repeats }),
       ...(b.accepted.length === 0 ? {} : { accepted: [...b.accepted] }),
     });
   });
@@ -1690,12 +1736,12 @@ export function composeScene(
   // prefixed as the idle's are and nothing else changed: the scene plays the idle, and schedules none of these.
   const beside: Record<string, SceneAnimation> = {};
   const notes = new Set(ready.map((b) => b.motion.animations.idle.note));
-  for (const c of scene.characters) {
+  for (const [i, c] of scene.characters.entries()) {
     const b = byId.get(c.id) as CharacterBuild;
     const id = c.id;
     for (const [k, v] of Object.entries(b.motion.easings)) easings[prefixed(id, k)] = v;
     for (const [k, v] of Object.entries(b.motion.groups)) groups[prefixed(id, k)] = v.map((n) => P(id, n));
-    const prefixTrack = (t: MotionSpec['animations']['idle']['tracks'][number]): MotionSpec['animations']['idle']['tracks'][number] => {
+    const prefixTrack = (t: MotionSpec['animations']['idle']['tracks'][number], repeatedIdle = false): MotionSpec['animations']['idle']['tracks'][number] => {
       const tr = { ...t } as Record<string, unknown>;
       if (typeof tr.bone === 'string') tr.bone = P(id, tr.bone);
       if (typeof tr.group === 'string') tr.group = prefixed(id, tr.group);
@@ -1703,23 +1749,34 @@ export function composeScene(
       const memberMap = (v: Record<string, unknown>): Record<string, unknown> => Object.fromEntries(Object.entries(v).map(([n, value]) => [P(id, n), value]));
       tr.keys = (t.keys as unknown as Array<Record<string, unknown>>).map((k) => ({
         ...k,
-        ...(typeof k.ease === 'string' ? { ease: prefixed(id, k.ease) } : {}),
+        ...(typeof k.ease === 'string' && !(repeatedIdle && k.ease === 'stepped') ? { ease: prefixed(id, k.ease) } : {}),
         ...(isRecord(k.v) ? { v: memberMap(k.v) } : {}),
         ...(isRecord(k.derive) ? { derive: { ...k.derive, ...(isRecord(k.derive.depth) ? { depth: memberMap(k.derive.depth) } : {}) } } : {}),
       }));
       return tr as unknown as MotionSpec['animations']['idle']['tracks'][number];
     };
-    for (const t of b.motion.animations.idle.tracks) tracks.push(scaledTrack(prefixTrack(t), c.scale));
-    const deforms = (a: SceneAnimation): { deform?: SceneDeform[] } => a.deform === undefined ? {} : { deform: a.deform.map((d) => ({
+    const deforms = (a: SceneAnimation, repeatedIdle = false): { deform?: SceneDeform[] } => a.deform === undefined ? {} : { deform: a.deform.map((d) => ({
       ...d, slot: prefixed(id, d.slot), attachment: prefixed(id, d.attachment),
       // default is the one shared skin, not a per-character name.
-      keys: d.keys.map((k) => ({ ...k, ...(Array.isArray(k.vertices) && c.scale !== 1 ? { vertices: k.vertices.map((v) => scaledBy(v as number, c.scale)) } : {}) })),
+      keys: d.keys.map((k) => ({ ...k,
+        ...(repeatedIdle && typeof k.ease === 'string' && k.ease !== 'stepped' ? { ease: prefixed(id, k.ease) } : {}),
+        ...(Array.isArray(k.vertices) && c.scale !== 1 ? { vertices: k.vertices.map((v) => scaledBy(v as number, c.scale)) } : {}),
+      })),
     })) };
-    idleDeform.push(...(deforms(animationsOf(b.motion).idle).deform ?? []));
-    for (const [n, a] of Object.entries(animationsOf(b.motion))) if (n !== 'idle') beside[prefixed(id, n)] = { ...a, tracks: a.tracks.map((t) => scaledTrack(prefixTrack(t), c.scale)), ...deforms(a) };
+    const animations = animationsOf(b.motion);
+    let idle = animations.idle;
+    const repeats = c.idle_repeats;
+    if (repeats !== undefined) {
+      const object = `scene.characters[${i}] motion.json animations.idle`;
+      verifyRepeatSource?.(b, object);
+      idle = repeatSceneKeys(idle, repeats, idleDuration, b.motion.groups, object);
+    }
+    for (const t of idle.tracks) tracks.push(scaledTrack(prefixTrack(t, repeats !== undefined), c.scale));
+    idleDeform.push(...(deforms(idle, repeats !== undefined).deform ?? []));
+    for (const [n, a] of Object.entries(animations)) if (n !== 'idle') beside[prefixed(id, n)] = { ...a, tracks: a.tracks.map((t) => scaledTrack(prefixTrack(t), c.scale)), ...deforms(a) };
   }
   const note = notes.size === 1 ? [...notes][0] : ready.map((b) => `${b.id}: ${b.motion.animations.idle.note}`).join(' | ');
-  const motion: MotionSpec = { spec: 'rigc-motion/1', archetype: name, cut: name, easings, groups, animations: { idle: { duration: durations[0], loop: true, note, tracks, ...(idleDeform.length === 0 ? {} : { deform: idleDeform }) }, ...beside } };
+  const motion: MotionSpec = { spec: 'rigc-motion/1', archetype: name, cut: name, easings, groups, animations: { idle: { duration: idleDuration, loop: true, note, tracks, ...(idleDeform.length === 0 ? {} : { deform: idleDeform }) }, ...beside } };
 
   if (scene.animations !== undefined) {
     const declaredBones = new Set(rig.bones.map(bone => bone.name));
@@ -1757,7 +1814,7 @@ export function composeScene(
     }) }),
     characters: rows,
     order: { declared: [...scene.order], slots: slots.map((s) => s.name), judged_by: 'nothing' },
-    idle_duration: durations[0],
+    idle_duration: idleDuration,
   };
   return { rig, motion, images, report, ...(scene.animations === undefined ? {} : { sceneAnimations: scene.animations }) };
 }
@@ -1919,7 +1976,7 @@ export function unprefixedNames(rig: RigSpec, motion: MotionSpec, ids: readonly 
  * {@link composeScene} — one refusal naming every problem the
  * files hold. Pure but for the reads.
  */
-export function composeFromFiles(scenePath: string, requirementsPath?: string, mode: PackMode = { pageEdges: DEFAULT_PAGE_EDGES, packShape: DEFAULT_PACK_SHAPE }, accept: readonly string[] = []): ComposedScene & { runRecord: ComposeRun } {
+export function composeFromFiles(scenePath: string, requirementsPath?: string, mode: PackMode = { pageEdges: DEFAULT_PAGE_EDGES, packShape: DEFAULT_PACK_SHAPE }, accept: readonly string[] = [], verifyRepeatSource?: (build: CharacterBuild, object: string) => void): ComposedScene & { runRecord: ComposeRun } {
   const scene = loadScene(scenePath);
   const problems: Problem[] = acceptProblems(accept, '--accept');
   const builds = scene.characters.map((c) => readCharacterBuild(c, problems, accept));
@@ -1968,7 +2025,7 @@ export function composeFromFiles(scenePath: string, requirementsPath?: string, m
       problems.push(...err.problems);
     }
   }
-  const composed = composeScene(scene, builds, plate, problems, mode, req, plateLayers);
+  const composed = composeScene(scene, builds, plate, problems, mode, req, plateLayers, verifyRepeatSource);
   const runRecord: ComposeRun = {
     spec: COMPOSE_RUN_SPEC,
     scene: { path: scenePath, sha256: scene.sha256 },
@@ -2042,7 +2099,16 @@ export function composeStage(input: ComposeInput, run: ComposeRunners, log: Log)
   log(`rig-parts compose: ${input.scene} -> ${input.out}, page edges ${mode.pageEdges}, pack shape ${mode.packShape}`);
   let composed: ReturnType<typeof composeFromFiles>;
   try {
-    composed = composeFromFiles(input.scene, input.requirements, mode, input.accept ?? []);
+    composed = composeFromFiles(input.scene, input.requirements, mode, input.accept ?? [], (b, object) => {
+      if (b.repeatSource === undefined) throw new Error(`${object}: missing source gate inputs`);
+      const [source] = gateThroughRigc(b.images, b.repeatSource, run.rig, run.scratch, null, build => {
+        refuseIfAny(sceneRepeatSourceLoopProblems(readFileSync(join(build, 'skeleton.model.json'), 'utf8'), object));
+      });
+      if (source.status !== 0) refuseIfAny([{
+        code: 'COMPOSE_RIGC_GREEN', object,
+        detail: `rigc source ${source.label} exited ${source.status}${source.lines.length > 0 ? `: ${source.lines.map(line => line.trim()).join(' | ')}` : ', and it printed nothing'}; exit 0 is required before anything is written, and nothing was`,
+      }]);
+    });
   } catch (err) {
     return refused('compose', err);
   }
@@ -2071,7 +2137,7 @@ export function composeStage(input: ComposeInput, run: ComposeRunners, log: Log)
   try {
     const clips = composed.sceneAnimations;
     gate = gateThroughRigc(composed.images, texts, run.rig, run.scratch, mode, clips === undefined ? undefined : build => {
-      refuseIfAny(sceneClipLoopProblems(readFileSync(join(build, 'skeleton.model.json'), 'utf8'), clips));
+      refuseIfAny(sceneClipLoopProblems(readFileSync(join(build, 'skeleton.model.json'), 'utf8'), clips, r.characters.some(c => c.idle_repeats !== undefined)));
     });
   } catch (err) { return refused('compose', err); }
   if (composed.sceneAnimations !== undefined) for (const g of gate) {

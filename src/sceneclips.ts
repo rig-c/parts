@@ -1,7 +1,7 @@
 /** Scene-authored clips use final names and Core's motion parser and poser. */
 import { CompileError } from '@rig-c/core/errors';
 import { parseMotionSpec, type MotionSpec as CoreMotion } from '@rig-c/core/motion';
-import { CoreInputError, poseRawAnimation, readModel, type RawPose } from '@rig-c/core/core';
+import { bezierPolyline, CoreInputError, poseRawAnimation, readModel, type RawPose } from '@rig-c/core/core';
 import { PartsError, refuseIfAny, type Problem } from './errors.ts';
 import type { MotionSpec } from './motion.ts';
 import type { RigSpec } from './rig.ts';
@@ -212,11 +212,89 @@ export function sceneKeyedModel(modelText: string) {
   return { doc, physics };
 }
 
+/** Check at the runtime's stored end, which need not equal the declared double.
+ * Keep that clock on the observation view even if a removed physics key set it.
+ */
+function storedIdleLoopDifference(modelText: string): { difference: string | null; duration: number } {
+  const full = readModel(modelText, 'gated idle model');
+  const idle = full.animations.find(a => a.name === 'idle');
+  const { doc } = sceneKeyedModel(modelText);
+  const keyed = doc.animations.find(a => a.name === 'idle');
+  if (idle === undefined || keyed === undefined) return { difference: 'gated model has no idle', duration: 0 };
+  const { duration, declared } = idle.timelines;
+  const clock = `declared duration ${declared} s, stored end ${duration} s`;
+  if (!(duration > 0)) return { difference: `idle has no positive playback period (${clock})`, duration };
+  keyed.timelines.duration = duration;
+  const [start, end] = poseRawAnimation(doc, 'idle', [duration]);
+  if (start?.animationTime !== 0 || end?.trackTime !== duration || end.animationTime !== duration) {
+    return { difference: `non-wrapping sample phases are ${start?.animationTime} s and ${end?.animationTime} s (${clock})`, duration };
+  }
+  return { difference: scenePoseState(start) === scenePoseState(end) ? null : `${poseDifferenceDetail(start, end)} (${clock})`, duration };
+}
+
+interface StoredCurveKey { time: number; curve?: number[] | 'stepped' }
+interface StoredTrackTarget { name: string; timelines: Array<{ name: string; keys: StoredCurveKey[] }> }
+
+/** At a splice, Core's sampled Bezier must reach the closing key from the left.
+ * Check the stored polyline, including curves generated from named easings.
+ */
+function sourceCurveSeamProblems(modelText: string, duration: number, object: string): Problem[] {
+  const { animations } = JSON.parse(modelText) as { animations: Array<{
+    name: string;
+    bones: StoredTrackTarget[];
+    slots: StoredTrackTarget[];
+    constraints: { physics: StoredTrackTarget[] };
+    attachments: Array<{ name: string; slots: Array<{ name: string; attachments: Array<{ name: string; deform?: StoredCurveKey[] }> }> }>;
+  }> };
+  const idle = animations.find(a => a.name === 'idle');
+  if (idle === undefined) return [];
+  const problems: Problem[] = [];
+  const check = (keys: StoredCurveKey[], timeline: string, deform = false): void => {
+    const before = keys.at(-2), end = keys.at(-1);
+    if (end === undefined || Math.fround(end.time) !== duration || !Array.isArray(before?.curve)) return;
+    const curve = before.curve;
+    for (let i = 0; i < curve.length; i += 4) {
+      // Only the time axis is needed. Core's deform polyline uses the stored
+      // float for the leading key time; bone and physics curves use its name.
+      const points = bezierPolyline(deform ? Math.fround(before.time) : before.time, 0, curve[i], 0, curve[i + 2], 0, end.time, 0);
+      const overlap = points.find((n, j) => j % 2 === 0 && n >= duration);
+      if (overlap === undefined) continue;
+      problems.push({ code: 'SCENE_REPEAT_KEY_SEAM', object: `${object}.${timeline}`,
+        detail: `Bezier channel ${i / 4} has a stored time sample ${overlap} s at or past the closing key ${duration} s. The source channel must splice without changing its keyed motion` });
+      break;
+    }
+  };
+  for (const [family, targets] of [['bone', idle.bones], ['slot', idle.slots], ['physics', idle.constraints.physics]] as const) {
+    for (const target of targets) for (const track of target.timelines) check(track.keys, `${family} ${JSON.stringify(target.name)} ${track.name}`);
+  }
+  for (const skin of idle.attachments) for (const slot of skin.slots) for (const attachment of slot.attachments) {
+    if (attachment.deform !== undefined) check(attachment.deform, `deform ${skin.name}/${slot.name}/${attachment.name}`, true);
+  }
+  return problems;
+}
+
+export function sceneRepeatSourceLoopProblems(modelText: string, object: string): Problem[] {
+  let difference: string | null;
+  try {
+    const result = storedIdleLoopDifference(modelText);
+    difference = result.difference;
+    if (difference === null) return sourceCurveSeamProblems(modelText, result.duration, object);
+  }
+  catch (err) {
+    if (!(err instanceof CoreInputError)) throw err;
+    difference = err.message;
+  }
+  return [{
+    code: 'SCENE_REPEAT_SOURCE_LOOP_CLOSES', object,
+    detail: `${difference}; repeating requires a closed source idle`,
+  }];
+}
+
 /** Measure the actual gated poses at both endpoints, without wrapping duration to zero.
  * Physics is omitted only from this observation, as in check's keyed-loop bar;
  * the gated/emitted motion and physics constraints are never edited.
  */
-export function sceneClipLoopProblems(modelText: string, clips: SceneAnimations): Problem[] {
+export function sceneClipLoopProblems(modelText: string, clips: SceneAnimations, repeatedIdle = false): Problem[] {
   try {
     const { doc, physics } = sceneKeyedModel(modelText);
     const problems: Problem[] = [];
@@ -229,6 +307,9 @@ export function sceneClipLoopProblems(modelText: string, clips: SceneAnimations)
             ? `pose sample clocks start ${poses[0].animationTime}, end ${poses[1].trackTime}; required 0 and ${clip.duration}; tolerance 0 (exact equality)`
             : poseDifferenceDetail(poses[0], poses[1]);
         problems.push({ code: 'SCENE_ANIMATION_LOOP_CLOSES', object: `scene.animations.${name}`, detail: `${difference}; identical endpoint poses are required (physics left out: ${physics.join(', ') || 'none'})` });
+      } else if (name === 'idle' && repeatedIdle) {
+        const { difference } = storedIdleLoopDifference(modelText);
+        if (difference !== null) problems.push({ code: 'SCENE_ANIMATION_LOOP_CLOSES', object: 'scene.animations.idle', detail: `${difference}; identical endpoint poses are required (physics left out: ${physics.join(', ') || 'none'})` });
       }
     }
     return problems;

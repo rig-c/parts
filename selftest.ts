@@ -789,6 +789,7 @@ import { readEditorReceipts } from './src/editreceipt.ts';
 import { type ComposedScene, checkBarsFailed, composeFromFiles, composeStage, IMAGE_SEP, PLATE, PLATE_IMAGE, PREFIX_SEP, SCENE_REPORT_FILE, SCENE_SPEC, scaledConstraint, scaledStop, unprefixedNames, plateImageName } from './src/scene.ts';
 import { mergeSceneAnimations, readSceneAnimations, sceneClipLoopProblems, scenePoseState, sceneKeyedModel } from './src/sceneclips.ts';
 import { poseRawAnimation } from '@rig-c/core/core';
+import { AnimationState, AnimationStateData, AtlasAttachmentLoader, MixFrom, Physics, Skeleton as SpineSkeleton, type SkeletonData, SkeletonJson, TextureAtlas } from '@esotericsoftware/spine-core';
 import { compareSceneBytes } from './scripts/scene_parity.ts';
 import { sceneOutputFiles, sceneClip, writeCanvasClipSceneFixture, writeSceneClipBuild, sceneCharacterRig, sceneText, writeFlatPlate, writeSceneBuild, writeTurnSceneBuild, sceneTurnFixture, sceneFoldProducerFixture, writeSceneProducerInput, writePlacementPivotProducerInput, writePlacementPivotRootBuild } from './fixtures/scene.ts';
 import { localInfluences, regionWeight } from './src/localweights.ts';
@@ -48797,6 +48798,229 @@ export function runSceneSharedRootControl(dir: string, say: FixtureCaseReporter)
     'issue #1503: all packed vertices follow the shared root by [+4,+3] at 0.5 s and close at 1 s; retargeting the same keys to the plate leaves both figures stationary');
 }
 
+type RepeatPoint = readonly [number, number];
+type RepeatSample = { phase: number; clock: number; carrier: RepeatPoint; tip: RepeatPoint };
+
+function repeatTip(skeleton: SpineSkeleton, prefix: string): Pick<RepeatSample, 'carrier' | 'tip'> {
+  const carrier = skeleton.findBone(prefix + 'body')?.appliedPose;
+  const end = skeleton.findBone(prefix + 'hem1');
+  if (carrier === undefined || end == null) throw new Error('repeat fixture needs a carrier and a chain end');
+  const { worldX, worldY, a, c } = end.appliedPose;
+  return { carrier: [carrier.worldX, carrier.worldY], tip: [worldX + a * end.data.length, worldY + c * end.data.length] };
+}
+
+function repeatWalk(data: SkeletonData, prefix: string, steps: number, dt: number, mode: Physics): RepeatSample[] {
+  const skeleton = new SpineSkeleton(data);
+  const state = new AnimationState(new AnimationStateData(data));
+  const entry = state.setAnimation(0, 'idle', true);
+  skeleton.setupPose();
+  return Array.from({ length: steps + 1 }, (_, step) => {
+    state.update(step === 0 ? 0 : dt);
+    state.apply(skeleton);
+    skeleton.update(step === 0 ? 0 : dt);
+    skeleton.updateWorldTransform(step === 0 && mode === Physics.update ? Physics.reset : mode);
+    return { phase: entry.getAnimationTime(), clock: skeleton.time, ...repeatTip(skeleton, prefix) };
+  });
+}
+
+function repeatKeyedTip(data: SkeletonData, prefix: string, time: number): RepeatPoint {
+  const idle = data.findAnimation('idle');
+  if (idle == null) throw new Error('repeat fixture has no idle');
+  const skeleton = new SpineSkeleton(data);
+  skeleton.setupPose();
+  idle.apply(skeleton, -1, time, false, null, 1, MixFrom.setup, false, false, false);
+  skeleton.updateWorldTransform(Physics.none);
+  return repeatTip(skeleton, prefix).tip;
+}
+
+/** Synthetic pose and raw Spine playback controls for compose's opt-in repeated idle (#1511). */
+export function runSceneRepeatControls(dir: string, say: FixtureCaseReporter, capture?: (child: FixtureChildDiagnostic) => void): void {
+  const why = 'issue #1511: each character opts in at its native period; a closed output needs correct internal seams as well';
+  const period = 1, count = 3, duration = period * count;
+  const constraint = 'hem_physics';
+  const driver = 'hem0_ctl';
+  const build = (id: string, defect?: 'open' | 'step', seconds = period) => writeSceneBuild(join(dir, id), 'plain', {
+    rig: r => {
+      r.constraints = [{ type: 'physics', name: constraint, bone: 'hem1', x: 1, rotate: 1, inertia: 0.75, strength: 30, damping: 0.8, mass: 1, mix: 1 }];
+    },
+    motion: raw => {
+      const motion = raw as unknown as MotionSpec;
+      motion.animations = {
+        idle: { duration: seconds, loop: true, note: 'Repeat a moving chain under a stationary carrier', tracks: [
+          { bone: driver, property: 'rotate', keys: [
+            { t: 0, v: [0], curve: [0.0625, 5, 0.1875, 7] },
+            { t: 0.25, v: [8] }, { t: 0.75, v: [-8], ...(defect === 'step' ? { ease: 'stepped' } : {}) },
+            { t: seconds, v: [defect === 'open' ? 2 : 0] },
+          ] },
+          { physics: constraint, property: 'mix', keys: [
+            { t: 0, v: [1] }, { t: 0.5, v: [0.875] }, { t: seconds, v: [1] },
+          ] },
+        ] },
+        rest: { duration: 0.5, loop: false, tracks: [{ bone: 'eye', property: 'rotate', keys: [{ t: 0, v: [0] }, { t: 0.5, v: [2] }] }] },
+      };
+    },
+  });
+  build('closed');
+  build('open', 'open');
+  build('step', 'step');
+  build('long-idle', undefined, duration);
+  const figure = (name: string, repeats?: unknown) => ({ id: 'figure', build: name, offset: [0, 0], idle_repeats: repeats });
+  const sceneIdle = (seconds: number, end = 0) => ({ duration: seconds, loop: true, tracks: [
+    { bone: 'figure:eye', property: 'rotate', keys: [{ t: 0, v: [0] }, { t: seconds, v: [end] }] },
+  ] });
+  const body = (name: string, repeats?: unknown, seconds?: number, end = 0) => ({
+    canvas: { width: 40, height: 40 }, characters: [figure(name, repeats)], order: ['figure'],
+    animations: seconds === undefined ? undefined : { idle: sceneIdle(seconds, end) },
+  });
+  const compose = (label: string, spec: ReturnType<typeof body>) => {
+    const file = join(dir, `${label}.json`), out = join(dir, label);
+    writeFileSync(file, sceneText(spec));
+    return { ...runCli(['compose', '--scene', file, '--out', out], capture), dir: out };
+  };
+  const snapshot = (out: string) => new Map(sceneOutputFiles(out).map(file => [file, readFileSync(join(out, file))]));
+  const refusal = (run: ReturnType<typeof compose>, code: string, ...fields: string[]) => {
+    const line = composeFail(run.out, code + ':');
+    return { ok: run.status === 1 && line !== null && fields.every(field => line.includes(field)) && sceneOutputFiles(run.dir).length === 0,
+      line: line ?? lastLines(run.out, 3).join(' | ') };
+  };
+  const legacy = compose('legacy', body('closed'));
+  const before = snapshot(legacy.dir);
+  const repeated = compose('repeated', body('closed', count, duration));
+  const check = readJsonFile(join(repeated.dir, 'check', 'check.json'));
+  const report = readJsonFile(join(repeated.dir, SCENE_REPORT_FILE));
+  const row = (report?.characters as Array<Record<string, unknown>> | undefined)?.[0];
+  const motion = readJsonFile(join(repeated.dir, 'rig', 'motion.json')) as unknown as MotionSpec | null;
+  const rest = motion?.animations['figure:rest'] as { duration?: number; loop?: boolean } | undefined;
+  const driverKeys = motion?.animations.idle.tracks.find(track => track.bone === 'figure:' + driver)?.keys ?? [];
+  const physicsKeys = motion?.animations.idle.tracks.find(track => track.physics === 'figure:' + constraint)?.keys ?? [];
+  const green = repeated.status === 0 && check?.gate_spine_html_green === true && check.PASS === true;
+  say('SC151_REPEAT_COMPOSES_ON_THE_SCENE_CLOCK_AND_KEEPS_SOURCE_PERIOD_AND_SIDE_CLIP',
+    green && report?.idle_duration === duration && row?.idle_duration === period && row.idle_repeats === count &&
+      rest?.duration === 0.5 && rest.loop === false &&
+      driverKeys.map(key => key.t).join(',') === '0,0.25,0.75,1,1.25,1.75,2,2.25,2.75,3' &&
+      physicsKeys.map(key => key.t).join(',') === '0,0.5,1,1.5,2,2.5,3',
+    green
+      ? `exit ${repeated.status}; scene ${report?.idle_duration}; row ${row?.idle_duration} x ${row?.idle_repeats}; side ${rest?.duration}; bone keys ${driverKeys.map(key => key.t)}; physics keys ${physicsKeys.map(key => key.t)}`
+      : `exit ${repeated.status}; ${lastLines(repeated.out, 5).join(' | ')}`, why);
+
+  const plants = [
+    { name: 'SC152_REPEAT_COUNT_REFUSES_ONE_AND_A_NON_INTEGER', code: 'SCENE_REPEAT_COUNT',
+      spec: body('closed', 2.5, duration), fields: ['scene.characters[0].idle_repeats — is 2.5.'],
+      second: body('closed', 1, duration), secondFields: ['scene.characters[0].idle_repeats — is 1.'] },
+    { name: 'SC153_REPEAT_REQUIRES_AN_AUTHORED_SCENE_IDLE', code: 'SCENE_REPEAT_IDLE_REQUIRED', spec: body('closed', count), fields: ['scene.animations.idle', 'figure'] },
+    { name: 'SC154_REPEAT_DURATION_REFUSES_BOTH_FRACTIONAL_AND_WRONG_INTEGER_RATIOS', code: 'SCENE_REPEAT_DURATION', spec: body('closed', count, 2.5), second: body('closed', count, 2), fields: ['scene.animations.idle.duration', 'figure'] },
+    { name: 'SC155_REPEAT_REFUSES_AN_OPEN_SOURCE_BEFORE_EMITTING', code: 'SCENE_REPEAT_SOURCE_LOOP_CLOSES', spec: body('open', count, duration), fields: ['motion.json', 'idle', driver], otherCode: 'SCENE_REPEAT_KEY_SEAM' },
+    { name: 'SC156_REPEAT_REFUSES_A_TERMINALLY_CLOSED_SOURCE_WITH_STEPPED_LEFT_LIMIT', code: 'SCENE_REPEAT_KEY_SEAM', spec: body('step', count, duration), fields: ['motion.json', 'idle', driver], otherCode: 'SCENE_REPEAT_SOURCE_LOOP_CLOSES' },
+  ];
+  for (const [i, plant] of plants.entries()) {
+    const run = compose(`red-${i}`, plant.spec);
+    const bad = refusal(run, plant.code, ...plant.fields);
+    const other = plant.second === undefined ? [] : [refusal(compose(`red-${i}-integer`, plant.second), plant.code, ...(plant.secondFields ?? plant.fields))];
+    const wrongCode = plant.otherCode === undefined ? null : composeFail(run.out, plant.otherCode + ':');
+    const probes = [bad, ...other];
+    const lines = probes.map(probe => probe.line);
+    if (wrongCode !== null) lines.push(wrongCode);
+    say(plant.name, green && wrongCode === null && probes.every(probe => probe.ok), lines.join(' | '), why);
+  }
+  const final = refusal(compose('open-final', body('closed', count, duration, 2)), 'SCENE_ANIMATION_LOOP_CLOSES', 'scene.animations.idle', 'figure:eye');
+  say('SC157_REPEAT_STILL_REFUSES_A_FINAL_SCENE_CLOSURE_DEFECT', green && final.ok, final.line, why);
+
+  // Run again at the same paths, with exactly the same declaration bytes and a fresh output tree.
+  rmSync(legacy.dir, { recursive: true, force: true });
+  const again = compose('legacy', body('closed'));
+  const parity = compareSceneBytes(before, snapshot(again.dir));
+  const absentReport = readJsonFile(join(again.dir, SCENE_REPORT_FILE));
+  const absentRow = (absentReport?.characters as Array<Record<string, unknown>> | undefined)?.[0];
+  const legacyDuration = refusal(compose('legacy-duration', body('closed', undefined, duration)),
+    'SCENE_DURATION_AGREES', 'scene.animations.idle.duration', 'is 3; composed idle declares 1');
+  const legacyCharactersFile = join(dir, 'legacy-characters.json');
+  writeFileSync(legacyCharactersFile, sceneText({
+    canvas: { width: 80, height: 40 },
+    characters: [figure('closed'), { id: 'longer', build: 'long-idle', offset: [40, 0] }], order: ['figure', 'longer'],
+  }));
+  const legacyCharacters = refusals(() => composeFromFiles(legacyCharactersFile))?.problems.find(p => p.code === 'SCENE_DURATION_AGREES');
+  say('SC158_NO_REPEAT_PRESERVES_DETERMINISTIC_OUTPUT_BYTES_AND_LEGACY_DURATION_REFUSAL',
+    legacy.status === 0 && again.status === 0 && before.size > 0 && parity.stableEqual &&
+      absentReport?.idle_duration === period && absentRow !== undefined && !('idle_repeats' in absentRow) && legacyDuration.ok &&
+      legacyCharacters?.object === 'scene.characters' && legacyCharacters.detail.includes('"figure" 1 s, "longer" 3 s'),
+    `legacy exits ${legacy.status}/${again.status}; ${before.size} files; differences ${JSON.stringify(parity.differences)}; ${legacyDuration.line} | ${legacyCharacters?.detail}`, why);
+
+  // Gate the unmodified native rig and motion independently through Core. Nothing from the repeated
+  // motion, its timeline expansion, or its wrap schedule feeds the reference animation.
+  const native = join(dir, 'native');
+  const bin = suiteRigc();
+  const argv = ['build', '--rig', join(dir, 'closed', 'rig', 'rig.json'), '--motion', join(dir, 'closed', 'rig', 'motion.json'),
+    '--out', native, '--profile', GATE_PROFILE, '--pack', '--page-edges', 'free', '--pack-shape', 'polygon'];
+  const gate = spawnSync(bin, argv, { encoding: 'utf8' });
+  capture?.({ argv: [bin, ...argv], status: gate.status ?? 1, stdout: gate.stdout ?? '', stderr: gate.stderr ?? '' });
+  if (!green || gate.status !== 0) {
+    const detail = `repeat exit ${repeated.status}; native gate exit ${gate.status}: ${lastLines((gate.stdout ?? '') + (gate.stderr ?? ''), 4).join(' | ')}`;
+    say('SC159_NATIVE_AND_EXPANDED_PHYSICS_TIP_VECTORS_MATCH_AND_DETECT_A_REAL_RESET', false, detail, why);
+    say('SC160_KEYED_SEAM_PROBE_DETECTS_AN_INTERNAL_DEFECT_WITH_CLOSED_ENDPOINTS', false, detail, why);
+    return;
+  }
+
+  type RawIdle = { bones?: Record<string, { rotate?: Array<{ time?: number; value?: number }> }>;
+    physics?: Record<string, { reset?: Array<{ time: number }> }> };
+  const read = (path: string) => ({
+    atlas: readFileSync(join(path, 'skeleton.atlas'), 'utf8'),
+    json: readJsonAt(join(path, 'skeleton.json')) as { animations: { idle: RawIdle } },
+  });
+  const load = ({ atlas, json }: ReturnType<typeof read>) => new SkeletonJson(new AtlasAttachmentLoader(new TextureAtlas(atlas))).readSkeletonData(json);
+  const source = load(read(native));
+  const expandedRaw = read(join(repeated.dir, 'check', 'build'));
+  const expanded = load(expandedRaw);
+  const plantedReset = structuredClone(expandedRaw);
+  const prefix = 'figure:';
+  const plantedPhysics = plantedReset.json.animations.idle.physics ??= {};
+  (plantedPhysics[prefix + constraint] ??= {}).reset = [{ time: period }];
+  const plantedKey = structuredClone(expandedRaw);
+  const boundaryKey = plantedKey.json.animations.idle.bones?.[prefix + driver]?.rotate?.find(key => key.time === period);
+  if (boundaryKey !== undefined) boundaryKey.value = 4;
+
+  // Dyadic steps land on the exact wrap. Both timelines run from t=0 on the same advancing physics clock.
+  const perPeriod = 32, dt = period / perPeriod;
+  const beforeAtAfter = [-1, 0, 1];
+  const seams = [1, 2, 3].map(k => k * perPeriod);
+  const walk = (data: SkeletonData, namePrefix: string, mode: Physics) => repeatWalk(data, namePrefix, seams[2] + 1, dt, mode);
+  const nativeOn = walk(source, '', Physics.update), composedOn = walk(expanded, prefix, Physics.update);
+  const nativeOff = walk(source, '', Physics.none), composedOff = walk(expanded, prefix, Physics.none);
+  const resetOn = walk(load(plantedReset), prefix, Physics.update), keyOff = walk(load(plantedKey), prefix, Physics.none);
+  const delta = (a: RepeatPoint, b: RepeatPoint): RepeatPoint => [b[0] - a[0], b[1] - a[1]];
+  const distance = (a: RepeatPoint, b: RepeatPoint) => Math.hypot(...delta(a, b));
+  const vectors = (samples: RepeatSample[], i: number) => [delta(samples[i - 1].tip, samples[i].tip), delta(samples[i].tip, samples[i + 1].tip)];
+  const error = (a: RepeatPoint[], b: RepeatPoint[]) => Math.max(...a.map((v, j) => distance(v, b[j])));
+  // Allow 64 binary32 steps at 32 px for carrying absolute Bezier handles through world evaluation.
+  const tolerance = 2 ** -12;
+  const clocksMatch = nativeOn.every((sample, i) =>
+    sample.clock === i * dt && composedOn[i].clock === sample.clock &&
+    sample.phase === (i % perPeriod) * dt && composedOn[i].phase === (i % seams[2]) * dt &&
+    distance(sample.carrier, nativeOn[0].carrier) === 0 && distance(composedOn[i].carrier, sample.carrier) === 0);
+  const readings = seams.map(i => {
+    const expected = vectors(nativeOn, i), actual = vectors(composedOn, i), reset = vectors(resetOn, i);
+    return { time: i * dt, native: expected, composed: actual, error: error(expected, actual),
+      live: error(expected, vectors(nativeOff, i)), reset, resetError: error(expected, reset) };
+  });
+  const historyError = Math.max(...nativeOn.map((sample, i) => distance(sample.tip, composedOn[i].tip)));
+  say('SC159_NATIVE_AND_EXPANDED_PHYSICS_TIP_VECTORS_MATCH_AND_DETECT_A_REAL_RESET',
+    clocksMatch && source.findAnimation('idle')?.duration === period && expanded.findAnimation('idle')?.duration === duration &&
+      historyError <= tolerance && readings.every(r => r.error <= tolerance && r.live > tolerance) &&
+      readings[0].resetError > tolerance && resetOn.slice(0, seams[0]).every((sample, i) => distance(sample.tip, composedOn[i].tip) === 0),
+    `clock/carrier matched ${clocksMatch}; history error ${historyError} px; tolerance ${tolerance} px; ${JSON.stringify(readings)}`, why);
+
+  const phaseErrors = (samples: RepeatSample[]) => seams.map(i => Math.max(...beforeAtAfter.map(offset => {
+    const want = nativeOff[i + offset], got = samples[i + offset];
+    return distance(want.tip, got.tip);
+  })));
+  const closed = (data: SkeletonData, p: string, end: number) => distance(repeatKeyedTip(data, p, 0), repeatKeyedTip(data, p, end));
+  const keyed = phaseErrors(composedOff), wrongKey = phaseErrors(keyOff);
+  const endpoints = [closed(source, '', period), closed(expanded, prefix, duration), closed(load(plantedKey), prefix, duration)];
+  say('SC160_KEYED_SEAM_PROBE_DETECTS_AN_INTERNAL_DEFECT_WITH_CLOSED_ENDPOINTS',
+    endpoints.every(value => value === 0) && keyed.every(value => value <= tolerance) &&
+      wrongKey[0] > tolerance && wrongKey.slice(1).every(value => value <= tolerance),
+    `nonwrapping closure errors ${endpoints} px; seam errors ${keyed} px; planted ${wrongKey} px`, why);
+}
+
 function runSceneSuite(): number {
   section('scene: finished builds composed into one rig, a plate and a declared order (issue #74)');
   const { say, bad } = counter();
@@ -49666,6 +49890,7 @@ function runSceneSuite(): number {
     runCanvasClipSceneControls(dir, legacyOut, say);
     runPlacementPivotSceneControls(join(dir, 'placement-pivot'), say);
     runSceneSharedRootControl(join(dir, 'shared-root'), say);
+    runSceneRepeatControls(join(dir, 'idle-repeat'), say);
 
     // ---- the order -----------------------------------------------------------
     const unresolved = compose(two({ order: ['plain', 'reach', 'ghost', 'plain:nose', 'ghost:cloth'] }));
