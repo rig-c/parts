@@ -30673,19 +30673,20 @@ function runBuildSuite(): number {
       'issue #476: a gesture subset set over a limb chain cuts at the base\'s joints along its drawn bone angles, emits slots and drawn for the covered chain bones in sets.json, poses the chain on set activation and restores the base byte-identically on set: null, leaves the base rig byte-identical, moves only the forearm by 30° when forearm drawn moves 30°, and refuses uncovered drawn bones or off-joint cuts by name; issue #711: the unchanged gesture also exposes UNDER body ghost over its raw-box floor, so the real build must refuse CHECK_SEAM_OVER_MOTION rather than report a green artifact',
     );
 
-    // BU173 — issue #474: the outfit transaction in docs/OUTFITS.md — when a second painting changes only the clothes
+    // BU173 — issue #474: the outfit transaction in docs/AUTHORING.md — when a second painting changes only the clothes
     // (`outfit_b` replacing `topwear`, `bottomwear`, `shoes`, `upperarm_r`, `forearm_r` and hiding `hairpin`, alongside
     // viseme subset sets `a`, `i`, `u` on `mouth`), `.bones` (including base `drawn` rest rotations), `.invariants.axes`
     // (`faceAxis`), `.animations.idle`, and the base `bottomwear` mesh stay byte-for-byte identical to the base-only
-    // build (`out_base`) with the exact sha256 digests recorded in docs/OUTFITS.md; `outfit_b_bottomwear` re-triangulates
+    // build (`out_base`) with the exact sha256 digests in Outfit alternates; `outfit_b_bottomwear` re-triangulates
     // (`30` vertices, `40` triangles vs `24` vertices, `30` triangles) on the kept `skirt0`/`skirt1` bones; `outfit_b`
     // composes with `a`/`i`/`u` and obeys later-set precedence on overlapping slots; and the wide-sleeve / overgarment
     // traps (`CONFIG_LIMB_SET_JOINTS`, `ASSEMBLE_LIMB_JOINT_ON_ART`, `ASSEMBLE_ALT_INPUT_PRESENT`,
-    // `ASSEMBLE_ALT_CANVAS_SIZE`) are refused by name while hiding covered arms (`hides: ["upperarm_r", "forearm_r"]`)
-    // builds cleanly.
+    // `ASSEMBLE_ALT_CANVAS_SIZE`) are refused by name. Hiding both arm segments is refused, and omitting them
+    // from both parts and hides builds cleanly.
     const outfitDir = join(dir, 'outfit-tx-474');
-    const outfitDocText = existsSync(join(ROOT, 'docs', 'OUTFITS.md'))
-      ? readFileSync(join(ROOT, 'docs', 'OUTFITS.md'), 'utf8')
+    const authoringPath = join(ROOT, 'docs', 'AUTHORING.md');
+    const outfitDocText = existsSync(authoringPath)
+      ? readFileSync(authoringPath, 'utf8').split('### Outfit alternates\n')[1]?.split('\n### ')[0] ?? ''
       : '';
     const outfitCAlt: [number, number, number] = [70, 80, 60];
     const makeFlatPainting = (w: number, h: number, rgb: [number, number, number]): Raster => {
@@ -31071,7 +31072,7 @@ function runBuildSuite(): number {
         trap4Run.status === 1 &&
         trap4Run.out.includes('FAIL  ASSEMBLE_ALT_CANVAS_SIZE:'),
       `base exit ${outfitBaseRun.status}, combined exit ${outfitCombinedRun.status}, check --set outfit_b exit ${outfitCheckSetRun.status}; kept sha256 match (bones=${shaBonesBase.slice(0, 12)}, axes=${shaAxesBase.slice(0, 12)}, idle=${shaIdleBase.slice(0, 12)}, baseSkirt=${shaSkirtBase.slice(0, 12)} ${baseSkirtV}v/${baseSkirtT}t vs outfit_b_bottomwear=${shaSkirtOutfitB.slice(0, 12)} ${altSkirtV}v/${altSkirtT}t); disjointCommutes=${disjointCommutes}, overlapPrecedence=${overlapPrecedenceHolds}; traps: partial limb exit ${trap1Run.status}, hides limb exit ${trap1HidesRun.status}, speck sleeve exit ${trap2OpaqueRun.status}, wrist-only sleeve exit ${trap2PixelsRun.status}, elbow-gap sleeve exit ${trap2Run.status} (keep base arm exit ${keepBaseArmRun.status}), missing layer exit ${trap3Run.status}, canvas size exit ${trap4Run.status}`,
-      'issue #474: docs/OUTFITS.md records the outfit transaction — base bones, drawn rest rotations, faceAxis, idle motion and base attachments stay byte-identical while clothing regions, limb cuts and skirt meshes re-run on the second painting, compose with viseme/gesture sets, and refuse partial/hidden limb coverage or swallowed wide sleeves by name',
+      'issue #474: the Outfit alternates section of docs/AUTHORING.md records the outfit transaction — base bones, drawn rest rotations, faceAxis, idle motion and base attachments stay byte-identical while clothing regions, limb cuts and skirt meshes re-run on the second painting, compose with viseme/gesture sets, and refuse partial/hidden limb coverage or swallowed wide sleeves by name',
     );
 
     // BU174–BU177 — issue #539: an alternate set that gives `skeleton` is cut at the skeleton's own joint positions, not at

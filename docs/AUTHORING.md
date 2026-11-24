@@ -1538,6 +1538,71 @@ and no byte moves; a build that passes under it writes the same bytes as
 without it. Of the public examples, every config holds no drawn shape except
 `scarf`, whose four patches `trace_parts` would refuse.
 
+### Outfit alternates
+
+Keep the base rig config and add an entry to `assemble.alternates` for the
+second painting. Use a painting on the base canvas and a full run containing
+the layers for the changed parts. Reuse the base head run if the selected head
+art is unchanged. In this example the outfit replaces three clothing pieces
+and both arm segments and hides the base hairpin.
+
+```json
+{
+  "name": "outfit_b",
+  "source": "painting_b.png",
+  "full": "full_b",
+  "head": "head",
+  "parts": ["topwear", "bottomwear", "shoes", "upperarm_r", "forearm_r"],
+  "hides": ["hairpin"]
+}
+```
+
+Use the existing limb joints when the painting has the same arm pose. The
+`assemble.alternates` field above describes `drawn` and `skeleton` for a
+different painted pose. Build with the base `--source`, `--full`, and
+`--head` inputs and use `--all-sets` to check each alternate in its setup pose.
+Use `check --set outfit_b` to inspect this outfit on its own.
+
+For sleeves and overgarments, check the layer that feeds the limb cut.
+
+- List every segment of a replaced limb in `parts`. Partial coverage or hiding
+  a limb segment is refused by [`CONFIG_LIMB_SET_JOINTS`](#CONFIG_LIMB_SET_JOINTS).
+  If the arm should keep its base art, omit all its segments from both
+  `parts` and `hides`.
+- If a sleeve should move with the arm, its layer must carry both segments
+  and cover the elbow cut. A speck removed as ghost pixels can trigger
+  [`ASSEMBLE_PART_OPAQUE`](#ASSEMBLE_PART_OPAQUE). A wrist-only layer can
+  leave the upper segment empty
+  ([`ASSEMBLE_LIMB_PIXELS`](#ASSEMBLE_LIMB_PIXELS)). A gap at the elbow leaves
+  the joint without art
+  ([`ASSEMBLE_LIMB_JOINT_ON_ART`](#ASSEMBLE_LIMB_JOINT_ON_ART)).
+  [Alternate part layers](#alternate-part-layers-assemblealternatesilayers-issue-666)
+  shows how to select a corrected sleeve layer.
+- A required layer missing from the alternate run triggers
+  [`ASSEMBLE_ALT_INPUT_PRESENT`](#ASSEMBLE_ALT_INPUT_PRESENT). An alternate
+  painting with different canvas dimensions triggers
+  [`ASSEMBLE_ALT_CANVAS_SIZE`](#ASSEMBLE_ALT_CANVAS_SIZE).
+
+An outfit and a mouth viseme can share the build. In the synthetic outfit
+fixture, the outfit and the `a` viseme bind disjoint slots. The consumer can
+combine their slot maps in either order. For overlapping slots, merging two
+slot maps with object spread gives the later map precedence on the shared
+slots. This is a consumer-side merge. The fixture measures it with a sleeve
+override map. For keyed visemes, see the `motion.animations_from` field above.
+
+The synthetic fixture in selftest `BU173` builds the base rig, then builds it
+with the outfit and three viseme sets. The first four rows have the same
+SHA-256 of the serialized JSON value in both builds. The last row is the new
+skirt attachment, triangulated for the alternate art.
+
+| JSON value measured by BU173 | SHA-256 |
+| --- | --- |
+| Base bones and drawn rest pose | `337b27f126c6e023fc89975a8336f6e238e6d88efcd43e4a4bdb2c4bb530afdf` |
+| Face axis | `eae7351e1206641929b2625359ced7ba31d065756272319b09bc83da50b82498` |
+| Idle animation | `87b6a843d36cd4a46fff474ab10e6874a7667f819bfa12d674e75e7dcf70667c` |
+| Base skirt mesh (24 vertices, 30 triangles) | `9c9bca3e0270160bc557248a250f7e015012161e7f1be7460b4bcb368b917925` |
+| Alternate skirt mesh (30 vertices, 40 triangles) | `e15b4ba5a013495d23fe945c7aafb980a12351cdc9ca067b4904ce0d48059701` |
+
 ### Alternate part layers (`assemble.alternates[i].layers`, issue #666)
 
 A gesture run may hold a raised arm only in a layer the author added, while

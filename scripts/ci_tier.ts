@@ -72,7 +72,6 @@ export const PATH_TO_SUITE_MAP: readonly MapRule[] = [
   { pattern: 'docs/MIGRATION.md', suites: ['tree'], why: 'held by MSD10 in tree' },
   { pattern: 'docs/DEPTH.md', suites: ['depth-maps', 'tree'], why: 'depth workflow documentation' },
   { pattern: 'docs/CHECKS.md', suites: ['tree'], why: 'scanned by tree text and link rules' },
-  { pattern: 'docs/OUTFITS.md', suites: ['tree'], why: 'scanned by tree text and link rules' },
   { pattern: 'docs/PAINTING.md', suites: ['painting', 'tree'], why: 'painting requirements documentation' },
   { pattern: 'docs/evidence/**', suites: ['auto-mesh', 'tree'], why: 'read by tools/production_trial_stray.ts (auto-mesh) and scanned by tree' },
   { pattern: 'examples/**', suites: ['fetch-examples', 'inputs-examples', 'propose-corpus', 'assemble-examples', 'ground-examples', 'auto-mesh-examples', 'chain', 'readme-loop', 'corpus', 'tree'], jobs: ['expected-files', 'painting-public'], why: 'public examples and expected snapshots' },
