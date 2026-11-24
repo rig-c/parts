@@ -46262,8 +46262,14 @@ function tarFileCount(tgz: string): number {
 /** A copy of `tgz` repacked after `edit` ran on its extraction (`<dir>/package/...`), written into `out`. */
 function editedTarball(tgz: string, out: string, edit: (pkgDir: string) => void): string {
   const dir = mkdtempSync(join(out, 'edit-'));
-  const unpacked = spawnSync('tar', ['-xzf', `./${basename(tgz)}`, '-C', dir], { cwd: dirname(tgz) });
-  if (unpacked.status !== 0) throw new Error(`tar -xzf ${tgz} exited ${unpacked.status}`);
+  const fd = fs.openSync(tgz, process.platform === 'win32' ? 'r' : fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+  try {
+    if (!fs.fstatSync(fd).isFile()) throw new Error(`tar -xzf ${tgz} could not read its archive: archive is not a regular file`);
+    const unpacked = spawnSync('tar', ['-xzf', '-'], { cwd: dir, stdio: [fd, 'pipe', 'pipe'] });
+    if (unpacked.status !== 0) throw new Error(`tar -xzf ${tgz} exited ${unpacked.status}`);
+  } finally {
+    fs.closeSync(fd);
+  }
   edit(join(dir, 'package'));
   return packInto(join(dir, 'package'), mkdtempSync(join(out, 'packed-')));
 }
