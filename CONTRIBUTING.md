@@ -33,7 +33,7 @@ bun run selftest:pre # always-include cross-cutting set; one worker
 bun run selftest:pre -- --only rig,propose
 ```
 
-Run targeted checks plus `selftest:pre` on an ordinary Nova slot. The full-tree
+Run targeted checks plus `selftest:pre` on an ordinary slot of the remote job pool. The full-tree
 verdict and the **full forms of every suite** belong to PR CI's sharded selftest.
 The pre command uses these fixed minimum forms, with one worker at a time:
 

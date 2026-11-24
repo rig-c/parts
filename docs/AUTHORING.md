@@ -23,7 +23,7 @@ A path this page names that the installed package does not hold — anything und
 `bun run` names — is in the repository, https://github.com/rig-c/parts; the package holds the files
 `package.json` lists under `files` (`npm pack --dry-run` prints them).
 
-For repository changes, run `bun run selftest:pre` on an ordinary Nova slot,
+For repository changes, run `bun run selftest:pre` on an ordinary slot of the remote job pool,
 beside the change's targeted suites (or add them with
 `bun run selftest:pre -- --only rig,propose`). Its fixed minimum forms are demo's
 AE02, TY12/TY16, one demo build with CH04/CH05 goldens, and declaration ownership
