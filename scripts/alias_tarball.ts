@@ -56,7 +56,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 
 const ROOT = resolve(import.meta.dir, '..');
 
@@ -109,8 +109,11 @@ function filesUnder(dir: string): string[] {
 }
 
 function extract(tgz: string, into: string): void {
-  mkdirSync(into, { recursive: true });
-  const unpacked = run('tar', ['-xzf', tgz, '-C', into], into);
+  const archive = resolve(tgz);
+  const destination = resolve(into);
+  mkdirSync(destination, { recursive: true });
+  // A relative archive name keeps GNU tar from treating a drive letter as a remote host.
+  const unpacked = run('tar', ['-xzf', `./${basename(archive)}`, '-C', destination], dirname(archive));
   if (unpacked.status !== 0) throw new AliasTarballError(`\`tar -xzf ${tgz}\` exited ${unpacked.status}: ${unpacked.out.trim().slice(0, 2000)}`);
   if (!existsSync(join(into, MANIFEST))) throw new AliasTarballError(`${tgz} holds no ${MANIFEST}, so it is not an npm package tarball`);
 }

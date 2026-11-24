@@ -32,6 +32,7 @@ export interface MapRule {
 export const PATH_TO_SUITE_MAP: readonly MapRule[] = [
   // 1. Full-tier triggers (workflows, CI tier map, release gates, smoke harnesses, bin shim, manifest, lockfile, shared validation builders)
   { pattern: '.github/workflows/**', tier: 'full', suites: ['ALL'], why: 'CI and release workflow definitions' },
+  { pattern: '.gitattributes', tier: 'full', suites: ['ALL'], why: 'checkout byte policy for cross-platform inputs' },
   { pattern: 'scripts/ci_tier.ts', tier: 'full', suites: ['ALL'], why: 'CI tier planner and path-to-suite map' },
   { pattern: 'scripts/check_ci_tier.ts', tier: 'full', suites: ['ALL'], why: 'CI tier planner verification controls' },
   { pattern: 'scripts/tree-verdict.json', tier: 'full', suites: ['ALL'], why: 'tree-verdict lifecycle/2 coverage declaration' },
@@ -321,7 +322,7 @@ export const PATH_TO_SUITE_MAP: readonly MapRule[] = [
   { pattern: 'tools/check_requirements_named.ts', suites: ['assemble', 'tree'], why: 'called by assemble suite' },
   { pattern: 'tools/check_revision_chain.ts', suites: ['config', 'remesh', 'retune', 'tree'], why: 'called by config, remesh, retune' },
   { pattern: 'tools/check_row_guard.ts', suites: ['tree', 'check'], why: 'called by tree and check' },
-  { pattern: 'tools/check_row_reference.ts', suites: ['tree'], why: 'called by TY823 in tree suite' },
+  { pattern: 'tools/check_row_reference.ts', suites: ['tree'], why: 'called by TY823 and TY831 in tree suite' },
   { pattern: 'tools/check_row_scope.ts', suites: ['tree', 'check'], why: 'called by tree and check' },
   { pattern: 'tools/check_seam_cells.ts', suites: ['check', 'tree'], why: 'called by check suite' },
   { pattern: 'tools/check_seam_config.ts', suites: ['config', 'tree'], why: 'called by config suite' },
