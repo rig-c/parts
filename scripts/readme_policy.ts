@@ -31,8 +31,12 @@ export function readmePolicyFaults(text: string): string[] {
     const heading = /^ {0,3}##[\t ]+(.+?)(?:[\t ]+#+)?[\t ]*$/u.exec(line)?.[1];
     if (heading !== undefined && !README_HEADINGS.includes(heading)) faults.push(`README_HEADING: line ${index + 1} names "${heading}"; use the heading allowlist`);
     if (line.includes('|') && /\b\d{4}-\d{2}-\d{2}\b/u.test(line)) faults.push(`README_DATED_MEASUREMENT: line ${index + 1} holds a date inside a table cell`);
+    // A link or image to a file of this repository is a relative path: the package page renders
+    // it against the repository field, so the absolute form is one more string to keep right.
+    for (const match of line.matchAll(/https:\/\/(?:github\.com\/rig-c\/parts\/(?:blob|tree|raw)\/|raw\.githubusercontent\.com\/rig-c\/parts\/)[^\s)"'>]*/gu)) {
+      faults.push(`README_ABSOLUTE_SAME_REPOSITORY_LINK: line ${index + 1} links ${match[0]}; write the path relative to the repository root`);
+    }
   }
-  // Read across line wraps so reflow cannot conceal a dated reading.
   for (const match of text.matchAll(/\b(?:measured|read)\s+on\s+20\d*/giu)) {
     faults.push(`README_DATED_MEASUREMENT: dated phrase "${match[0].replace(/\s+/gu, ' ')}"; move the measurement to the reference`);
   }
@@ -52,6 +56,8 @@ export function runReadmePolicyChecks(readme: string, say: Say): void {
     ['TY35_README_REFUSES_TABLE_DATE', good + '\n| input | 2026-10-30 |\n', 'README_DATED_MEASUREMENT'],
     ['TY37_README_REFUSES_TABLE_DATE_WITHOUT_EDGE_PIPES', good + '\ninput | 2026-10-30\n', 'README_DATED_MEASUREMENT'],
     ['TY38_README_REFUSES_TABLE_DATE_IN_FIRST_CELL', good + '\n2026-10-30 | input\n', 'README_DATED_MEASUREMENT'],
+    ['TY42_README_REFUSES_ABSOLUTE_LINK_TO_A_FILE_OF_THIS_REPOSITORY', good + '\n[Releasing](https://github.com/rig-c/parts/blob/main/RELEASING.md)\n', 'README_ABSOLUTE_SAME_REPOSITORY_LINK'],
+    ['TY43_README_REFUSES_ABSOLUTE_IMAGE_OF_THIS_REPOSITORY', good + '\n<img src="https://raw.githubusercontent.com/rig-c/parts/main/assets/banner.svg" />\n', 'README_ABSOLUTE_SAME_REPOSITORY_LINK'],
   ];
   const live = readmePolicyFaults(readme);
   say('TY30_README_POLICY', live.length === 0, `${readmeWords(readme)} words; cap ${README_WORD_CAP}; ${live.join('; ') || 'allowed headings and no dated measurements'}`);
@@ -63,8 +69,10 @@ export function runReadmePolicyChecks(readme: string, say: Say): void {
     good, 'word '.repeat(README_WORD_CAP),
     good + '\n```md\n## Example heading\n| date | 2026-10-30 |\n```\n',
     good + '\n### Existing subsection\nReleased 2026-10-30.\n| version | 1.2.3 |\n',
+    good + '\n[Core](https://github.com/rig-c/core/blob/main/README.md) [issue](https://github.com/rig-c/parts/issues/1) [guide](docs/AUTHORING.md)\n',
+    good + '\n```md\n[Releasing](https://github.com/rig-c/parts/blob/main/RELEASING.md)\n```\n',
   ];
-  say('TY36_README_POLICY_POSITIVE_CONTROLS', controls.every(text => readmePolicyFaults(text).length === 0), 'normal page, exact cap, fenced examples and non-measurement prose dates accepted');
+  say('TY36_README_POLICY_POSITIVE_CONTROLS', controls.every(text => readmePolicyFaults(text).length === 0), 'normal page, exact cap, fenced examples, non-measurement prose dates, and links to other repositories, issues and relative paths accepted');
 }
 
 if (import.meta.main) {

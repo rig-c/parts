@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/rig-c/parts/main/assets/banner.svg" alt="@rig-c/parts — 2D character parts, weighted meshes and bone chains from one painting" width="100%" />
+  <img src="assets/banner.svg" alt="@rig-c/parts — 2D character parts, weighted meshes and bone chains from one painting" width="100%" />
 </p>
 
 <p align="center">
@@ -27,12 +27,12 @@ input is silent.
 ## What you get
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/rig-c/parts/main/assets/demo-source.png" alt="The demo painting: a generated full-body character in a white and pink idol dress with a layered skirt and long pink twin tails, standing with her arms held away from her body and her hands open" height="420" />
-  <img src="https://raw.githubusercontent.com/rig-c/parts/main/assets/demo-idle.png" alt="The same character rigged, breathing, blinking once and swaying her hair, sleeves and skirt in a 3.3-second loop" height="420" />
+  <img src="assets/demo-source.png" alt="The demo painting: a generated full-body character in a white and pink idol dress with a layered skirt and long pink twin tails, standing with her arms held away from her body and her hands open" height="420" />
+  <img src="assets/demo-idle.png" alt="The same character rigged, breathing, blinking once and swaying her hair, sleeves and skirt in a 3.3-second loop" height="420" />
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/rig-c/parts/main/assets/demo-parts.png" alt="Contact sheet of the painting and the 23 assembled parts it was split into: hair, sleeves, legs, boots, neck, skirt, bodice, earrings, hair ornaments, ears, face, brows, mouth and eyes" width="100%" />
+  <img src="assets/demo-parts.png" alt="Contact sheet of the painting and the 23 assembled parts it was split into: hair, sleeves, legs, boots, neck, skirt, bodice, earrings, hair ornaments, ears, face, brows, mouth and eyes" width="100%" />
 </p>
 
 <p align="center"><em>
@@ -64,7 +64,7 @@ from it by max 1 level, 0 px over 40 (<code>--lead-in</code>). Frame 29 (2.417 s
 closed eye: the blink holds for 0.084 s, one 12 fps frame rounded up; the painting is
 shown at half size, resampled and written by this package's PNG codec (nothing here
 encodes JPEG). <code>rig-parts sheet</code> made the contact sheet. Its
-<code>expected/</code> is this port's own build (<a href="https://github.com/rig-c/parts/blob/main/examples/demo/README.md">examples/demo</a>).
+<code>expected/</code> is this port's own build (<a href="examples/demo/README.md">examples/demo</a>).
 </em></p>
 
 <p align="center"><em>
@@ -74,7 +74,7 @@ with its proposal used unedited — the only hand corrections are four
 <code>assemble.patches</code>, each answering an <code>uncovered hole</code> line.
 <code>check</code> passes 9 of 9 with every mesh on the lattice and with every mesh
 switched to the contour mode. It has no reference output: its <code>expected/</code>
-is this port's own build (<a href="https://github.com/rig-c/parts/blob/main/examples/scarf/README.md">examples/scarf</a>).
+is this port's own build (<a href="examples/scarf/README.md">examples/scarf</a>).
 </em></p>
 
 <p align="center"><em>
@@ -302,7 +302,7 @@ rig-parts build --config config.json --source painting.png --full layers/full --
 At each step the config holds only what that step reads; the one table of what
 that is, step by step, is [docs/AUTHORING.md §4](docs/AUTHORING.md#4-the-command-order).
 How the selftest runs this block on each example is in
-[CONTRIBUTING.md](https://github.com/rig-c/parts/blob/main/CONTRIBUTING.md#the-readme-loop-as-the-selftest-runs-it).
+[CONTRIBUTING.md](CONTRIBUTING.md#the-readme-loop-as-the-selftest-runs-it).
 
 `propose` is deliberately not a step of `build`: the proposal is a draft to correct
 against its overlay, and a config with bones is `build`'s input. `rig`, `check` and
@@ -478,7 +478,7 @@ beside `rig-parts` for the transition, the same launcher under both names. On np
 both compatibility names stay published beside `@rig-c/parts` at every version, as aliases
 carrying the same files with only the `name` in `package.json` changed, so a
 project that depends on either keeps receiving every release; a new
-install names `@rig-c/parts` ([RELEASING.md](https://github.com/rig-c/parts/blob/main/RELEASING.md), *The registry side*). `@rig-c/core`
+install names `@rig-c/parts` ([RELEASING.md](RELEASING.md), *The registry side*). `@rig-c/core`
 comes with it as a dependency, providing the `rigc` command. No Spine runtime does: since
 rig-c 2.0 the installed `rigc` gates every build with its own validator over the
 compiled model document, and `rigc --version` says `entry: cli_core.ts —
@@ -493,7 +493,7 @@ MIT; see [NOTICE.md](NOTICE.md) for third-party terms and the Spine runtime lice
 ## Development
 
 `bun install`, then `bun run typecheck`, `bun run lint` and `bun run selftest`.
-[CONTRIBUTING.md](https://github.com/rig-c/parts/blob/main/CONTRIBUTING.md) has every command and what a change has to clear; [CLAUDE.md](https://github.com/rig-c/parts/blob/main/CLAUDE.md) is the doctrine, [RELEASING.md](https://github.com/rig-c/parts/blob/main/RELEASING.md) the cut, [docs/STABILITY.md](docs/STABILITY.md) the interface it holds.
+[CONTRIBUTING.md](CONTRIBUTING.md) has every command and what a change has to clear; [CLAUDE.md](CLAUDE.md) is the doctrine, [RELEASING.md](RELEASING.md) the cut, [docs/STABILITY.md](docs/STABILITY.md) the interface it holds.
 
 ## Licence
 
