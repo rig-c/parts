@@ -64,7 +64,7 @@ from it by max 1 level, 0 px over 40 (<code>--lead-in</code>). Frame 29 (2.417 s
 closed eye: the blink holds for 0.084 s, one 12 fps frame rounded up; the painting is
 shown at half size, resampled and written by this package's PNG codec (nothing here
 encodes JPEG). <code>rig-parts sheet</code> made the contact sheet. Its
-<code>expected/</code> is this port's own build (<a href="examples/demo/README.md">examples/demo</a>).
+<code>expected/</code> is this port's own build (<a href="https://github.com/rig-c/parts/blob/main/examples/demo/README.md">examples/demo</a>).
 </em></p>
 
 <p align="center"><em>
@@ -74,7 +74,7 @@ with its proposal used unedited — the only hand corrections are four
 <code>assemble.patches</code>, each answering an <code>uncovered hole</code> line.
 <code>check</code> passes 9 of 9 with every mesh on the lattice and with every mesh
 switched to the contour mode. It has no reference output: its <code>expected/</code>
-is this port's own build (<a href="examples/scarf/README.md">examples/scarf</a>).
+is this port's own build (<a href="https://github.com/rig-c/parts/blob/main/examples/scarf/README.md">examples/scarf</a>).
 </em></p>
 
 <p align="center"><em>
@@ -85,6 +85,11 @@ until issue #227, which took the clasped-hands painting off display). Their
 <code>expected/</code> is that implementation's own output, which the selftest holds
 this port to.
 </em></p>
+
+One rig can also carry **alternate drawings** as named sets — an outfit swap, or
+mouth shapes (visemes) for speech — cut from extra paintings you supply, and the
+player switches a set by name: see `assemble.alternates` in
+[AUTHORING §3](docs/AUTHORING.md#3-configjson-field-by-field).
 
 ## What it takes in
 
@@ -125,6 +130,10 @@ page** (issue #2):
 | `rig/` | `rig.json` and `motion.json` in rig-c's spec, `mesh_report.json`, the padded `images/` |
 | `check/` | both gate files verbatim, the idle's frames and their `geometry.json` (skinned vertices per frame), `contact.png`, `motion_heat.png`, `check.json` (with `pack_mode`, the `--page-edges` and `--pack-shape` the page was packed under) |
 | `idle.png`, `idle-indexed.png`, `idle.gif` | with `--loop`: the idle as a lossless APNG (the exactness record), an indexed APNG with one shared palette (the small one) and a GIF; the last two print their palette error |
+
+Beside the skeleton data rig-c writes `check/build/skeleton.model.json`, the compiled
+model document. [@rig-c/play](https://github.com/rig-c/play) loads that file and
+draws the rig in a browser, as plain DOM elements or on one canvas.
 
 The last lines of a green build are the pack line, printed beside the Spine example
 export's `spineboy.png` as a yardstick (a reference, not a bar), and the three
@@ -168,10 +177,12 @@ atlas written by anything else would have no oracle behind it.
 | --- | --- | --- |
 | painting + See-through layers → parts and specs | **rig-parts** (npm `@rig-c/parts`) | the merge of two runs, the measurements, the rig spec and motion spec |
 | specs → Spine skeleton data | **[@rig-c/core](https://github.com/rig-c/core)** (npm dependency `@rig-c/core`) | compile, the gate (rigc's own validator in an install; the round trip through `spine-core` where the runtime is beside it, as in this repository's CI), the named assertions, the packer, the renderer |
-| skeleton data → a page | **[rig-play](https://github.com/rig-c/play)** (npm `@rig-c/play`; formerly spine-html), a sibling project | a DOM renderer; rigc's `rig-play` profile is its policy, and every build here is gated under that profile as well as under `spine` |
+| compiled model → a page | **[rig-play](https://github.com/rig-c/play)** (npm `@rig-c/play`; formerly spine-html), a sibling project | the browser player: it loads the compiled model document and draws it as DOM elements or on one canvas; rigc's `rig-play` profile is its policy, and every build here is gated under that profile as well as under `spine` |
 
 rig-parts never writes Spine data itself. Everything on disk under `check/build/`
 was written by rig-c after its own gate passed.
+
+Next stops: [@rig-c/review](https://github.com/rig-c/review) is where a person looks at a build and answers, and [@rig-c/create](https://github.com/rig-c/create) drives the whole cycle with an agent.
 
 ## Getting See-through layers
 
@@ -215,7 +226,7 @@ box at its exact size (`st_input_head.png`). Pure raster, no GPU.
 ### The optional ComfyUI adapter
 
 For a user who has a ComfyUI box, two
-commands drive it; nothing else in the pipeline needs one:
+commands make the painting and the layers on it; nothing else in the pipeline needs one:
 
 ```sh
 rig-parts comfy paint --config config.json --out <dir> --host http://<box>:8188
@@ -290,25 +301,8 @@ rig-parts build --config config.json --source painting.png --full layers/full --
 
 At each step the config holds only what that step reads; the one table of what
 that is, step by step, is [docs/AUTHORING.md §4](docs/AUTHORING.md#4-the-command-order).
-The command-order controls exercise the hand-copy route above on each fetched
-example from a config holding only what the first step reads (`RL01`). The optional
-`--write-config` forms below save the proposed fields; `RL01` does not exercise
-that flag. On `demo` the
-proposal pasted uncorrected stops at the last step, naming its `bottomwear` on
-`CHECK_TIP_OVER_ROOT` — the correction its tracked config records there, the two outer
-skirt chains moved (issue #227, [its README](examples/demo/README.md)); on `scarf`,
-since issue #262, it builds green, and on `wind` too. `wind`'s config declares the cloth
-recipe and its limbs, so the block runs on it again with that `cloth` block authored,
-`--cloth config.json` on the drafting `propose` line and its tracked `keypoints.json` on both
-`propose --parts` lines (`RL05`): it pastes `limbs` and `constraints` with the rest and gives
-back the tracked config, section for section ([its README](examples/wind/README.md)).
-On `demo`, which tracks the pose file it was painted on, the block runs again with
-`--keypoints` on both `propose --parts` lines (`RL03`): the proposal then also drafts
-`limbs`, the step's list carries them, and the run ends where `RL01` ends. The joints
-are that pose file scaled to the painting, not read off it, so this shows what the
-loop carries, not where the joints are. On `wind`, which tracks the joints read off its
-painting (`keypoints.json`), `RL03` runs with those. The list as it stood before issue #375, four
-sections, stops at `--from-config` naming every limb part (`RL04`).
+How the selftest runs this block on each example is in
+[CONTRIBUTING.md](https://github.com/rig-c/parts/blob/main/CONTRIBUTING.md#the-readme-loop-as-the-selftest-runs-it).
 
 `propose` is deliberately not a step of `build`: the proposal is a draft to correct
 against its overlay, and a config with bones is `build`'s input. `rig`, `check` and
@@ -325,11 +319,17 @@ Command details and config saving are in the [command reference](docs/AUTHORING.
 | command | does |
 | --- | --- |
 | `inputs` | [Prepare the two See-through input images](docs/AUTHORING.md#command-reference) |
-| `comfy` | [Drive an optional ComfyUI painting or layer job](docs/AUTHORING.md#command-reference) |
+| `comfy` | [Drive optional ComfyUI jobs: painting, layers, matte and plate](docs/AUTHORING.md#command-reference) |
 | `layers` | [Inspect wrapper layers or a PSD](docs/AUTHORING.md#command-reference) |
+| `head-crop-preflight` | [Report what a head box would clip, before the head run](docs/AUTHORING.md#command-reference) |
 | `sheet` | [Make a contact sheet](docs/AUTHORING.md#command-reference) |
 | `assemble` | [Merge layers into measured parts](docs/AUTHORING.md#command-reference) |
+| `check-parts` | [Check assembled parts' integrity and write a report](docs/AUTHORING.md#check-parts) |
+| `diff-components` | [List every place the stacked parts differ from the painting](docs/AUTHORING.md#whole-figure-difference-inventory) |
 | `diff-drafts` | [Compare two assemble outputs](docs/AUTHORING.md#command-reference) |
+| `depth-prepare` | [Write one depth-model input image per part](docs/DEPTH.md#1-prepare-one-inference-image-per-part) |
+| `depth-bind` | [Bind a depth map to its prepared input](docs/DEPTH.md#3-bind-every-map-to-its-prepared-input) |
+| `depth-apply` | [Apply depth maps to the parts as depth sheets](docs/DEPTH.md#4-apply-the-maps-as-depth-sheets) |
 | `edited-part` | [Record an edited part receipt](docs/AUTHORING.md#edited-rig-space-parts-assembleedited_parts-issue-1278) |
 | `external-receipt` | [Record or verify an external mask](docs/AUTHORING.md#external-mask-receipt) |
 | `propose` | [Draft or inspect a character config](docs/AUTHORING.md#command-reference) |
@@ -347,6 +347,14 @@ Command details and config saving are in the [command reference](docs/AUTHORING.
 | `retune` | [Revise constraints and idle in a gated rig](docs/AUTHORING.md#command-reference) |
 | `guide` | [Read the installed authoring reference](docs/AUTHORING.md#command-reference) |
 
+## Depth-driven rigging
+
+[docs/DEPTH.md](docs/DEPTH.md) is the feature page for a person: what a depth-driven turn gives you, the two stages that make the sheets, how to pick a painting and how to judge the result.
+See the [depth-driven rigging reference](docs/AUTHORING.md#depth-driven-rigging) for sampled head and body turns and unit-depth precedence.
+
+### Per-layer depth input
+
+See the [per-layer depth input contract](docs/AUTHORING.md#per-layer-depth-input) for opt-in sheets, calibration and their consumers.
 
 ## What it does not do
 
@@ -359,10 +367,13 @@ These are limits of the approach, stated so nobody reads more into a green run:
   sheets, consumed by the shipped 2.5D head-turn producer through [config.turn.roles](docs/AUTHORING.md#3-configjson-field-by-field). A layer that is in front of another in one place and behind it in another is drawn
   right in the still (the painting's own pixels are projected onto it) and wrong once
   it moves.
-- **No expression or lip-sync, and no jiggle.** The mouth is one layer; there is no
-  mouth-shape set and no expression axis, and nothing here proposes, keys or judges a
-  soft region. An expression that moves the face's parts, and a jiggle, can be built on
-  the rig it writes ([below](#what-can-be-built-on-top)); lip-sync cannot.
+- **No expression axis, no lip-sync from audio, and no jiggle.** The base rig's mouth is
+  one layer. Mouth shapes exist only as alternate sets you paint and declare
+  (`assemble.alternates`, [AUTHORING §3](docs/AUTHORING.md#3-configjson-field-by-field)),
+  switched by name or keyed by hand in a named animation; nothing here draws them or
+  reads speech, and nothing here proposes, keys or judges a soft region. An expression
+  that moves the face's parts, and a jiggle, can be built on the rig it writes
+  ([below](#what-can-be-built-on-top)).
 - **Occluded pixels are See-through's synthesis**, not the artist's. How much of a rig
   that is, is below.
 - **No success rate is claimed.** Ten characters have been measured stage by stage
@@ -408,9 +419,9 @@ for each — a config fragment, the `check` lines it passes with, and its limit:
   named by `motion.animations_from` are built and gated beside the idle on every build. Keys
   carry core motion fields, including raw `curve` control points in absolute time/value
   coordinates ([core key format](https://github.com/rig-c/core/blob/main/docs/AUTHORING.md#45-keys--times-values-curves));
-  the linked recipe includes a core-gated example. One
-  attachment per slot, so a part moves, turns and scales but is never swapped for another
-  image; `check` measures the idle alone.
+  the linked recipe includes a core-gated example. Without
+  an alternate set a slot holds one image, so a part moves, turns and scales but is not
+  swapped for another; `check` measures the idle alone.
 - [**A soft region driven by physics**](docs/AUTHORING.md#recipe-a-soft-region-driven-by-physics)
   (a bust, the hips): a bone the config authors, a contour-mode region that hands it the patch,
   and a `physics` constraint on it; `examples/reference-sample` carries one. Under its slow
@@ -467,7 +478,7 @@ beside `rig-parts` for the transition, the same launcher under both names. On np
 both compatibility names stay published beside `@rig-c/parts` at every version, as aliases
 carrying the same files with only the `name` in `package.json` changed, so a
 project that depends on either keeps receiving every release; a new
-install names `@rig-c/parts` ([RELEASING.md](RELEASING.md), *The registry side*). `@rig-c/core`
+install names `@rig-c/parts` ([RELEASING.md](https://github.com/rig-c/parts/blob/main/RELEASING.md), *The registry side*). `@rig-c/core`
 comes with it as a dependency, providing the `rigc` command. No Spine runtime does: since
 rig-c 2.0 the installed `rigc` gates every build with its own validator over the
 compiled model document, and `rigc --version` says `entry: cli_core.ts —
@@ -481,42 +492,8 @@ MIT; see [NOTICE.md](NOTICE.md) for third-party terms and the Spine runtime lice
 
 ## Development
 
-```sh
-bun install
-bun run typecheck        # tsc --noEmit, strict
-bun run lint             # one rule: no explicit any
-bun run fetch-examples   # the public examples' paintings and layers, into examples/*/inputs (needs a network); each file held to its blob id at the pinned commit, a stale one replaced by name
-bun run selftest         # every gate's controls; with the examples fetched, build on each of them against its expected/
-bun run selftest -- --summary-json summary.json  # also write rig-selftest-summary/1 (per-suite PASS/FAIL/SKIP counts, holes, partial flag and exit)
-bun run smoke            # pack, install into an empty directory, run from the install (needs a network)
-```
-
-`bun run selftest -- --summary-json <file>` writes a machine-readable summary (`spec: "rig-selftest-summary/1"`, `tool: "rig-parts"`) derived from the same `RunTally` that prints the console summary: `exit` (`0 | 1 | 2`), `partial` (`boolean`), `only` (`string[] | null`), `faults`, `totals` (`suites`, `ran`, `skipped_suites`, `controls`, `passed`, `failed`, `skipped`, `holes`), per-suite `suites` entries (`suite`, `ran`, `controls`, `passed`, `failed`, `skipped`, `status`, `reason`), `skips` (`{ suite, name, reason, hole }`), and `holes` (`{ suite, name, reason }`). See [AUTHORING §8](docs/AUTHORING.md#machine-readable-selftest-summary---summary-json-issue-725) for the full shape.
-
-The generated `foot-ownership` suite can be run alone with
-`bun run selftest -- --only foot-ownership` (exit 2 means a green partial run,
-not a full-tree verdict). Issue #638's revised acceptance requires zero foreign-leg
-components and reports historical own-cap components separately; it was changed
-after measurement, and the historical case did not pass the original second-island
-1% bar. Issue #637 additionally preserves assigned own-cap connections under covers:
-the generated default is now one connected component, retaining the historical
-own-cap pixels and their bridge. The controls require both historical measurements
-and current connected ownership, with no foreign-leg pixels.
-[AUTHORING's limb section](docs/AUTHORING.md#limbs-cut-at-their-joints-limbs-issue-349)
-records the generated default-cap case and its preservation controls.
-
-[CLAUDE.md](CLAUDE.md) is the doctrine, [CONTRIBUTING.md](CONTRIBUTING.md) the
-practice, [RELEASING.md](RELEASING.md) the cut, [docs/STABILITY.md](docs/STABILITY.md)
-the interface it holds.
-
-## Depth-driven rigging
-
-[docs/DEPTH.md](docs/DEPTH.md) is the feature page for a person: what a depth-driven turn gives you, the two stages that make the sheets, how to pick a painting and how to judge the result.
-See the [depth-driven rigging reference](docs/AUTHORING.md#depth-driven-rigging) for sampled head and body turns and unit-depth precedence.
-
-### Per-layer depth input
-
-See the [per-layer depth input contract](docs/AUTHORING.md#per-layer-depth-input) for opt-in sheets, calibration and their consumers.
+`bun install`, then `bun run typecheck`, `bun run lint` and `bun run selftest`.
+[CONTRIBUTING.md](https://github.com/rig-c/parts/blob/main/CONTRIBUTING.md) has every command and what a change has to clear; [CLAUDE.md](https://github.com/rig-c/parts/blob/main/CLAUDE.md) is the doctrine, [RELEASING.md](https://github.com/rig-c/parts/blob/main/RELEASING.md) the cut, [docs/STABILITY.md](docs/STABILITY.md) the interface it holds.
 
 ## Licence
 
