@@ -36,35 +36,12 @@ input is silent.
 </p>
 
 <p align="center"><em>
-The painting was generated for this repository with a public checkpoint (Hassaku XL
-(Illustrious) v1.3 Style A, by Ikena, Fair AI Public License 1.0-SD) and no LoRA, on a
-pose that holds the hands apart, then given one hand-detailer pass; its generation
-record, See-through layers and licence are in
-<a href="https://github.com/rig-c/examples">rig-c/examples</a>.
-See-through ran twice, once on the whole figure and once on a square head crop.
-Then one command: <code>rig-parts build --loop --lead-in 3</code>. The proposer's bones, meshes,
-regions and motion were used as proposed but for one correction, written in the
-config beside the values it replaced: the two outer skirt chains were moved out to
-0.8 of the skirt's half-width (the proposal's, within 90 px of the centre of a skirt
-449 px wide, swung it about its middle and failed <code>TIP_OVER_ROOT</code>, 0.442
-against 1.4725; moved, 2.425). One input-stage edit: <code>hair_back</code> is taken
-from the full run, because the twin tails leave the head crop sideways (a plan edit).
-<code>check</code> printed, verbatim:<br/>
-<code>50 assertions: 24 measured (24 passed, 0 failed), 26 skipped, 0 not in profile "rig-play"</code><br/>
-<code>loop: idle 41 frame(s) at 12 fps, f0000 vs f0040 (t = 3.333333333333333s) with the rig's 29 physics constraint(s) left out (named on the `loop physics:` line; rendered with them, the ends need not meet — `build --loop --lead-in &lt;n&gt;`): max |d| 0 (0 required)</code><br/>
-<code>seam: setup pose at 654x1216, scale 0.9438: mean |d| 0.147 (&lt;= 1.0), 0 px over 40, 0.00 rig px (the count / s²; &lt;= 50), 0 px over 80 (reported)</code><br/>
-<code>pack: skeleton.png 1051x972, 23 region(s), 96.9% covered, padding 2, page edges free, shape polygon</code><br/>
-The loop is that build's indexed APNG, 40 frames at 12 fps, 703,909 bytes, one
-256-entry palette at a measured error of max 71, mean 0.636 per channel over every
-frame (the lossless APNG beside it, the exactness record, is 4,449,233 bytes; the
-GIF, at the same error, 760,058). The rig's hair, skirt, sleeves, bows and earrings
-carry physics, which rigc's render starts from rest, so the idle is played three
-periods ahead and the loop is the fourth: the frame one period after its first differs
-from it by max 1 level, 0 px over 40 (<code>--lead-in</code>). Frame 29 (2.417 s) is the
-closed eye: the blink holds for 0.084 s, one 12 fps frame rounded up; the painting is
-shown at half size, resampled and written by this package's PNG codec (nothing here
-encodes JPEG). <code>rig-parts sheet</code> made the contact sheet. Its
-<code>expected/</code> is this port's own build (<a href="examples/demo/README.md">examples/demo</a>).
+A painting generated for this repository, split by See-through twice (the whole figure and
+a square head crop), then built by one command: <code>rig-parts build --loop --lead-in 3</code>.
+The proposer's bones, meshes, regions and motion were used as proposed but for one
+correction. The generation record, the correction, the lines <code>check</code> printed and the
+loop's encoding figures are in <a href="examples/demo/README.md">examples/demo</a>; the layers
+and licence are in <a href="https://github.com/rig-c/examples">rig-c/examples</a>.
 </em></p>
 
 <p align="center"><em>
@@ -147,26 +124,12 @@ build: PASS — the packed atlas is the artifact; parts/ and rig/ are the interm
   out/check/build/skeleton.png
 ```
 
-The page's edges are free by default: rigc picks the least-area page the parts need,
-not the next power of two. On the two reference examples, packed by rectangles, that is 967x1338
-and 479x1166, where a power-of-two page is 1024x2048 and 512x2048, and covered goes from 56.3 % to 91.2 % and
-from 49.7 % to 93.4 %. The cost is the one rigc's help states: *"region attachments
-sampling within 1 LSB of the loose build rather than exactly"*. Measured on both
-examples, every idle frame stays within 1 level of the power-of-two build's. The atlas says
-`filter: Linear, Linear` and has no `repeat` line, so `--page-edges pot` is for a
-consumer that mipmaps or repeats the page; it writes exactly the page builds wrote
-before the flag existed. The measurements are in
-[AUTHORING §5, *Page edges*](docs/AUTHORING.md#5-after-each-stage-what-to-read).
-
-The pack shape is `polygon` by default (rig-c 2.1): a region only meshes draw is
-packed by its emitted hull, so a neighbour may sit inside its rectangle where the hull
-is not; a region attachment stays its rectangle. On the two examples that takes the
-free page from 967x1338 to 922x1348 (covered 91.2 % to 95.0 %, 3.9 % less area) and
-from 479x1166 to 477x1151 (93.4 % to 95.0 %, 1.7 % less), at the cost class `free`
-already has: every idle frame within 1 level of the `rect` build's, and no figure in
-`check.json` but `pack_mode` moves. `--pack-shape rect` writes the page and atlas
-0.7.0 wrote. The measurements are in
-[AUTHORING §5, *Pack shape*](docs/AUTHORING.md#5-after-each-stage-what-to-read).
+The page's edges are free by default: rigc picks the least-area page the parts need, not
+the next power of two; `--page-edges pot` is for a consumer that mipmaps or repeats the
+page. The pack shape is `polygon` by default: a region only meshes draw is packed by its
+emitted hull; `--pack-shape rect` packs every region by its rectangle. What each costs and
+saves, measured on the reference examples, is in
+[AUTHORING §5, *Page edges*](docs/AUTHORING.md#5-after-each-stage-what-to-read) and *Pack shape*.
 
 The packer is rig-c's, and no other: a packed region is a lossless copy, and an
 atlas written by anything else would have no oracle behind it.
@@ -197,21 +160,15 @@ rig-parts at what it wrote:
 | Upstream CLI | `python inference/scripts/inference_psd.py --srcp <image> --save_to_psd` in a checkout of [shitagaki-lab/see-through](https://github.com/shitagaki-lab/see-through) | the `.psd` in `workspace/layerdiff_output/` |
 | ComfyUI wrapper | [jtydhr88/ComfyUI-See-through](https://github.com/jtydhr88/ComfyUI-See-through) on your own ComfyUI box; the optional `comfy` adapter (`rig-parts comfy seethrough`) drives it | the `layers.json` + PNGs it writes |
 
-Use the square `inputs` outputs on the Space too. Its [app calls `apply_layerdiff`](https://huggingface.co/spaces/24yearsold/see-through-demo/blob/049a1ab07908e404aad03f73431dd1a98f88202c/app.py#L110-L118),
-which [calls `center_square_pad_resize`](https://huggingface.co/spaces/24yearsold/see-through-demo/blob/049a1ab07908e404aad03f73431dd1a98f88202c/common/utils/inference_utils.py#L78-L83).
-That [preprocessing function](https://huggingface.co/spaces/24yearsold/see-through-demo/blob/049a1ab07908e404aad03f73431dd1a98f88202c/common/utils/cv.py#L254-L274)
-pads a non-square upload before resizing; the centre-crop reported in
-[#356](https://github.com/rig-c/parts/issues/356) is not the current source path.
-`st_input_full.png` supplies the explicit white padding that rig-parts maps back
-to the original painting. This is a source inspection, not a new demo run.
+Use the square `inputs` outputs on the Space too: `st_input_full.png` supplies the white
+padding rig-parts maps back to the original painting
+([source reading](docs/AUTHORING.md#see-through-space-input-source-reading)).
 
 The [head-run source reading](docs/AUTHORING.md#see-through-head-run-source-reading) explains why a separate head crop is needed.
 
 **See-through is required; ComfyUI is not.** The wrapper is one route among
 four, and `rig-parts comfy` is only a convenience for that route: every
-stage after See-through reads files, whichever route wrote them. On the two
-reference examples each run took 171–199 s through the wrapper, and on the demo 179 s (each run's
-`meta.json`, in [rig-c/examples](https://github.com/rig-c/examples)).
+stage after See-through reads files, whichever route wrote them.
 
 ### The two images See-through is fed: `inputs`
 
@@ -255,19 +212,10 @@ sources and records their declared terms; those declarations do not assign a
 blanket licence to output images. The graph's automatic upscaler selection is
 unchanged; the owner decision is tracked separately in [#428](https://github.com/rig-c/parts/issues/428).
 
-`--offload` selects the wrapper's CUDA group-offload path on the **ComfyUI host**:
-its [LayerDiff and depth loaders](https://github.com/jtydhr88/ComfyUI-See-through/blob/98d754bf04f668647919ab750eccb0e0640faa81/nodes.py#L395-L475)
-call `enable_group_offload('cuda', ...)`. Omit it for a local Mac/MPS host. A Mac
-running this CLI may pass it to a remote CUDA host. This describes that offload
-path; it is not a claim that the remaining model stack has been verified on MPS.
-
-The [wrapper README at `98d754b`](https://github.com/jtydhr88/ComfyUI-See-through/blob/98d754bf04f668647919ab750eccb0e0640faa81/README.md#L22-L28)
-describes a combined Decompose node and names `24yearsold/seethroughv0.0.1_marigold`
-for depth. The shipped `workflows/seethrough.json` instead sends
-`SeeThrough_GenerateLayers`, `SeeThrough_GenerateDepth` and `SeeThrough_PostProcess`,
-and selects `layerdifforg/seethroughv0.0.1_marigold`, matching the wrapper's
-[implemented depth default](https://github.com/jtydhr88/ComfyUI-See-through/blob/98d754bf04f668647919ab750eccb0e0640faa81/nodes.py#L82-L85).
-Use the graph's node classes and the host's `/object_info` when checking the adapter.
+`--offload` selects the wrapper's CUDA group-offload path on the **ComfyUI host**; omit it
+for a local Mac/MPS host. The source reading behind it, and how the shipped graph differs
+from the wrapper's README, are in
+[AUTHORING, *The optional ComfyUI adapter*](docs/AUTHORING.md#source-readings-for-the-see-through-graph).
 
 ## The loop, for an agent
 
@@ -424,67 +372,27 @@ for each — a config fragment, the `check` lines it passes with, and its limit:
   swapped for another; `check` measures the idle alone.
 - [**A soft region driven by physics**](docs/AUTHORING.md#recipe-a-soft-region-driven-by-physics)
   (a bust, the hips): a bone the config authors, a contour-mode region that hands it the patch,
-  and a `physics` constraint on it; `examples/reference-sample` carries one. Under its slow
-  4 s idle the bust moves at most 0.066 rig px and the hips not at all: the spring answers
-  faster keys on the body. Its `hop`, a named animation keying only `hip`, moves the
-  bust up to 6.702 and the hips up to 4.609 rig px; the region's `band` caps how far a patch may
-  go before the texture-stretch ceiling, and `check` measures the idle alone.
+  and a `physics` constraint on it; `examples/reference-sample` carries one. The spring
+  answers faster keys on the body more than a slow idle, the region's `band` caps how far a
+  patch may go before the texture-stretch ceiling, and `check` measures the idle alone.
 
 ### How much of a rig the model painted
 
-`parts.json` splits each part's opaque pixels (`opaque_px`) into `visible_px` — no
-later layer of its See-through run is opaque in front of them — and `occluded_px`,
-and counts the visible ones whose colour was not taken from the painting
-(`visible_not_projected_px`). On the four examples, from the totals of their
-`expected/parts.json` (the default `--project core`; `scarf`'s painting patches are
-whole painting pixels, so they count as taken):
-
-| | opaque px | occluded | visible, not projected | taken from the painting |
-| --- | --- | --- | --- | --- |
-| `demo` | 362,441 | 69,098 (19.1 %) | 67,164 (18.5 %) | 226,179 (62.4 %) |
-| `scarf` | 283,813 | 78,503 (27.7 %) | 56,699 (20.0 %) | 148,611 (52.4 %) |
-| `reference-sample` | 298,363 | 79,122 (26.5 %) | 35,979 (12.1 %) | 183,262 (61.4 %) |
-| `reference-demo` | 765,924 | 202,343 (26.4 %) | 75,626 (9.9 %) | 487,955 (63.7 %) |
-
-The occluded share is art the painting does not show — a back-hair layer, a neck, the
-parts of an ear under the hair — and is See-through's synthesis by necessity; it is
-what the decomposition is for. The visible-but-not-projected share is synthesis where
-the painting was there to be taken: a part too thin for the reference rule's 5x5
-eroded core, an anti-aliased fringe below alpha 250, a rim beside a layer in front, a
-pixel refused for drift. `--project visible` keeps the erosion only along a rim with a
-layer in front, which takes that share to 22,476 (7.5 %) on `reference-sample` and 49,672 (6.5 %)
-on `reference-demo` (from the `parts.json` of a `--project visible` build). On the eleven thin
-head parts — brows, lashes, irises, eye whites, ears, mouth — it takes 296 of
-`reference-sample`'s 1,289 visible pixels where `core` takes 110, and 824 of `reference-demo`'s 2,162
-where `core` takes 343. What neither rule takes is the fringe: a per-pixel
-classification of those parts under `visible`, recorded with the change that added
-the flag, puts 813 of `reference-sample`'s 993 still-unprojected pixels and 879 of `reference-demo`'s
-1,338 below alpha 250. Where such a fringe keeps the stack off the painting and a part
-beneath holds the pixel in the painting's colour, `assemble` clears it instead, and
-the assemble line and `parts.json` say how many pixels, of which part, over which
-(AUTHORING §5, *The fringe push-back*; the figures in this section were measured
-before it, at v0.14.0, but for the `demo` row, which is its `expected/parts.json`
-as this port wrote it in issue #227).
+`parts.json` splits each part's opaque pixels into `visible_px` and `occluded_px`, and
+counts the visible ones whose colour was not taken from the painting
+(`visible_not_projected_px`). The occluded share is art the painting does not show — a
+back-hair layer, a neck — and is See-through's synthesis by necessity. The figures for the
+four examples, and what `--project visible` changes, are in
+[AUTHORING §5](docs/AUTHORING.md#how-much-of-a-rig-the-model-painted).
 
 ## Requirements
 
-[Bun](https://bun.sh) 1.4 or later (`engines.bun >=1.4.0`; CI tests latest only). `npm i -D @rig-c/parts` installs the
-`rig-parts` command (`npm install -g @rig-c/parts` puts it on `PATH`); it hands off
-to Bun and says so in one sentence if Bun is not on `PATH`. **`@rig-c/parts` is the
-package's canonical name; versions 1.0.0-rc.1 to 1.5.3 were published as `rig-parts`, the convenience install name, and
-versions up to 0.16.0
-as `spine-parts`, the legacy install name**, and the install keeps a `spine-parts` command
-beside `rig-parts` for the transition, the same launcher under both names. On npm
-both compatibility names stay published beside `@rig-c/parts` at every version, as aliases
-carrying the same files with only the `name` in `package.json` changed, so a
-project that depends on either keeps receiving every release; a new
-install names `@rig-c/parts` ([RELEASING.md](RELEASING.md), *The registry side*). `@rig-c/core`
-comes with it as a dependency, providing the `rigc` command. No Spine runtime does: since
-rig-c 2.0 the installed `rigc` gates every build with its own validator over the
-compiled model document, and `rigc --version` says `entry: cli_core.ts —
-@esotericsoftware/spine-core absent`. With `@esotericsoftware/spine-core` installed
-beside it, the same `rigc` runs the spine-core round trip instead, as this repository's
-selftest and CI do; `check.json`'s `rigc_entry` records which one gated a build.
+[Bun](https://bun.sh) 1.4 or later. `npm i -D @rig-c/parts` installs the `rig-parts`
+command (`npm install -g @rig-c/parts` puts it on `PATH`); it hands off to Bun and says
+so in one sentence if Bun is not on `PATH`. `@rig-c/core` comes with it as a dependency,
+providing the `rigc` command; no Spine runtime does. [docs/STABILITY.md](docs/STABILITY.md#rig-c)
+says what this package relies on in rig-c and which validator gates an install, and
+[RELEASING.md](RELEASING.md#three-names-one-tree) covers the package's earlier install names.
 
 ## Licence posture
 
