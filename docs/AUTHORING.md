@@ -9806,9 +9806,10 @@ replaces that group's rigid depths. `clear` explicitly lists part references to
 remove, including any small units intended to sample the surface. Unselected
 parts retain their artwork and depth references. The output config copies the
 original, sets the declared group pivots/unit depths, and relocates the file
-references `configFileReferences` declares. It rebases `assemble.edited_parts.dir`
-to the output directory while keeping every receipt's `file` unchanged; other
-references use their `set`
+references `configFileReferences` declares alongside the config-relative
+assembly inputs (`assemble.editor_receipts.receipts[].file` included). It
+rebases `assemble.edited_parts.dir` to the output directory while keeping every
+edited-part receipt's `file` unchanged; other references use their `set`
 ([STABILITY](STABILITY.md#programmatic-config-file-references)). Built-in
 skeleton names remain names. A selected part whose provenance records
 `depth.kind: "authored-unit"` is refused before output

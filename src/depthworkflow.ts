@@ -10,6 +10,7 @@ import { PartsError, type Problem } from './errors.ts';
 import { loadConfigAndAnimations, parseConfig } from './config.ts';
 import { relocateConfigReferences } from './configrelocation.ts';
 import { depthReading, readSourceDepth } from './depthsheets.ts';
+import { readEditorReceipts } from './editreceipt.ts';
 import { alphaSupport, depthMapFail as fail, floatBox, integrateNormals, mapToSheet, readNumericMap, type NumericMap } from './depthmaps.ts';
 import { depthImageReference, partImageReference, readParts } from './parts.ts';
 import { readPartSet } from './propose.ts';
@@ -243,6 +244,8 @@ export function applyDepth(input: { parts: string; manifest: string; config: str
   const rawParts = object(readJson(join(input.parts, 'parts.json')), 'parts.json'), file = readParts(join(input.parts, 'parts.json'));
   for (const p of file.parts) if (Object.hasOwn(recipe.parts, p.name) && applied(recipe.parts[p.name].group) && p.provenance?.depth?.kind === 'authored-unit') fail('DEPTH_AUTHORED_UNIT_CONFLICT', `part "${p.name}"`, 'has provenance.depth.kind "authored-unit"; a transported scalar reference cannot coexist with authored unit depth — retain the unit declaration or supply an explicitly reassembled scalar-compatible input; no automatic transition is made');
   const { config } = loadConfigAndAnimations(input.rigConfig);
+  const receiptProblems = readEditorReceipts(config.assemble.editor_receipts, input.rigConfig).problems;
+  if (receiptProblems.length) throw new PartsError(receiptProblems);
   refuseStaleAssembly(input.rigConfig, file, config);
   const raw = object(readJson(input.rigConfig), 'rig config'), turn = object(raw.turn, 'config.turn');
   // A group left out must not turn: the rig builds a group's turn from its config block, not from its sheets.
@@ -263,7 +266,10 @@ export function applyDepth(input: { parts: string; manifest: string; config: str
   }
   // Keep relative paths portable when relocating the output directory with its inputs.
   relocateConfigReferences(raw, dirname(input.rigConfig), input.out, 'relative');
-  refuseStaleAssembly(join(input.out, 'config.json'), file, parseConfig(raw));
+  const relocatedConfig = parseConfig(raw), outConfig = join(input.out, 'config.json');
+  const relocatedReceiptProblems = readEditorReceipts(relocatedConfig.assemble.editor_receipts, outConfig).problems;
+  if (relocatedReceiptProblems.length) throw new PartsError(relocatedReceiptProblems);
+  refuseStaleAssembly(outConfig, file, relocatedConfig);
   const warnings: string[] = [];
   const writes = new Map<string, Uint8Array>(), rows: Obj[] = [], recs = rawParts.parts as Obj[];
   // Retain auxiliary art (including alternate sets) and diagnostics byte-for-byte.

@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
-import { writeEditorReceiptFixture } from '../fixtures/editor_receipts.ts';
+import { RECEIPT_AUTHOR_FILE, writeEditorReceiptFixture } from '../fixtures/editor_receipts.ts';
 import { rigParts } from '../fixtures/rig.ts';
 import { PartsError } from '../src/errors.ts';
 import { configFileReferences } from '../src/config.ts';
@@ -15,6 +15,8 @@ import { assembleStage, readRigInputs } from '../src/build.ts';
 import { buildRig } from '../src/rig.ts';
 import { depthReading } from '../src/depthsheets.ts';
 import { type EditedPartReceipt } from '../src/editedparts.ts';
+import { type EditorReceipt, readEditorReceipts } from '../src/editreceipt.ts';
+import { relocateConfigReferences } from '../src/configrelocation.ts';
 import { scratchConfig } from '../src/meshdraft.ts';
 import { isSkeletonName, KEYPOINT_NAMES } from '../src/skeleton.ts';
 import { encodePngBytes, readPng, writePng } from '../src/raster/png.ts';
@@ -375,6 +377,191 @@ export function runDepthRelocationChecks(dir: string, say: Say): void {
   say('DMP1283_OLD_PRIVATE_LIST_REFUSES_BOTH_RECEIPTS', refused.length === 2 &&
     receipts.every((r, i) => refused.includes(`ASSEMBLE_EDITED_PART_FILE: config.assemble.edited_parts.receipts[${i}] (part "${r.part}")`)) &&
     !existsSync(refusedOut), JSON.stringify({ refusals: refused, outputExists: existsSync(refusedOut) }));
+
+  // #1533: rig-config one directory above --out with editor_receipts.receipts[].file; rebase + skip-rebase plant + missing-file refusal.
+  const authorSourcePath = join(receiptDir, 'author_hand.png');
+  writeFileSync(authorSourcePath, sourceBytes[0]);
+  const authorSourceSha = sha256(sourceBytes[0]);
+  const editorReceipt: EditorReceipt = {
+    file: '../../../inputs/set/author_hand.png',
+    sha256: authorSourceSha,
+    from_sha256: '0'.repeat(64),
+    editor: 'synthetic editor receipt fixture',
+  };
+  const editorReceiptsBlock = { required: true, receipts: [editorReceipt] };
+  const nestedWithEditorReceipts = {
+    ...nestedRaw,
+    assemble: { ...(nestedRaw.assemble as Obj), editor_receipts: editorReceiptsBlock },
+  };
+  const editorReceiptConfig = join(configDir, 'editor-receipt-config.json');
+  json(editorReceiptConfig, nestedWithEditorReceipts);
+  const editorReceiptConfigBytes = readFileSync(editorReceiptConfig);
+  const editorReceiptOut = join(configDir, 'mapped-editor-receipts');
+  const expectedEditorReceiptFile = '../../../../inputs/set/author_hand.png';
+  applyDepth({ parts: built, manifest: join(editedPrepared, 'manifest.json'), config: recipePath, rigConfig: editorReceiptConfig, out: editorReceiptOut });
+  const emittedEditorReceiptCfg = JSON.parse(readFileSync(join(editorReceiptOut, 'config.json'), 'utf8')) as {
+    assemble: { edited_parts: EditedBlock; editor_receipts: { required?: boolean; receipts: EditorReceipt[] } };
+  };
+  const emittedEditorReceipt = emittedEditorReceiptCfg.assemble.editor_receipts.receipts[0];
+  const resolvedFromSource = resolve(configDir, editorReceipt.file);
+  const resolvedFromOut = resolve(editorReceiptOut, emittedEditorReceipt.file);
+  const checkEditorReceiptRebased = (block: { required?: boolean; receipts: EditorReceipt[] }, report: Say): void => {
+    const r = block.receipts[0];
+    const target = resolve(editorReceiptOut, r.file);
+    const ledger = readEditorReceipts(block, join(editorReceiptOut, 'config.json'));
+    const ok = block.required === true && block.receipts.length === 1 &&
+      r.file === expectedEditorReceiptFile && r.sha256 === authorSourceSha &&
+      r.from_sha256 === editorReceipt.from_sha256 && r.editor === editorReceipt.editor &&
+      target === resolvedFromSource && existsSync(target) && sha256(readFileSync(target)) === authorSourceSha &&
+      ledger.problems.length === 0 && ledger.bySha.get(authorSourceSha)?.path === resolvedFromSource;
+    report('DMP1533_EDITOR_RECEIPTS_REBASED_ONE_DIR_BELOW_RIG_CONFIG', ok,
+      JSON.stringify({ file: r.file, expected: expectedEditorReceiptFile, resolvedFromSource, target, problems: ledger.problems }));
+  };
+  checkEditorReceiptRebased(emittedEditorReceiptCfg.assemble.editor_receipts, say);
+  const editorReceiptReassembled = join(dir, 'editor-receipt-reassembled');
+  assemble(join(editorReceiptOut, 'config.json'), editorReceiptReassembled);
+  say('DMP1533_EDITOR_RECEIPTS_AND_EDITED_PARTS_REASSEMBLE_FROM_MAPPED_OUT',
+    canonicalEditedBlock(emittedEditorReceiptCfg.assemble.edited_parts, nestedBlock, expectedDir) &&
+    resolvedFromOut === resolvedFromSource &&
+    receiptBytesMatch(emittedEditorReceiptCfg.assemble.edited_parts, editorReceiptOut, editorReceiptReassembled) &&
+    readFileSync(editorReceiptConfig).equals(editorReceiptConfigBytes),
+    JSON.stringify({ editedDir: emittedEditorReceiptCfg.assemble.edited_parts.dir, receiptFile: emittedEditorReceipt.file }));
+
+  // Plant that skips rebasing editor_receipts.receipts[].file turns the control red and fails downstream assembly.
+  const skippedEditorReceiptBlock = { ...editorReceiptsBlock, receipts: [{ ...editorReceipt }] };
+  const skippedPlantResults: { name: string; ok: boolean; detail: string }[] = [];
+  checkEditorReceiptRebased(skippedEditorReceiptBlock, (name, ok, detail) => { skippedPlantResults.push({ name, ok, detail }); });
+  const skippedPlantCfg = join(editorReceiptOut, 'skipped-editor-receipt-config.json');
+  json(skippedPlantCfg, { ...emittedEditorReceiptCfg, assemble: { ...emittedEditorReceiptCfg.assemble, editor_receipts: skippedEditorReceiptBlock } });
+  const skippedRefusedOut = join(dir, 'skipped-editor-receipt-refused');
+  const skippedRefusals = codes(() => assemble(skippedPlantCfg, skippedRefusedOut));
+  say('DMP1533_PLANT_SKIPPING_EDITOR_RECEIPT_REBASE_TURNS_CONTROL_RED',
+    skippedPlantResults.length === 1 && !skippedPlantResults[0].ok &&
+    skippedRefusals.includes(`ASSEMBLE_EDITOR_RECEIPT_FILE: config.assemble.editor_receipts.receipts[0] (file "${editorReceipt.file}")`) &&
+    !existsSync(skippedRefusedOut),
+    JSON.stringify({ controlPassed: skippedPlantResults[0]?.ok, refusals: skippedRefusals, outputExists: existsSync(skippedRefusedOut) }));
+
+  // Any editor_receipts path that cannot resolve is refused by name (field, value, where it would resolve) before anything is written.
+  const missingReceiptFile = '../../../inputs/set/missing_receipt.png';
+  const missingReceiptResolved = resolve(configDir, missingReceiptFile);
+  const missingEditorReceiptCfg = join(configDir, 'missing-editor-receipt-config.json');
+  json(missingEditorReceiptCfg, {
+    ...nestedRaw,
+    assemble: {
+      ...(nestedRaw.assemble as Obj),
+      editor_receipts: { receipts: [{ ...editorReceipt, file: missingReceiptFile }] },
+    },
+  });
+  const missingReceiptOut = join(configDir, 'mapped-missing-receipt');
+  let missingReceiptError = '';
+  try {
+    applyDepth({ parts: built, manifest: join(editedPrepared, 'manifest.json'), config: recipePath, rigConfig: missingEditorReceiptCfg, out: missingReceiptOut });
+  } catch (e) {
+    if (!(e instanceof PartsError)) throw e;
+    missingReceiptError = e.problems.map(p => `${p.code}: ${p.object} — ${p.detail}`).join(' | ');
+  }
+  say('DMP1533_UNRESOLVABLE_EDITOR_RECEIPT_REFUSED_BEFORE_EMIT',
+    missingReceiptError.includes(`ASSEMBLE_EDITOR_RECEIPT_FILE: config.assemble.editor_receipts.receipts[0] (file "${missingReceiptFile}")`) &&
+    missingReceiptError.includes(`names ${missingReceiptResolved}, which is no such file`) &&
+    !existsSync(missingReceiptOut),
+    missingReceiptError);
+
+  // Same-depth --out (sibling directory of configDir) leaves relative paths starting without ../ or at same depth unchanged when --out is at the same depth.
+  const sameDepthOut = join(dirname(configDir), 'mapped-same-depth');
+  applyDepth({ parts: built, manifest: join(editedPrepared, 'manifest.json'), config: recipePath, rigConfig: editorReceiptConfig, out: sameDepthOut });
+  const sameDepthEmitted = JSON.parse(readFileSync(join(sameDepthOut, 'config.json'), 'utf8')) as typeof emittedEditorReceiptCfg;
+  say('DMP1533_SAME_DEPTH_OUT_PRESERVES_DEPTH_RELATIVE_BYTES',
+    sameDepthEmitted.assemble.edited_parts.dir === nestedBlock.dir &&
+    sameDepthEmitted.assemble.editor_receipts.receipts[0].file === editorReceipt.file &&
+    readEditorReceipts(sameDepthEmitted.assemble.editor_receipts, join(sameDepthOut, 'config.json')).problems.length === 0,
+    JSON.stringify({ dir: sameDepthEmitted.assemble.edited_parts.dir, file: sameDepthEmitted.assemble.editor_receipts.receipts[0].file }));
+
+  // Full census of every relative-path field depth-apply copies through relocateConfigReferences:
+  // 1. requirements, 2. motion.animations_from, 3. generation.control.skeleton,
+  // 4. assemble.occluders[i].image, 5. assemble.occluders[i].plate,
+  // 6. assemble.edited_parts.dir (with assemble.edited_parts.receipts[i].file kept dir-relative),
+  // 7. assemble.editor_receipts.receipts[i].file,
+  // 8. assemble.cuts[i].under (string and {plate}),
+  // 9. assemble.alternates[i].{source,full,head,skeleton} and cuts[j].under (string and {plate}),
+  // 10. assemble.take[i].{run_dir,st_input,reference.painting},
+  // 11. limbs.<limb>.segments[i].cap,
+  // 12. depth.{full,head}.{atlas.image,layers.<layer>.image}.
+  const censusConfigDir = join(base, 'census/sub'), censusOutDir = join(censusConfigDir, 'mapped');
+  const censusAssetsDir = join(base, 'census/assets');
+  mkdirSync(censusConfigDir, { recursive: true }); mkdirSync(censusAssetsDir, { recursive: true });
+  const censusFiles = [
+    'req.json', 'anim.json', 'pose.json', 'occ.png', 'plate-dir', 'cut-under.png', 'cut-plate',
+    'alt-src.png', 'alt-full', 'alt-head', 'alt-skel.json', 'alt-under.png', 'alt-plate',
+    'take-run', 'take-input.png', 'take-ref.png', 'limb-cap.png',
+    'full-atlas.png', 'full-layer.png', 'head-atlas.png', 'head-layer.png', 'receipt-art.png',
+  ] as const;
+  for (const f of censusFiles) writeFileSync(join(censusAssetsDir, f), f);
+  writeFileSync(join(censusAssetsDir, 'edits-dir', 'part.png'), (() => { mkdirSync(join(censusAssetsDir, 'edits-dir'), { recursive: true }); return 'part'; })());
+  const relFromConfig = (f: string): string => `../assets/${f}`;
+  const relFromOut = (f: string): string => `../../assets/${f}`;
+  const censusRaw = {
+    requirements: relFromConfig('req.json'),
+    motion: { animations_from: relFromConfig('anim.json') },
+    generation: { control: { skeleton: relFromConfig('pose.json') } },
+    assemble: {
+      occluders: [{ image: relFromConfig('occ.png'), plate: relFromConfig('plate-dir') }],
+      edited_parts: { dir: relFromConfig('edits-dir'), receipts: [{ part: 'face', file: 'part.png', sha256: 'a'.repeat(64), from_sha256: 'b'.repeat(64), editor: 'fixture' }] },
+      editor_receipts: { receipts: [{ file: relFromConfig('receipt-art.png'), sha256: 'c'.repeat(64), from_sha256: 'd'.repeat(64), editor: 'fixture' }, { file: RECEIPT_AUTHOR_FILE, sha256: 'e'.repeat(64), from_sha256: 'f'.repeat(64), editor: 'fixture' }] },
+      cuts: [{ under: relFromConfig('cut-under.png') }, { under: { plate: relFromConfig('cut-plate') } }],
+      alternates: [{
+        name: 'alt',
+        source: relFromConfig('alt-src.png'),
+        full: relFromConfig('alt-full'),
+        head: relFromConfig('alt-head'),
+        skeleton: relFromConfig('alt-skel.json'),
+        cuts: [{ under: relFromConfig('alt-under.png') }, { under: { plate: relFromConfig('alt-plate') } }],
+      }],
+      take: [{
+        run_dir: relFromConfig('take-run'),
+        st_input: relFromConfig('take-input.png'),
+        reference: { painting: relFromConfig('take-ref.png') },
+      }],
+    },
+    limbs: { arm: { segments: [{ cap: relFromConfig('limb-cap.png') }] } },
+    depth: {
+      full: { atlas: { image: relFromConfig('full-atlas.png') }, layers: { face: { image: relFromConfig('full-layer.png') } } },
+      head: { atlas: { image: relFromConfig('head-atlas.png') }, layers: { face: { image: relFromConfig('head-layer.png') } } },
+    },
+  };
+  const relocatedCensus = structuredClone(censusRaw);
+  relocateConfigReferences(relocatedCensus, censusConfigDir, censusOutDir, 'relative');
+  const expectedCensus = {
+    requirements: relFromOut('req.json'),
+    motion: { animations_from: relFromOut('anim.json') },
+    generation: { control: { skeleton: relFromOut('pose.json') } },
+    assemble: {
+      occluders: [{ image: relFromOut('occ.png'), plate: relFromOut('plate-dir') }],
+      edited_parts: { dir: relFromOut('edits-dir'), receipts: [{ part: 'face', file: 'part.png', sha256: 'a'.repeat(64), from_sha256: 'b'.repeat(64), editor: 'fixture' }] },
+      editor_receipts: { receipts: [{ file: relFromOut('receipt-art.png'), sha256: 'c'.repeat(64), from_sha256: 'd'.repeat(64), editor: 'fixture' }, { file: `../${RECEIPT_AUTHOR_FILE}`, sha256: 'e'.repeat(64), from_sha256: 'f'.repeat(64), editor: 'fixture' }] },
+      cuts: [{ under: relFromOut('cut-under.png') }, { under: { plate: relFromOut('cut-plate') } }],
+      alternates: [{
+        name: 'alt',
+        source: relFromOut('alt-src.png'),
+        full: relFromOut('alt-full'),
+        head: relFromOut('alt-head'),
+        skeleton: relFromOut('alt-skel.json'),
+        cuts: [{ under: relFromOut('alt-under.png') }, { under: { plate: relFromOut('alt-plate') } }],
+      }],
+      take: [{
+        run_dir: relFromOut('take-run'),
+        st_input: relFromOut('take-input.png'),
+        reference: { painting: relFromOut('take-ref.png') },
+      }],
+    },
+    limbs: { arm: { segments: [{ cap: relFromOut('limb-cap.png') }] } },
+    depth: {
+      full: { atlas: { image: relFromOut('full-atlas.png') }, layers: { face: { image: relFromOut('full-layer.png') } } },
+      head: { atlas: { image: relFromOut('head-atlas.png') }, layers: { face: { image: relFromOut('head-layer.png') } } },
+    },
+  };
+  say('DMP1533_EVERY_COPIED_RELATIVE_PATH_FIELD_REBASES_TO_OUT',
+    JSON.stringify(relocatedCensus) === JSON.stringify(expectedCensus),
+    JSON.stringify(relocatedCensus));
 }
 /** Narrow identity proof: synthetic file readers and CLI only; no renderer or inference. */
 export function runDepthBindingChecks(dir: string, say: Say): void {
