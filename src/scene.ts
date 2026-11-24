@@ -1721,6 +1721,27 @@ export function composeScene(
   const note = notes.size === 1 ? [...notes][0] : ready.map((b) => `${b.id}: ${b.motion.animations.idle.note}`).join(' | ');
   const motion: MotionSpec = { spec: 'rigc-motion/1', archetype: name, cut: name, easings, groups, animations: { idle: { duration: durations[0], loop: true, note, tracks, ...(idleDeform.length === 0 ? {} : { deform: idleDeform }) }, ...beside } };
 
+  if (scene.animations !== undefined) {
+    const declaredBones = new Set(rig.bones.map(bone => bone.name));
+    const undeclaredPivots = new Map<string, string>();
+    for (const c of scene.characters) {
+      const bone = prefixed(c.id, PLACEMENT_BONE);
+      if (c.placement_pivot !== true && !declaredBones.has(bone)) undeclaredPivots.set(bone, c.id);
+    }
+    for (const [animation, clip] of Object.entries(scene.animations)) for (const [i, track] of clip.tracks.entries()) {
+      const group = track.group;
+      const members = group !== undefined && isBoneProperty(track.property) && Object.hasOwn(groups, group) ? groups[group] : [];
+      const targets = track.bone === undefined ? members : [track.bone];
+      for (const bone of new Set(targets)) {
+        const id = undeclaredPivots.get(bone);
+        if (id === undefined) continue;
+        const via = group === undefined ? '' : ` through group ${show(group)}`;
+        fail('SCENE_PIVOT_DECLARED', `scene.animations.${animation}.tracks[${i}]`,
+          `keys bone ${show(bone)}${via}; declare "placement_pivot": true on character ${show(id)}`);
+      }
+    }
+    refuseIfAny(problems);
+  }
   if (scene.animations !== undefined || pivots.size > 0) mergeSceneAnimations(rig, motion, scene.animations ?? {}, [...pivots.values()]);
 
   const report: SceneReport = {
