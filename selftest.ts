@@ -48633,11 +48633,6 @@ export function runPlacementPivotSceneControls(dir: string, say: FixtureCaseRepo
       bone(existing.rig, pivot)?.x === -3 && existing.report.characters[0].bones === 3,
     `${codes(collision)}; existing target still resolves with parent ${bone(existing.rig, pivot)?.parent}`, why);
 
-  const undeclared = cli('undeclared', { ...base, animations: motion });
-  say('SPV09_UNDECLARED_TARGET_KEEPS_THE_CORE_UNKNOWN_BONE_REFUSAL',
-    undeclared.status === 1 && undeclared.out.includes('CE_COMPILE_ANIMATION_BONE_UNKNOWN') &&
-      undeclared.out.includes('keys unknown bone "figure:placement"') && noFiles(undeclared),
-    `exit ${undeclared.status}; files ${sceneOutputFiles(undeclared.dir).length}; ${errorLines(undeclared)}`, why);
   const plateProblems = [pivot, carrier].map(name => refused({ ...rootScene, animations: motion, plates: [{ ...plate, name }], order: ['figure', name] }));
   say('SPV10_NAMED_PLATES_KEEP_THE_EXISTING_GENERATED_NAME_COLLISION_REFUSAL',
     plateProblems.every((err, i) => named(err, 'SCENE_PLATE_NAME_FREE', [pivot, carrier][i]) && !named(err, 'SCENE_ORDER_COMPLETE')),
@@ -48702,6 +48697,37 @@ export function runPlacementPivotSceneControls(dir: string, say: FixtureCaseRepo
     rootKeys.every(err => named(err, 'SCENE_ROOT_SHARED', 'animations.hop.tracks[0]', '"root"')) &&
       authored.motion.animations.idle.tracks.some(t => t.bone === 'root' && t.property === 'translatex'),
     `imported direct/group ${rootKeys.map(codes).join(' / ')}; authored shared root retained`, why);
+
+  // Issue #1504: a missing generated pivot has its own fix; other unknown bones still reach Core.
+  const declarationWhy = 'issue #1504: an unresolved scene pivot names the character opt-in before the Core compile';
+  const missingDeclaration = (run: ReturnType<typeof cli>, index: number, group?: string): boolean => {
+    const via = group === undefined ? '' : ` through group "${group}"`;
+    const detail = `SCENE_PIVOT_DECLARED: scene.animations.idle.tracks[${index}] — keys bone "${pivot}"${via}; declare "placement_pivot": true on character "figure"`;
+    return run.status === 1 && run.out.includes(detail) && !run.out.includes('COMPOSE_RIGC_GREEN') && noFiles(run);
+  };
+  const undeclared = cli('undeclared', { ...base, animations: motion });
+  say('SPVD01_UNDECLARED_PIVOT_NAMES_THE_REQUIRED_OPT_IN', missingDeclaration(undeclared, 0),
+    `exit ${undeclared.status}; files ${sceneOutputFiles(undeclared.dir).length}; ${errorLines(undeclared)}`, declarationWhy);
+  const unknown = cli('unknown-bone', { ...base, animations: idle(track('figure:missing')) });
+  say('SPVD02_OTHER_UNKNOWN_BONES_KEEP_THE_CORE_REFUSAL',
+    unknown.status === 1 && unknown.out.includes('COMPOSE_RIGC_GREEN') && unknown.out.includes('CE_COMPILE_ANIMATION_BONE_UNKNOWN') &&
+      unknown.out.includes('keys unknown bone "figure:missing"') && !unknown.out.includes('SCENE_PIVOT_DECLARED') && noFiles(unknown),
+    `exit ${unknown.status}; files ${sceneOutputFiles(unknown.dir).length}; ${errorLines(unknown)}`, declarationWhy);
+
+  const groupBuild = join(dir, 'pivot-group-build');
+  cpSync(build, groupBuild, { recursive: true });
+  const groupMotionPath = join(groupBuild, 'rig', 'motion.json');
+  const groupMotion = JSON.parse(readFileSync(groupMotionPath, 'utf8')) as MotionSpec;
+  groupMotion.groups.move = ['eye', 'placement'];
+  writeFileSync(groupMotionPath, rigJsonText(groupMotion));
+  const { property, keys } = track(pivot);
+  const groupedIdle = idle(track('figure:eye', 'translate'));
+  const grouped = cli('undeclared-group', {
+    ...base, characters: [{ ...figure, build: 'pivot-group-build' }],
+    animations: { idle: { ...groupedIdle.idle, tracks: [...groupedIdle.idle.tracks, { group: 'figure:move', property, keys }] } },
+  });
+  say('SPVD03_BONE_GROUP_MEMBER_NAMES_THE_REQUIRED_OPT_IN', missingDeclaration(grouped, 1, 'figure:move'),
+    `exit ${grouped.status}; files ${sceneOutputFiles(grouped.dir).length}; ${errorLines(grouped)}`, declarationWhy);
 }
 
 /** Exercise scene-authored root motion independently of the placement-pivot controls. */
