@@ -222,10 +222,6 @@ a session rotated — the reader rule above, measured on ourselves. So it is her
 - **Never push to an armed PR** — one with auto-merge armed. Disable auto-merge
   first, push, and report the new head. The tower re-arms a **FEATURE PR** only;
   a release PR is never armed. A merge of main into the branch counts as a push.
-- **A pull request that changes a shipped file is never titled `docs:`** —
-  use `fix:` or `feat:` so the commit history and manual `CHANGELOG.md` entries
-  reflect shipped changes (release-please and the `ships` job in `ci.yml` were
-  retired in #1263, so this is a review convention rather than a CI job).
 - **The report**, sent when an issue lands or stops: ① the PR and its merge SHA
   ② a verification table — command, exit code, figures ③ every claim in the
   issue that was contradicted, with the measurement ④ what was rejected, with

@@ -16,7 +16,7 @@
  * `--alias` was still not served inside its own wait.
  *
  * Nothing else in this repository asks that question. `prepublishOnly` gates the
- * SOURCE TREE, the `ships` job in `ci.yml` reads packed PATH LISTS, and
+ * SOURCE TREE, and
  * `release.yml` gates the packaged build through `@rig-c/play` (`bun run smoke -- --case clean`)
  * before `npm publish`. This is the fact about a program:
  * `npm pack`, `npm install` into an empty directory, and real commands run from
