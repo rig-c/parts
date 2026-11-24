@@ -30686,7 +30686,7 @@ function runBuildSuite(): number {
     const outfitDir = join(dir, 'outfit-tx-474');
     const authoringPath = join(ROOT, 'docs', 'AUTHORING.md');
     const outfitDocText = existsSync(authoringPath)
-      ? readFileSync(authoringPath, 'utf8').split('### Outfit alternates\n')[1]?.split('\n### ')[0] ?? ''
+      ? readFileSync(authoringPath, 'utf8').replace(/\r\n/g, '\n').split('### Outfit alternates\n')[1]?.split('\n### ')[0] ?? ''
       : '';
     const outfitCAlt: [number, number, number] = [70, 80, 60];
     const makeFlatPainting = (w: number, h: number, rgb: [number, number, number]): Raster => {
