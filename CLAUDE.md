@@ -211,19 +211,21 @@ a session rotated — the reader rule above, measured on ourselves. So it is her
   `--match-head-commit`, confirms main is green, and sends HQ a landing report.
   HQ's sign is still required for dependency work (an issue that blocks or is
   blocked by another repo's work, or a change to a public contract, API or
-  export another repo consumes) and for releases. A
-  `release:` PR from release-please merges and cuts only after HQ's explicit
+  export another repo consumes) and for releases. A manual release PR
+  (`chore: release X.Y.Z` bumping `package.json` and `CHANGELOG.md`;
+  release-please was retired in #1263) merges and cuts only after HQ's explicit
   "LGTM #NNN" naming the PR and its current head, quoted in the cut report;
   the sub-commander approves the release PR's awaiting CI run on that exact
-  head only. A release PR is never armed: release-please rewrites its head on
-  every push to main. Merge it manually with `--match-head-commit` naming the
-  head signed by HQ. AI review runs at most once per PR.
+  head only. A release PR is never armed: merge it manually with
+  `--match-head-commit` naming the head signed by HQ. AI review runs at most
+  once per PR.
 - **Never push to an armed PR** — one with auto-merge armed. Disable auto-merge
   first, push, and report the new head. The tower re-arms a **FEATURE PR** only;
   a release PR is never armed. A merge of main into the branch counts as a push.
 - **A pull request that changes a shipped file is never titled `docs:`** —
-  release-please hides that type, and the `ships` job in `ci.yml` refuses the
-  landing. Use `fix:` or `feat:`.
+  use `fix:` or `feat:` so the commit history and manual `CHANGELOG.md` entries
+  reflect shipped changes (release-please and the `ships` job in `ci.yml` were
+  retired in #1263, so this is a review convention rather than a CI job).
 - **The report**, sent when an issue lands or stops: ① the PR and its merge SHA
   ② a verification table — command, exit code, figures ③ every claim in the
   issue that was contradicted, with the measurement ④ what was rejected, with
@@ -255,18 +257,19 @@ a session rotated — the reader rule above, measured on ourselves. So it is her
 
 ### Verification tiers
 
-What a lane runs before it reports, where, and how often. The verdict on the tree is PR CI, and a lane does not run it twice.
+What a lane runs before it reports, where, and how often. CI is split into a light PR tier (`scripts/ci_tier.ts`) and a full release tier (#1505), and a lane does not run a tier twice.
 
 | tier | what runs | where | cap | when |
 | --- | --- | --- | --- | --- |
 | V0 pre-flight | `typecheck`, `lint`, `git diff --check`; grep `selftest.ts` for every rule code and message the diff touches and list the exact-message controls that will move; check every `--only` suite name exists (an unknown name exits 64 (usage), #1006); check message length against the line ceiling | the lane's machine, no selftest | 2 min | every commit |
 | V1 quick | `bun run verify:nova -- --only <suites>` (`--label`, `--owner`, `--session`; sets `RIG_PARTS_VALIDATION_HEAD` from `HEAD` and `RIG_PARTS_SELFTEST_JOBS=1`, and reports exit 2 as `green-partial`) | the remote pool | 10 min per job | each iteration, and before every handover |
-| V2 precise | the full selftest (its shards), build controls, packed installs, `ships`, the merged run tally | PR CI, on a draft PR the tower opens from the worker's branch | CI's own (`.github/workflows/ci.yml`) | once when V1 is green; again only after a fix |
+| V2 PR CI | **Light tier** on ordinary feature PRs and `main` pushes (`typecheck`, `lint`, `check:readme`, `tree-verdict`, the five selftest shards filtered to the suites selected by `scripts/ci_tier.ts` — always including `tree` and `run-tally` — plus `selftest merge`, `packed install ubuntu-latest Bun latest`, and conditional `expected-files`, `painting-public`, and standalone checks when their inputs are touched); **Full release tier** (all 75 selftest suites across five shards, `expected-files`, `build-platforms` on Ubuntu/macOS/Windows, `install-platforms` on Ubuntu/macOS/Windows and npm release, and `tree-verdict-receipt`) on release PRs (`chore: release X.Y.Z` / `package.json`), PRs touching full-tier paths (`.github/workflows/**`, `scripts/ci_tier.ts`, `scripts/*smoke*.ts`, `bin/**`, `package.json`, `bun.lock`, `tsconfig.json`, `eslint.config.js`, shared validation builders), the daily non-blocking scheduled full run on `main` at `03:17 UTC`, and `workflow_dispatch` (`tier=full`) | PR CI and `main` (`.github/workflows/ci.yml`) | ~5–9 min (light), CI's own (full) | once when V1 is green; again only after a fix |
 | V3 measurement | only what the issue's bar names: public-example output hashes, a stage timer, a pixel comparison, a reproduction | the remote pool, narrowest sample | named in the issue, ≤ 15 min | only when the issue names it |
 
-- A lane does not run the full serial selftest on the remote pool. V2 is that verdict. The exceptions are named in the issue: the issue is about the full run's own time or memory (#1018), or CI is down.
+- A lane does not run the full serial selftest on the remote pool. The exceptions are named in the issue: the issue is about the full run's own time or memory (#1018), or CI is down.
+- **Consequence of the two-tier split (#1505):** V2 on an ordinary feature PR is the light PR tier, not the full cross-suite and cross-OS verdict. The full-tree verdict runs in the full release tier (on release PRs, full-tier path PRs, the daily scheduled full run on `main` at `03:17 UTC`, and `workflow_dispatch` with `tier=full`), and only the full tier stamps a `tree-verdict-receipt`. A lane whose change adds a new path or cross-stage dependency updates `PATH_TO_SUITE_MAP` in `scripts/ci_tier.ts` in the same PR (which itself triggers the full tier).
 - **A runner verifies before it hands over.** Before every handover it runs V1 over the suites its diff touches, however many there are. It picks them by searching `selftest.ts` and `tools/` for the paths, modules and rule codes it changed. A handover with only V0 is an unverified handover, and it is sent back. If that V1 sample would take more than 15 min for one run, the worker raises it under the cost check below; it does not skip to V2.
-- V1 is a sample. It is reported as `green-partial`, never as a pass. V2 stays the only verdict on the tree.
+- V1 is a sample. It is reported as `green-partial`, never as a pass. V2 gates the PR merge, and the full release tier gates the release cut.
 - After a red V2, the worker reruns the failed suites with `--only` before the next push.
 - `--exclusive` is only for whole-run timing comparisons. A stage timer against a millisecond bar runs on the ordinary pool, median of 3.
 - Limits:

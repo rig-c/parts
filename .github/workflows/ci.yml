@@ -4,19 +4,41 @@
 # that makes it fire, so a green run means the failures are still reachable —
 # not merely that nothing threw. Nothing here asserts timing, and the selftest
 # reports an absent corpus as a HOLE, never as a pass.
+#
+# Issue #1505 splits CI into two tiers:
+#   - Light PR tier (ordinary pull_request and push to main): runs typecheck,
+#     lint, check:readme, tree-verdict, the five selftest shards filtered to the
+#     suites selected by scripts/ci_tier.ts (always including tree and
+#     run-tally), selftest merge, packed install on ubuntu-latest, and
+#     conditional jobs (expected-files, painting-public, standalone checks) when
+#     their inputs are touched.
+#   - Full release tier (release PRs, PRs touching full-tier paths, the daily
+#     scheduled full run on main at 03:17 UTC, and workflow_dispatch): runs
+#     all 75 selftest suites across all five shards, expected-files,
+#     build-platforms (Ubuntu, macOS, Windows), install-platforms (Ubuntu,
+#     macOS, Windows, and npm release), and stamps tree-verdict-receipt.
 name: ci
 
 on:
   push:
     branches: [main]
   pull_request:
-  # The release pull request gets a `pull_request` run like any other, but a run
-  # started by GITHUB_TOKEN lands in `action_required`, so that pull request's
-  # required check reads as blocked until a human approves it — a standing step
-  # of every cut (RELEASING.md). A run started from the Actions tab cannot stand
-  # in for that approval: a required check is matched by the run that reported
-  # it, not by the SHA. This trigger is a manual lever and nothing more.
+  schedule:
+    # Daily non-blocking full run on main at 03:17 UTC (12:17 KST), chosen from
+    # the 03:00-03:59 UTC zero-run trough in the 300-run histogram (#1505).
+    - cron: '17 3 * * *'
+  # The release pull request gets a `pull_request` run like any other, and a
+  # manual dispatch selects the full tier by default (`tier: full`).
   workflow_dispatch:
+    inputs:
+      tier:
+        description: 'Verification tier to run (full or light)'
+        required: false
+        default: 'full'
+        type: choice
+        options:
+          - full
+          - light
 
 permissions:
   contents: read
@@ -28,7 +50,7 @@ permissions:
 # and is never cancelled: each merge commit on main keeps its own verdict.
 # release.yml has no such group — a cancelled publish is worse than a slow one.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}-${{ github.event_name }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -40,9 +62,20 @@ jobs:
       head-sha: ${{ steps.reuse.outputs.head-sha }}
       tested-sha: ${{ steps.reuse.outputs.tested-sha }}
       pr: ${{ steps.reuse.outputs.pr }}
+      tier: ${{ steps.plan.outputs.tier }}
+      suites: ${{ steps.plan.outputs.suites }}
+      run-expected-files: ${{ steps.plan.outputs.run_expected_files }}
+      run-painting-public: ${{ steps.plan.outputs.run_painting_public }}
+      run-standalone-tools: ${{ steps.plan.outputs.run_standalone_tools }}
+      run-build-platforms: ${{ steps.plan.outputs.run_build_platforms }}
+      run-full-installs: ${{ steps.plan.outputs.run_full_installs }}
+      install-matrix: ${{ steps.plan.outputs.install_matrix }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
       - id: reuse
         uses: rig-c/core/.github/actions/tree-verdict@149bca5fc828c60416283de0a1aa570ed33f385f
         with:
@@ -51,15 +84,22 @@ jobs:
         env:
           TREE_VERDICT_TOOLS: ${{ steps.reuse.outputs.tooling-path }}
         run: bun "$TREE_VERDICT_TOOLS/../../../scripts/lint_workflows.ts" scripts/lint_workflows.declarations.json .
+      - name: Check CI tier selector and planted failures
+        run: bun scripts/check_ci_tier.ts --quiet
+      - name: Plan verification tier and suite selection
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_TIER: ${{ inputs.tier }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: bun scripts/ci_tier.ts plan
 
-  # The selftest runs in five shards (issues #395, #849, #1021, #1456). SHARDS in
-  # selftest.ts assigns every unit exactly once; test below merges the records.
-  # Issue #1021 uses PR CI unit clocks and capped case-timing samples to split
-  # check's fixture helpers into separately scheduled units. SHARDS documents
-  # the measured inputs and the estimates the next PR CI run must confirm.
-  # The two-worker default and 25-minute timeout remain unchanged.
-  # A shard judges nothing: its record holds every line its units printed, and
-  # the merge prints and counts them as one whole run would.
+  # The selftest runs in five shards (issues #395, #849, #1021, #1456, #1505).
+  # SHARDS in selftest.ts assigns every unit exactly once; test below merges the
+  # records. In the light tier, each shard filters its assigned units to the
+  # suites selected by scripts/ci_tier.ts; in the full tier, every unit runs.
   #
   # ⚠️ The matrix names the shards SHARDS names. A shard here and not there is
   # refused when it starts; one there and not here leaves no record, which the
@@ -78,6 +118,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
+      - name: Configure light-tier shard filter
+        if: needs.tree-verdict.outputs.tier == 'light'
+        env:
+          CI_TIER: ${{ needs.tree-verdict.outputs.tier }}
+          CI_SUITES: ${{ needs.tree-verdict.outputs.suites }}
+        run: bun scripts/ci_tier.ts install-shim --tier "$CI_TIER" --suites "$CI_SUITES"
 
       # Its units run in worker processes, as many at once as the runner has
       # cores, capped at two by default for one 6 GiB slot; the step is red
@@ -88,17 +134,17 @@ jobs:
       # The ordinary sample suite uses generated fixtures. These five pinned
       # public assemblies separately hold owner-allocation error membership.
       - name: Restore the pinned examples
-        if: matrix.shard == '3'
+        if: matrix.shard == '3' && needs.tree-verdict.outputs.run-painting-public == 'true'
         id: examples
         uses: actions/cache@v4
         with:
           path: examples/*/inputs
           key: examples-inputs-${{ hashFiles('scripts/fetch-examples.sh') }}
       - name: Fetch pinned painting allocation examples
-        if: matrix.shard == '3' && steps.examples.outputs.cache-hit != 'true'
+        if: matrix.shard == '3' && needs.tree-verdict.outputs.run-painting-public == 'true' && steps.examples.outputs.cache-hit != 'true'
         run: bun run fetch-examples
       - name: Check public painting allocation membership
-        if: matrix.shard == '3'
+        if: matrix.shard == '3' && needs.tree-verdict.outputs.run-painting-public == 'true'
         timeout-minutes: 12
         run: |
           for example in demo reference-demo reference-sample scarf wind; do
@@ -121,7 +167,7 @@ jobs:
   # input commit. The tool refuses inputs that are not the pinned blobs.
   expected-files:
     needs: tree-verdict
-    if: needs.tree-verdict.outputs.reused != 'true'
+    if: needs.tree-verdict.outputs.reused != 'true' && needs.tree-verdict.outputs.run-expected-files == 'true'
     name: expected files
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -159,28 +205,49 @@ jobs:
       - run: bun run typecheck
       - run: bun run lint
       - name: Check receipted matte against a fake ComfyUI
+        if: needs.tree-verdict.outputs.run-standalone-tools == 'true'
         run: bun tools/check_matte.ts
       - name: Check core plate pad-to-8 transform against a fake ComfyUI
+        if: needs.tree-verdict.outputs.run-standalone-tools == 'true'
         run: bun tools/check_core_grid.ts
       - name: Check core plate --cfg against a fake ComfyUI
+        if: needs.tree-verdict.outputs.run-standalone-tools == 'true'
         run: bun tools/check_core_cfg.ts
       - name: Check opt-in run stamp clock with local stage doubles
+        if: needs.tree-verdict.outputs.run-standalone-tools == 'true'
         run: bun tools/check_run_clock.ts
       - name: Check ComfyUI client timeouts and poll retries against local stubs
+        if: needs.tree-verdict.outputs.run-standalone-tools == 'true'
         run: bun test tools/comfy_client.test.ts
       - name: Check assemble edge splits on a synthetic hem fixture
+        if: needs.tree-verdict.outputs.run-standalone-tools == 'true'
         run: bun test ./fixtures/edge_split.ts
       - uses: actions/download-artifact@v4
         with:
           pattern: selftest-shard-*
           path: shards
           merge-multiple: true
+      - name: Configure light-tier shard merge
+        if: needs.tree-verdict.outputs.tier == 'light'
+        env:
+          CI_TIER: ${{ needs.tree-verdict.outputs.tier }}
+          CI_SUITES: ${{ needs.tree-verdict.outputs.suites }}
+        run: bun scripts/ci_tier.ts install-shim --tier "$CI_TIER" --suites "$CI_SUITES"
       - name: Merge the shards into one selftest run
         run: bun selftest.ts --merge shards
 
-  # Fresh receipts attest the successful shard matrix and semantic merge.
+  # Gate full-tree receipt creation to full-tier non-scheduled runs so a
+  # light-tier partial run never stamps a full-tree receipt (#1505).
+  receipt-eligible:
+    needs: [tree-verdict, shard, test, expected-files, install-platforms, build-platforms]
+    if: ${{ needs.tree-verdict.outputs.reused != 'true' && needs.tree-verdict.outputs.tier == 'full' && github.event_name != 'schedule' }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Full-tier run eligible for tree-verdict receipt"
+
+  # Fresh receipts attest the successful full-tier shard matrix and semantic merge.
   tree-verdict-receipt:
-    needs: [shard, test, expected-files]
+    needs: [shard, test, expected-files, receipt-eligible]
     if: ${{ success() }}
     runs-on: ubuntu-latest
     steps:
@@ -208,10 +275,11 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Report the full selftest verdict
+      - name: Report the selftest verdict
         env:
           LOOKUP_RESULT: ${{ needs.tree-verdict.result }}
           REUSED: ${{ needs.tree-verdict.outputs.reused }}
+          RUN_EXPECTED_FILES: ${{ needs.tree-verdict.outputs.run-expected-files }}
           SOURCE_PR: ${{ needs.tree-verdict.outputs.pr }}
           SOURCE_HEAD: ${{ needs.tree-verdict.outputs.head-sha }}
           SOURCE_TESTED: ${{ needs.tree-verdict.outputs.tested-sha }}
@@ -226,12 +294,17 @@ jobs:
           else
             test "$SHARD_RESULT" = success
             test "$TEST_RESULT" = success
-            test "$EXPECTED_FILES_RESULT" = success
+            if [ "$RUN_EXPECTED_FILES" = true ]; then
+              test "$EXPECTED_FILES_RESULT" = success
+            else
+              test "$EXPECTED_FILES_RESULT" = skipped
+            fi
           fi
 
   # Whether the PACKAGE runs, which nothing else here asks. `prepublishOnly`
-  # gates the source tree and the `ships` job below reads packed path lists;
-  # neither starts the program from an install.
+  # gates the source tree and `release.yml` gates the packaged build through
+  # `@rig-c/play` before publication; neither starts the program from a fresh
+  # cross-platform install on PR CI.
   #
   # ⭐ A separate job on purpose, with no `bun install` in it: the question is
   # whether a stranger's machine can run the package, and a job that had first
@@ -251,21 +324,14 @@ jobs:
   install-platforms:
     needs: tree-verdict
     if: needs.tree-verdict.outputs.reused != 'true'
-    # The `release` entry is the release job's own environment (setup-node with
-    # registry-url, so its .npmrc is in use, and the same exact npm release.yml
-    # pins), measured here so an npm change fails before a tag, not the cut.
+    # In the light tier, install-matrix runs ubuntu-latest (bundled npm).
+    # In the full tier, it runs ubuntu-latest, macos-latest, windows-latest,
+    # and the ubuntu-latest (npm release) entry matching release.yml's npm.
     name: packed install ${{ matrix.os }} Bun ${{ matrix.bun }}${{ matrix.npm == 'release' && ' (npm release)' || '' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        bun: [latest]
-        npm: [bundled]
-        include:
-          - os: ubuntu-latest
-            bun: latest
-            npm: release
+      matrix: ${{ fromJSON(needs.tree-verdict.outputs.install-matrix) }}
     # Recent 40 Windows jobs: 35 green, p95 510s, max 546s (job time).
     # Run 42282469376, job 128114964904 is that maximum; 15m leaves 354s.
     # The smoke step alone had p95 482s and max 525s; setup shares this cap.
@@ -291,7 +357,7 @@ jobs:
 
   build-platforms:
     needs: tree-verdict
-    if: needs.tree-verdict.outputs.reused != 'true'
+    if: needs.tree-verdict.outputs.reused != 'true' && needs.tree-verdict.outputs.run-build-platforms == 'true'
     name: build controls ${{ matrix.os }} Bun ${{ matrix.bun }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -343,7 +409,7 @@ jobs:
           assert.equal(build.failed, 0);
           JS
 
-  # Preserve the required check name; BOTH matrices must finish green.
+  # Preserve the required check name in both tiers.
   installs:
     needs: [tree-verdict, install-platforms, build-platforms]
     if: always()
@@ -353,6 +419,7 @@ jobs:
         env:
           LOOKUP_RESULT: ${{ needs.tree-verdict.result }}
           REUSED: ${{ needs.tree-verdict.outputs.reused }}
+          RUN_BUILD_PLATFORMS: ${{ needs.tree-verdict.outputs.run-build-platforms }}
           SOURCE_PR: ${{ needs.tree-verdict.outputs.pr }}
           SOURCE_HEAD: ${{ needs.tree-verdict.outputs.head-sha }}
           SOURCE_TESTED: ${{ needs.tree-verdict.outputs.tested-sha }}
@@ -365,5 +432,34 @@ jobs:
             echo "Reused PR $SOURCE_PR head $SOURCE_HEAD tested $SOURCE_TESTED run $SOURCE_RUN"
           else
             test "$INSTALLS_RESULT" = success
-            test "$BUILD_CONTROLS_RESULT" = success
+            if [ "$RUN_BUILD_PLATFORMS" = true ]; then
+              test "$BUILD_CONTROLS_RESULT" = success
+            else
+              test "$BUILD_CONTROLS_RESULT" = skipped
+            fi
           fi
+
+  # When the daily scheduled full run on main goes red, open or comment on an
+  # issue naming the failing jobs and the commit range since the last green
+  # full run (#1505).
+  scheduled-report:
+    name: scheduled full run report
+    needs: [tree-verdict, shard, test, expected-files, install-platforms, build-platforms, test-status, installs]
+    if: ${{ always() && github.event_name == 'schedule' && (needs.test-status.result != 'success' || needs.installs.result != 'success') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+      - name: Open or update the scheduled full-run failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: bun scripts/ci_tier.ts report-scheduled-failure
