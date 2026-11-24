@@ -13,6 +13,7 @@ import { scratchConfig } from '../src/meshdraft.ts';
 import { readParts, serializeParts, type PartsFile } from '../src/parts.ts';
 import { encodePngBytes, readPng } from '../src/raster/png.ts';
 import { type Raster } from '../src/raster/types.ts';
+import { readDocument } from './fixtures/read_document.ts';
 
 type Say = (name: string, pass: boolean, detail: string) => void;
 type Receipt = { part: string; file: string; sha256: string; from_sha256: string; editor: string };
@@ -659,7 +660,7 @@ function checkFrontColourUnderFrontPart(dir: string, say: Say): void {
   // painted in front colour F (distance 0 <= 40 from painting F), box [20, 22, 6, 4]. Rest recomposite is unchanged.
   const planted = runCase('planted-front-colour', paintRect(original, 12, 2, 18, 6, F));
   const plantedLine = '  edited part front colour: part "body" (edited_parts[0]) front owner "face" 24 px, box [20, 22, 6, 4] (within 40 of painting; measurement, no declared limit)';
-  const authoring = readFileSync(resolve(import.meta.dir, '..', 'docs', 'AUTHORING.md'), 'utf8');
+  const authoring = readDocument(resolve(import.meta.dir, '..', 'docs', 'AUTHORING.md'));
   const editedSection = authoring.split('### Edited rig-space parts (`assemble.edited_parts`, issue #1278)')[1]?.split('\n### ')[0] ?? '';
   const docHolds = editedSection.includes('edited part front colour:') && editedSection.includes('rawPaintingOwner') &&
     editedSection.includes('ERROR_LIMIT') && editedSection.includes('remove\nthe front part\'s colour from the hidden overlap');

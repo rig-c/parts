@@ -344,6 +344,7 @@ export const PATH_TO_SUITE_MAP: readonly MapRule[] = [
   { pattern: 'tools/check_waist*.ts', suites: ['waist', 'tree'], why: 'called by waist suite' },
   { pattern: 'tools/check_yield_contour.ts', suites: ['assemble', 'tree'], why: 'called by assemble suite' },
   { pattern: 'tools/expected_form.ts', suites: ['tree', 'chain'], why: 'called by tree and chain' },
+  { pattern: 'tools/fixtures/read_document.ts', suites: ['build', 'editor-receipts', 'tree'], why: 'LF-normalized Markdown reads in build, editor-receipts, and tree' },
   { pattern: 'tools/fixtures/**', suites: ['tree', 'check'], why: 'tools/fixtures/motion_seam_controls.ts called by tree and check' },
   { pattern: 'tools/parts_file_*.ts', suites: ['parts', 'tree'], why: 'parts.json field census and reference checks in parts suite' },
   { pattern: 'tools/parts_reader_fixture.ts', suites: ['parts', 'tree'], why: 'called by parts suite' },

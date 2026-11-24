@@ -71,6 +71,7 @@ import { runVisibilityChecks } from './tools/check_visibility.ts';
 import { runEditorReceiptChecks } from './tools/check_editor_receipts.ts';
 import { writeEditorReceiptFixture } from './fixtures/editor_receipts.ts';
 import { runEditedPartChecks, runEditedReferenceCwdChecks } from './tools/check_edited_parts.ts';
+import { readDocument } from './tools/fixtures/read_document.ts';
 import { runOutlineSpeckChecks } from './tools/check_outline_specks.ts';
 import { runExternalReceiptChecks } from './tools/check_external_receipt.ts';
 import { runBustLandmarkChecks } from './tools/check_bust_landmarks.ts';
@@ -30686,7 +30687,7 @@ function runBuildSuite(): number {
     const outfitDir = join(dir, 'outfit-tx-474');
     const authoringPath = join(ROOT, 'docs', 'AUTHORING.md');
     const outfitDocText = existsSync(authoringPath)
-      ? readFileSync(authoringPath, 'utf8').replace(/\r\n/g, '\n').split('### Outfit alternates\n')[1]?.split('\n### ')[0] ?? ''
+      ? readDocument(authoringPath).split('### Outfit alternates\n')[1]?.split('\n### ')[0] ?? ''
       : '';
     const outfitCAlt: [number, number, number] = [70, 80, 60];
     const makeFlatPainting = (w: number, h: number, rgb: [number, number, number]): Raster => {
@@ -41842,7 +41843,7 @@ function treeFiles(): string[] {
   const walk = (dir: string): void => {
     for (const entry of readdirSync(dir).sort()) {
       const abs = join(dir, entry);
-      const rel = relative(ROOT, abs);
+      const rel = relative(ROOT, abs).split(sep).join('/');
       if (rel === '.git' || ignored(rel, patterns)) continue;
       if (statSync(abs).isDirectory()) walk(abs);
       else out.push(rel);
@@ -44795,7 +44796,7 @@ function treeGuideCase(text: ReadonlyArray<readonly [string, string]>, say: Retu
   // TY16 — issue #343: every rule the source can print has exactly one row in the guide's rule/line tables, the row's
   // first cell starts with one anchor per name, and no row names a rule the source cannot print.
   const guideSources = runtimeRuleSources(text);
-  const guideText = readFileSync(join(ROOT, GUIDE_DOC), 'utf8');
+  const guideText = readDocument(join(ROOT, GUIDE_DOC));
   const rigc16 = rigcSources();
   const drift16 = ledgerDrift(guideSources, guideText, rigc16);
   const rowLine = (name: string): string => guideText.split('\n').find((l) => l.includes(`<a id="${name}"></a>`)) ?? '';
@@ -45089,11 +45090,216 @@ function expectedFormCases(text: ReadonlyArray<readonly [string, string]>, say: 
     'issue #1439 review: with no value difference the bytes are compared with the build\'s, on every platform; with machine-class differences only, the serializer must first reproduce the built bytes');
 }
 
+function readTreeText(files: readonly string[]): Array<readonly [string, string]> {
+  return files.filter(f => TEXT_FILE.test(f)).map(f => {
+    const path = join(ROOT, f);
+    return [f, f.endsWith('.md') ? readDocument(path) : readFileSync(path, 'utf8')] as const;
+  });
+}
+
+/** Detect heading selectors fed by a raw Markdown read through local bindings or helper arguments. */
+function rawHeadingReadFaults(text: ReadonlyArray<readonly [string, string]>): string[] {
+  const sources = new Map(text.map(([file, source]) => [file.replaceAll('\\', '/'), source] as const)
+    .filter(([file, source]) => (file === 'selftest.ts' || /^tools\/.*\.[cm]?[jt]s$/.test(file)) &&
+      /\b(?:readFile(?:Sync)?|Bun)\b/.test(source) && /(?:\.md\b|\bGUIDE_DOC\b)/i.test(source)));
+  const options: ts.CompilerOptions = { noResolve: true, noLib: true, types: [], allowJs: true };
+  const host = ts.createCompilerHost(options);
+  host.getSourceFile = (file, target) => {
+    const source = sources.get(file);
+    return source === undefined ? undefined : ts.createSourceFile(file, source, target, true);
+  };
+  const program = ts.createProgram([...sources.keys()], options, host);
+  const checker = program.getTypeChecker();
+  const declaration = (node: ts.Node): ts.Declaration | undefined =>
+    checker.getSymbolAtLocation(node)?.declarations?.[0];
+  const nameOf = (expr: ts.Expression): string | undefined => {
+    if (ts.isPropertyAccessExpression(expr)) return expr.name.text;
+    if (ts.isElementAccessExpression(expr) && ts.isStringLiteralLike(expr.argumentExpression)) return expr.argumentExpression.text;
+    if (!ts.isIdentifier(expr)) return undefined;
+    const named = declaration(expr);
+    return named !== undefined && ts.isImportSpecifier(named) ? (named.propertyName ?? named.name).text : expr.text;
+  };
+  const receiver = (expr: ts.Expression): ts.Expression | undefined =>
+    ts.isPropertyAccessExpression(expr) || ts.isElementAccessExpression(expr) ? expr.expression : undefined;
+  const selectors = new Set(['split', 'indexOf', 'lastIndexOf', 'search', 'match', 'matchAll']);
+  const markerText = (node: ts.Node, seen = new Set<ts.Node>()): string => {
+    if (ts.isStringLiteralLike(node)) return node.text;
+    if (seen.has(node)) return '';
+    const next = new Set(seen).add(node);
+    const value = (child: ts.Node): string => markerText(child, next);
+    if (ts.isTemplateExpression(node)) return node.head.text + node.templateSpans.map(span => value(span.expression) + span.literal.text).join('');
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) return value(node.left) + value(node.right);
+    if (ts.isParenthesizedExpression(node)) return value(node.expression);
+    if (ts.isIdentifier(node)) {
+      const binding = declaration(node);
+      if (binding !== undefined && ts.isVariableDeclaration(binding) && binding.initializer !== undefined) return value(binding.initializer);
+    }
+    return '';
+  };
+  const heading = (node: ts.Node): boolean => {
+    if (ts.isRegularExpressionLiteral(node)) {
+      return /\\n(?:#{2,6}|#\{\d+(?:,\d*)?\})(?: |\\[st]|\[)|(?:^|\^|\()(?:#{1,6}|#\{\d+(?:,\d*)?\})[^\r\n]*\\n/.test(node.text.slice(1));
+    }
+    return /(?:^|\n)#{1,6}[ \t][^\n]*\n|\n#{2,6}[ \t]/.test(markerText(node));
+  };
+  const faults: string[] = [];
+  for (const source of program.getSourceFiles()) {
+    const calls: ts.CallExpression[] = [];
+    const directCalls = new Map<string, ts.CallExpression[]>();
+    const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node)) {
+        calls.push(node);
+        if (ts.isIdentifier(node.expression)) {
+          const name = node.expression.text;
+          const matches = directCalls.get(name);
+          if (matches === undefined) directCalls.set(name, [node]);
+          else matches.push(node);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+
+    const parameterInputs = (param: ts.ParameterDeclaration): ts.Expression[] => {
+      const fn = param.parent;
+      const variable = ts.isVariableDeclaration(fn.parent) && fn.parent.initializer === fn ? fn.parent : undefined;
+      const name = variable?.name ?? fn.name;
+      const index = fn.parameters.indexOf(param);
+      if (name !== undefined && ts.isIdentifier(name)) {
+        return (directCalls.get(name.text) ?? []).flatMap(call => {
+          const arg = call.arguments[index];
+          return arg !== undefined && declaration(call.expression) === (variable ?? fn) ? [arg] : [];
+        });
+      }
+      const array = index === 0 && ts.isCallExpression(fn.parent) ? receiver(fn.parent.expression) : undefined;
+      return array === undefined ? [] : [array];
+    };
+
+    const reaches = (root: ts.Node, matches: (node: ts.Node) => boolean): boolean => {
+      const seen = new Set<ts.Node>();
+      const follow = (node: ts.Node): boolean => {
+        if (seen.has(node)) return false;
+        seen.add(node);
+        if (matches(node)) return true;
+        if (ts.isIdentifier(node)) {
+          const binding = declaration(node);
+          if (binding !== undefined && ts.isVariableDeclaration(binding)) {
+            if (binding.initializer !== undefined && follow(binding.initializer)) return true;
+            const loop = binding.parent.parent;
+            if (ts.isForOfStatement(loop) && follow(loop.expression)) return true;
+          }
+          if (binding !== undefined && ts.isParameter(binding) && parameterInputs(binding).some(follow)) return true;
+        }
+        return ts.forEachChild(node, child => follow(child) ? true : undefined) ?? false;
+      };
+      return follow(root);
+    };
+    // Resolve literal markers and path arguments without following unrelated runtime value producers.
+    const hasLiteral = (node: ts.Node, matches: (node: ts.Node) => boolean, seen = new Set<ts.Node>()): boolean => {
+      if (matches(node)) return true;
+      if (seen.has(node)) return false;
+      seen.add(node);
+      const has = (child: ts.Node): boolean => hasLiteral(child, matches, seen);
+      if (ts.isIdentifier(node)) {
+        const binding = declaration(node);
+        return binding !== undefined && ts.isVariableDeclaration(binding) && binding.initializer !== undefined && has(binding.initializer);
+      }
+      if (ts.isCallExpression(node) || ts.isNewExpression(node)) return [...(node.arguments ?? [])].reverse().some(has);
+      if (ts.isTemplateExpression(node)) return matches(node.head) || node.templateSpans.some(span => matches(span.literal) || has(span.expression));
+      if (ts.isParenthesizedExpression(node)) return has(node.expression);
+      return false;
+    };
+    const markdownPath = (node: ts.Node): boolean =>
+      ((ts.isStringLiteralLike(node) || ts.isTemplateTail(node)) && /\.md$/i.test(node.text)) ||
+      (ts.isIdentifier(node) && nameOf(node) === 'GUIDE_DOC');
+    const rawReads = calls.filter(call => {
+      const name = nameOf(call.expression);
+      const owner = receiver(call.expression);
+      return (name === 'readFileSync' || name === 'readFile' || (name === 'file' && owner !== undefined && ts.isIdentifier(owner) && owner.text === 'Bun')) &&
+        call.arguments[0] !== undefined && hasLiteral(call.arguments[0], markdownPath);
+    });
+    if (rawReads.length === 0) continue;
+
+    const rawNodes = new Set<ts.Node>(rawReads);
+    const selected = new Set<ts.Node>();
+    const takeOrigin = (node: ts.Node): boolean => {
+      if (rawNodes.has(node)) selected.add(node);
+      return false;
+    };
+    for (const call of calls) {
+      const name = nameOf(call.expression);
+      if (name === undefined) continue;
+      const arg = call.arguments[0];
+      const owner = receiver(call.expression);
+      let document: ts.Expression | undefined;
+      if (arg !== undefined && owner !== undefined) {
+        if (selectors.has(name) && hasLiteral(arg, heading)) document = owner;
+        else if ((name === 'exec' || name === 'test') && hasLiteral(owner, heading)) document = arg;
+      }
+      if (document !== undefined) reaches(document, takeOrigin);
+    }
+    for (const read of selected) {
+      const { line } = source.getLineAndCharacterOfPosition(read.getStart(source));
+      faults.push(source.fileName + ':' + (line + 1) + ': Markdown heading reads must use readDocument');
+    }
+  }
+  return faults.sort();
+}
+
+function sourceBeforeScissors(guide: string): string {
+  return guide.split('### Source before scissors\n')[1]?.split('**Patching')[0] ?? '';
+}
+
+function runDocumentReadCases(text: ReadonlyArray<readonly [string, string]>, say: FixtureCaseReporter): void {
+  const path = 'tools\\plant_document.ts';
+  const raw = [
+    "import { readFileSync as raw } from 'node:fs';",
+    "const path = join('docs', 'plant.md');",
+    "const title = '### Plant\\n';",
+    "const doc = raw(path, 'utf8');",
+    "const section = doc.split(title)[1];",
+    "const line = raw(path, 'utf8').search(/\\n#{2,3} /);",
+    "const next = '\\n' + '#### ';",
+    "const sectionIndex = (text: string) => text.indexOf(next);",
+    "sectionIndex(raw(path, 'utf8'));",
+  ].join('\n');
+  const shared = "import { readDocument } from './fixtures/read_document.ts';\n" +
+    raw.replaceAll("raw(path, 'utf8')", 'readDocument(path)');
+  const quiet = "const plain = readFileSync('README.md', 'utf8');\nplain.indexOf('### Heading');";
+  const live = rawHeadingReadFaults(text);
+  const planted = rawHeadingReadFaults([[path, raw]]);
+  const allowed = rawHeadingReadFaults([[path, shared + '\n' + quiet], ['src/plant_document.ts', raw]]);
+  const fault = (line: number): string => 'tools/plant_document.ts:' + line + ': Markdown heading reads must use readDocument';
+  say('TY44_MARKDOWN_HEADING_READS_USE_THE_SHARED_READER',
+    live.length === 0 && planted.join('\n') === [fault(4), fault(6), fault(9)].join('\n') && allowed.length === 0,
+    JSON.stringify({ live, planted, allowed }),
+    'Issue #1524: direct Markdown heading reads in selftest.ts and tools use the shared reader before slicing.');
+
+  const guidePath = join(ROOT, GUIDE_DOC);
+  const guide = readDocument(guidePath);
+  const real = sourceBeforeScissors(guide);
+  const crlf = guide.replaceAll('\n', '\r\n');
+  const dir = temp('document-crlf');
+  try {
+    const copy = join(dir, 'AUTHORING.md');
+    writeFileSync(copy, crlf);
+    const actual = sourceBeforeScissors(readDocument(copy));
+    const rawSection = sourceBeforeScissors(crlf);
+    say('TY45_THE_REAL_AUTHORING_SECTION_SURVIVES_CRLF',
+      real.includes('Scissors are for structure, never for repair') && actual === real && rawSection === '',
+      'Source before scissors: ' + real.length + ' LF characters, ' + actual.length +
+        ' normalized CRLF characters, ' + rawSection.length + ' raw CRLF characters',
+      'Issue #1524: a CRLF copy of the real guide gives the same nonempty section through the shared reader.');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 function runTreeSuite(_corpus: string | null = null, pre = false): number {
   section('tree: the rules CLAUDE.md states, held to the files');
   const { say, bad } = counter();
   if (pre) {
-    const text = treeFiles().filter(f => TEXT_FILE.test(f)).map(f => [f, readFileSync(join(ROOT, f), 'utf8')] as const);
+    const text = readTreeText(treeFiles());
     treeNamesCase(text, say);
     treeGuideCase(text, say);
     return bad();
@@ -45105,7 +45311,8 @@ function runTreeSuite(_corpus: string | null = null, pre = false): number {
   const patterns = ignorePatterns();
   const readerFaults = ignoreReaderFaults(patterns);
   const files = treeFiles();
-  const text: Array<readonly [string, string]> = files.filter((f) => TEXT_FILE.test(f)).map((f) => [f, readFileSync(join(ROOT, f), 'utf8')] as const);
+  const text = readTreeText(files);
+  runDocumentReadCases(text, say);
   expectedPartsLegacyCase(text, say);
   expectedFormCases(text, say);
   const unclassified = files.filter((f) => !TEXT_FILE.test(f) && !IMAGE_FILE.test(f));
@@ -45382,7 +45589,7 @@ function runTreeSuite(_corpus: string | null = null, pre = false): number {
 
   const { guideSources, guideText, rowLine } = treeGuideCase(text, say);
 
-  const sourceSection817 = guideText.split('### Source before scissors\n')[1]?.split('**Patching')[0] ?? '';
+  const sourceSection817 = sourceBeforeScissors(guideText);
   const remedyNames817 = ['SEETHROUGH_ARM_RUN_MERGED', 'SEETHROUGH_HEAD_RUN_HOLLOW', 'CHECK_SEAM_WITHIN_BAR', 'CHECK_SEAM_OVER_RANGE', 'SEAM_OVER_MOTION', 'CHECK_SEAM_OVER_MOTION'];
   const configRemedies817 = ['assemble.patches', 'assemble.cuts'];
   const configLinked817 = (g: string): boolean => configRemedies817.every(name => (g.split('\n').find(l => l.startsWith('| `' + name + '` |')) ?? '').includes('[Source before scissors](#source-before-scissors)'));
@@ -63023,4 +63230,4 @@ if (import.meta.main && process.argv[2] === VALIDATION_FEATURE_FLAG) {
   finishSelftestPeak?.();
 }
 
-export { RunTally, reportMeasuredCase, treeGuideCase, treeFiles, TEXT_FILE, tallyFaults };
+export { RunTally, reportMeasuredCase, runDocumentReadCases, treeGuideCase, treeFiles, TEXT_FILE, tallyFaults };
