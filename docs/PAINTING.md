@@ -200,7 +200,7 @@ and chosen to be the next public example — a character for a wind demo, where 
 and cloth move by physics under a side gust. It is the public example `wind`: its
 painting, See-through layers and generation record are in
 [rig-c/examples](https://github.com/rig-c/examples) (`wind/`), and its config,
-proposal and build are [`examples/wind`](../examples/wind/README.md). The block:
+proposal and build are [`examples/wind`](https://github.com/rig-c/parts/blob/main/examples/wind/README.md). The block:
 
 ```json
 "generation": {

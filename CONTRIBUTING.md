@@ -136,17 +136,11 @@ so a run that passes has watched the check fail four times.
 
 [Conventional Commits](https://www.conventionalcommits.org/) with a scope —
 `feat(layers):`, `fix(raster):`, `check(selftest):`, `docs(readme):`. Subject and
-body in English. The subject is what release-please reads: `feat` bumps the
-minor, `fix`, `perf` and `check` bump the patch, everything else is invisible to
-the release. See [RELEASING.md](RELEASING.md).
-
-⚠️ **A landing that changes a file inside the published package has to be
-visible to the release.** The package is the `files` allowlist plus what npm
-always adds (`package.json`, `README.md`, `LICENSE`); `npm pack --dry-run`
-prints it. The `ships` job in CI refuses a landing that changes a packed path
-under a type release-please hides. Either remedy clears it: a type the
-changelog shows, or a `Release-As:` footer in a **commit message on the
-branch** (the squash body is made of the commits, not the pull request body).
+body in English. No workflow or tool reads the commit subject to cut a release:
+cutting a release is landing the version bump (`package.json` and `CHANGELOG.md`)
+on `main` through a pull request with green `ci` and pushing a `vX.Y.Z` tag on
+that `main` commit, which runs `.github/workflows/release.yml`. See
+[RELEASING.md](RELEASING.md).
 
 Keep one unit of work per commit.
 
