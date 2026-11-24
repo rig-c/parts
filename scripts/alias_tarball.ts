@@ -54,7 +54,7 @@
  * reason `scripts/install_smoke.ts` lives here.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve, sep } from 'node:path';
 
@@ -88,8 +88,8 @@ interface Ran {
   out: string;
 }
 
-function run(cmd: string, args: readonly string[], cwd: string): Ran {
-  const r = spawnSync(cmd, [...args], { cwd, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
+function run(cmd: string, args: readonly string[], cwd: string, stdin: 'pipe' | number = 'pipe'): Ran {
+  const r = spawnSync(cmd, [...args], { cwd, stdio: [stdin, 'pipe', 'pipe'], encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
   const failed = r.error === undefined ? '' : `\n${r.error.message}`;
   return { status: typeof r.status === 'number' ? r.status : 1, out: `${r.stdout ?? ''}${r.stderr ?? ''}${failed}` };
 }
@@ -109,8 +109,23 @@ function filesUnder(dir: string): string[] {
 }
 
 function extract(tgz: string, into: string): void {
-  mkdirSync(into, { recursive: true });
-  const unpacked = run('tar', ['-xzf', tgz, '-C', into], into);
+  const archive = resolve(tgz);
+  const destination = resolve(into);
+  mkdirSync(destination, { recursive: true });
+  // Passing the archive on stdin and the destination as cwd keeps both drive paths out of tar's arguments.
+  let unpacked: Ran;
+  try {
+    // On POSIX, opening without blocking lets fstat reject a named pipe even when it has no writer.
+    const fd = openSync(archive, process.platform === 'win32' ? 'r' : constants.O_RDONLY | constants.O_NONBLOCK);
+    try {
+      if (!fstatSync(fd).isFile()) throw new Error('archive is not a regular file');
+      unpacked = run('tar', ['-xzf', '-'], destination, fd);
+    } finally {
+      closeSync(fd);
+    }
+  } catch (error) {
+    throw new AliasTarballError(`\`tar -xzf ${tgz}\` could not read its archive: ${error instanceof Error ? error.message : String(error)}`);
+  }
   if (unpacked.status !== 0) throw new AliasTarballError(`\`tar -xzf ${tgz}\` exited ${unpacked.status}: ${unpacked.out.trim().slice(0, 2000)}`);
   if (!existsSync(join(into, MANIFEST))) throw new AliasTarballError(`${tgz} holds no ${MANIFEST}, so it is not an npm package tarball`);
 }

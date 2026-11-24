@@ -1,0 +1,8 @@
+*.json text eol=lf
+*.md text eol=lf
+*.ts text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+machine-class.txt text eol=lf
+/.gitignore text eol=lf
+/.gitattributes text eol=lf

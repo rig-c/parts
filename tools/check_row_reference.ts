@@ -1,28 +1,38 @@
 /** Derive the consumer table from calls in the actual row producers. */
 import ts from 'typescript';
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { CHECK_ROW_PATHS } from '../src/checkrow.ts';
 
 export const ROW_TABLE_BEGIN = '<!-- check-row-table:begin -->';
 export const ROW_TABLE_END = '<!-- check-row-table:end -->';
+
+/** TypeScript uses slash-separated filenames even when the filesystem uses backslashes. */
+function compilerFileKey(host: ts.CompilerHost, file: string): string {
+  return host.getCanonicalFileName(resolve(file));
+}
+
 export function checkRowTable(root: string): string {
   const families = new Map<string, { scopes: Set<string>; kinds: Set<string>; subjects: Set<string>; sites: string[] }>(
     Object.keys(CHECK_ROW_PATHS).map(family => [family, { scopes: new Set(), kinds: new Set(), subjects: new Set(), sites: [] }]));
-  const source = join(root, 'src');
+  const source = resolve(root, 'src');
   const files = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
     .flatMap(e => e.isDirectory() ? files(join(dir, e.name)) : e.name.endsWith('.ts') ? [join(dir, e.name)] : []);
-  const program = ts.createProgram(files(source), { target: ts.ScriptTarget.Latest, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler, allowImportingTsExtensions: true, skipLibCheck: true });
+  const sources = files(source);
+  const options: ts.CompilerOptions = { target: ts.ScriptTarget.Latest, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler, allowImportingTsExtensions: true, skipLibCheck: true };
+  const host = ts.createCompilerHost(options);
+  const rowProducer = compilerFileKey(host, join(source, 'checkrow.ts'));
+  const program = ts.createProgram(sources, options, host);
   const checker = program.getTypeChecker();
-  for (const path of files(source)) {
+  for (const path of sources) {
     const tree = program.getSourceFile(path);
-    if (tree === undefined || path === join(source, 'checkrow.ts')) continue;
+    if (tree === undefined || compilerFileKey(host, tree.fileName) === rowProducer) continue;
     const file = relative(source, path).replaceAll('\\', '/');
     const visit = (node: ts.Node): void => {
       if (ts.isCallExpression(node)) {
         let symbol = checker.getSymbolAtLocation(node.expression);
         if (symbol !== undefined && (symbol.flags & ts.SymbolFlags.Alias)) symbol = checker.getAliasedSymbol(symbol);
-        const producer = symbol?.declarations?.find(d => d.getSourceFile().fileName === join(source, 'checkrow.ts') && ts.isFunctionDeclaration(d));
+        const producer = symbol?.declarations?.find(d => ts.isFunctionDeclaration(d) && compilerFileKey(host, d.getSourceFile().fileName) === rowProducer);
         const name = producer !== undefined && ts.isFunctionDeclaration(producer) ? producer.name?.text : undefined;
         if (name === 'checkRow' || name === 'checkSlotRow') {
           const [family] = node.arguments;
@@ -71,12 +81,13 @@ export const CHECK_ROW_TYPE_EXCLUSIONS: Readonly<Record<string, string>> = {
 
 /** Read the serialized public type, independently of calls and runtime fixtures. */
 export function checkRowTypeInventory(root: string, plant = ''): { arrays: string[]; unknown: string[]; faults: string[] } {
-  const path = join(root, 'src/check.ts');
+  const path = resolve(root, 'src/check.ts');
   const options: ts.CompilerOptions = { target: ts.ScriptTarget.Latest, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler, strict: true, skipLibCheck: true, allowImportingTsExtensions: true };
   const host = ts.createCompilerHost(options), originalRead = host.readFile;
+  const checkFile = compilerFileKey(host, path);
   host.readFile = file => {
     const source = originalRead(file);
-    return file === path && source !== undefined ? source + plant : source;
+    return source !== undefined && compilerFileKey(host, file) === checkFile ? source + plant : source;
   };
   const program = ts.createProgram([path], options, host), checker = program.getTypeChecker();
   const source = program.getSourceFile(path);

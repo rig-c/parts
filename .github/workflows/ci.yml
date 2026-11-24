@@ -382,9 +382,8 @@ jobs:
         shell: bash
         env:
           RIG_PARTS_SELFTEST_JOBS: '1'
-          # Windows keeps tree disabled until #1529 lands. Run 45414113019 (job 138515761915)
-          # passed all #1524 Markdown controls and exposed unrelated Windows tree failures.
-          BUILD_CONTROL_SUITES: ${{ matrix.os == 'windows-latest' && 'build,editor-receipts' || 'build' }}
+          # Windows runs tree and checks the exact four POSIX-only exclusions below.
+          BUILD_CONTROL_SUITES: ${{ matrix.os == 'windows-latest' && 'build,editor-receipts,tree' || 'build' }}
         run: |
           set +e
           summary="$RUNNER_TEMP/build-controls-summary.json"
@@ -412,6 +411,20 @@ jobs:
             assert.equal(suite.ran, true, name);
             assert.ok(suite.controls > 0, name);
             assert.equal(suite.failed, 0, name);
+          }
+          if (process.platform === 'win32') {
+            // The summary also lists suites omitted by --only. Inspect skips inside the suites that ran.
+            const skips = summary.skips.filter(entry => selected.includes(entry.suite));
+            assert.deepEqual(skips.map(entry => entry.name).sort(), [
+              'AL09_PUSH_PROVENANCE_MATCHES_THE_CUT_TAG_COMMIT_BEFORE_ANY_NAME_IS_PUBLISHED',
+              'TY1327_04_UNKNOWN_ONLY_SUITE_REACHES_EXIT_64_AND_IS_REPORTED_REFUSED',
+              'TY1327_05_EXIT_2_IS_REPORTED_GREEN_PARTIAL_EXIT_0_AND_EXIT_1_IS_REPORTED_RED_EXIT_1',
+              'TY1327_06_EXIT_2_WITHOUT_SUMMARY_OR_WITH_SUMMARY_FAULT_IS_REFUSED_NONZERO',
+            ], 'Windows build-control exclusions');
+            for (const { suite, name, reason } of skips) {
+              assert.equal(suite, 'tree', name);
+              assert.match(reason, /windows/, name);
+            }
           }
           JS
 

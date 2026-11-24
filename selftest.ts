@@ -41853,7 +41853,7 @@ function treeFiles(): string[] {
   return out;
 }
 
-const TEXT_FILE = /\.(ts|js|cjs|mjs|json|md|yml|yaml|lock|txt|sh|svg)$|(^|\/)(\.gitignore|LICENSE)$/;
+const TEXT_FILE = /\.(ts|js|cjs|mjs|json|md|yml|yaml|lock|txt|sh|svg)$|(^|\/)(\.gitignore|LICENSE)$|^\.gitattributes$/;
 /** The binary files the tree may carry: fixture PNGs and PSDs, and the examples' contact sheets and reference renders. */
 const IMAGE_FILE = /\.(png|psd|jpg|webp|gif)$/;
 
@@ -46249,21 +46249,27 @@ function prereleaseTagFaults(yml: string): string[] {
 
 /** One file's bytes inside a tarball, read with tar rather than with the comparison under test. */
 function tarMember(tgz: string, path: string): Buffer | null {
-  const r = spawnSync('tar', ['-xzOf', tgz, path], { maxBuffer: 64 * 1024 * 1024 });
+  const r = spawnSync('tar', ['-xzOf', `./${basename(tgz)}`, path], { cwd: dirname(tgz), maxBuffer: 64 * 1024 * 1024 });
   return r.status === 0 ? r.stdout : null;
 }
 
 /** The regular files a tarball lists, by `tar -tzf`, independent of the comparison's own directory walk. */
 function tarFileCount(tgz: string): number {
-  const r = spawnSync('tar', ['-tzf', tgz], { encoding: 'utf8' });
-  return r.status === 0 ? r.stdout.split('\n').filter((l) => l.trim() !== '' && !l.endsWith('/')).length : -1;
+  const r = spawnSync('tar', ['-tzf', `./${basename(tgz)}`], { cwd: dirname(tgz), encoding: 'utf8' });
+  return r.status === 0 ? r.stdout.split(/\r?\n/).filter((l) => l.trim() !== '' && !l.endsWith('/')).length : -1;
 }
 
 /** A copy of `tgz` repacked after `edit` ran on its extraction (`<dir>/package/...`), written into `out`. */
 function editedTarball(tgz: string, out: string, edit: (pkgDir: string) => void): string {
   const dir = mkdtempSync(join(out, 'edit-'));
-  const unpacked = spawnSync('tar', ['-xzf', tgz, '-C', dir]);
-  if (unpacked.status !== 0) throw new Error(`tar -xzf ${tgz} exited ${unpacked.status}`);
+  const fd = fs.openSync(tgz, process.platform === 'win32' ? 'r' : fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+  try {
+    if (!fs.fstatSync(fd).isFile()) throw new Error(`tar -xzf ${tgz} could not read its archive: archive is not a regular file`);
+    const unpacked = spawnSync('tar', ['-xzf', '-'], { cwd: dir, stdio: [fd, 'pipe', 'pipe'] });
+    if (unpacked.status !== 0) throw new Error(`tar -xzf ${tgz} exited ${unpacked.status}`);
+  } finally {
+    fs.closeSync(fd);
+  }
   edit(join(dir, 'package'));
   return packInto(join(dir, 'package'), mkdtempSync(join(out, 'packed-')));
 }
@@ -46761,6 +46767,10 @@ function runRepublishControls(say: (name: string, ok: boolean, detail: string, w
 
 /** Port of core #1552's closed shell controls: execute the resolver and actual publish bodies, never services. */
 function runPushProvenanceControls(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  if (process.platform === 'win32') {
+    console.log('  SKIP  AL09_PUSH_PROVENANCE_MATCHES_THE_CUT_TAG_COMMIT_BEFORE_ANY_NAME_IS_PUBLISHED: windows cannot run the POSIX /bin/bash harness with executable shell stubs');
+    return;
+  }
   const yml = readFileSync(join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
   const mock = temp('push-provenance');
   const bin = join(mock, 'bin');
@@ -47024,14 +47034,20 @@ function runPushProvenanceControls(say: (name: string, ok: boolean, detail: stri
       else {
         const found = inspect(plant.text);
         if (found.faults.length === 0) probes.push(`${plant.what}: no fault fired`);
-        // Issue #977: the scenarios each mutant turned red, bounded so the detail line stays under PRINTED_LINE_LIMIT (32768 B).
+        // One row per mutant, with the affected scenario count and a sample of the first fault.
         const reds = [...new Set(found.faults.map((f) => scenarios.map((sc) => sc.name).filter((n) => f.startsWith(`${n}: `)).sort((a, b) => b.length - a.length)[0] ?? f.split(': ')[0]))];
         const redSummary = reds.length <= 4 ? reds.join(', ') : `${reds.slice(0, 4).join(', ')} (+${reds.length - 4} more)`;
         rows.push(`${plant.what}: ${found.faults.length} fault(s) in ${reds.length} scenario(s) (${redSummary}); first=${found.faults[0]?.slice(0, 160) ?? 'no fault'}`);
       }
     }
-    say('AL09_PUSH_PROVENANCE_MATCHES_THE_CUT_TAG_COMMIT_BEFORE_ANY_NAME_IS_PUBLISHED', standing.faults.length === 0 && probes.length === 0,
-      `${[...standing.faults, ...probes].join('; ') || `${scenarios.length} shell scenarios and ${plants.length} mutants held`}; ${rows.join('; ')}`.replaceAll('\n', '\\n'),
+    const faults = [...standing.faults, ...probes];
+    // Issue #977: keep each fault and each scenario or mutant on its own continuation line.
+    const detail = [
+      faults.length === 0 ? `${scenarios.length} shell scenarios and ${plants.length} mutants held` : `${faults.length} fault(s)`,
+      ...faults,
+      ...rows,
+    ].map((line) => line.replaceAll('\n', '\\n')).join('\n          ');
+    say('AL09_PUSH_PROVENANCE_MATCHES_THE_CUT_TAG_COMMIT_BEFORE_ANY_NAME_IS_PUBLISHED', faults.length === 0, detail,
       'issue #653, #1262: unified tag push and dispatch validation requires a full commit SHA, matching run SHA and checked-out HEAD, protected-main ancestry, package.json version match, and registry/semver checks before any name is published');
   } finally { rmSync(mock, { recursive: true, force: true }); }
 }
