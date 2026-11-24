@@ -75,6 +75,7 @@ jobs:
         with:
           fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
       - id: reuse
         uses: rig-c/core/.github/actions/tree-verdict@149bca5fc828c60416283de0a1aa570ed33f385f
         with:

@@ -7,6 +7,7 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readdirS
 import { availableParallelism, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import ts from 'typescript';
+import { VALIDATION_VARIANTS } from '../fixtures/validation_cache.ts';
 import { launchWorker, RunTally, tallyFaults } from '../selftest.ts';
 
 export const ROOT = resolve(import.meta.dir, '..');
@@ -54,388 +55,388 @@ export const PATH_TO_SUITE_MAP: readonly MapRule[] = [
   { pattern: 'fixtures/regenerate_validation.ts', tier: 'full', suites: ['ALL'], why: 'validation sample regenerator' },
 
   // 2. Root files, documentation, skills, assets, workflows, examples, scripts
-  { pattern: '.gitignore', suites: ['tree', 'run-tally'], why: 'read by TY00 ignorePatterns()' },
-  { pattern: 'CLAUDE.md', suites: ['tree', 'run-tally'], why: 'scanned by TY00–TY04, TY11–TY12, TY39, TY1327' },
-  { pattern: 'AGENTS.md', suites: ['tree', 'run-tally'], why: 'symlink to CLAUDE.md scanned by tree' },
-  { pattern: 'CONTRIBUTING.md', suites: ['tree', 'run-tally'], why: 'scanned by tree text rules' },
-  { pattern: 'LICENSE', suites: ['tree', 'run-tally'], why: 'scanned by tree text rules' },
-  { pattern: 'NOTICE.md', suites: ['tree', 'run-tally'], why: 'scanned by tree text rules' },
-  { pattern: 'CHANGELOG.md', suites: ['tree', 'run-tally'], why: 'scanned by TY11/TY12/TY18/TY39 in tree' },
-  { pattern: 'README.md', suites: ['readme-loop', 'fetch-examples', 'tree', 'run-tally'], why: 'read by check:readme, TY18/TY19/TY28, readme-loop, fetch-examples' },
-  { pattern: 'RELEASING.md', suites: ['tree', 'run-tally'], why: 'read by AL01, AL07, AL08 in tree suite' },
-  { pattern: 'skills/**', suites: ['tree', 'run-tally'], why: 'read by TY18, TY27, TY40 skill router audit' },
-  { pattern: 'assets/**', suites: ['tree', 'run-tally'], why: 'checked by TY00 tree walk classification' },
-  { pattern: 'workflows/**', suites: ['comfy', 'tree', 'run-tally'], why: 'workflows/seethrough.json read by comfy adapter controls' },
-  { pattern: 'docs/AUTHORING.md', suites: ['tree', 'run-tally'], why: 'held by TY16/TY18/TY20/TY21/TY23/TY27/TY28/TY29/TY40/TY817/TY823 in tree' },
-  { pattern: 'docs/STABILITY.md', suites: ['tree', 'run-tally'], why: 'held by TY13/TY14/TY1372/MSD10 in tree' },
-  { pattern: 'docs/MIGRATION.md', suites: ['tree', 'run-tally'], why: 'held by MSD10 in tree' },
-  { pattern: 'docs/DEPTH.md', suites: ['depth-maps', 'tree', 'run-tally'], why: 'depth workflow documentation' },
-  { pattern: 'docs/CHECKS.md', suites: ['tree', 'run-tally'], why: 'scanned by tree text and link rules' },
-  { pattern: 'docs/OUTFITS.md', suites: ['tree', 'run-tally'], why: 'scanned by tree text and link rules' },
-  { pattern: 'docs/PAINTING.md', suites: ['painting', 'tree', 'run-tally'], why: 'painting requirements documentation' },
-  { pattern: 'docs/evidence/**', suites: ['auto-mesh', 'tree', 'run-tally'], why: 'read by tools/production_trial_stray.ts (auto-mesh) and scanned by tree' },
-  { pattern: 'examples/**', suites: ['fetch-examples', 'inputs-examples', 'propose-corpus', 'assemble-examples', 'ground-examples', 'auto-mesh-examples', 'chain', 'readme-loop', 'corpus', 'tree', 'run-tally'], jobs: ['expected-files', 'painting-public'], why: 'public examples and expected snapshots' },
-  { pattern: 'scripts/fetch-examples.sh', suites: ['fetch-examples', 'inputs-examples', 'propose-corpus', 'assemble-examples', 'ground-examples', 'auto-mesh-examples', 'chain', 'readme-loop', 'corpus', 'tree', 'run-tally'], jobs: ['expected-files', 'painting-public'], why: 'pins example inputs commit' },
-  { pattern: 'scripts/example_inputs.ts', suites: ['fetch-examples', 'inputs-examples', 'propose-corpus', 'assemble-examples', 'ground-examples', 'auto-mesh-examples', 'chain', 'readme-loop', 'corpus', 'tree', 'run-tally'], jobs: ['expected-files', 'painting-public'], why: 'validates pinned example input blobs' },
-  { pattern: 'scripts/readme_policy.ts', suites: ['tree', 'run-tally'], why: 'invoked by check:readme and runReadmePolicyChecks in tree' },
-  { pattern: 'scripts/verify_nova.ts', suites: ['tree', 'run-tally'], why: 'tested by runVerifyNovaChecks in tree' },
-  { pattern: 'scripts/scene_parity.ts', suites: ['scene', 'tree', 'run-tally'], why: 'imported by runSceneSuite' },
-  { pattern: 'scripts/selftest_measure.ts', suites: ['run-tally', 'tree'], why: 'tested by runMeasurementControls in run-tally and TY24–TY26' },
-  { pattern: 'scripts/selftest_prefixes.ts', suites: ['run-tally', 'tree'], why: 'tested by tallyPrefixCase (RT14) in run-tally' },
-  { pattern: 'scripts/rig_oracle.ts', suites: ['rig', 'tree', 'run-tally'], why: 'rig oracle script' },
-  { pattern: 'scripts/soft_occluder_probe.ts', suites: ['assemble', 'tree', 'run-tally'], why: 'occluder probe script' },
-  { pattern: 'scripts/strip_old_config.ts', suites: ['config', 'tree', 'run-tally'], why: 'config helper script' },
+  { pattern: '.gitignore', suites: ['tree'], why: 'read by TY00 ignorePatterns()' },
+  { pattern: 'CLAUDE.md', suites: ['tree'], why: 'scanned by TY00–TY04, TY11–TY12, TY39, TY1327' },
+  { pattern: 'AGENTS.md', suites: ['tree'], why: 'symlink to CLAUDE.md scanned by tree' },
+  { pattern: 'CONTRIBUTING.md', suites: ['tree'], why: 'scanned by tree text rules' },
+  { pattern: 'LICENSE', suites: ['tree'], why: 'scanned by tree text rules' },
+  { pattern: 'NOTICE.md', suites: ['tree'], why: 'scanned by tree text rules' },
+  { pattern: 'CHANGELOG.md', suites: ['tree'], why: 'scanned by TY11/TY12/TY18/TY39 in tree' },
+  { pattern: 'README.md', suites: ['readme-loop', 'fetch-examples', 'tree'], why: 'read by check:readme, TY18/TY19/TY28, readme-loop, fetch-examples' },
+  { pattern: 'RELEASING.md', suites: ['tree'], why: 'read by AL01, AL07, AL08 in tree suite' },
+  { pattern: 'skills/**', suites: ['tree'], why: 'read by TY18, TY27, TY40 skill router audit' },
+  { pattern: 'assets/**', suites: ['tree'], why: 'checked by TY00 tree walk classification' },
+  { pattern: 'workflows/**', suites: ['comfy', 'tree'], why: 'workflows/seethrough.json read by comfy adapter controls' },
+  { pattern: 'docs/AUTHORING.md', suites: ['tree'], why: 'held by TY16/TY18/TY20/TY21/TY23/TY27/TY28/TY29/TY40/TY817/TY823 in tree' },
+  { pattern: 'docs/STABILITY.md', suites: ['tree'], why: 'held by TY13/TY14/TY1372/MSD10 in tree' },
+  { pattern: 'docs/MIGRATION.md', suites: ['tree'], why: 'held by MSD10 in tree' },
+  { pattern: 'docs/DEPTH.md', suites: ['depth-maps', 'tree'], why: 'depth workflow documentation' },
+  { pattern: 'docs/CHECKS.md', suites: ['tree'], why: 'scanned by tree text and link rules' },
+  { pattern: 'docs/OUTFITS.md', suites: ['tree'], why: 'scanned by tree text and link rules' },
+  { pattern: 'docs/PAINTING.md', suites: ['painting', 'tree'], why: 'painting requirements documentation' },
+  { pattern: 'docs/evidence/**', suites: ['auto-mesh', 'tree'], why: 'read by tools/production_trial_stray.ts (auto-mesh) and scanned by tree' },
+  { pattern: 'examples/**', suites: ['fetch-examples', 'inputs-examples', 'propose-corpus', 'assemble-examples', 'ground-examples', 'auto-mesh-examples', 'chain', 'readme-loop', 'corpus', 'tree'], jobs: ['expected-files', 'painting-public'], why: 'public examples and expected snapshots' },
+  { pattern: 'scripts/fetch-examples.sh', suites: ['fetch-examples', 'inputs-examples', 'propose-corpus', 'assemble-examples', 'ground-examples', 'auto-mesh-examples', 'chain', 'readme-loop', 'corpus', 'tree'], jobs: ['expected-files', 'painting-public'], why: 'pins example inputs commit' },
+  { pattern: 'scripts/example_inputs.ts', suites: ['fetch-examples', 'inputs-examples', 'propose-corpus', 'assemble-examples', 'ground-examples', 'auto-mesh-examples', 'chain', 'readme-loop', 'corpus', 'tree'], jobs: ['expected-files', 'painting-public'], why: 'validates pinned example input blobs' },
+  { pattern: 'scripts/readme_policy.ts', suites: ['tree'], why: 'invoked by check:readme and runReadmePolicyChecks in tree' },
+  { pattern: 'scripts/verify_nova.ts', suites: ['tree'], why: 'tested by runVerifyNovaChecks in tree' },
+  { pattern: 'scripts/scene_parity.ts', suites: ['scene', 'tree'], why: 'imported by runSceneSuite' },
+  { pattern: 'scripts/selftest_measure.ts', tier: 'full', suites: ['run-tally', 'tree'], why: 'tested by runMeasurementControls in run-tally and TY24–TY26 (requires full-tier merge)' },
+  { pattern: 'scripts/selftest_prefixes.ts', tier: 'full', suites: ['run-tally', 'tree'], why: 'tested by tallyPrefixCase (RT14) in run-tally (requires full-tier merge)' },
+  { pattern: 'scripts/rig_oracle.ts', suites: ['rig', 'tree'], why: 'rig oracle script' },
+  { pattern: 'scripts/soft_occluder_probe.ts', suites: ['assemble', 'tree'], why: 'occluder probe script' },
+  { pattern: 'scripts/strip_old_config.ts', suites: ['config', 'tree'], why: 'config helper script' },
 
   // 3. cli.ts and selftest.ts
-  { pattern: 'cli.ts', suites: ['cli', 'tree', 'run-tally'], why: 'CLI dispatcher and flag tables tested by cli and TY13/TY15/TY16/TY40 in tree' },
-  { pattern: 'selftest.ts', suites: ['tree', 'run-tally'], why: 'scanned by TY01/TY04/TY08/TY09/RT14; diff hunks in selftest.ts select the edited suite functions (or full if outside suite functions)' },
+  { pattern: 'cli.ts', suites: ['cli', 'tree'], why: 'CLI dispatcher and flag tables tested by cli and TY13/TY15/TY16/TY40 in tree' },
+  { pattern: 'selftest.ts', suites: ['tree'], why: 'scanned by TY01/TY04/TY08/TY09/RT14; diff hunks in selftest.ts select the edited suite functions (or full if outside suite functions)' },
 
   // 4. src/ modules -> direct owning suite(s) + cross-stage rows approved in Phase B
-  { pattern: 'src/raster/png.ts', suites: ['png', 'tree', 'run-tally'], why: 'PNG codec owned by png suite' },
-  { pattern: 'src/raster/components.ts', suites: ['raster-components', 'tree', 'run-tally'], why: 'connected components owned by raster-components suite' },
-  { pattern: 'src/raster/morph.ts', suites: ['raster-morph', 'tree', 'run-tally'], why: 'morphology ops owned by raster-morph suite' },
-  { pattern: 'src/raster/blur.ts', suites: ['raster-blur', 'tree', 'run-tally'], why: 'Gaussian blur owned by raster-blur suite' },
-  { pattern: 'src/raster/resize.ts', suites: ['raster-resize', 'tree', 'run-tally'], why: 'Lanczos/bilinear resize owned by raster-resize suite' },
-  { pattern: 'src/raster/warp.ts', suites: ['raster-warp', 'tree', 'run-tally'], why: 'affine/perspective warp owned by raster-warp suite' },
-  { pattern: 'src/raster/poly.ts', suites: ['raster-poly', 'tree', 'run-tally'], why: 'polygon rasterizer owned by raster-poly suite' },
-  { pattern: 'src/raster/composite.ts', suites: ['raster-composite', 'tree', 'run-tally'], why: 'alpha compositing owned by raster-composite suite' },
-  { pattern: 'src/raster/index.ts', suites: ['png', 'raster-components', 'raster-morph', 'raster-blur', 'raster-resize', 'raster-warp', 'raster-poly', 'raster-composite', 'tree', 'run-tally'], why: 'raster barrel export' },
-  { pattern: 'src/raster/types.ts', suites: ['png', 'raster-components', 'raster-morph', 'raster-blur', 'raster-resize', 'raster-warp', 'raster-poly', 'raster-composite', 'tree', 'run-tally'], why: 'raster type declarations' },
+  { pattern: 'src/raster/png.ts', suites: ['png', 'tree'], why: 'PNG codec owned by png suite' },
+  { pattern: 'src/raster/components.ts', suites: ['raster-components', 'tree'], why: 'connected components owned by raster-components suite' },
+  { pattern: 'src/raster/morph.ts', suites: ['raster-morph', 'tree'], why: 'morphology ops owned by raster-morph suite' },
+  { pattern: 'src/raster/blur.ts', suites: ['raster-blur', 'tree'], why: 'Gaussian blur owned by raster-blur suite' },
+  { pattern: 'src/raster/resize.ts', suites: ['raster-resize', 'tree'], why: 'Lanczos/bilinear resize owned by raster-resize suite' },
+  { pattern: 'src/raster/warp.ts', suites: ['raster-warp', 'tree'], why: 'affine/perspective warp owned by raster-warp suite' },
+  { pattern: 'src/raster/poly.ts', suites: ['raster-poly', 'tree'], why: 'polygon rasterizer owned by raster-poly suite' },
+  { pattern: 'src/raster/composite.ts', suites: ['raster-composite', 'tree'], why: 'alpha compositing owned by raster-composite suite' },
+  { pattern: 'src/raster/index.ts', suites: ['png', 'raster-components', 'raster-morph', 'raster-blur', 'raster-resize', 'raster-warp', 'raster-poly', 'raster-composite', 'tree'], why: 'raster barrel export' },
+  { pattern: 'src/raster/types.ts', suites: ['png', 'raster-components', 'raster-morph', 'raster-blur', 'raster-resize', 'raster-warp', 'raster-poly', 'raster-composite', 'tree'], why: 'raster type declarations' },
 
-  { pattern: 'src/comfy/**', suites: ['comfy', 'tree', 'run-tally'], jobs: ['standalone-tools'], why: 'ComfyUI adapter owned by comfy suite and standalone comfy checks' },
-  { pattern: 'src/seethrough-transform.ts', suites: ['comfy', 'tree', 'run-tally'], jobs: ['standalone-tools'], why: 'See-through pad/crop transform owned by comfy suite' },
-  { pattern: 'src/plate.ts', suites: ['comfy', 'assemble', 'tree', 'run-tally'], jobs: ['standalone-tools'], why: 'plate producer owned by comfy and assemble suites' },
-  { pattern: 'src/platecomponents.ts', suites: ['comfy', 'tree', 'run-tally'], jobs: ['standalone-tools'], why: 'classified plate components owned by comfy suite' },
-  { pattern: 'src/matte.ts', suites: ['comfy', 'tree', 'run-tally'], jobs: ['standalone-tools'], why: 'receipted matte reader owned by check_matte.ts and comfy suite' },
-  { pattern: 'src/maskvalues.ts', suites: ['comfy', 'assemble', 'tree', 'run-tally'], jobs: ['standalone-tools'], why: 'mask value validation' },
-  { pattern: 'src/externalreceipt.ts', suites: ['cli', 'comfy', 'tree', 'run-tally'], why: 'external receipt writer tested in cli suite' },
-  { pattern: 'src/receiptproducer.ts', suites: ['editor-receipts', 'config', 'parts', 'tree', 'run-tally'], why: 'receipt producer validation' },
+  { pattern: 'src/comfy/**', suites: ['comfy', 'tree'], jobs: ['standalone-tools'], why: 'ComfyUI adapter owned by comfy suite and standalone comfy checks' },
+  { pattern: 'src/seethrough-transform.ts', suites: ['comfy', 'tree'], jobs: ['standalone-tools'], why: 'See-through pad/crop transform owned by comfy suite' },
+  { pattern: 'src/plate.ts', suites: ['comfy', 'assemble', 'tree'], jobs: ['standalone-tools'], why: 'plate producer owned by comfy and assemble suites' },
+  { pattern: 'src/platecomponents.ts', suites: ['comfy', 'tree'], jobs: ['standalone-tools'], why: 'classified plate components owned by comfy suite' },
+  { pattern: 'src/matte.ts', suites: ['comfy', 'tree'], jobs: ['standalone-tools'], why: 'receipted matte reader owned by check_matte.ts and comfy suite' },
+  { pattern: 'src/maskvalues.ts', suites: ['comfy', 'assemble', 'tree'], jobs: ['standalone-tools'], why: 'mask value validation' },
+  { pattern: 'src/externalreceipt.ts', suites: ['cli', 'comfy', 'tree'], why: 'external receipt writer tested in cli suite' },
+  { pattern: 'src/receiptproducer.ts', suites: ['editor-receipts', 'config', 'parts', 'tree'], why: 'receipt producer validation' },
 
-  { pattern: 'src/layers.ts', suites: ['layers-wrapper', 'layers-psd', 'corpus', 'tree', 'run-tally'], why: 'layer reader owned by layers-wrapper, layers-psd, corpus' },
-  { pattern: 'src/tags.ts', suites: ['layers-wrapper', 'layers-psd', 'plausibility', 'tree', 'run-tally'], why: 'tag vocabulary owned by layers-* and plausibility' },
-  { pattern: 'src/sheet.ts', suites: ['sheet', 'tree', 'run-tally'], why: 'contact sheet renderer owned by sheet suite' },
-  { pattern: 'src/inputs.ts', suites: ['inputs', 'inputs-examples', 'tree', 'run-tally'], why: 'inputs reader owned by inputs and inputs-examples' },
-  { pattern: 'src/graphs.ts', suites: ['prompt', 'comfy', 'tree', 'run-tally'], why: 'workflow graph builder owned by prompt and comfy' },
-  { pattern: 'src/guide.ts', suites: ['tree', 'config-write', 'run-tally'], why: 'guide reader owned by tree (TY16/TY17) and config-write' },
-  { pattern: 'src/errors.ts', suites: ['tree', 'config', 'run-tally'], why: 'PartsError and failLine owned by tree (TY16/TY17) and config' },
-  { pattern: 'src/coords.ts', suites: ['tree', 'winding', 'contour', 'run-tally'], why: 'cropToSpineY coordinate door owned by tree (TY07/TY1445), winding, contour' },
-  { pattern: 'src/round.ts', suites: ['contour-wiring', 'auto-mesh', 'auto-motion', 'influence', 'tree', 'run-tally'], why: 'deterministic rounding helper' },
-  { pattern: 'src/length.ts', suites: ['tree', 'contour-wiring', 'run-tally'], why: 'edgeLength owned by tree (TY15) and contour-wiring' },
-  { pattern: 'src/pyfmt.ts', suites: ['propose', 'tree', 'run-tally'], why: 'Python float formatter owned by propose' },
-  { pattern: 'src/runstamp.ts', suites: ['rig', 'assemble', 'scene', 'tree', 'run-tally'], jobs: ['standalone-tools'], why: 'rig-run/1 stamp writer/reader tested by check_run_clock.ts, rig, assemble, scene' },
+  { pattern: 'src/layers.ts', suites: ['layers-wrapper', 'layers-psd', 'corpus', 'tree'], why: 'layer reader owned by layers-wrapper, layers-psd, corpus' },
+  { pattern: 'src/tags.ts', suites: ['layers-wrapper', 'layers-psd', 'plausibility', 'tree'], why: 'tag vocabulary owned by layers-* and plausibility' },
+  { pattern: 'src/sheet.ts', suites: ['sheet', 'tree'], why: 'contact sheet renderer owned by sheet suite' },
+  { pattern: 'src/inputs.ts', suites: ['inputs', 'inputs-examples', 'tree'], why: 'inputs reader owned by inputs and inputs-examples' },
+  { pattern: 'src/graphs.ts', suites: ['prompt', 'comfy', 'tree'], why: 'workflow graph builder owned by prompt and comfy' },
+  { pattern: 'src/guide.ts', suites: ['tree', 'config-write'], why: 'guide reader owned by tree (TY16/TY17) and config-write' },
+  { pattern: 'src/errors.ts', suites: ['tree', 'config'], why: 'PartsError and failLine owned by tree (TY16/TY17) and config' },
+  { pattern: 'src/coords.ts', suites: ['tree', 'winding', 'contour'], why: 'cropToSpineY coordinate door owned by tree (TY07/TY1445), winding, contour' },
+  { pattern: 'src/round.ts', suites: ['contour-wiring', 'auto-mesh', 'auto-motion', 'influence', 'tree'], why: 'deterministic rounding helper' },
+  { pattern: 'src/length.ts', suites: ['tree', 'contour-wiring'], why: 'edgeLength owned by tree (TY15) and contour-wiring' },
+  { pattern: 'src/pyfmt.ts', suites: ['propose', 'tree'], why: 'Python float formatter owned by propose' },
+  { pattern: 'src/runstamp.ts', suites: ['rig', 'assemble', 'scene', 'tree'], jobs: ['standalone-tools'], why: 'rig-run/1 stamp writer/reader tested by check_run_clock.ts, rig, assemble, scene' },
 
-  { pattern: 'src/config.ts', suites: ['config', 'config-write', 'depth-maps', 'tree', 'run-tally'], why: 'config loader owned by config, TY14 in tree, and relocation in depth-maps' },
-  { pattern: 'src/configrelocation.ts', suites: ['config', 'depth-maps', 'mesh-draft', 'editor-receipts', 'tree', 'run-tally'], why: 'config relocation helper' },
-  { pattern: 'src/configwrite.ts', suites: ['config-write', 'arm-split-upgrade', 'propose', 'tree', 'run-tally'], why: 'config writer owned by config-write and arm-split-upgrade' },
-  { pattern: 'src/cloth-targets.json', suites: ['tree', 'propose', 'run-tally'], why: 'cloth targets JSON owned by check_cloth_targets in tree' },
-  { pattern: 'src/clothconfig.ts', suites: ['propose', 'config', 'tree', 'run-tally'], why: 'cloth recipe config parser' },
-  { pattern: 'src/cloth.ts', suites: ['influence', 'propose', 'rig', 'tree', 'run-tally'], why: 'cloth chain and weight generator' },
+  { pattern: 'src/config.ts', suites: ['config', 'config-write', 'depth-maps', 'tree'], why: 'config loader owned by config, TY14 in tree, and relocation in depth-maps' },
+  { pattern: 'src/configrelocation.ts', suites: ['config', 'depth-maps', 'mesh-draft', 'editor-receipts', 'tree'], why: 'config relocation helper' },
+  { pattern: 'src/configwrite.ts', suites: ['config-write', 'arm-split-upgrade', 'propose', 'tree'], why: 'config writer owned by config-write and arm-split-upgrade' },
+  { pattern: 'src/cloth-targets.json', suites: ['tree', 'propose'], why: 'cloth targets JSON owned by check_cloth_targets in tree' },
+  { pattern: 'src/clothconfig.ts', suites: ['propose', 'config', 'tree'], why: 'cloth recipe config parser' },
+  { pattern: 'src/cloth.ts', suites: ['influence', 'propose', 'rig', 'tree'], why: 'cloth chain and weight generator' },
 
-  { pattern: 'src/parts.ts', suites: ['parts', 'sheet', 'editor-receipts', 'part-sources', 'corpus', 'tree', 'run-tally'], why: 'parts.json reader/writer owned by parts, sheet, editor-receipts, part-sources, corpus' },
-  { pattern: 'src/partscheck.ts', suites: ['assemble', 'parts', 'tree', 'run-tally'], why: 'check-parts diagnostics owned by assemble and parts' },
-  { pattern: 'src/partsource.ts', suites: ['part-sources', 'tree', 'run-tally'], why: 'part source provenance owned by part-sources' },
-  { pattern: 'src/partvisibility.ts', suites: ['assemble', 'tree', 'run-tally'], why: 'See-through visibility report owned by assemble' },
-  { pattern: 'src/visibility.ts', suites: ['comfy', 'assemble', 'tree', 'run-tally'], why: 'layer visibility record owned by comfy and assemble' },
-  { pattern: 'src/provenance.ts', suites: ['assemble', 'hybrid-limb', 'assemble-examples', 'tree', 'run-tally'], why: 'part pixel provenance owned by assemble, hybrid-limb, assemble-examples' },
-  { pattern: 'src/assembly-reading.ts', suites: ['assemble', 'config', 'depth-maps', 'hybrid-limb', 'take-layers', 'tree', 'run-tally'], why: 'assembly config digest binding' },
+  { pattern: 'src/parts.ts', suites: ['parts', 'sheet', 'editor-receipts', 'part-sources', 'corpus', 'tree'], why: 'parts.json reader/writer owned by parts, sheet, editor-receipts, part-sources, corpus' },
+  { pattern: 'src/partscheck.ts', suites: ['assemble', 'parts', 'tree'], why: 'check-parts diagnostics owned by assemble and parts' },
+  { pattern: 'src/partsource.ts', suites: ['part-sources', 'tree'], why: 'part source provenance owned by part-sources' },
+  { pattern: 'src/partvisibility.ts', suites: ['assemble', 'tree'], why: 'See-through visibility report owned by assemble' },
+  { pattern: 'src/visibility.ts', suites: ['comfy', 'assemble', 'tree'], why: 'layer visibility record owned by comfy and assemble' },
+  { pattern: 'src/provenance.ts', suites: ['assemble', 'hybrid-limb', 'assemble-examples', 'tree'], why: 'part pixel provenance owned by assemble, hybrid-limb, assemble-examples' },
+  { pattern: 'src/assembly-reading.ts', suites: ['assemble', 'config', 'depth-maps', 'hybrid-limb', 'take-layers', 'tree'], why: 'assembly config digest binding' },
 
-  { pattern: 'src/assemble.ts', suites: ['assemble', 'assemble-examples', 'ground-examples', 'subset-cover', 'foot-ownership', 'hybrid-limb', 'take-layers', 'plausibility', 'tree', 'run-tally'], why: 'assemble stage owned by assemble and its sub-suites' },
-  { pattern: 'src/authoredunit.ts', suites: ['layers-wrapper', 'assemble', 'tree', 'run-tally'], why: 'authored unit depth grouping owned by layers-wrapper' },
-  { pattern: 'src/alternatelayers.ts', suites: ['alternate-layers', 'take-layers', 'tree', 'run-tally'], why: 'alternate cut/take layers owned by alternate-layers' },
-  { pattern: 'src/baseanchor.ts', suites: ['alternate-layers', 'tree', 'run-tally'], why: 'base anchor validation owned by alternate-layers' },
-  { pattern: 'src/takelayers.ts', suites: ['take-layers', 'assemble', 'tree', 'run-tally'], why: 'take-layers stage owned by take-layers' },
-  { pattern: 'src/takeregion.ts', suites: ['take-layers', 'assemble', 'tree', 'run-tally'], why: 'region take extraction owned by take-layers and assemble' },
-  { pattern: 'src/takesource.ts', suites: ['take-layers', 'tree', 'run-tally'], why: 'take source binding owned by take-layers' },
-  { pattern: 'src/occluders.ts', suites: ['assemble', 'comfy', 'take-layers', 'tree', 'run-tally'], why: 'occluder split logic owned by assemble, comfy, take-layers' },
-  { pattern: 'src/occluderstage.ts', suites: ['build', 'assemble', 'tree', 'run-tally'], why: 'build-time occluder stage helper' },
-  { pattern: 'src/edgeresidual.ts', suites: ['assemble', 'tree', 'run-tally'], why: 'edge residual measurement owned by assemble' },
-  { pattern: 'src/edgesplit.ts', suites: ['assemble', 'config', 'tree', 'run-tally'], jobs: ['standalone-tools'], why: 'hem edge split owned by fixtures/edge_split.ts and assemble' },
-  { pattern: 'src/editedparts.ts', suites: ['editor-receipts', 'depth-maps', 'config', 'tree', 'run-tally'], why: 'edited_parts reader owned by editor-receipts, depth-maps, config' },
-  { pattern: 'src/editreceipt.ts', suites: ['editor-receipts', 'part-sources', 'assemble', 'scene', 'take-layers', 'tree', 'run-tally'], why: 'edited part receipt writer' },
-  { pattern: 'src/hiddenextent.ts', suites: ['config', 'assemble', 'tree', 'run-tally'], why: 'hidden extent validation owned by config and assemble' },
-  { pattern: 'src/limbownership.ts', suites: ['subset-cover', 'foot-ownership', 'tree', 'run-tally'], why: 'limb ownership owned by subset-cover and foot-ownership' },
-  { pattern: 'src/limbs.ts', suites: ['assemble', 'foot-ownership', 'subset-cover', 'alternate-tips', 'tree', 'run-tally'], why: 'limb cut assembly owned by assemble, foot-ownership, subset-cover, alternate-tips' },
-  { pattern: 'src/limblayout.ts', suites: ['limb-layout', 'limb-slots', 'config', 'tree', 'run-tally'], why: 'limb layout validation owned by limb-layout and limb-slots' },
-  { pattern: 'src/limbslots.ts', suites: ['limb-slots', 'limb-layout', 'tree', 'run-tally'], why: 'limb slot draw order owned by limb-slots and limb-layout' },
-  { pattern: 'src/painting-reference.ts', suites: ['parts', 'tree', 'run-tally'], why: 'sealed painting reference sidecar owned by parts suite' },
-  { pattern: 'src/paintingedges.ts', suites: ['assemble', 'ground-examples', 'config', 'tree', 'run-tally'], jobs: ['painting-public'], why: 'painting edge allocation owned by assemble and ground-examples' },
-  { pattern: 'src/paintingextension.ts', suites: ['assemble', 'tree', 'run-tally'], why: 'painting extension owned by assemble' },
-  { pattern: 'src/paintingowner.ts', suites: ['assemble', 'editor-receipts', 'tree', 'run-tally'], jobs: ['painting-public'], why: 'painting pixel ownership owned by assemble and check_painting_public' },
-  { pattern: 'src/projectrule.ts', suites: ['assemble', 'assemble-examples', 'tree', 'run-tally'], why: 'projection rule helper' },
-  { pattern: 'src/seamrule.ts', suites: ['assemble', 'config', 'tree', 'run-tally'], why: 'seam rule selection' },
-  { pattern: 'src/sourcecover.ts', suites: ['assemble', 'tree', 'run-tally'], why: 'source cover validation owned by assemble' },
-  { pattern: 'src/sourcestates.ts', suites: ['boundary-colour', 'assemble', 'tree', 'run-tally'], why: 'source visibility states owned by boundary-colour and assemble' },
-  { pattern: 'src/diffcomponents.ts', suites: ['assemble', 'assemble-examples', 'tree', 'run-tally'], why: 'compare component diffing owned by assemble' },
-  { pattern: 'src/diffdrafts.ts', suites: ['assemble', 'tree', 'run-tally'], why: 'draft-to-draft assemble diff owned by assemble' },
+  { pattern: 'src/assemble.ts', suites: ['assemble', 'assemble-examples', 'ground-examples', 'subset-cover', 'foot-ownership', 'hybrid-limb', 'take-layers', 'plausibility', 'tree'], why: 'assemble stage owned by assemble and its sub-suites' },
+  { pattern: 'src/authoredunit.ts', suites: ['layers-wrapper', 'assemble', 'tree'], why: 'authored unit depth grouping owned by layers-wrapper' },
+  { pattern: 'src/alternatelayers.ts', suites: ['alternate-layers', 'take-layers', 'tree'], why: 'alternate cut/take layers owned by alternate-layers' },
+  { pattern: 'src/baseanchor.ts', suites: ['alternate-layers', 'tree'], why: 'base anchor validation owned by alternate-layers' },
+  { pattern: 'src/takelayers.ts', suites: ['take-layers', 'assemble', 'tree'], why: 'take-layers stage owned by take-layers' },
+  { pattern: 'src/takeregion.ts', suites: ['take-layers', 'assemble', 'tree'], why: 'region take extraction owned by take-layers and assemble' },
+  { pattern: 'src/takesource.ts', suites: ['take-layers', 'tree'], why: 'take source binding owned by take-layers' },
+  { pattern: 'src/occluders.ts', suites: ['assemble', 'comfy', 'take-layers', 'tree'], why: 'occluder split logic owned by assemble, comfy, take-layers' },
+  { pattern: 'src/occluderstage.ts', suites: ['build', 'assemble', 'tree'], why: 'build-time occluder stage helper' },
+  { pattern: 'src/edgeresidual.ts', suites: ['assemble', 'tree'], why: 'edge residual measurement owned by assemble' },
+  { pattern: 'src/edgesplit.ts', suites: ['assemble', 'config', 'tree'], jobs: ['standalone-tools'], why: 'hem edge split owned by fixtures/edge_split.ts and assemble' },
+  { pattern: 'src/editedparts.ts', suites: ['editor-receipts', 'depth-maps', 'config', 'tree'], why: 'edited_parts reader owned by editor-receipts, depth-maps, config' },
+  { pattern: 'src/editreceipt.ts', suites: ['editor-receipts', 'part-sources', 'assemble', 'scene', 'take-layers', 'tree'], why: 'edited part receipt writer' },
+  { pattern: 'src/hiddenextent.ts', suites: ['config', 'assemble', 'tree'], why: 'hidden extent validation owned by config and assemble' },
+  { pattern: 'src/limbownership.ts', suites: ['subset-cover', 'foot-ownership', 'tree'], why: 'limb ownership owned by subset-cover and foot-ownership' },
+  { pattern: 'src/limbs.ts', suites: ['assemble', 'foot-ownership', 'subset-cover', 'alternate-tips', 'tree'], why: 'limb cut assembly owned by assemble, foot-ownership, subset-cover, alternate-tips' },
+  { pattern: 'src/limblayout.ts', suites: ['limb-layout', 'limb-slots', 'config', 'tree'], why: 'limb layout validation owned by limb-layout and limb-slots' },
+  { pattern: 'src/limbslots.ts', suites: ['limb-slots', 'limb-layout', 'tree'], why: 'limb slot draw order owned by limb-slots and limb-layout' },
+  { pattern: 'src/painting-reference.ts', suites: ['parts', 'tree'], why: 'sealed painting reference sidecar owned by parts suite' },
+  { pattern: 'src/paintingedges.ts', suites: ['assemble', 'ground-examples', 'config', 'tree'], jobs: ['painting-public'], why: 'painting edge allocation owned by assemble and ground-examples' },
+  { pattern: 'src/paintingextension.ts', suites: ['assemble', 'tree'], why: 'painting extension owned by assemble' },
+  { pattern: 'src/paintingowner.ts', suites: ['assemble', 'editor-receipts', 'tree'], jobs: ['painting-public'], why: 'painting pixel ownership owned by assemble and check_painting_public' },
+  { pattern: 'src/projectrule.ts', suites: ['assemble', 'assemble-examples', 'tree'], why: 'projection rule helper' },
+  { pattern: 'src/seamrule.ts', suites: ['assemble', 'config', 'tree'], why: 'seam rule selection' },
+  { pattern: 'src/sourcecover.ts', suites: ['assemble', 'tree'], why: 'source cover validation owned by assemble' },
+  { pattern: 'src/sourcestates.ts', suites: ['boundary-colour', 'assemble', 'tree'], why: 'source visibility states owned by boundary-colour and assemble' },
+  { pattern: 'src/diffcomponents.ts', suites: ['assemble', 'assemble-examples', 'tree'], why: 'compare component diffing owned by assemble' },
+  { pattern: 'src/diffdrafts.ts', suites: ['assemble', 'tree'], why: 'draft-to-draft assemble diff owned by assemble' },
 
-  { pattern: 'src/propose.ts', suites: ['propose', 'propose-corpus', 'rig', 'config-write', 'arm-split-upgrade', 'plausibility', 'tree', 'run-tally'], why: 'propose stage owned by propose, propose-corpus, rig (neck mode), config-write, arm-split-upgrade' },
-  { pattern: 'src/bustlandmarks.ts', suites: ['propose', 'config', 'config-write', 'tree', 'run-tally'], why: 'bust-landmarks owned by propose, config, config-write' },
-  { pattern: 'src/headbox.ts', suites: ['propose', 'propose-corpus', 'inputs', 'inputs-examples', 'tree', 'run-tally'], why: 'head crop box detection' },
-  { pattern: 'src/headcroppreflight.ts', suites: ['propose', 'tree', 'run-tally'], why: 'head crop preflight owned by propose' },
-  { pattern: 'src/headframe.ts', suites: ['propose', 'tree', 'run-tally'], why: 'head frame geometry owned by propose' },
-  { pattern: 'src/keypoints.ts', suites: ['keypoints', 'painting', 'propose', 'propose-corpus', 'diagnostics', 'tree', 'run-tally'], why: 'keypoints reader owned by keypoints, painting, propose, diagnostics' },
-  { pattern: 'src/paintcheck.ts', suites: ['painting', 'tree', 'run-tally'], why: 'painting preflight owned by painting suite' },
-  { pattern: 'src/skeleton.ts', suites: ['skeleton', 'keypoints', 'painting', 'prompt', 'tree', 'run-tally'], why: 'skeleton layout owned by skeleton, keypoints, painting, prompt' },
-  { pattern: 'src/squeeze.ts', suites: ['propose', 'tree', 'run-tally'], why: 'chest squeeze geometry owned by propose' },
-  { pattern: 'src/structure.ts', suites: ['structure', 'diagnostics', 'contour-wiring', 'tree', 'run-tally'], why: 'structural analysis owned by structure, diagnostics, contour-wiring' },
-  { pattern: 'src/diagnostics.ts', suites: ['diagnostics', 'structure', 'tree', 'run-tally'], why: 'diagnostic note emitter owned by diagnostics and structure' },
-  { pattern: 'src/planted.ts', suites: ['diagnostics', 'tree', 'run-tally'], why: 'planted diagnostics helper owned by diagnostics' },
-  { pattern: 'src/neckdraft.ts', suites: ['layers-wrapper', 'rig', 'propose', 'tree', 'run-tally'], why: 'sampled neck draft owned by layers-wrapper, rig, propose' },
+  { pattern: 'src/propose.ts', suites: ['propose', 'propose-corpus', 'rig', 'config-write', 'arm-split-upgrade', 'plausibility', 'tree'], why: 'propose stage owned by propose, propose-corpus, rig (neck mode), config-write, arm-split-upgrade' },
+  { pattern: 'src/bustlandmarks.ts', suites: ['propose', 'config', 'config-write', 'tree'], why: 'bust-landmarks owned by propose, config, config-write' },
+  { pattern: 'src/headbox.ts', suites: ['propose', 'propose-corpus', 'inputs', 'inputs-examples', 'tree'], why: 'head crop box detection' },
+  { pattern: 'src/headcroppreflight.ts', suites: ['propose', 'tree'], why: 'head crop preflight owned by propose' },
+  { pattern: 'src/headframe.ts', suites: ['propose', 'tree'], why: 'head frame geometry owned by propose' },
+  { pattern: 'src/keypoints.ts', suites: ['keypoints', 'painting', 'propose', 'propose-corpus', 'diagnostics', 'tree'], why: 'keypoints reader owned by keypoints, painting, propose, diagnostics' },
+  { pattern: 'src/paintcheck.ts', suites: ['painting', 'tree'], why: 'painting preflight owned by painting suite' },
+  { pattern: 'src/skeleton.ts', suites: ['skeleton', 'keypoints', 'painting', 'prompt', 'tree'], why: 'skeleton layout owned by skeleton, keypoints, painting, prompt' },
+  { pattern: 'src/squeeze.ts', suites: ['propose', 'tree'], why: 'chest squeeze geometry owned by propose' },
+  { pattern: 'src/structure.ts', suites: ['structure', 'diagnostics', 'contour-wiring', 'tree'], why: 'structural analysis owned by structure, diagnostics, contour-wiring' },
+  { pattern: 'src/diagnostics.ts', suites: ['diagnostics', 'structure', 'tree'], why: 'diagnostic note emitter owned by diagnostics and structure' },
+  { pattern: 'src/planted.ts', suites: ['diagnostics', 'tree'], why: 'planted diagnostics helper owned by diagnostics' },
+  { pattern: 'src/neckdraft.ts', suites: ['layers-wrapper', 'rig', 'propose', 'tree'], why: 'sampled neck draft owned by layers-wrapper, rig, propose' },
 
   // Phase B addition: src/rig.ts and the turn sources also select `build` (catches #958 and #889)
-  { pattern: 'src/rig.ts', suites: ['rig', 'build', 'mesh-draft', 'waist', 'chain-inherit', 'front-slot', 'limb-slots', 'limb-layout', 'hybrid-limb', 'arm-split-upgrade', 'alternate-tips', 'alternate-layers', 'tree', 'run-tally'], why: 'rig compiler stage owned by rig, build, mesh-draft, and limb/slot suites' },
-  { pattern: 'src/waist.ts', suites: ['waist', 'tree', 'run-tally'], why: 'waist bone logic owned by waist suite' },
-  { pattern: 'src/waistmesh.ts', suites: ['waist', 'tree', 'run-tally'], why: 'waist mesh solver owned by waist suite' },
-  { pattern: 'src/weights.ts', suites: ['rig', 'contour-wiring', 'winding', 'influence', 'waist', 'tree', 'run-tally'], why: 'bone weight solver' },
-  { pattern: 'src/localweights.ts', suites: ['contour-wiring', 'auto-mesh', 'rig', 'tree', 'run-tally'], why: 'local field weight solver' },
-  { pattern: 'src/heat.ts', suites: ['rig', 'tree', 'run-tally'], why: 'bone heat weight solver owned by rig suite' },
-  { pattern: 'src/mesh.ts', suites: ['rig', 'auto-mesh', 'winding', 'contour', 'contour-wiring', 'waist', 'tree', 'run-tally'], why: 'lattice and contour mesh builder' },
-  { pattern: 'src/explicitmesh.ts', suites: ['config', 'rig', 'tree', 'run-tally'], why: 'explicit mesh reader owned by config and rig' },
-  { pattern: 'src/meshdraft.ts', suites: ['mesh-draft', 'influence', 'auto-motion', 'readme-loop', 'arm-split-upgrade', 'editor-receipts', 'depth-maps', 'tree', 'run-tally'], why: 'mesh-draft stage' },
-  { pattern: 'src/meshstats.ts', suites: ['mesh-stats', 'config', 'tree', 'run-tally'], why: 'mesh-stats triangle counter owned by mesh-stats' },
-  { pattern: 'src/contour.ts', suites: ['contour', 'contour-wiring', 'auto-mesh', 'winding', 'mesh-draft', 'behind-seams', 'tree', 'run-tally'], why: 'contour extraction and triangulation' },
-  { pattern: 'src/automesh.ts', suites: ['auto-mesh', 'auto-mesh-examples', 'auto-motion', 'build-cost', 'winding', 'contour-wiring', 'tree', 'run-tally'], why: 'automatic mesh reduction owned by auto-mesh, auto-mesh-examples, auto-motion, build-cost, winding' },
-  { pattern: 'src/autoenvelope.ts', suites: ['auto-mesh', 'auto-motion', 'raster-resize', 'contour-wiring', 'retune', 'tree', 'run-tally'], why: 'skinning envelope solver' },
-  { pattern: 'src/automotion.ts', suites: ['auto-motion', 'auto-mesh', 'build-cost', 'tree', 'run-tally'], why: 'automatic motion residual evaluation' },
-  { pattern: 'src/autoamplitude.ts', suites: ['auto-motion', 'auto-mesh', 'build-cost', 'tree', 'run-tally'], why: 'automatic motion amplitude tuning' },
-  { pattern: 'src/autoreplay.ts', suites: ['auto-motion', 'tree', 'run-tally'], why: 'auto-motion replay cache owned by auto-motion' },
-  { pattern: 'src/motion.ts', suites: ['rig', 'auto-motion', 'structure', 'scene', 'waist', 'chain-inherit', 'front-slot', 'tree', 'run-tally'], why: 'motion track generator' },
-  { pattern: 'src/turn.ts', suites: ['rig', 'build', 'config', 'propose', 'tree', 'run-tally'], why: '2.5D turn deformation compiler' },
-  { pattern: 'src/turncoverage.ts', suites: ['rig', 'build', 'tree', 'run-tally'], why: 'turn surface coverage owned by rig and build' },
-  { pattern: 'src/turnfield.ts', suites: ['rig', 'build', 'tree', 'run-tally'], why: 'turn displacement field owned by rig and build' },
-  { pattern: 'src/turnoverlap.ts', suites: ['rig', 'build', 'tree', 'run-tally'], why: 'turn overlap solver owned by rig and build' },
-  { pattern: 'src/boundarydepth.ts', suites: ['rig', 'build', 'tree', 'run-tally'], why: 'boundary depth solver owned by rig and build' },
-  { pattern: 'src/depthmaps.ts', suites: ['depth-maps', 'rig', 'tree', 'run-tally'], why: 'depth map reader owned by depth-maps and rig' },
-  { pattern: 'src/depthsheets.ts', suites: ['depth-maps', 'layers-wrapper', 'rig', 'comfy', 'tree', 'run-tally'], why: 'depth contact sheet generator owned by depth-maps, layers-wrapper, rig, comfy' },
-  { pattern: 'src/depthworkflow.ts', suites: ['depth-maps', 'rig', 'tree', 'run-tally'], why: 'depth-init / depth-apply workflow owned by depth-maps and rig' },
-  { pattern: 'src/setfocus.ts', suites: ['alternate-tips', 'rig', 'config', 'parts', 'tree', 'run-tally'], why: 'set focus metadata owned by alternate-tips' },
+  { pattern: 'src/rig.ts', suites: ['rig', 'build', 'mesh-draft', 'waist', 'chain-inherit', 'front-slot', 'limb-slots', 'limb-layout', 'hybrid-limb', 'arm-split-upgrade', 'alternate-tips', 'alternate-layers', 'tree'], why: 'rig compiler stage owned by rig, build, mesh-draft, and limb/slot suites' },
+  { pattern: 'src/waist.ts', suites: ['waist', 'tree'], why: 'waist bone logic owned by waist suite' },
+  { pattern: 'src/waistmesh.ts', suites: ['waist', 'tree'], why: 'waist mesh solver owned by waist suite' },
+  { pattern: 'src/weights.ts', suites: ['rig', 'contour-wiring', 'winding', 'influence', 'waist', 'tree'], why: 'bone weight solver' },
+  { pattern: 'src/localweights.ts', suites: ['contour-wiring', 'auto-mesh', 'rig', 'tree'], why: 'local field weight solver' },
+  { pattern: 'src/heat.ts', suites: ['rig', 'tree'], why: 'bone heat weight solver owned by rig suite' },
+  { pattern: 'src/mesh.ts', suites: ['rig', 'auto-mesh', 'winding', 'contour', 'contour-wiring', 'waist', 'tree'], why: 'lattice and contour mesh builder' },
+  { pattern: 'src/explicitmesh.ts', suites: ['config', 'rig', 'tree'], why: 'explicit mesh reader owned by config and rig' },
+  { pattern: 'src/meshdraft.ts', suites: ['mesh-draft', 'influence', 'auto-motion', 'readme-loop', 'arm-split-upgrade', 'editor-receipts', 'depth-maps', 'tree'], why: 'mesh-draft stage' },
+  { pattern: 'src/meshstats.ts', suites: ['mesh-stats', 'config', 'tree'], why: 'mesh-stats triangle counter owned by mesh-stats' },
+  { pattern: 'src/contour.ts', suites: ['contour', 'contour-wiring', 'auto-mesh', 'winding', 'mesh-draft', 'behind-seams', 'tree'], why: 'contour extraction and triangulation' },
+  { pattern: 'src/automesh.ts', suites: ['auto-mesh', 'auto-mesh-examples', 'auto-motion', 'build-cost', 'winding', 'contour-wiring', 'tree'], why: 'automatic mesh reduction owned by auto-mesh, auto-mesh-examples, auto-motion, build-cost, winding' },
+  { pattern: 'src/autoenvelope.ts', suites: ['auto-mesh', 'auto-motion', 'raster-resize', 'contour-wiring', 'retune', 'tree'], why: 'skinning envelope solver' },
+  { pattern: 'src/automotion.ts', suites: ['auto-motion', 'auto-mesh', 'build-cost', 'tree'], why: 'automatic motion residual evaluation' },
+  { pattern: 'src/autoamplitude.ts', suites: ['auto-motion', 'auto-mesh', 'build-cost', 'tree'], why: 'automatic motion amplitude tuning' },
+  { pattern: 'src/autoreplay.ts', suites: ['auto-motion', 'tree'], why: 'auto-motion replay cache owned by auto-motion' },
+  { pattern: 'src/motion.ts', suites: ['rig', 'auto-motion', 'structure', 'scene', 'waist', 'chain-inherit', 'front-slot', 'tree'], why: 'motion track generator' },
+  { pattern: 'src/turn.ts', suites: ['rig', 'build', 'config', 'propose', 'tree'], why: '2.5D turn deformation compiler' },
+  { pattern: 'src/turncoverage.ts', suites: ['rig', 'build', 'tree'], why: 'turn surface coverage owned by rig and build' },
+  { pattern: 'src/turnfield.ts', suites: ['rig', 'build', 'tree'], why: 'turn displacement field owned by rig and build' },
+  { pattern: 'src/turnoverlap.ts', suites: ['rig', 'build', 'tree'], why: 'turn overlap solver owned by rig and build' },
+  { pattern: 'src/boundarydepth.ts', suites: ['rig', 'build', 'tree'], why: 'boundary depth solver owned by rig and build' },
+  { pattern: 'src/depthmaps.ts', suites: ['depth-maps', 'rig', 'tree'], why: 'depth map reader owned by depth-maps and rig' },
+  { pattern: 'src/depthsheets.ts', suites: ['depth-maps', 'layers-wrapper', 'rig', 'comfy', 'tree'], why: 'depth contact sheet generator owned by depth-maps, layers-wrapper, rig, comfy' },
+  { pattern: 'src/depthworkflow.ts', suites: ['depth-maps', 'rig', 'tree'], why: 'depth-init / depth-apply workflow owned by depth-maps and rig' },
+  { pattern: 'src/setfocus.ts', suites: ['alternate-tips', 'rig', 'config', 'parts', 'tree'], why: 'set focus metadata owned by alternate-tips' },
 
-  { pattern: 'src/remesh-api.ts', suites: ['remesh', 'tree', 'run-tally'], why: 'public Bun remesh API subpath (TY41 in tree, remesh suite)' },
-  { pattern: 'src/remesh.ts', suites: ['remesh', 'retune', 'hybrid-limb', 'tree', 'run-tally'], why: 'remesh stage owned by remesh and retune' },
-  { pattern: 'src/remeshdelta.ts', suites: ['remesh', 'retune', 'tree', 'run-tally'], why: 'remesh geometry delta helper' },
-  { pattern: 'src/retune.ts', suites: ['retune', 'remesh', 'tree', 'run-tally'], why: 'retune stage owned by retune and remesh' },
+  { pattern: 'src/remesh-api.ts', suites: ['remesh', 'tree'], why: 'public Bun remesh API subpath (TY41 in tree, remesh suite)' },
+  { pattern: 'src/remesh.ts', suites: ['remesh', 'retune', 'hybrid-limb', 'tree'], why: 'remesh stage owned by remesh and retune' },
+  { pattern: 'src/remeshdelta.ts', suites: ['remesh', 'retune', 'tree'], why: 'remesh geometry delta helper' },
+  { pattern: 'src/retune.ts', suites: ['retune', 'remesh', 'tree'], why: 'retune stage owned by retune and remesh' },
 
-  { pattern: 'src/build.ts', suites: ['build', 'loop', 'tree', 'run-tally'], why: 'build stage owned by build and loop' },
-  { pattern: 'src/apng.ts', suites: ['loop', 'readme-loop', 'tree', 'run-tally'], why: 'APNG encoder owned by loop suite' },
-  { pattern: 'src/gif.ts', suites: ['loop', 'readme-loop', 'tree', 'run-tally'], why: 'GIF encoder owned by loop suite' },
-  { pattern: 'src/palette.ts', suites: ['loop', 'tree', 'run-tally'], why: 'palette quantizer owned by loop suite' },
+  { pattern: 'src/build.ts', suites: ['build', 'loop', 'tree'], why: 'build stage owned by build and loop' },
+  { pattern: 'src/apng.ts', suites: ['loop', 'readme-loop', 'tree'], why: 'APNG encoder owned by loop suite' },
+  { pattern: 'src/gif.ts', suites: ['loop', 'readme-loop', 'tree'], why: 'GIF encoder owned by loop suite' },
+  { pattern: 'src/palette.ts', suites: ['loop', 'tree'], why: 'palette quantizer owned by loop suite' },
 
-  { pattern: 'src/scene.ts', suites: ['scene', 'requirements', 'tree', 'run-tally'], why: 'compose stage owned by scene and requirements' },
-  { pattern: 'src/sceneclips.ts', suites: ['scene', 'tree', 'run-tally'], why: 'named scene animation clips owned by scene' },
-  { pattern: 'src/scenerepeat.ts', suites: ['scene', 'tree', 'run-tally'], why: 'scene character idle repeat compiler owned by scene' },
+  { pattern: 'src/scene.ts', suites: ['scene', 'requirements', 'tree'], why: 'compose stage owned by scene and requirements' },
+  { pattern: 'src/sceneclips.ts', suites: ['scene', 'tree'], why: 'named scene animation clips owned by scene' },
+  { pattern: 'src/scenerepeat.ts', suites: ['scene', 'tree'], why: 'scene character idle repeat compiler owned by scene' },
 
   // Phase B addition: src/check.ts also selects `chain` (catches #1317 and #938)
-  { pattern: 'src/check.ts', suites: ['check', 'chain', 'behind-seams', 'joint-contact', 'core-pointer', 'requirements', 'fixed-skeleton', 'setup-painting', 'boundary-colour', 'contour-wiring', 'retune', 'build', 'tree', 'run-tally'], why: 'check stage, chain (CH04), sub-check suites, retune (RN09), and build (BU165/BU212)' },
-  { pattern: 'src/checkrow.ts', suites: ['check', 'behind-seams', 'joint-contact', 'setup-painting', 'retune', 'tree', 'run-tally'], why: 'check row builder (TY823/TY830/TY831 in tree)' },
-  { pattern: 'src/behindseams.ts', suites: ['behind-seams', 'scene', 'tree', 'run-tally'], why: 'BEHIND_PART_SEAMS owned by behind-seams and scene' },
-  { pattern: 'src/boundarycolour.ts', suites: ['boundary-colour', 'scene', 'tree', 'run-tally'], why: 'BOUNDARY_COLOUR owned by boundary-colour and scene' },
-  { pattern: 'src/sourceexposure.ts', suites: ['boundary-colour', 'tree', 'run-tally'], why: 'SOURCE_EXPOSURE owned by boundary-colour' },
-  { pattern: 'src/artjoints.ts', suites: ['fixed-skeleton', 'tree', 'run-tally'], why: 'fixed-skeleton art joints owned by fixed-skeleton' },
-  { pattern: 'src/jointcontact.ts', suites: ['joint-contact', 'tree', 'run-tally'], why: 'joint contact check owned by joint-contact' },
-  { pattern: 'src/setuppainting.ts', suites: ['setup-painting', 'scene', 'assemble', 'take-layers', 'tree', 'run-tally'], why: 'SETUP_MATCHES_PAINTING owned by setup-painting, scene, assemble, take-layers' },
-  { pattern: 'src/setupbackdrop.ts', suites: ['setup-painting', 'tree', 'run-tally'], why: 'setup backdrop exclusion owned by setup-painting' },
-  { pattern: 'src/setupfiguremask.ts', suites: ['setup-painting', 'tree', 'run-tally'], why: 'setup figure mask builder owned by setup-painting' },
-  { pattern: 'src/requirements.ts', suites: ['requirements', 'behind-seams', 'fixed-skeleton', 'setup-painting', 'boundary-colour', 'assemble', 'tree', 'run-tally'], why: 'requirements loader owned by requirements and bar suites' },
-  { pattern: 'src/cutmaterial.ts', suites: ['requirements', 'parts', 'tree', 'run-tally'], why: 'structural cut material check owned by requirements' },
-  { pattern: 'src/cutmaterialio.ts', suites: ['requirements', 'parts', 'tree', 'run-tally'], why: 'cut material I/O helper owned by requirements and parts' },
-  { pattern: 'src/coincide.ts', suites: ['tree', 'build', 'check', 'run-tally'], why: 'COINCIDE check owned by tree (runCoincideMutants), build, check' },
-  { pattern: 'src/coincideio.ts', suites: ['tree', 'parts', 'check', 'run-tally'], why: 'coincide I/O helper' },
-  { pattern: 'src/instruments.ts', suites: ['parts', 'rig', 'propose', 'requirements', 'readme-loop', 'tree', 'run-tally'], why: 'geometric and raster check instruments' },
-  { pattern: 'src/motionseampose.ts', suites: ['tree', 'check', 'run-tally'], why: 'posed motion-seam evaluation' },
-  { pattern: 'src/motionseams.ts', suites: ['tree', 'check', 'run-tally'], why: 'motion-seam corridor and band evaluation' },
-  { pattern: 'src/outputpaths.ts', suites: ['check', 'scene', 'tree', 'run-tally'], why: 'portable diagnostic output folder naming' },
-  { pattern: 'src/physicscontrib.ts', suites: ['retune', 'check', 'tree', 'run-tally'], why: 'PHYSICS_CONTRIBUTES check row owned by check and retune' },
-  { pattern: 'src/supportdomains.ts', suites: ['check', 'parts', 'tree', 'run-tally'], why: 'support domain check owned by check and parts' },
+  { pattern: 'src/check.ts', suites: ['check', 'chain', 'behind-seams', 'joint-contact', 'core-pointer', 'requirements', 'fixed-skeleton', 'setup-painting', 'boundary-colour', 'contour-wiring', 'retune', 'build', 'tree'], why: 'check stage, chain (CH04), sub-check suites, retune (RN09), and build (BU165/BU212)' },
+  { pattern: 'src/checkrow.ts', suites: ['check', 'behind-seams', 'joint-contact', 'setup-painting', 'retune', 'tree'], why: 'check row builder (TY823/TY830/TY831 in tree)' },
+  { pattern: 'src/behindseams.ts', suites: ['behind-seams', 'scene', 'tree'], why: 'BEHIND_PART_SEAMS owned by behind-seams and scene' },
+  { pattern: 'src/boundarycolour.ts', suites: ['boundary-colour', 'scene', 'tree'], why: 'BOUNDARY_COLOUR owned by boundary-colour and scene' },
+  { pattern: 'src/sourceexposure.ts', suites: ['boundary-colour', 'tree'], why: 'SOURCE_EXPOSURE owned by boundary-colour' },
+  { pattern: 'src/artjoints.ts', suites: ['fixed-skeleton', 'tree'], why: 'fixed-skeleton art joints owned by fixed-skeleton' },
+  { pattern: 'src/jointcontact.ts', suites: ['joint-contact', 'tree'], why: 'joint contact check owned by joint-contact' },
+  { pattern: 'src/setuppainting.ts', suites: ['setup-painting', 'scene', 'assemble', 'take-layers', 'tree'], why: 'SETUP_MATCHES_PAINTING owned by setup-painting, scene, assemble, take-layers' },
+  { pattern: 'src/setupbackdrop.ts', suites: ['setup-painting', 'tree'], why: 'setup backdrop exclusion owned by setup-painting' },
+  { pattern: 'src/setupfiguremask.ts', suites: ['setup-painting', 'tree'], why: 'setup figure mask builder owned by setup-painting' },
+  { pattern: 'src/requirements.ts', suites: ['requirements', 'behind-seams', 'fixed-skeleton', 'setup-painting', 'boundary-colour', 'assemble', 'tree'], why: 'requirements loader owned by requirements and bar suites' },
+  { pattern: 'src/cutmaterial.ts', suites: ['requirements', 'parts', 'tree'], why: 'structural cut material check owned by requirements' },
+  { pattern: 'src/cutmaterialio.ts', suites: ['requirements', 'parts', 'tree'], why: 'cut material I/O helper owned by requirements and parts' },
+  { pattern: 'src/coincide.ts', suites: ['tree', 'build', 'check'], why: 'COINCIDE check owned by tree (runCoincideMutants), build, check' },
+  { pattern: 'src/coincideio.ts', suites: ['tree', 'parts', 'check'], why: 'coincide I/O helper' },
+  { pattern: 'src/instruments.ts', suites: ['parts', 'rig', 'propose', 'requirements', 'readme-loop', 'tree'], why: 'geometric and raster check instruments' },
+  { pattern: 'src/motionseampose.ts', suites: ['tree', 'check'], why: 'posed motion-seam evaluation' },
+  { pattern: 'src/motionseams.ts', suites: ['tree', 'check'], why: 'motion-seam corridor and band evaluation' },
+  { pattern: 'src/outputpaths.ts', suites: ['check', 'scene', 'tree'], why: 'portable diagnostic output folder naming' },
+  { pattern: 'src/physicscontrib.ts', suites: ['retune', 'check', 'tree'], why: 'PHYSICS_CONTRIBUTES check row owned by check and retune' },
+  { pattern: 'src/supportdomains.ts', suites: ['check', 'parts', 'tree'], why: 'support domain check owned by check and parts' },
 
   // 5. tools/ files
-  { pattern: 'tools/regenerate_examples.ts', suites: ['tree', 'run-tally'], jobs: ['expected-files'], why: 'public examples expected-files builder/checker' },
-  { pattern: 'tools/check_painting_public.ts', suites: ['assemble', 'tree', 'run-tally'], jobs: ['painting-public'], why: 'public painting allocation membership check' },
-  { pattern: 'tools/check_matte.ts', suites: ['comfy', 'tree', 'run-tally'], jobs: ['standalone-tools'], why: 'standalone matte check in test job' },
-  { pattern: 'tools/check_core_grid.ts', suites: ['comfy', 'tree', 'run-tally'], jobs: ['standalone-tools'], why: 'standalone core plate grid check in test job' },
-  { pattern: 'tools/check_core_cfg.ts', suites: ['comfy', 'tree', 'run-tally'], jobs: ['standalone-tools'], why: 'standalone core plate --cfg check in test job' },
-  { pattern: 'tools/check_run_clock.ts', suites: ['build', 'tree', 'run-tally'], jobs: ['standalone-tools'], why: 'standalone run-stamp clock check in test job' },
-  { pattern: 'tools/comfy_client.test.ts', suites: ['comfy', 'tree', 'run-tally'], jobs: ['standalone-tools'], why: 'standalone ComfyUI client test in test job' },
-  { pattern: 'tools/alternate-cli.ts', suites: ['cli', 'tree', 'run-tally'], why: 'called by cli suite' },
-  { pattern: 'tools/atlas_population.ts', suites: ['build', 'tree', 'run-tally'], why: 'called by build suite' },
-  { pattern: 'tools/build-process.ts', suites: ['build', 'config', 'tree', 'run-tally'], why: 'shipped build child-process worker' },
-  { pattern: 'tools/check_alternate_cut_layers.ts', suites: ['alternate-layers', 'tree', 'run-tally'], why: 'called by alternate-layers suite' },
-  { pattern: 'tools/check_alternate_layers.ts', suites: ['alternate-layers', 'tree', 'run-tally'], why: 'called by alternate-layers suite' },
-  { pattern: 'tools/check_alternate_tips.ts', suites: ['alternate-tips', 'tree', 'run-tally'], why: 'called by alternate-tips suite' },
-  { pattern: 'tools/check_arm_split_upgrade.ts', suites: ['arm-split-upgrade', 'tree', 'run-tally'], why: 'called by arm-split-upgrade suite' },
-  { pattern: 'tools/check_art_joints.ts', suites: ['fixed-skeleton', 'tree', 'run-tally'], why: 'called by fixed-skeleton suite' },
-  { pattern: 'tools/check_authored_unit_depth.ts', suites: ['layers-wrapper', 'tree', 'run-tally'], why: 'called by layers-wrapper suite' },
-  { pattern: 'tools/check_base_anchor.ts', suites: ['alternate-layers', 'tree', 'run-tally'], why: 'called by alternate-layers suite' },
-  { pattern: 'tools/check_behind_seams.ts', suites: ['behind-seams', 'tree', 'run-tally'], why: 'called by behind-seams suite' },
-  { pattern: 'tools/check_boundary_colour.ts', suites: ['boundary-colour', 'tree', 'run-tally'], why: 'called by boundary-colour suite' },
-  { pattern: 'tools/check_bust_landmarks.ts', suites: ['propose', 'tree', 'run-tally'], why: 'called by propose suite' },
-  { pattern: 'tools/check_bust_moved.ts', suites: ['propose', 'tree', 'run-tally'], why: 'called by propose suite' },
-  { pattern: 'tools/check_bust_shape.ts', suites: ['propose', 'tree', 'run-tally'], why: 'called by propose suite' },
-  { pattern: 'tools/check_cap_ownership.ts', suites: ['subset-cover', 'tree', 'run-tally'], why: 'called by subset-cover suite' },
-  { pattern: 'tools/check_chain_inherit.ts', suites: ['chain-inherit', 'tree', 'run-tally'], why: 'called by chain-inherit suite' },
-  { pattern: 'tools/check_classified_plate.ts', suites: ['comfy', 'tree', 'run-tally'], why: 'called by comfy suite' },
-  { pattern: 'tools/check_cloth_targets.ts', suites: ['tree', 'run-tally'], why: 'called by tree suite' },
-  { pattern: 'tools/check_coincide.ts', suites: ['tree', 'check', 'run-tally'], why: 'called by tree and check suites' },
-  { pattern: 'tools/check_configwrite.ts', suites: ['config-write', 'tree', 'run-tally'], why: 'called by config-write suite' },
-  { pattern: 'tools/configwrite.ts', suites: ['config-write', 'layers-wrapper', 'rig', 'propose', 'tree', 'run-tally'], why: 'called by config-write, layers-wrapper, rig, propose' },
-  { pattern: 'tools/check_corepointer.ts', suites: ['core-pointer', 'tree', 'run-tally'], why: 'called by core-pointer suite' },
-  { pattern: 'tools/check_cut_material.ts', suites: ['requirements', 'tree', 'run-tally'], why: 'called by requirements suite' },
-  { pattern: 'tools/check_depthmaps.ts', suites: ['depth-maps', 'tree', 'run-tally'], why: 'called by depth-maps suite' },
-  { pattern: 'tools/check_depthsheets.ts', suites: ['layers-wrapper', 'rig', 'comfy', 'tree', 'run-tally'], why: 'called by layers-wrapper, rig, comfy' },
-  { pattern: 'tools/check_diffcomponents.ts', suites: ['cli', 'assemble', 'assemble-examples', 'tree', 'run-tally'], why: 'called by cli, assemble, assemble-examples' },
-  { pattern: 'tools/check_diffdrafts.ts', suites: ['cli', 'assemble', 'tree', 'run-tally'], why: 'called by cli and assemble' },
-  { pattern: 'tools/check_edge_residual.ts', suites: ['assemble', 'tree', 'run-tally'], why: 'called by assemble suite' },
-  { pattern: 'tools/check_edited_part_writer.ts', suites: ['editor-receipts', 'tree', 'run-tally'], why: 'called by editor-receipts suite' },
-  { pattern: 'tools/check_edited_parts.ts', suites: ['editor-receipts', 'depth-maps', 'config', 'tree', 'run-tally'], why: 'called by editor-receipts, depth-maps, config' },
-  { pattern: 'tools/check_editor_receipts.ts', suites: ['editor-receipts', 'tree', 'run-tally'], why: 'called by editor-receipts suite' },
-  { pattern: 'tools/check_explicitmesh.ts', suites: ['config', 'rig', 'tree', 'run-tally'], why: 'called by config suite' },
-  { pattern: 'tools/check_external_receipt.ts', suites: ['cli', 'tree', 'run-tally'], why: 'called by cli suite' },
-  { pattern: 'tools/check_extremes.ts', suites: ['check', 'tree', 'run-tally'], why: 'called by check suite' },
-  { pattern: 'tools/check_file_references.ts', suites: ['config', 'tree', 'run-tally'], why: 'called by config suite' },
-  { pattern: 'tools/check_foot_ownership.ts', suites: ['foot-ownership', 'tree', 'run-tally'], why: 'called by foot-ownership suite' },
-  { pattern: 'tools/check_front_slot.ts', suites: ['front-slot', 'tree', 'run-tally'], why: 'called by front-slot suite' },
-  { pattern: 'tools/check_gather_optout.ts', suites: ['limb-slots', 'tree', 'run-tally'], why: 'called by limb-slots suite' },
-  { pattern: 'tools/check_ground.ts', suites: ['config', 'assemble', 'ground-examples', 'tree', 'run-tally'], why: 'called by config, assemble, ground-examples' },
-  { pattern: 'tools/check_hybrid_limb.ts', suites: ['hybrid-limb', 'requirements', 'tree', 'run-tally'], why: 'called by hybrid-limb and requirements' },
-  { pattern: 'tools/check_joint_contact.ts', suites: ['joint-contact', 'tree', 'run-tally'], why: 'called by joint-contact suite' },
-  { pattern: 'tools/check_layer_bounds.ts', suites: ['layers-wrapper', 'tree', 'run-tally'], why: 'called by layers-wrapper suite' },
-  { pattern: 'tools/check_limb_layout.ts', suites: ['limb-layout', 'tree', 'run-tally'], why: 'called by limb-layout suite' },
-  { pattern: 'tools/check_limb_slots.ts', suites: ['limb-slots', 'tree', 'run-tally'], why: 'called by limb-slots suite' },
-  { pattern: 'tools/check_named_cut_skirt.ts', suites: ['propose', 'tree', 'run-tally'], why: 'called by propose suite' },
-  { pattern: 'tools/check_neck_bust.ts', suites: ['propose', 'tree', 'run-tally'], why: 'called by propose suite' },
-  { pattern: 'tools/check_neck_draft.ts', suites: ['layers-wrapper', 'rig', 'tree', 'run-tally'], why: 'called by layers-wrapper and rig' },
-  { pattern: 'tools/neck-propose.ts', suites: ['layers-wrapper', 'rig', 'propose', 'tree', 'run-tally'], why: 'called by check_neck_draft and check_neck_bust' },
-  { pattern: 'tools/check_occluders.ts', suites: ['assemble', 'comfy', 'tree', 'run-tally'], why: 'called by assemble and comfy' },
-  { pattern: 'tools/check_outline_specks.ts', suites: ['editor-receipts', 'tree', 'run-tally'], why: 'called by editor-receipts suite' },
-  { pattern: 'tools/check_painting_allocation.ts', suites: ['assemble', 'tree', 'run-tally'], why: 'called by assemble suite' },
-  { pattern: 'tools/check_painting_edges.ts', suites: ['assemble', 'tree', 'run-tally'], why: 'called by assemble suite' },
-  { pattern: 'tools/check_painting_extension.ts', suites: ['assemble', 'tree', 'run-tally'], why: 'called by assemble suite' },
-  { pattern: 'tools/check_painting_extension_examples.ts', suites: ['assemble', 'tree', 'run-tally'], why: 'painting extension example helper' },
-  { pattern: 'tools/check_painting_outline.ts', suites: ['assemble', 'tree', 'run-tally'], why: 'called by assemble suite' },
-  { pattern: 'tools/check_painting_owner.ts', suites: ['assemble', 'tree', 'run-tally'], why: 'called by assemble suite' },
-  { pattern: 'tools/check_part_sources.ts', suites: ['part-sources', 'tree', 'run-tally'], why: 'called by part-sources suite' },
-  { pattern: 'tools/check_part_visibility.ts', suites: ['assemble', 'tree', 'run-tally'], why: 'called by assemble suite' },
-  { pattern: 'tools/read_visibility_coverage.ts', suites: ['assemble', 'tree', 'run-tally'], why: 'called by check_part_visibility in assemble' },
-  { pattern: 'tools/check_pinholes.ts', suites: ['assemble', 'tree', 'run-tally'], why: 'called by assemble suite' },
-  { pattern: 'tools/check_plate.ts', suites: ['comfy', 'tree', 'run-tally'], why: 'called by comfy suite' },
-  { pattern: 'tools/check_project_config.ts', suites: ['config', 'tree', 'run-tally'], why: 'called by config suite' },
-  { pattern: 'tools/check_requirements_named.ts', suites: ['assemble', 'tree', 'run-tally'], why: 'called by assemble suite' },
-  { pattern: 'tools/check_revision_chain.ts', suites: ['config', 'remesh', 'retune', 'tree', 'run-tally'], why: 'called by config, remesh, retune' },
-  { pattern: 'tools/check_row_guard.ts', suites: ['tree', 'check', 'run-tally'], why: 'called by tree and check' },
-  { pattern: 'tools/check_row_reference.ts', suites: ['tree', 'run-tally'], why: 'called by TY823 in tree suite' },
-  { pattern: 'tools/check_row_scope.ts', suites: ['tree', 'check', 'run-tally'], why: 'called by tree and check' },
-  { pattern: 'tools/check_seam_cells.ts', suites: ['check', 'tree', 'run-tally'], why: 'called by check suite' },
-  { pattern: 'tools/check_seam_config.ts', suites: ['config', 'tree', 'run-tally'], why: 'called by config suite' },
-  { pattern: 'tools/check_seethrough_transform.ts', suites: ['comfy', 'tree', 'run-tally'], why: 'called by comfy suite' },
-  { pattern: 'tools/check_set_anchor.ts', suites: ['config', 'tree', 'run-tally'], why: 'called by config suite' },
-  { pattern: 'tools/check_set_focus.ts', suites: ['alternate-tips', 'tree', 'run-tally'], why: 'called by alternate-tips suite' },
-  { pattern: 'tools/check_setup_painting.ts', suites: ['setup-painting', 'tree', 'run-tally'], why: 'called by setup-painting suite' },
-  { pattern: 'tools/check_source_exposure.ts', suites: ['boundary-colour', 'tree', 'run-tally'], why: 'called by boundary-colour suite' },
-  { pattern: 'tools/check_subset_cap.ts', suites: ['subset-cover', 'tree', 'run-tally'], why: 'called by subset-cover suite' },
-  { pattern: 'tools/check_subset_cover.ts', suites: ['subset-cover', 'tree', 'run-tally'], why: 'called by subset-cover suite' },
-  { pattern: 'tools/check_support_domains.ts', suites: ['check', 'tree', 'run-tally'], why: 'called by check suite' },
-  { pattern: 'tools/check_take_cleanup.ts', suites: ['take-layers', 'tree', 'run-tally'], why: 'called by take-layers suite' },
-  { pattern: 'tools/check_take_footprint.ts', suites: ['take-layers', 'tree', 'run-tally'], why: 'called by take-layers suite' },
-  { pattern: 'tools/check_take_layers.ts', suites: ['take-layers', 'tree', 'run-tally'], why: 'called by take-layers suite' },
-  { pattern: 'tools/check_take_plan_order.ts', suites: ['take-layers', 'tree', 'run-tally'], why: 'called by take-layers suite' },
-  { pattern: 'tools/check_take_region.ts', suites: ['assemble', 'take-layers', 'tree', 'run-tally'], why: 'called by assemble and take-layers' },
-  { pattern: 'tools/observe_take_footprint.ts', suites: ['take-layers', 'tree', 'run-tally'], why: 'called by check_take_footprint in take-layers' },
-  { pattern: 'tools/check_turn_*.ts', suites: ['rig', 'build', 'tree', 'run-tally'], why: 'turn control modules called by rig and build suites' },
-  { pattern: 'tools/check_visibility.ts', suites: ['comfy', 'tree', 'run-tally'], why: 'called by comfy suite' },
-  { pattern: 'tools/check_waist*.ts', suites: ['waist', 'tree', 'run-tally'], why: 'called by waist suite' },
-  { pattern: 'tools/check_yield_contour.ts', suites: ['assemble', 'tree', 'run-tally'], why: 'called by assemble suite' },
-  { pattern: 'tools/expected_form.ts', suites: ['tree', 'chain', 'run-tally'], why: 'called by tree and chain' },
-  { pattern: 'tools/fixtures/**', suites: ['tree', 'check', 'run-tally'], why: 'tools/fixtures/motion_seam_controls.ts called by tree and check' },
-  { pattern: 'tools/parts_file_*.ts', suites: ['parts', 'tree', 'run-tally'], why: 'parts.json field census and reference checks in parts suite' },
-  { pattern: 'tools/parts_reader_fixture.ts', suites: ['parts', 'tree', 'run-tally'], why: 'called by parts suite' },
-  { pattern: 'tools/auto_*.ts', suites: ['auto-mesh', 'auto-motion', 'contour', 'contour-wiring', 'build-cost', 'tree', 'run-tally'], why: 'auto-mesh and auto-motion survey helpers' },
-  { pattern: 'tools/feature_contour_*.ts', suites: ['auto-mesh', 'tree', 'run-tally'], why: 'called by auto-mesh suite' },
-  { pattern: 'tools/production_trial*.ts', suites: ['auto-mesh', 'scene', 'tree', 'run-tally'], why: 'called by auto-mesh and scene' },
-  { pattern: 'tools/veto_tally.ts', suites: ['auto-motion', 'auto-mesh', 'raster-resize', 'contour-wiring', 'tree', 'run-tally'], why: 'mesh reduction veto tally helper' },
-  { pattern: 'tools/weight_rule_survey.ts', suites: ['auto-mesh', 'tree', 'run-tally'], why: 'called by auto-mesh suite' },
-  { pattern: 'tools/local_compare.ts', suites: ['depth-maps', 'contour-wiring', 'auto-mesh', 'build-cost', 'propose', 'assemble', 'scene', 'mesh-draft', 'tree', 'run-tally'], why: 'local rig comparison helper' },
-  { pattern: 'tools/real_compare.ts', suites: ['raster-morph', 'contour', 'contour-wiring', 'auto-mesh', 'build-cost', 'requirements', 'hybrid-limb', 'remesh', 'tree', 'run-tally'], why: 'real rig comparison helper' },
-  { pattern: 'tools/edited-part-cli.ts', suites: ['editor-receipts', 'cli', 'tree', 'run-tally'], why: 'edited part CLI helper' },
-  { pattern: 'tools/contourdraft.ts', suites: ['contour', 'contour-wiring', 'mesh-draft', 'tree', 'run-tally'], why: 'contour draft helper' },
-  { pattern: 'tools/compare_neck_origin.ts', suites: ['propose', 'rig', 'tree', 'run-tally'], why: 'neck origin comparison helper' },
-  { pattern: 'tools/hybrid_limb_*.ts', suites: ['hybrid-limb', 'requirements', 'tree', 'run-tally'], why: 'hybrid limb acceptance and identity helpers' },
-  { pattern: 'tools/idle_cost.ts', suites: ['build-cost', 'auto-motion', 'tree', 'run-tally'], why: 'idle cost measurement helper' },
-  { pattern: 'tools/measure_authored_unit_depth.ts', suites: ['layers-wrapper', 'assemble', 'tree', 'run-tally'], why: 'authored unit depth measurement tool' },
-  { pattern: 'tools/measure_edge_residual.ts', suites: ['assemble', 'tree', 'run-tally'], why: 'edge residual measurement tool' },
-  { pattern: 'tools/measure_take_region.ts', suites: ['take-layers', 'assemble', 'tree', 'run-tally'], why: 'take region measurement tool' },
-  { pattern: 'tools/measure_turn_*.ts', suites: ['rig', 'build', 'tree', 'run-tally'], why: 'turn blend and unit precedence measurement tools' },
-  { pattern: 'tools/{amplitude_survey,arm_seam_survey,back_hair_survey,bend_survey,cap_survey,case_clock_sample,cloth_*,compose_*,contour_*,cut_*,density_survey,depth_*,dial_*,edge_survey,eye_*,face_*,falloff_survey,foot_*,fringe_*,ground_*,hair_*,head_*,hem_*,island_draft_survey,joint_*,limb_*,loop_*,mesh_*,motion_*,neck_*,occluder_*,offfigure_survey,outfit_*,outline_survey,overlap_*,pack_*,painting_*,part_*,physics_*,pinhole_*,plate_*,pose_*,project_*,propose_*,reach_*,region_*,remesh_*,retune_*,rig_*,seam_*,set_*,setup_*,sheet_*,skirt_*,sleeve_*,slot_*,source_*,split_*,squeeze_*,strand_*,subset_*,support_*,take_*,tear_survey,tip_survey,torso_*,turn_*,under_*,waist_*,weight_*,wind_*,wrist_*,yield_*}.ts', suites: ['tree', 'run-tally'], why: 'offline survey and measurement tools scanned by tree' },
+  { pattern: 'tools/regenerate_examples.ts', suites: ['tree'], jobs: ['expected-files'], why: 'public examples expected-files builder/checker' },
+  { pattern: 'tools/check_painting_public.ts', suites: ['assemble', 'tree'], jobs: ['painting-public'], why: 'public painting allocation membership check' },
+  { pattern: 'tools/check_matte.ts', suites: ['comfy', 'tree'], jobs: ['standalone-tools'], why: 'standalone matte check in test job' },
+  { pattern: 'tools/check_core_grid.ts', suites: ['comfy', 'tree'], jobs: ['standalone-tools'], why: 'standalone core plate grid check in test job' },
+  { pattern: 'tools/check_core_cfg.ts', suites: ['comfy', 'tree'], jobs: ['standalone-tools'], why: 'standalone core plate --cfg check in test job' },
+  { pattern: 'tools/check_run_clock.ts', suites: ['build', 'tree'], jobs: ['standalone-tools'], why: 'standalone run-stamp clock check in test job' },
+  { pattern: 'tools/comfy_client.test.ts', suites: ['comfy', 'tree'], jobs: ['standalone-tools'], why: 'standalone ComfyUI client test in test job' },
+  { pattern: 'tools/alternate-cli.ts', suites: ['cli', 'tree'], why: 'called by cli suite' },
+  { pattern: 'tools/atlas_population.ts', suites: ['build', 'tree'], why: 'called by build suite' },
+  { pattern: 'tools/build-process.ts', suites: ['build', 'config', 'tree'], why: 'shipped build child-process worker' },
+  { pattern: 'tools/check_alternate_cut_layers.ts', suites: ['alternate-layers', 'tree'], why: 'called by alternate-layers suite' },
+  { pattern: 'tools/check_alternate_layers.ts', suites: ['alternate-layers', 'tree'], why: 'called by alternate-layers suite' },
+  { pattern: 'tools/check_alternate_tips.ts', suites: ['alternate-tips', 'tree'], why: 'called by alternate-tips suite' },
+  { pattern: 'tools/check_arm_split_upgrade.ts', suites: ['arm-split-upgrade', 'tree'], why: 'called by arm-split-upgrade suite' },
+  { pattern: 'tools/check_art_joints.ts', suites: ['fixed-skeleton', 'tree'], why: 'called by fixed-skeleton suite' },
+  { pattern: 'tools/check_authored_unit_depth.ts', suites: ['layers-wrapper', 'tree'], why: 'called by layers-wrapper suite' },
+  { pattern: 'tools/check_base_anchor.ts', suites: ['alternate-layers', 'tree'], why: 'called by alternate-layers suite' },
+  { pattern: 'tools/check_behind_seams.ts', suites: ['behind-seams', 'tree'], why: 'called by behind-seams suite' },
+  { pattern: 'tools/check_boundary_colour.ts', suites: ['boundary-colour', 'tree'], why: 'called by boundary-colour suite' },
+  { pattern: 'tools/check_bust_landmarks.ts', suites: ['propose', 'tree'], why: 'called by propose suite' },
+  { pattern: 'tools/check_bust_moved.ts', suites: ['propose', 'tree'], why: 'called by propose suite' },
+  { pattern: 'tools/check_bust_shape.ts', suites: ['propose', 'tree'], why: 'called by propose suite' },
+  { pattern: 'tools/check_cap_ownership.ts', suites: ['subset-cover', 'tree'], why: 'called by subset-cover suite' },
+  { pattern: 'tools/check_chain_inherit.ts', suites: ['chain-inherit', 'tree'], why: 'called by chain-inherit suite' },
+  { pattern: 'tools/check_classified_plate.ts', suites: ['comfy', 'tree'], why: 'called by comfy suite' },
+  { pattern: 'tools/check_cloth_targets.ts', suites: ['tree'], why: 'called by tree suite' },
+  { pattern: 'tools/check_coincide.ts', suites: ['tree', 'check'], why: 'called by tree and check suites' },
+  { pattern: 'tools/check_configwrite.ts', suites: ['config-write', 'tree'], why: 'called by config-write suite' },
+  { pattern: 'tools/configwrite.ts', suites: ['config-write', 'layers-wrapper', 'rig', 'propose', 'tree'], why: 'called by config-write, layers-wrapper, rig, propose' },
+  { pattern: 'tools/check_corepointer.ts', suites: ['core-pointer', 'tree'], why: 'called by core-pointer suite' },
+  { pattern: 'tools/check_cut_material.ts', suites: ['requirements', 'tree'], why: 'called by requirements suite' },
+  { pattern: 'tools/check_depthmaps.ts', suites: ['depth-maps', 'tree'], why: 'called by depth-maps suite' },
+  { pattern: 'tools/check_depthsheets.ts', suites: ['layers-wrapper', 'rig', 'comfy', 'tree'], why: 'called by layers-wrapper, rig, comfy' },
+  { pattern: 'tools/check_diffcomponents.ts', suites: ['cli', 'assemble', 'assemble-examples', 'tree'], why: 'called by cli, assemble, assemble-examples' },
+  { pattern: 'tools/check_diffdrafts.ts', suites: ['cli', 'assemble', 'tree'], why: 'called by cli and assemble' },
+  { pattern: 'tools/check_edge_residual.ts', suites: ['assemble', 'tree'], why: 'called by assemble suite' },
+  { pattern: 'tools/check_edited_part_writer.ts', suites: ['editor-receipts', 'tree'], why: 'called by editor-receipts suite' },
+  { pattern: 'tools/check_edited_parts.ts', suites: ['editor-receipts', 'depth-maps', 'config', 'tree'], why: 'called by editor-receipts, depth-maps, config' },
+  { pattern: 'tools/check_editor_receipts.ts', suites: ['editor-receipts', 'tree'], why: 'called by editor-receipts suite' },
+  { pattern: 'tools/check_explicitmesh.ts', suites: ['config', 'rig', 'tree'], why: 'called by config suite' },
+  { pattern: 'tools/check_external_receipt.ts', suites: ['cli', 'tree'], why: 'called by cli suite' },
+  { pattern: 'tools/check_extremes.ts', suites: ['check', 'tree'], why: 'called by check suite' },
+  { pattern: 'tools/check_file_references.ts', suites: ['config', 'tree'], why: 'called by config suite' },
+  { pattern: 'tools/check_foot_ownership.ts', suites: ['foot-ownership', 'tree'], why: 'called by foot-ownership suite' },
+  { pattern: 'tools/check_front_slot.ts', suites: ['front-slot', 'tree'], why: 'called by front-slot suite' },
+  { pattern: 'tools/check_gather_optout.ts', suites: ['limb-slots', 'tree'], why: 'called by limb-slots suite' },
+  { pattern: 'tools/check_ground.ts', suites: ['config', 'assemble', 'ground-examples', 'tree'], why: 'called by config, assemble, ground-examples' },
+  { pattern: 'tools/check_hybrid_limb.ts', suites: ['hybrid-limb', 'requirements', 'tree'], why: 'called by hybrid-limb and requirements' },
+  { pattern: 'tools/check_joint_contact.ts', suites: ['joint-contact', 'tree'], why: 'called by joint-contact suite' },
+  { pattern: 'tools/check_layer_bounds.ts', suites: ['layers-wrapper', 'tree'], why: 'called by layers-wrapper suite' },
+  { pattern: 'tools/check_limb_layout.ts', suites: ['limb-layout', 'tree'], why: 'called by limb-layout suite' },
+  { pattern: 'tools/check_limb_slots.ts', suites: ['limb-slots', 'tree'], why: 'called by limb-slots suite' },
+  { pattern: 'tools/check_named_cut_skirt.ts', suites: ['propose', 'tree'], why: 'called by propose suite' },
+  { pattern: 'tools/check_neck_bust.ts', suites: ['propose', 'tree'], why: 'called by propose suite' },
+  { pattern: 'tools/check_neck_draft.ts', suites: ['layers-wrapper', 'rig', 'tree'], why: 'called by layers-wrapper and rig' },
+  { pattern: 'tools/neck-propose.ts', suites: ['layers-wrapper', 'rig', 'propose', 'tree'], why: 'called by check_neck_draft and check_neck_bust' },
+  { pattern: 'tools/check_occluders.ts', suites: ['assemble', 'comfy', 'tree'], why: 'called by assemble and comfy' },
+  { pattern: 'tools/check_outline_specks.ts', suites: ['editor-receipts', 'tree'], why: 'called by editor-receipts suite' },
+  { pattern: 'tools/check_painting_allocation.ts', suites: ['assemble', 'tree'], why: 'called by assemble suite' },
+  { pattern: 'tools/check_painting_edges.ts', suites: ['assemble', 'tree'], why: 'called by assemble suite' },
+  { pattern: 'tools/check_painting_extension.ts', suites: ['assemble', 'tree'], why: 'called by assemble suite' },
+  { pattern: 'tools/check_painting_extension_examples.ts', suites: ['assemble', 'tree'], why: 'painting extension example helper' },
+  { pattern: 'tools/check_painting_outline.ts', suites: ['assemble', 'tree'], why: 'called by assemble suite' },
+  { pattern: 'tools/check_painting_owner.ts', suites: ['assemble', 'tree'], why: 'called by assemble suite' },
+  { pattern: 'tools/check_part_sources.ts', suites: ['part-sources', 'tree'], why: 'called by part-sources suite' },
+  { pattern: 'tools/check_part_visibility.ts', suites: ['assemble', 'tree'], why: 'called by assemble suite' },
+  { pattern: 'tools/read_visibility_coverage.ts', suites: ['assemble', 'tree'], why: 'called by check_part_visibility in assemble' },
+  { pattern: 'tools/check_pinholes.ts', suites: ['assemble', 'tree'], why: 'called by assemble suite' },
+  { pattern: 'tools/check_plate.ts', suites: ['comfy', 'tree'], why: 'called by comfy suite' },
+  { pattern: 'tools/check_project_config.ts', suites: ['config', 'tree'], why: 'called by config suite' },
+  { pattern: 'tools/check_requirements_named.ts', suites: ['assemble', 'tree'], why: 'called by assemble suite' },
+  { pattern: 'tools/check_revision_chain.ts', suites: ['config', 'remesh', 'retune', 'tree'], why: 'called by config, remesh, retune' },
+  { pattern: 'tools/check_row_guard.ts', suites: ['tree', 'check'], why: 'called by tree and check' },
+  { pattern: 'tools/check_row_reference.ts', suites: ['tree'], why: 'called by TY823 in tree suite' },
+  { pattern: 'tools/check_row_scope.ts', suites: ['tree', 'check'], why: 'called by tree and check' },
+  { pattern: 'tools/check_seam_cells.ts', suites: ['check', 'tree'], why: 'called by check suite' },
+  { pattern: 'tools/check_seam_config.ts', suites: ['config', 'tree'], why: 'called by config suite' },
+  { pattern: 'tools/check_seethrough_transform.ts', suites: ['comfy', 'tree'], why: 'called by comfy suite' },
+  { pattern: 'tools/check_set_anchor.ts', suites: ['config', 'tree'], why: 'called by config suite' },
+  { pattern: 'tools/check_set_focus.ts', suites: ['alternate-tips', 'tree'], why: 'called by alternate-tips suite' },
+  { pattern: 'tools/check_setup_painting.ts', suites: ['setup-painting', 'tree'], why: 'called by setup-painting suite' },
+  { pattern: 'tools/check_source_exposure.ts', suites: ['boundary-colour', 'tree'], why: 'called by boundary-colour suite' },
+  { pattern: 'tools/check_subset_cap.ts', suites: ['subset-cover', 'tree'], why: 'called by subset-cover suite' },
+  { pattern: 'tools/check_subset_cover.ts', suites: ['subset-cover', 'tree'], why: 'called by subset-cover suite' },
+  { pattern: 'tools/check_support_domains.ts', suites: ['check', 'tree'], why: 'called by check suite' },
+  { pattern: 'tools/check_take_cleanup.ts', suites: ['take-layers', 'tree'], why: 'called by take-layers suite' },
+  { pattern: 'tools/check_take_footprint.ts', suites: ['take-layers', 'tree'], why: 'called by take-layers suite' },
+  { pattern: 'tools/check_take_layers.ts', suites: ['take-layers', 'tree'], why: 'called by take-layers suite' },
+  { pattern: 'tools/check_take_plan_order.ts', suites: ['take-layers', 'tree'], why: 'called by take-layers suite' },
+  { pattern: 'tools/check_take_region.ts', suites: ['assemble', 'take-layers', 'tree'], why: 'called by assemble and take-layers' },
+  { pattern: 'tools/observe_take_footprint.ts', suites: ['take-layers', 'tree'], why: 'called by check_take_footprint in take-layers' },
+  { pattern: 'tools/check_turn_*.ts', suites: ['rig', 'build', 'tree'], why: 'turn control modules called by rig and build suites' },
+  { pattern: 'tools/check_visibility.ts', suites: ['comfy', 'tree'], why: 'called by comfy suite' },
+  { pattern: 'tools/check_waist*.ts', suites: ['waist', 'tree'], why: 'called by waist suite' },
+  { pattern: 'tools/check_yield_contour.ts', suites: ['assemble', 'tree'], why: 'called by assemble suite' },
+  { pattern: 'tools/expected_form.ts', suites: ['tree', 'chain'], why: 'called by tree and chain' },
+  { pattern: 'tools/fixtures/**', suites: ['tree', 'check'], why: 'tools/fixtures/motion_seam_controls.ts called by tree and check' },
+  { pattern: 'tools/parts_file_*.ts', suites: ['parts', 'tree'], why: 'parts.json field census and reference checks in parts suite' },
+  { pattern: 'tools/parts_reader_fixture.ts', suites: ['parts', 'tree'], why: 'called by parts suite' },
+  { pattern: 'tools/auto_*.ts', suites: ['auto-mesh', 'auto-motion', 'contour', 'contour-wiring', 'build-cost', 'tree'], why: 'auto-mesh and auto-motion survey helpers' },
+  { pattern: 'tools/feature_contour_*.ts', suites: ['auto-mesh', 'tree'], why: 'called by auto-mesh suite' },
+  { pattern: 'tools/production_trial*.ts', suites: ['auto-mesh', 'scene', 'tree'], why: 'called by auto-mesh and scene' },
+  { pattern: 'tools/veto_tally.ts', suites: ['auto-motion', 'auto-mesh', 'raster-resize', 'contour-wiring', 'tree'], why: 'mesh reduction veto tally helper' },
+  { pattern: 'tools/weight_rule_survey.ts', suites: ['auto-mesh', 'tree'], why: 'called by auto-mesh suite' },
+  { pattern: 'tools/local_compare.ts', suites: ['depth-maps', 'contour-wiring', 'auto-mesh', 'build-cost', 'propose', 'assemble', 'scene', 'mesh-draft', 'tree'], why: 'local rig comparison helper' },
+  { pattern: 'tools/real_compare.ts', suites: ['raster-morph', 'contour', 'contour-wiring', 'auto-mesh', 'build-cost', 'requirements', 'hybrid-limb', 'remesh', 'tree'], why: 'real rig comparison helper' },
+  { pattern: 'tools/edited-part-cli.ts', suites: ['editor-receipts', 'cli', 'tree'], why: 'edited part CLI helper' },
+  { pattern: 'tools/contourdraft.ts', suites: ['contour', 'contour-wiring', 'mesh-draft', 'tree'], why: 'contour draft helper' },
+  { pattern: 'tools/compare_neck_origin.ts', suites: ['propose', 'rig', 'tree'], why: 'neck origin comparison helper' },
+  { pattern: 'tools/hybrid_limb_*.ts', suites: ['hybrid-limb', 'requirements', 'tree'], why: 'hybrid limb acceptance and identity helpers' },
+  { pattern: 'tools/idle_cost.ts', suites: ['build-cost', 'auto-motion', 'tree'], why: 'idle cost measurement helper' },
+  { pattern: 'tools/measure_authored_unit_depth.ts', suites: ['layers-wrapper', 'assemble', 'tree'], why: 'authored unit depth measurement tool' },
+  { pattern: 'tools/measure_edge_residual.ts', suites: ['assemble', 'tree'], why: 'edge residual measurement tool' },
+  { pattern: 'tools/measure_take_region.ts', suites: ['take-layers', 'assemble', 'tree'], why: 'take region measurement tool' },
+  { pattern: 'tools/measure_turn_*.ts', suites: ['rig', 'build', 'tree'], why: 'turn blend and unit precedence measurement tools' },
+  { pattern: 'tools/{amplitude_survey,arm_seam_survey,back_hair_survey,bend_survey,cap_survey,case_clock_sample,cloth_*,compose_*,contour_*,cut_*,density_survey,depth_*,dial_*,edge_survey,eye_*,face_*,falloff_survey,foot_*,fringe_*,ground_*,hair_*,head_*,hem_*,island_draft_survey,joint_*,limb_*,loop_*,mesh_*,motion_*,neck_*,occluder_*,offfigure_survey,outfit_*,outline_survey,overlap_*,pack_*,painting_*,part_*,physics_*,pinhole_*,plate_*,pose_*,project_*,propose_*,reach_*,region_*,remesh_*,retune_*,rig_*,seam_*,set_*,setup_*,sheet_*,skirt_*,sleeve_*,slot_*,source_*,split_*,squeeze_*,strand_*,subset_*,support_*,take_*,tear_survey,tip_survey,torso_*,turn_*,under_*,waist_*,weight_*,wind_*,wrist_*,yield_*}.ts', suites: ['tree'], why: 'offline survey and measurement tools scanned by tree' },
 
   // 6. fixtures/ files
-  { pattern: 'fixtures/validation-inputs/**', suites: ['chain', 'tree', 'run-tally'], why: 'golden validation-inputs expected outputs checked by chain and TY22/expectedFormCases in tree' },
-  { pattern: 'fixtures/edge_split.ts', suites: ['assemble', 'config', 'tree', 'run-tally'], jobs: ['standalone-tools'], why: 'executed by bun test ./fixtures/edge_split.ts in test job' },
-  { pattern: 'fixtures/alternate_cut_layers.ts', suites: ['assemble', 'alternate-layers', 'tree', 'run-tally'], why: 'imported by assemble and alternate-layers' },
-  { pattern: 'fixtures/alternate_layers.ts', suites: ['alternate-layers', 'take-layers', 'tree', 'run-tally'], why: 'imported by alternate-layers and take-layers' },
-  { pattern: 'fixtures/arm_split_upgrade.ts', suites: ['arm-split-upgrade', 'layers-wrapper', 'rig', 'propose', 'tree', 'run-tally'], why: 'imported by arm-split-upgrade, layers-wrapper, rig, propose' },
-  { pattern: 'fixtures/artist.ts', suites: ['cli', 'assemble', 'build', 'tree', 'run-tally'], why: 'imported by cli, assemble, build' },
-  { pattern: 'fixtures/authored_unit_depth.ts', suites: ['layers-wrapper', 'tree', 'run-tally'], why: 'imported by check_authored_unit_depth in layers-wrapper' },
-  { pattern: 'fixtures/bust.ts', suites: ['contour-wiring', 'tree', 'run-tally'], why: 'imported by contour-wiring' },
-  { pattern: 'fixtures/busy_ground.ts', suites: ['config', 'assemble', 'ground-examples', 'tree', 'run-tally'], why: 'imported by check_ground in config, assemble, ground-examples' },
-  { pattern: 'fixtures/chain_inherit.ts', suites: ['chain-inherit', 'tree', 'run-tally'], why: 'imported by chain-inherit' },
-  { pattern: 'fixtures/check_options.ts', suites: ['cli', 'build', 'tree', 'run-tally'], why: 'imported by cli and build' },
-  { pattern: 'fixtures/checkrig.ts', suites: ['behind-seams', 'requirements', 'fixed-skeleton', 'setup-painting', 'boundary-colour', 'check', 'tree', 'run-tally'], why: 'check rig fixture helper' },
-  { pattern: 'fixtures/classified_plate.ts', suites: ['comfy', 'tree', 'run-tally'], why: 'imported by check_classified_plate in comfy' },
-  { pattern: 'fixtures/cloth.ts', suites: ['config', 'config-write', 'rig', 'propose', 'influence', 'tree', 'run-tally'], why: 'cloth fixture helper' },
-  { pattern: 'fixtures/comfyharness.ts', suites: ['comfy', 'tree', 'run-tally'], jobs: ['standalone-tools'], why: 'fake ComfyUI server harness' },
-  { pattern: 'fixtures/configwrite.ts', suites: ['config-write', 'arm-split-upgrade', 'tree', 'run-tally'], why: 'imported by config-write and arm-split-upgrade' },
-  { pattern: 'fixtures/contour-turn.ts', suites: ['rig', 'build', 'tree', 'run-tally'], why: 'imported by rig and build suites' },
-  { pattern: 'fixtures/corepointer.ts', suites: ['core-pointer', 'tree', 'run-tally'], why: 'imported by core-pointer suite' },
-  { pattern: 'fixtures/crop_edge_checks.ts', suites: ['assemble', 'tree', 'run-tally'], why: 'imported by assemble suite' },
-  { pattern: 'fixtures/editor_receipts.ts', suites: ['editor-receipts', 'part-sources', 'depth-maps', 'config', 'rig', 'tree', 'run-tally'], why: 'imported by editor-receipts, part-sources, depth-maps, config, rig' },
-  { pattern: 'fixtures/explicitmesh.ts', suites: ['config', 'rig', 'tree', 'run-tally'], why: 'imported by check_explicitmesh in config and rig' },
-  { pattern: 'fixtures/fakecomfy.ts', suites: ['comfy', 'tree', 'run-tally'], jobs: ['standalone-tools'], why: 'imported by comfy suite' },
-  { pattern: 'fixtures/fakematte.ts', suites: ['comfy', 'tree', 'run-tally'], jobs: ['standalone-tools'], why: 'imported by tools/check_matte.ts' },
-  { pattern: 'fixtures/foot_ownership.ts', suites: ['foot-ownership', 'alternate-tips', 'alternate-layers', 'tree', 'run-tally'], why: 'imported by foot-ownership, alternate-tips, alternate-layers' },
-  { pattern: 'fixtures/front_slot.ts', suites: ['front-slot', 'assemble', 'tree', 'run-tally'], why: 'imported by front-slot and assemble' },
-  { pattern: 'fixtures/head_crop_preflight_checks.ts', suites: ['propose', 'tree', 'run-tally'], why: 'imported by propose suite' },
-  { pattern: 'fixtures/hidden_extent.ts', suites: ['config', 'assemble', 'tree', 'run-tally'], why: 'imported by config and assemble' },
-  { pattern: 'fixtures/hybrid_limb.ts', suites: ['hybrid-limb', 'requirements', 'tree', 'run-tally'], why: 'imported by hybrid-limb and requirements' },
-  { pattern: 'fixtures/limb_slots.ts', suites: ['limb-slots', 'limb-layout', 'tree', 'run-tally'], why: 'imported by limb-slots and limb-layout' },
-  { pattern: 'fixtures/mannequin.ts', suites: ['propose', 'tree', 'run-tally'], why: 'imported by propose suite' },
-  { pattern: 'fixtures/meshdraft.ts', suites: ['mesh-draft', 'influence', 'remesh', 'retune', 'config', 'tree', 'run-tally'], why: 'imported by mesh-draft, influence, remesh, retune, config' },
-  { pattern: 'fixtures/named_cut_skirt.ts', suites: ['propose', 'tree', 'run-tally'], why: 'imported by check_named_cut_skirt in propose' },
-  { pattern: 'fixtures/neck_draft.ts', suites: ['layers-wrapper', 'rig', 'propose', 'tree', 'run-tally'], why: 'imported by check_neck_draft in layers-wrapper, rig, propose' },
-  { pattern: 'fixtures/occluder_chain.ts', suites: ['assemble', 'take-layers', 'comfy', 'tree', 'run-tally'], why: 'imported by assemble, take-layers, comfy' },
-  { pattern: 'fixtures/painting*.ts', suites: ['painting', 'assemble', 'tree', 'run-tally'], why: 'painting and painting-edge fixtures in painting and assemble' },
-  { pattern: 'fixtures/painting_edge_*.json', suites: ['assemble', 'tree', 'run-tally'], why: 'painting edge fixture JSONs read by check_painting_edges in assemble' },
-  { pattern: 'fixtures/parts_check_checks.ts', suites: ['assemble', 'tree', 'run-tally'], why: 'imported by assemble suite' },
-  { pattern: 'fixtures/poses.ts', suites: ['propose', 'keypoints', 'diagnostics', 'tree', 'run-tally'], why: 'imported by propose, keypoints, diagnostics' },
-  { pattern: 'fixtures/propose.ts', suites: ['propose', 'keypoints', 'structure', 'diagnostics', 'influence', 'tree', 'run-tally'], why: 'propose fixture builder' },
-  { pattern: 'fixtures/reqrig.ts', suites: ['requirements', 'scene', 'tree', 'run-tally'], why: 'requirements rig fixture builder' },
-  { pattern: 'fixtures/rider.ts', suites: ['propose', 'check', 'tree', 'run-tally'], why: 'rider fixture builder imported by propose and check' },
-  { pattern: 'fixtures/rigc_run_clock*.ts', suites: ['build', 'comfy', 'tree', 'run-tally'], jobs: ['standalone-tools'], why: 'imported by build, comfy, and tools/check_run_clock.ts' },
-  { pattern: 'fixtures/scene.ts', suites: ['scene', 'tree', 'run-tally'], why: 'imported by scene suite' },
-  { pattern: 'fixtures/setupbackdrop.ts', suites: ['setup-painting', 'tree', 'run-tally'], why: 'imported by setup-painting suite' },
-  { pattern: 'fixtures/setupfigure.ts', suites: ['setup-painting', 'config', 'tree', 'run-tally'], why: 'imported by setup-painting and config' },
-  { pattern: 'fixtures/soft_occluder.ts', suites: ['assemble', 'tree', 'run-tally'], why: 'imported by assemble suite' },
-  { pattern: 'fixtures/source_cover_checks.ts', suites: ['assemble', 'tree', 'run-tally'], why: 'imported by assemble suite' },
-  { pattern: 'fixtures/squeeze.ts', suites: ['propose', 'check', 'tree', 'run-tally'], why: 'imported by propose and check' },
-  { pattern: 'fixtures/subset_cover.ts', suites: ['subset-cover', 'alternate-tips', 'alternate-layers', 'tree', 'run-tally'], why: 'imported by subset-cover, alternate-tips, alternate-layers' },
-  { pattern: 'fixtures/take_layers.ts', suites: ['take-layers', 'assemble', 'tree', 'run-tally'], why: 'imported by take-layers and assemble' },
-  { pattern: 'fixtures/take_region.ts', suites: ['take-layers', 'assemble', 'tree', 'run-tally'], why: 'imported by take-layers and assemble' },
-  { pattern: 'fixtures/turn_*.ts', suites: ['rig', 'build', 'scene', 'tree', 'run-tally'], why: 'turn fixture builders imported by rig, build, and scene' },
-  { pattern: 'fixtures/validation_ground.ts', suites: ['ground-examples', 'tree', 'run-tally'], why: 'imported by ground-examples suite' },
-  { pattern: 'fixtures/validation_hole.ts', suites: ['chain', 'tree', 'run-tally'], why: 'imported by chain suite' },
-  { pattern: 'fixtures/validation_metadata.ts', suites: ['structure', 'tree', 'run-tally'], why: 'imported by structure suite' },
-  { pattern: 'fixtures/validation_pinholes.ts', suites: ['assemble-examples', 'tree', 'run-tally'], why: 'imported by assemble-examples suite' },
-  { pattern: 'fixtures/validation_readers.ts', suites: ['propose-corpus', 'structure', 'inputs-examples', 'tree', 'run-tally'], why: 'imported by propose-corpus, structure, inputs-examples' },
-  { pattern: 'fixtures/waist.ts', suites: ['waist', 'tree', 'run-tally'], why: 'imported by waist suite' },
-  { pattern: 'fixtures/yield_contour.ts', suites: ['assemble', 'tree', 'run-tally'], why: 'imported by check_yield_contour in assemble' },
-  { pattern: 'fixtures/yield_rim.ts', suites: ['assemble', 'tree', 'run-tally'], why: 'imported by assemble suite' },
-  { pattern: 'fixtures/automesh.ts', suites: ['auto-mesh', 'auto-mesh-examples', 'auto-motion', 'build-cost', 'winding', 'contour', 'contour-wiring', 'tree', 'run-tally'], why: 'auto-mesh fixture builder' },
-  { pattern: 'fixtures/automotion.ts', suites: ['auto-motion', 'auto-mesh', 'auto-mesh-examples', 'build-cost', 'contour-wiring', 'tree', 'run-tally'], why: 'auto-motion fixture builder' },
-  { pattern: 'fixtures/contour.ts', suites: ['contour', 'contour-wiring', 'auto-mesh', 'auto-motion', 'build-cost', 'winding', 'behind-seams', 'loop', 'tree', 'run-tally'], why: 'shared contour fixture builder' },
-  { pattern: 'fixtures/localfield.ts', suites: ['contour-wiring', 'depth-maps', 'raster-morph', 'hybrid-limb', 'tree', 'run-tally'], why: 'local field fixture builder' },
-  { pattern: 'fixtures/assemble_fixture.ts', suites: ['assemble', 'assemble-examples', 'ground-examples', 'layers-wrapper', 'layers-psd', 'subset-cover', 'foot-ownership', 'hybrid-limb', 'take-layers', 'plausibility', 'tree', 'run-tally'], why: 'synthetic assemble fixture builder' },
-  { pattern: 'fixtures/rig.ts', suites: ['rig', 'waist', 'chain-inherit', 'front-slot', 'limb-slots', 'limb-layout', 'arm-split-upgrade', 'mesh-draft', 'mesh-stats', 'influence', 'remesh', 'retune', 'tree', 'run-tally'], why: 'synthetic rig fixture builder' },
-  { pattern: 'fixtures/structure.ts', suites: ['structure', 'keypoints', 'painting', 'plausibility', 'fetch-examples', 'prompt', 'tree', 'run-tally'], why: 'synthetic structure fixture builder' },
-  { pattern: 'fixtures/synthetic.ts', suites: ['layers-wrapper', 'layers-psd', 'inputs', 'plausibility', 'tree', 'run-tally'], why: 'flat colour block synthetic fixture generator' },
-  { pattern: 'fixtures/{oracle_assemble,project_band_controls,underpieces}.ts', suites: ['assemble', 'tree', 'run-tally'], why: 'assemble fixture helpers' },
-  { pattern: 'fixtures/reference-demo-auto-turn-1.79.1.config.json', suites: ['config', 'rig', 'tree', 'run-tally'], why: 'reference-demo auto-turn config fixture' },
+  { pattern: 'fixtures/validation-inputs/**', suites: ['chain', 'tree'], why: 'golden validation-inputs expected outputs checked by chain and TY22/expectedFormCases in tree' },
+  { pattern: 'fixtures/edge_split.ts', suites: ['assemble', 'config', 'tree'], jobs: ['standalone-tools'], why: 'executed by bun test ./fixtures/edge_split.ts in test job' },
+  { pattern: 'fixtures/alternate_cut_layers.ts', suites: ['assemble', 'alternate-layers', 'tree'], why: 'imported by assemble and alternate-layers' },
+  { pattern: 'fixtures/alternate_layers.ts', suites: ['alternate-layers', 'take-layers', 'tree'], why: 'imported by alternate-layers and take-layers' },
+  { pattern: 'fixtures/arm_split_upgrade.ts', suites: ['arm-split-upgrade', 'layers-wrapper', 'rig', 'propose', 'tree'], why: 'imported by arm-split-upgrade, layers-wrapper, rig, propose' },
+  { pattern: 'fixtures/artist.ts', suites: ['cli', 'assemble', 'build', 'tree'], why: 'imported by cli, assemble, build' },
+  { pattern: 'fixtures/authored_unit_depth.ts', suites: ['layers-wrapper', 'tree'], why: 'imported by check_authored_unit_depth in layers-wrapper' },
+  { pattern: 'fixtures/bust.ts', suites: ['contour-wiring', 'tree'], why: 'imported by contour-wiring' },
+  { pattern: 'fixtures/busy_ground.ts', suites: ['config', 'assemble', 'ground-examples', 'tree'], why: 'imported by check_ground in config, assemble, ground-examples' },
+  { pattern: 'fixtures/chain_inherit.ts', suites: ['chain-inherit', 'tree'], why: 'imported by chain-inherit' },
+  { pattern: 'fixtures/check_options.ts', suites: ['cli', 'build', 'tree'], why: 'imported by cli and build' },
+  { pattern: 'fixtures/checkrig.ts', suites: ['behind-seams', 'requirements', 'fixed-skeleton', 'setup-painting', 'boundary-colour', 'check', 'tree'], why: 'check rig fixture helper' },
+  { pattern: 'fixtures/classified_plate.ts', suites: ['comfy', 'tree'], why: 'imported by check_classified_plate in comfy' },
+  { pattern: 'fixtures/cloth.ts', suites: ['config', 'config-write', 'rig', 'propose', 'influence', 'tree'], why: 'cloth fixture helper' },
+  { pattern: 'fixtures/comfyharness.ts', suites: ['comfy', 'tree'], jobs: ['standalone-tools'], why: 'fake ComfyUI server harness' },
+  { pattern: 'fixtures/configwrite.ts', suites: ['config-write', 'arm-split-upgrade', 'tree'], why: 'imported by config-write and arm-split-upgrade' },
+  { pattern: 'fixtures/contour-turn.ts', suites: ['rig', 'build', 'tree'], why: 'imported by rig and build suites' },
+  { pattern: 'fixtures/corepointer.ts', suites: ['core-pointer', 'tree'], why: 'imported by core-pointer suite' },
+  { pattern: 'fixtures/crop_edge_checks.ts', suites: ['assemble', 'tree'], why: 'imported by assemble suite' },
+  { pattern: 'fixtures/editor_receipts.ts', suites: ['editor-receipts', 'part-sources', 'depth-maps', 'config', 'rig', 'tree'], why: 'imported by editor-receipts, part-sources, depth-maps, config, rig' },
+  { pattern: 'fixtures/explicitmesh.ts', suites: ['config', 'rig', 'tree'], why: 'imported by check_explicitmesh in config and rig' },
+  { pattern: 'fixtures/fakecomfy.ts', suites: ['comfy', 'tree'], jobs: ['standalone-tools'], why: 'imported by comfy suite' },
+  { pattern: 'fixtures/fakematte.ts', suites: ['comfy', 'tree'], jobs: ['standalone-tools'], why: 'imported by tools/check_matte.ts' },
+  { pattern: 'fixtures/foot_ownership.ts', suites: ['foot-ownership', 'alternate-tips', 'alternate-layers', 'tree'], why: 'imported by foot-ownership, alternate-tips, alternate-layers' },
+  { pattern: 'fixtures/front_slot.ts', suites: ['front-slot', 'assemble', 'tree'], why: 'imported by front-slot and assemble' },
+  { pattern: 'fixtures/head_crop_preflight_checks.ts', suites: ['propose', 'tree'], why: 'imported by propose suite' },
+  { pattern: 'fixtures/hidden_extent.ts', suites: ['config', 'assemble', 'tree'], why: 'imported by config and assemble' },
+  { pattern: 'fixtures/hybrid_limb.ts', suites: ['hybrid-limb', 'requirements', 'tree'], why: 'imported by hybrid-limb and requirements' },
+  { pattern: 'fixtures/limb_slots.ts', suites: ['limb-slots', 'limb-layout', 'tree'], why: 'imported by limb-slots and limb-layout' },
+  { pattern: 'fixtures/mannequin.ts', suites: ['propose', 'tree'], why: 'imported by propose suite' },
+  { pattern: 'fixtures/meshdraft.ts', suites: ['mesh-draft', 'influence', 'remesh', 'retune', 'config', 'tree'], why: 'imported by mesh-draft, influence, remesh, retune, config' },
+  { pattern: 'fixtures/named_cut_skirt.ts', suites: ['propose', 'tree'], why: 'imported by check_named_cut_skirt in propose' },
+  { pattern: 'fixtures/neck_draft.ts', suites: ['layers-wrapper', 'rig', 'propose', 'tree'], why: 'imported by check_neck_draft in layers-wrapper, rig, propose' },
+  { pattern: 'fixtures/occluder_chain.ts', suites: ['assemble', 'take-layers', 'comfy', 'tree'], why: 'imported by assemble, take-layers, comfy' },
+  { pattern: 'fixtures/painting*.ts', suites: ['painting', 'assemble', 'tree'], why: 'painting and painting-edge fixtures in painting and assemble' },
+  { pattern: 'fixtures/painting_edge_*.json', suites: ['assemble', 'tree'], why: 'painting edge fixture JSONs read by check_painting_edges in assemble' },
+  { pattern: 'fixtures/parts_check_checks.ts', suites: ['assemble', 'tree'], why: 'imported by assemble suite' },
+  { pattern: 'fixtures/poses.ts', suites: ['propose', 'keypoints', 'diagnostics', 'tree'], why: 'imported by propose, keypoints, diagnostics' },
+  { pattern: 'fixtures/propose.ts', suites: ['propose', 'keypoints', 'structure', 'diagnostics', 'influence', 'tree'], why: 'propose fixture builder' },
+  { pattern: 'fixtures/reqrig.ts', suites: ['requirements', 'scene', 'tree'], why: 'requirements rig fixture builder' },
+  { pattern: 'fixtures/rider.ts', suites: ['propose', 'check', 'tree'], why: 'rider fixture builder imported by propose and check' },
+  { pattern: 'fixtures/rigc_run_clock*.ts', suites: ['build', 'comfy', 'tree'], jobs: ['standalone-tools'], why: 'imported by build, comfy, and tools/check_run_clock.ts' },
+  { pattern: 'fixtures/scene.ts', suites: ['scene', 'tree'], why: 'imported by scene suite' },
+  { pattern: 'fixtures/setupbackdrop.ts', suites: ['setup-painting', 'tree'], why: 'imported by setup-painting suite' },
+  { pattern: 'fixtures/setupfigure.ts', suites: ['setup-painting', 'config', 'tree'], why: 'imported by setup-painting and config' },
+  { pattern: 'fixtures/soft_occluder.ts', suites: ['assemble', 'tree'], why: 'imported by assemble suite' },
+  { pattern: 'fixtures/source_cover_checks.ts', suites: ['assemble', 'tree'], why: 'imported by assemble suite' },
+  { pattern: 'fixtures/squeeze.ts', suites: ['propose', 'check', 'tree'], why: 'imported by propose and check' },
+  { pattern: 'fixtures/subset_cover.ts', suites: ['subset-cover', 'alternate-tips', 'alternate-layers', 'tree'], why: 'imported by subset-cover, alternate-tips, alternate-layers' },
+  { pattern: 'fixtures/take_layers.ts', suites: ['take-layers', 'assemble', 'tree'], why: 'imported by take-layers and assemble' },
+  { pattern: 'fixtures/take_region.ts', suites: ['take-layers', 'assemble', 'tree'], why: 'imported by take-layers and assemble' },
+  { pattern: 'fixtures/turn_*.ts', suites: ['rig', 'build', 'scene', 'tree'], why: 'turn fixture builders imported by rig, build, and scene' },
+  { pattern: 'fixtures/validation_ground.ts', suites: ['ground-examples', 'tree'], why: 'imported by ground-examples suite' },
+  { pattern: 'fixtures/validation_hole.ts', suites: ['chain', 'tree'], why: 'imported by chain suite' },
+  { pattern: 'fixtures/validation_metadata.ts', suites: ['structure', 'tree'], why: 'imported by structure suite' },
+  { pattern: 'fixtures/validation_pinholes.ts', suites: ['assemble-examples', 'tree'], why: 'imported by assemble-examples suite' },
+  { pattern: 'fixtures/validation_readers.ts', suites: ['propose-corpus', 'structure', 'inputs-examples', 'tree'], why: 'imported by propose-corpus, structure, inputs-examples' },
+  { pattern: 'fixtures/waist.ts', suites: ['waist', 'tree'], why: 'imported by waist suite' },
+  { pattern: 'fixtures/yield_contour.ts', suites: ['assemble', 'tree'], why: 'imported by check_yield_contour in assemble' },
+  { pattern: 'fixtures/yield_rim.ts', suites: ['assemble', 'tree'], why: 'imported by assemble suite' },
+  { pattern: 'fixtures/automesh.ts', suites: ['auto-mesh', 'auto-mesh-examples', 'auto-motion', 'build-cost', 'winding', 'contour', 'contour-wiring', 'tree'], why: 'auto-mesh fixture builder' },
+  { pattern: 'fixtures/automotion.ts', suites: ['auto-motion', 'auto-mesh', 'auto-mesh-examples', 'build-cost', 'contour-wiring', 'tree'], why: 'auto-motion fixture builder' },
+  { pattern: 'fixtures/contour.ts', suites: ['contour', 'contour-wiring', 'auto-mesh', 'auto-motion', 'build-cost', 'winding', 'behind-seams', 'loop', 'tree'], why: 'shared contour fixture builder' },
+  { pattern: 'fixtures/localfield.ts', suites: ['contour-wiring', 'depth-maps', 'raster-morph', 'hybrid-limb', 'tree'], why: 'local field fixture builder' },
+  { pattern: 'fixtures/assemble_fixture.ts', suites: ['assemble', 'assemble-examples', 'ground-examples', 'layers-wrapper', 'layers-psd', 'subset-cover', 'foot-ownership', 'hybrid-limb', 'take-layers', 'plausibility', 'tree'], why: 'synthetic assemble fixture builder' },
+  { pattern: 'fixtures/rig.ts', suites: ['rig', 'waist', 'chain-inherit', 'front-slot', 'limb-slots', 'limb-layout', 'arm-split-upgrade', 'mesh-draft', 'mesh-stats', 'influence', 'remesh', 'retune', 'tree'], why: 'synthetic rig fixture builder' },
+  { pattern: 'fixtures/structure.ts', suites: ['structure', 'keypoints', 'painting', 'plausibility', 'fetch-examples', 'prompt', 'tree'], why: 'synthetic structure fixture builder' },
+  { pattern: 'fixtures/synthetic.ts', suites: ['layers-wrapper', 'layers-psd', 'inputs', 'plausibility', 'tree'], why: 'flat colour block synthetic fixture generator' },
+  { pattern: 'fixtures/{oracle_assemble,project_band_controls,underpieces}.ts', suites: ['assemble', 'tree'], why: 'assemble fixture helpers' },
+  { pattern: 'fixtures/reference-demo-auto-turn-1.79.1.config.json', suites: ['config', 'rig', 'tree'], why: 'reference-demo auto-turn config fixture' },
 ];
 
 export function matchPathRule(file: string, map: readonly MapRule[] = PATH_TO_SUITE_MAP): MapRule | null {
@@ -479,24 +480,71 @@ export function readSelftestRegistry(selftestSource?: string): SelftestRegistry 
   const shardsEnd = text.indexOf('];', shardsStart);
   const shardsText = text.slice(shardsStart, shardsEnd);
   const shards: Array<readonly [string, readonly string[]]> = [];
-  const suiteUnits = new Map<string, string[]>();
   for (const m of shardsText.matchAll(/\['(\d+)',\s*\[([\s\S]*?)\]\]/g)) {
     const shardId = m[1];
     const units: string[] = [];
     for (const um of m[2].matchAll(/'([^']+)'/g)) {
-      const u = um[1];
-      units.push(u);
-      const suite = u.split('@')[0];
-      const list = suiteUnits.get(suite) ?? [];
-      list.push(u);
-      suiteUnits.set(suite, list);
+      units.push(um[1]);
     }
     shards.push([shardId, units]);
   }
+
+  // Canonical split-suite unit replay order from selftest.ts (suiteUnits(key, [])), never shard order.
+  const valFeatMatch = /const VALIDATION_FEATURES\s*=\s*\[([\s\S]*?)\]\s*as const;/.exec(text);
+  if (valFeatMatch === null) throw new Error('ci_tier: cannot find VALIDATION_FEATURES in selftest.ts');
+  const valFeatures = [...valFeatMatch[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+
+  const cl26Match = /const CL26_COMMAND_SETS:[\s\S]*?=\s*\[([\s\S]*?)\];/.exec(text);
+  if (cl26Match === null) throw new Error('ci_tier: cannot find CL26_COMMAND_SETS in selftest.ts');
+  const cl26Letters = [...cl26Match[1].matchAll(/\['([A-Z])',/g)].map((m) => m[1].toLowerCase());
+
+  const cliStart = text.indexOf('function cliCaseGroups(): readonly CliCaseGroup[] {');
+  if (cliStart < 0) throw new Error('ci_tier: cannot find cliCaseGroups in selftest.ts');
+  const cliEnd = text.indexOf('\nfunction ', cliStart + 1);
+  const cliBody = text.slice(cliStart, cliEnd < 0 ? text.length : cliEnd);
+  const cliUnits: string[] = [];
+  for (const m of cliBody.matchAll(/\['([a-z-]+)',\s*\(say\)\s*=>|\.\.\.CL26_COMMAND_SETS\.map\(/g)) {
+    if (m[1] !== undefined) cliUnits.push(`cli@${m[1]}`);
+    else for (const l of cl26Letters) cliUnits.push(`cli@usage-${l}`);
+  }
+
+  const checkStart = text.indexOf('function checkCaseGroups(): readonly CheckCaseGroup[] {');
+  if (checkStart < 0) throw new Error('ci_tier: cannot find checkCaseGroups in selftest.ts');
+  const checkEnd = text.indexOf('\nfunction ', checkStart + 1);
+  const checkBody = text.slice(checkStart, checkEnd < 0 ? text.length : checkEnd);
+  const checkUnits: string[] = [];
+  for (const m of checkBody.matchAll(/\[(?:'([a-z-]+)'|(\w+)\.name),\s*\(_?scope/g)) {
+    checkUnits.push(`check@${m[1] ?? m[2]}`);
+  }
+
+  const suiteUnits = new Map<string, readonly string[]>();
   for (const k of workerKeys) {
-    if (!suiteUnits.has(k)) suiteUnits.set(k, [k]);
+    if (k === 'chain') {
+      suiteUnits.set(k, [...VALIDATION_VARIANTS, ...valFeatures.map((g) => `feature-${g}`), 'end'].map((p) => `chain@${p}`));
+    } else if (k === 'readme-loop') {
+      suiteUnits.set(k, ['loop-plain', 'loop-posed', 'loop-cloth', 'end'].map((p) => `readme-loop@${p}`));
+    } else if (k === 'assemble-examples') {
+      suiteUnits.set(k, ['standard', 'end'].map((p) => `assemble-examples@${p}`));
+    } else if (k === 'check') {
+      suiteUnits.set(k, checkUnits);
+    } else if (k === 'cli') {
+      suiteUnits.set(k, cliUnits);
+    } else {
+      suiteUnits.set(k, [k]);
+    }
   }
   suiteUnits.set('run-tally', ['run-tally']);
+
+  const shardUnitSet = new Set(shards.flatMap(([, units]) => units));
+  const canonicalWorkerUnits = workerKeys.flatMap((k) => suiteUnits.get(k) ?? []);
+  if (
+    canonicalWorkerUnits.length !== shardUnitSet.size ||
+    canonicalWorkerUnits.some((u) => !shardUnitSet.has(u))
+  ) {
+    throw new Error(
+      `ci_tier: canonical suiteUnits (${canonicalWorkerUnits.length}) and SHARDS (${shardUnitSet.size}) disagree`,
+    );
+  }
 
   const reg: SelftestRegistry = { suites, allSuiteKeys, startedFirst, dispatchOrder, shards, suiteUnits };
   if (selftestSource === undefined) cachedRegistry = reg;
@@ -615,7 +663,7 @@ export function resolveSelftestDiffSuites(
     return { full: true, suites: [], reason: 'selftest.ts-no-hunks' };
   }
   const idx = buildSelftestFunctionIndex(selftestSource);
-  const touched = new Set<string>(['tree', 'run-tally']);
+  const touched = new Set<string>(['tree']);
   for (const h of hunks) {
     const start = Number(h[1]);
     const count = h[2] === undefined ? 1 : Number(h[2]);
@@ -627,6 +675,13 @@ export function resolveSelftestDiffSuites(
           full: true,
           suites: [],
           reason: `selftest.ts:${line}${fn !== undefined ? ` (${fn.name})` : ' (top-level)'}`,
+        };
+      }
+      if (fn.suites.includes('run-tally')) {
+        return {
+          full: true,
+          suites: [],
+          reason: `run-tally:selftest.ts:${line} (${fn.name})`,
         };
       }
       for (const s of fn.suites) touched.add(s);
@@ -700,7 +755,7 @@ export function planCiTier(input: PlanCiTierInput): CiTierPlan {
     reasons.push('empty-diff');
   }
 
-  const selectedSuites = new Set<string>(['tree', 'run-tally']);
+  const selectedSuites = new Set<string>(['tree']);
   const selectedJobs = new Set<CiJobFlag>(['install-ubuntu']);
 
   for (const file of input.changedFiles) {
@@ -708,6 +763,11 @@ export function planCiTier(input: PlanCiTierInput): CiTierPlan {
     if (rule === null) {
       isFull = true;
       reasons.push(`unmapped:${file}`);
+      continue;
+    }
+    if (rule.suites.includes('run-tally')) {
+      isFull = true;
+      reasons.push(`run-tally:${file}`);
       continue;
     }
     if (rule.tier === 'full') {
@@ -722,7 +782,7 @@ export function planCiTier(input: PlanCiTierInput): CiTierPlan {
   if (!isFull && input.changedFiles.includes('selftest.ts')) {
     if (input.selftestDiff !== undefined && input.selftestDiff.trim() !== '') {
       const resolved = resolveSelftestDiffSuites(input.selftestDiff, input.selftestSource);
-      if (resolved.full) {
+      if (resolved.full || resolved.suites.includes('run-tally')) {
         isFull = true;
         reasons.push(resolved.reason ?? 'selftest.ts-outside-suite-fn');
       } else {
@@ -736,7 +796,7 @@ export function planCiTier(input: PlanCiTierInput): CiTierPlan {
 
   const orderedSuites = isFull
     ? [...reg.dispatchOrder, 'run-tally']
-    : [...reg.dispatchOrder.filter((k) => selectedSuites.has(k)), ...(selectedSuites.has('run-tally') ? ['run-tally'] : [])];
+    : reg.dispatchOrder.filter((k) => selectedSuites.has(k));
 
   const suiteSet = new Set(orderedSuites);
   const shardUnits: Record<'1' | '2' | '3' | '4' | '5', readonly string[]> = {
@@ -994,6 +1054,10 @@ export function mergeLightShards(dir: string, selectedSuites: readonly string[])
   }
 
   const suiteSet = new Set(selectedSuites);
+  if (suiteSet.has('run-tally')) {
+    console.error('rig-parts selftest: light tier cannot run "run-tally" (paths mapping to run-tally must run the full tier)');
+    return 2;
+  }
   const expectedUnits = reg.shards.flatMap(([, units]) => units.filter((u) => suiteSet.has(u.split('@')[0])));
   const byUnit = new Map<string, LightUnitRun>();
   for (const r of records) {
@@ -1078,26 +1142,12 @@ export function mergeLightShards(dir: string, selectedSuites: readonly string[])
       });
     }
 
-    if (suiteSet.has('run-tally')) {
-      ranSuites.push('run-tally');
-      const preTallyFaults = tallyFaults(tally.blocks, tally.gutter, tally.total);
-      tally.of('run-tally', () => {
-        console.log('\n── run-tally: the light-tier shard merge accounts for every selected suite ──');
-        if (preTallyFaults.length === 0 && tally.total > 0) {
-          console.log(`  PASS  RT_LIGHT_MERGE_TALLY_ACCOUNTED: ${ranSuites.length} selected suite(s) tallied over ${tally.total} case line(s) with 0 tally faults`);
-          return 0;
-        }
-        console.log(`  FAIL  RT_LIGHT_MERGE_TALLY_ACCOUNTED: ${preTallyFaults.join('; ') || '0 case lines tallied'}`);
-        return 1;
-      });
-    } else {
-      skippedSuites.push('run-tally');
-      tally.of('run-tally', () => {
-        console.log('\n── run-tally ──');
-        console.log('  SKIP  run-tally: not run — --only');
-        return null;
-      });
-    }
+    skippedSuites.push('run-tally');
+    tally.of('run-tally', () => {
+      console.log('\n── run-tally ──');
+      console.log('  SKIP  run-tally: not run — --only');
+      return null;
+    });
   } finally {
     console.log = origLog;
   }

@@ -22,7 +22,7 @@
  *      1 on a planted failure.
  */
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { treeFiles } from '../selftest.ts';
@@ -1099,7 +1099,11 @@ export async function runCiTierChecks(quiet = false): Promise<void> {
       changedFiles: pr.files,
     });
     assert.equal(plan.tier, pr.expectedTier, `PR #${pr.number} tier mismatch: got ${plan.tier}, expected ${pr.expectedTier}`);
-    assert.ok(plan.suites.includes('tree') && plan.suites.includes('run-tally'), `PR #${pr.number} must include tree and run-tally`);
+    assert.ok(
+      plan.suites.includes('tree') &&
+        (plan.tier === 'full' ? plan.suites.includes('run-tally') : !plan.suites.includes('run-tally')),
+      `PR #${pr.number} must include tree (and run-tally iff full tier)`,
+    );
     assert.deepEqual(plan.requiredChecks, ['test', 'installs']);
     if (plan.tier === 'light') lightCount++;
     else fullCount++;
@@ -1209,6 +1213,40 @@ export async function runCiTierChecks(quiet = false): Promise<void> {
   const outsideSuiteHunk = resolveSelftestDiffSuites('@@ -1,2 +1,3 @@\n+// top-level header edit outside suite fns\n');
   assert.equal(outsideSuiteHunk.full, true);
 
+  // Planted controls for paths and hunks that map to run-tally: must force full tier so real RT01..RT33 controls run.
+  const measurePlan = planCiTier({
+    eventName: 'pull_request',
+    prTitle: 'fix(selftest): adjust measurement helper',
+    changedFiles: ['scripts/selftest_measure.ts'],
+  });
+  assert.equal(measurePlan.tier, 'full', 'scripts/selftest_measure.ts must force full tier so real run-tally controls run');
+  assert.ok(measurePlan.reasons.includes('run-tally:scripts/selftest_measure.ts'), 'reasons must name run-tally:scripts/selftest_measure.ts');
+  assert.equal(measurePlan.suites.length, reg.allSuiteKeys.length);
+  assert.ok(measurePlan.suites.includes('run-tally'));
+
+  const prefixesPlan = planCiTier({
+    eventName: 'pull_request',
+    prTitle: 'fix(selftest): adjust prefix helper',
+    changedFiles: ['scripts/selftest_prefixes.ts'],
+  });
+  assert.equal(prefixesPlan.tier, 'full', 'scripts/selftest_prefixes.ts must force full tier so real run-tally controls run');
+  assert.ok(prefixesPlan.reasons.includes('run-tally:scripts/selftest_prefixes.ts'), 'reasons must name run-tally:scripts/selftest_prefixes.ts');
+  assert.equal(prefixesPlan.suites.length, reg.allSuiteKeys.length);
+
+  const runTallyFn = idx.ranges.find((r) => r.name === 'runTallySuite');
+  assert.ok(runTallyFn !== undefined, 'runTallySuite must exist in selftest.ts function index');
+  const runTallyHunkPlan = planCiTier({
+    eventName: 'pull_request',
+    prTitle: 'test(selftest): update runTallySuite control',
+    changedFiles: ['selftest.ts'],
+    selftestDiff: `@@ -${runTallyFn.startLine + 2},1 +${runTallyFn.startLine + 2},2 @@\n+  // inside runTallySuite\n`,
+  });
+  assert.equal(runTallyHunkPlan.tier, 'full', 'editing runTallySuite in selftest.ts must force full tier');
+  assert.ok(
+    runTallyHunkPlan.reasons.some((r) => r.startsWith('run-tally:selftest.ts:')),
+    `expected run-tally:selftest.ts reason, got ${runTallyHunkPlan.reasons.join(', ')}`,
+  );
+
   // Bar 4: A release-shaped PR runs the full tier.
   log('=== Bar 4: Release-shaped PR detector ===');
   for (const title of ['chore: release 2.56.0', 'chore(main): release 2.56.0-rc.1', 'release: v2.56.0']) {
@@ -1285,10 +1323,25 @@ export async function runCiTierChecks(quiet = false): Promise<void> {
       schedule?: Array<{ cron?: string }>;
       workflow_dispatch?: { inputs?: Record<string, { default?: string }> };
     };
-    jobs?: Record<string, { name?: string; if?: string; needs?: string | string[] }>;
+    jobs?: Record<
+      string,
+      {
+        name?: string;
+        if?: string;
+        needs?: string | string[];
+        steps?: Array<{ name?: string; uses?: string; run?: string }>;
+      }
+    >;
   };
   assert.equal(ciDoc.on?.schedule?.[0]?.cron, '17 3 * * *', 'ci.yml must schedule daily full run at 17 3 * * * (03:17 UTC)');
   assert.equal(ciDoc.on?.workflow_dispatch?.inputs?.tier?.default, 'full', 'ci.yml workflow_dispatch tier input must default to full');
+  const treeVerdictSteps = ciDoc.jobs?.['tree-verdict']?.steps ?? [];
+  const installStepIdx = treeVerdictSteps.findIndex((s) => s.run === 'bun install --frozen-lockfile');
+  const checkTierStepIdx = treeVerdictSteps.findIndex((s) => (s.run ?? '').includes('scripts/check_ci_tier.ts'));
+  assert.ok(
+    installStepIdx >= 0 && installStepIdx < checkTierStepIdx,
+    'tree-verdict job must run bun install --frozen-lockfile before check_ci_tier.ts and ci_tier.ts plan',
+  );
   assert.equal(ciDoc.jobs?.['test-status']?.name, 'test', 'test-status job must keep display name "test"');
   assert.equal(ciDoc.jobs?.['test-status']?.if, 'always()', 'test-status job must run in both tiers under if: always()');
   assert.ok(ciDoc.jobs?.installs !== undefined, 'installs job must exist in ci.yml');
@@ -1299,17 +1352,108 @@ export async function runCiTierChecks(quiet = false): Promise<void> {
     'receipt-eligible must guard tree-verdict-receipt to full-tier non-scheduled runs',
   );
 
-  // Exercise mergeLightShards on synthetic green and red shard records (and a real fast shard run on png).
+  // Verify canonical split-suite unit ordering in readSelftestRegistry (never shard order).
+  const checkUnits = reg.suiteUnits.get('check') ?? [];
+  assert.equal(checkUnits[0], 'check@fixtures', 'check@fixtures must be the first canonical unit of check');
+  assert.ok(
+    checkUnits.indexOf('check@fixtures') < checkUnits.indexOf('check@runPlantedFeetCases'),
+    'check@fixtures (shard 5) must replay before check@runPlantedFeetCases (shard 1)',
+  );
+  const cliUnits = reg.suiteUnits.get('cli') ?? [];
+  assert.equal(cliUnits[0], 'cli@receipts', 'cli@receipts must be the first canonical unit of cli');
+  assert.ok(
+    cliUnits.indexOf('cli@receipts') < cliUnits.indexOf('cli@usage-b'),
+    'cli@receipts (shard 3) must replay before cli@usage-b (shard 1)',
+  );
+  const chainUnits = reg.suiteUnits.get('chain') ?? [];
+  assert.equal(chainUnits[0], 'chain@standard', 'chain@standard must be the first canonical unit of chain');
+  assert.equal(chainUnits.at(-1), 'chain@end', 'chain@end must be the last canonical unit of chain');
+  assert.ok(
+    chainUnits.indexOf('chain@feature-readme-cloth') < chainUnits.indexOf('chain@end'),
+    'chain@feature-readme-cloth must replay before chain@end',
+  );
+  assert.deepEqual(reg.suiteUnits.get('readme-loop'), [
+    'readme-loop@loop-plain',
+    'readme-loop@loop-posed',
+    'readme-loop@loop-cloth',
+    'readme-loop@end',
+  ]);
+  assert.deepEqual(reg.suiteUnits.get('assemble-examples'), [
+    'assemble-examples@standard',
+    'assemble-examples@end',
+  ]);
+
+  // Exercise mergeLightShards on synthetic shard records for a split suite (readme-loop, where loop-cloth is in shard 2
+  // and loop-posed + end are in shard 3, and check, where runPlantedFeetCases is in shard 1 and fixtures is in shard 5)
+  // plus a real fast shard run on png.
   const tmp = mkdtempSync(join(tmpdir(), 'rig-parts-ci-tier-check-'));
   try {
+    const splitShardsDir = join(tmp, 'split-shards');
+    mkdirSync(splitShardsDir, { recursive: true });
+    for (const [shardId, units] of reg.shards) {
+      const checkAndReadmeUnits = units
+        .filter((u) => u.startsWith('check@') || u.startsWith('readme-loop@'))
+        .map((u) => {
+          const isHead = u === 'check@fixtures' || u === 'readme-loop@loop-plain';
+          const suite = u.split('@')[0];
+          const header = isHead ? `\n── ${suite}: synthetic split-suite replay check ──\n` : '';
+          return {
+            key: u,
+            status: 0,
+            signal: null,
+            stdout: `${header}  PASS  ${u.replace(/[^A-Za-z0-9_]/g, '_').toUpperCase()}: ok\n`,
+            stderr: '',
+            result: JSON.stringify({ returned: 0 }),
+            began: 0,
+            ended: 1,
+          };
+        });
+      writeFileSync(
+        join(splitShardsDir, `shard-${shardId}.json`),
+        `${JSON.stringify({
+          spec: 'rig-parts-selftest-shard/2',
+          shard: shardId,
+          jobs: 2,
+          cores: 2,
+          units: checkAndReadmeUnits,
+        })}\n`,
+      );
+    }
+    const replayedLines: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: unknown[]): void => {
+      replayedLines.push(args.map(String).join(' '));
+    };
+    let splitMergeCode = 2;
+    try {
+      splitMergeCode = mergeLightShards(splitShardsDir, ['check', 'readme-loop']);
+    } finally {
+      console.log = origLog;
+    }
+    assert.equal(splitMergeCode, 0, 'mergeLightShards on split suites check and readme-loop must exit 0');
+    const replayedText = replayedLines.join('\n');
+    assert.ok(
+      replayedText.indexOf('CHECK_FIXTURES') < replayedText.indexOf('CHECK_RUNPLANTEDFEETCASES'),
+      'mergeLightShards must replay check@fixtures (shard 5) before check@runPlantedFeetCases (shard 1)',
+    );
+    assert.ok(
+      replayedText.indexOf('README_LOOP_LOOP_POSED') < replayedText.indexOf('README_LOOP_LOOP_CLOTH') &&
+        replayedText.indexOf('README_LOOP_LOOP_CLOTH') < replayedText.indexOf('README_LOOP_END'),
+      'mergeLightShards must replay readme-loop units in canonical order (loop-posed before loop-cloth before end)',
+    );
+
+    // Planted refusal: mergeLightShards refuses run-tally in light mode with exit 2
+    const refusedRunTally = mergeLightShards(splitShardsDir, ['check', 'run-tally']);
+    assert.equal(refusedRunTally, 2, 'mergeLightShards must refuse run-tally in light mode with exit 2');
+
     const shardsDir = join(tmp, 'shards');
-    const selected = ['png', 'run-tally'];
+    const selected = ['png'];
     for (const s of ['1', '2', '3', '4', '5']) {
       const code = await runLightShard(s, join(shardsDir, `shard-${s}.json`), selected);
-      assert.equal(code, 0, `light shard ${s} on [png, run-tally] must exit 0`);
+      assert.equal(code, 0, `light shard ${s} on [png] must exit 0`);
     }
     const greenMerge = mergeLightShards(shardsDir, selected);
-    assert.equal(greenMerge, 0, 'mergeLightShards on green [png, run-tally] shards must exit 0');
+    assert.equal(greenMerge, 0, 'mergeLightShards on green [png] shards must exit 0');
 
     // Plant a failing control in the shard record holding png and verify mergeLightShards exits 1
     let plantedPng = false;
