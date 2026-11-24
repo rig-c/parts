@@ -34,6 +34,9 @@ function relocateAssemblyFiles(raw: unknown, relocate: (value: string) => string
       fields(take, ['run_dir', 'st_input']);
       fields(take.reference, ['painting']);
     }
+    if (object(raw.assemble.editor_receipts)) {
+      for (const receipt of entries(raw.assemble.editor_receipts.receipts)) fields(receipt, ['file']);
+    }
   }
   if (object(raw.limbs)) {
     for (const limb of Object.values(raw.limbs).filter(object)) {
