@@ -193,9 +193,7 @@ The README loop pasted uncorrected stops where the README says to read
 ## The build, by figure
 
 The current build's gate and pack lines are in [`expected/gate_spine-html.txt`](expected/gate_spine-html.txt),
-its seam, loop and `check` bar figures (`BREATH_VISIBLE`, `BLINK_NO_HOLE`, `CHAIN_LAG`,
-`TIP_OVER_ROOT`, `STILL_REGIONS_DARK`, `TEXTURE_STRETCH`, `ANIMATIONS_DO_NOT_FOLD`,
-`STRESS_OFF_CHAIN` and `RECOMPOSITE_HOLES`) in [`expected/check.json`](expected/check.json),
+its seam, loop and `check` bar figures in [`expected/check.json`](expected/check.json),
 and its per-mesh vertex and triangle counts in [`expected/mesh_report.json`](expected/mesh_report.json).
 
 `--seam silhouette` changes little here: recomposite error pixels 14,570 → 14,534,
