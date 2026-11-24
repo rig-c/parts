@@ -382,31 +382,37 @@ jobs:
         shell: bash
         env:
           RIG_PARTS_SELFTEST_JOBS: '1'
+          # On Windows, exercise the Markdown reads in build, editor-receipts, and tree,
+          # including the tree rule for heading-sensitive reads (issue #1524).
+          BUILD_CONTROL_SUITES: ${{ matrix.os == 'windows-latest' && 'build,editor-receipts,tree' || 'build' }}
         run: |
           set +e
           summary="$RUNNER_TEMP/build-controls-summary.json"
           rm -f "$summary"
-          bun selftest.ts --only build --summary-json "$summary"
+          bun selftest.ts --only "$BUILD_CONTROL_SUITES" --summary-json "$summary"
           status=$?
           # Exit 2 also means broken accounting (including overlong log lines).
           # Require the measured green partial verdict, not just its exit code.
           test "$status" -eq 2 || exit 1
-          node --input-type=module - "$summary" <<'JS'
+          node --input-type=module - "$summary" "$BUILD_CONTROL_SUITES" <<'JS'
           import assert from 'node:assert/strict';
           import { readFileSync } from 'node:fs';
           const summary = JSON.parse(readFileSync(process.argv[2], 'utf8'));
           assert.equal(summary.spec, 'rig-selftest-summary/1');
           assert.equal(summary.exit, 2);
           assert.equal(summary.partial, true);
-          assert.deepEqual(summary.only, ['build']);
+          const selected = process.argv[3].split(',');
+          assert.deepEqual(summary.only, selected);
           assert.deepEqual(summary.faults, []);
           assert.equal(summary.totals.failed, 0);
           assert.equal(summary.totals.holes, 0);
-          const build = summary.suites.find(suite => suite.suite === 'build');
-          assert.equal(build?.status, 'pass');
-          assert.equal(build?.ran, true);
-          assert.ok(build.controls > 0);
-          assert.equal(build.failed, 0);
+          for (const name of selected) {
+            const suite = summary.suites.find(entry => entry.suite === name);
+            assert.equal(suite?.status, 'pass', name);
+            assert.equal(suite.ran, true, name);
+            assert.ok(suite.controls > 0, name);
+            assert.equal(suite.failed, 0, name);
+          }
           JS
 
   # Preserve the required check name in both tiers.
