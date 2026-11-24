@@ -28,10 +28,10 @@ bytes, named in *Since 1.0.0-rc.1*: the skinning envelope's reference (#169).
 | --- | --- | --- |
 | npm package | the former name | `rig-parts`; the alias `spine-parts` is published beside it at every version, the same files with only the `name` in `package.json` changed |
 | command | the former name | `rig-parts`; the install also keeps the alias `spine-parts` as a second command on the same launcher, for the transition |
-| repository | the former repository name (GitHub redirects it) | `firejune/rig-parts` |
+| repository | the former repository name (GitHub redirects it) | `rig-c/parts` (then `firejune/rig-parts`, moved after 1.5.3; *After 1.5.3* below) |
 | selftest variables | the `SPINE_PARTS_` names | `RIG_PARTS_CORPUS`, `RIG_PARTS_SELFTEST_JOBS`, each read first, with the former `SPINE_PARTS_` name read when it is not set |
 | spec ids of the files authors write and this package writes | `spine-parts-requirements/1`, `spine-parts-scene/1`, `spine-parts-keypoints/1`, `spine-parts-bonemap/1`, `spine-parts-basis/1`, `spine-parts-scene-report/1` | unchanged: they name a file format, not the tool, so a file written before the rename still reads |
-| public examples repository | `spine-parts-examples` | unchanged (it keeps the name it was published under) |
+| public examples repository | the former examples repository name (GitHub redirects it) | `rig-c/examples` |
 
 What to do: install with `npm install -g @rig-c/parts` and write `rig-parts` in scripts.
 A script or a dependant that names the alias `spine-parts` keeps working and keeps
