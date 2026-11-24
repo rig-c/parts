@@ -189,8 +189,10 @@ catalogues, dated or machine-specific figures, version history, or licence text
 beyond a pointer. A feature PR adds at most one line to it. Put reference detail
 in AUTHORING or STABILITY; move existing content mechanically and preserve every
 inbound heading as a one-sentence link stub. Repoint content-reading tests in the
-same change. Link documents outside the package's `files` with absolute GitHub
-URLs so npm readers can reach them.
+same change. In README.md, links and images to files of this repository are
+relative paths, whether or not the file ships: the package page renders them
+against the `repository` field (owner's ruling 2026-11-24, measured that day on
+published pages).
 
 `bun run check:readme` enforces the word cap, second-level heading allowlist and
 dated-measurement rules, with automated planted failures. The cap is the post-cut
