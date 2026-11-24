@@ -211,6 +211,23 @@ The README loop pasted uncorrected stops where the README says to read
 `--seam silhouette` changes little here: recomposite error pixels 14,570 → 14,534,
 uncovered 2,939 under both. The README's animation is the default build's.
 
+### The picture on the package README
+
+The package README shows the painting, this build's idle loop and the contact sheet of its
+parts. The corrections behind the build are in *The two corrections* above and the lines
+`check` printed are in the table above.
+
+The loop is that build's indexed APNG, 40 frames at 12 fps, 703,909 bytes, one
+256-entry palette at a measured error of max 71, mean 0.636 per channel over every
+frame (the lossless APNG beside it, the exactness record, is 4,449,233 bytes; the
+GIF, at the same error, 760,058). The rig's hair, skirt, sleeves, bows and earrings
+carry physics, which rigc's render starts from rest, so the idle is played three
+periods ahead and the loop is the fourth: the frame one period after its first differs
+from it by max 1 level, 0 px over 40 (`--lead-in`). Frame 29 (2.417 s) is the
+closed eye: the blink holds for 0.084 s, one 12 fps frame rounded up; the painting is
+shown at half size, resampled and written by this package's PNG codec (nothing here
+encodes JPEG). `rig-parts sheet` made the contact sheet.
+
 ## Gestures, expressions and trailing strands
 
 Issue #224 gave the character named animations beside the idle and physics on its

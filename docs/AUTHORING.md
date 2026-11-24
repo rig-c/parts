@@ -113,6 +113,16 @@ head run on `st_input_head.png` is what gives the eyes more pixels
   crops; at the 1024 the examples ran, the full run's right eye white is 22×13 px
   and the head run's 60×38: the head run is still needed.
 
+### See-through Space input source reading
+
+Use the square `inputs` outputs on the Space too. Its [app calls `apply_layerdiff`](https://huggingface.co/spaces/24yearsold/see-through-demo/blob/049a1ab07908e404aad03f73431dd1a98f88202c/app.py#L110-L118),
+which [calls `center_square_pad_resize`](https://huggingface.co/spaces/24yearsold/see-through-demo/blob/049a1ab07908e404aad03f73431dd1a98f88202c/common/utils/inference_utils.py#L78-L83).
+That [preprocessing function](https://huggingface.co/spaces/24yearsold/see-through-demo/blob/049a1ab07908e404aad03f73431dd1a98f88202c/common/utils/cv.py#L254-L274)
+pads a non-square upload before resizing; the centre-crop reported in
+[#356](https://github.com/rig-c/parts/issues/356) is not the current source path.
+`st_input_full.png` supplies the explicit white padding that rig-parts maps back
+to the original painting. This is a source inspection, not a new demo run.
+
 ## 2. The folder
 
 Nothing in rig-parts requires a layout; every command takes paths. The one the
@@ -1023,6 +1033,42 @@ existing geometry refusal and its message.
 
 Region take entries accept the same optional `crop` and use this transport before
 selecting the seeded component on the target run canvas.
+
+### How much of a rig the model painted
+
+`parts.json` splits each part's opaque pixels (`opaque_px`) into `visible_px` — no
+later layer of its See-through run is opaque in front of them — and `occluded_px`,
+and counts the visible ones whose colour was not taken from the painting
+(`visible_not_projected_px`). On the four examples, from the totals of their
+`expected/parts.json` (the default `--project core`; `scarf`'s painting patches are
+whole painting pixels, so they count as taken):
+
+| | opaque px | occluded | visible, not projected | taken from the painting |
+| --- | --- | --- | --- | --- |
+| `demo` | 362,441 | 69,098 (19.1 %) | 67,164 (18.5 %) | 226,179 (62.4 %) |
+| `scarf` | 283,813 | 78,503 (27.7 %) | 56,699 (20.0 %) | 148,611 (52.4 %) |
+| `reference-sample` | 298,363 | 79,122 (26.5 %) | 35,979 (12.1 %) | 183,262 (61.4 %) |
+| `reference-demo` | 765,924 | 202,343 (26.4 %) | 75,626 (9.9 %) | 487,955 (63.7 %) |
+
+The occluded share is art the painting does not show — a back-hair layer, a neck, the
+parts of an ear under the hair — and is See-through's synthesis by necessity; it is
+what the decomposition is for. The visible-but-not-projected share is synthesis where
+the painting was there to be taken: a part too thin for the reference rule's 5x5
+eroded core, an anti-aliased fringe below alpha 250, a rim beside a layer in front, a
+pixel refused for drift. `--project visible` keeps the erosion only along a rim with a
+layer in front, which takes that share to 22,476 (7.5 %) on `reference-sample` and 49,672 (6.5 %)
+on `reference-demo` (from the `parts.json` of a `--project visible` build). On the eleven thin
+head parts — brows, lashes, irises, eye whites, ears, mouth — it takes 296 of
+`reference-sample`'s 1,289 visible pixels where `core` takes 110, and 824 of `reference-demo`'s 2,162
+where `core` takes 343. What neither rule takes is the fringe: a per-pixel
+classification of those parts under `visible`, recorded with the change that added
+the flag, puts 813 of `reference-sample`'s 993 still-unprojected pixels and 879 of `reference-demo`'s
+1,338 below alpha 250. Where such a fringe keeps the stack off the painting and a part
+beneath holds the pixel in the painting's colour, `assemble` clears it instead, and
+the assemble line and `parts.json` say how many pixels, of which part, over which
+(AUTHORING §5, *The fringe push-back*; the figures in this section were measured
+before it, at v0.14.0, but for the `demo` row, which is its `expected/parts.json`
+as this port wrote it in issue #227).
 
 ### Source projection cover (`source_cover.json`, issue #1158)
 
@@ -5969,6 +6015,25 @@ those settings. Changing a config seed alone cannot change a no-config run.
 | <a id="COMFY_PAINTING_SIZE"></a>`COMFY_PAINTING_SIZE` | the painting `comfy paint` got back is not twice the latent (a config with no `generation` block is `CONFIG_FIELD_PRESENT`, §6 *The config*) | `config.generation` |
 | <a id="CONFIG_POSE_CANVAS"></a><a id="CONFIG_POSE_KEYPOINTS"></a><a id="CONFIG_POSE_IN_CANVAS"></a>`CONFIG_POSE_CANVAS`, `CONFIG_POSE_KEYPOINTS`, `CONFIG_POSE_IN_CANVAS` | the pose file `generation.control.skeleton` names states another canvas than `generation.latent`, holds other than the 18 body-18 keypoints, or puts one off its canvas | the pose file (§3, the `generation.control.skeleton` row) |
 
+
+#### Source readings for the See-through graph
+
+`--offload` selects the wrapper's CUDA group-offload path on the **ComfyUI host**:
+its [LayerDiff and depth loaders](https://github.com/jtydhr88/ComfyUI-See-through/blob/98d754bf04f668647919ab750eccb0e0640faa81/nodes.py#L395-L475)
+call `enable_group_offload('cuda', ...)`. Omit it for a local Mac/MPS host. A Mac
+running this CLI may pass it to a remote CUDA host. This describes that offload
+path; it is not a claim that the remaining model stack has been verified on MPS.
+
+The [wrapper README at `98d754b`](https://github.com/jtydhr88/ComfyUI-See-through/blob/98d754bf04f668647919ab750eccb0e0640faa81/README.md#L22-L28)
+describes a combined Decompose node and names `24yearsold/seethroughv0.0.1_marigold`
+for depth. The shipped `workflows/seethrough.json` instead sends
+`SeeThrough_GenerateLayers`, `SeeThrough_GenerateDepth` and `SeeThrough_PostProcess`,
+and selects `layerdifforg/seethroughv0.0.1_marigold`, matching the wrapper's
+[implemented depth default](https://github.com/jtydhr88/ComfyUI-See-through/blob/98d754bf04f668647919ab750eccb0e0640faa81/nodes.py#L82-L85).
+Use the graph's node classes and the host's `/object_info` when checking the adapter.
+
+On the two reference examples each See-through run took 171–199 s through the wrapper, and on the
+demo 179 s (each run's `meta.json`, in [rig-c/examples](https://github.com/rig-c/examples)).
 
 #### See-through layer visibility
 
