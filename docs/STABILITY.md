@@ -1460,8 +1460,11 @@ file is in `check.json`, and no byte comparison this package makes reads them.
 
 Key order is fixed as shown: `spec`, `package`, `command`, `started_at`,
 `finished_at`, `config` (`build` only; `check` reads no config), `outputs`, `argv`.
-`package`, the two times (`SOURCE_DATE_EPOCH` included) and `config` are as in
-`rig-run/1`. `outputs` lists every file under the paths the run cleared and wrote —
+`package` and the two times (`SOURCE_DATE_EPOCH` included) are as in `rig-run/1`.
+`config` is the config's `sha256` and its path relative to the real `--out`
+directory, with the config's directory resolved through its links and the file's
+own name kept: a config given through a link is recorded by the link's name.
+`outputs` lists every file under the paths the run cleared and wrote —
 for `check`, the report files its `wrote` line names and the directories it names
 (`build/`, `idle_frames/`, …); for `build`, the paths it clears before it starts —
 sorted by `/`-separated `path` in UTF-16 code-unit order, each with the `sha256` of
@@ -1478,8 +1481,9 @@ separators, by path arithmetic from the working directory with no symlink resolv
 is written as given. These arguments reproduce the check with the same package
 version, run from the --out directory. A switch's default is not written, so a later
 version that changed it would replay differently; that is why the version is in
-`package`. The record is written after the report and is never a reason to refuse
-the check.
+`package`. The record is written after the report, in place, and is never a reason to refuse
+the check; a run killed while writing it can leave a partial record, and no other
+file.
 
 `rig-run/2` is stable on the same terms as `rig-run/1`.
 

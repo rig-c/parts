@@ -244,7 +244,7 @@ export const PATH_TO_SUITE_MAP: readonly MapRule[] = [
   { pattern: 'src/instruments.ts', suites: ['parts', 'rig', 'propose', 'requirements', 'readme-loop', 'tree'], why: 'geometric and raster check instruments' },
   { pattern: 'src/motionseampose.ts', suites: ['tree', 'check'], why: 'posed motion-seam evaluation' },
   { pattern: 'src/motionseams.ts', suites: ['tree', 'check'], why: 'motion-seam corridor and band evaluation' },
-  { pattern: 'src/outputpaths.ts', suites: ['check', 'scene', 'tree'], why: 'portable diagnostic output folder naming' },
+  { pattern: 'src/outputpaths.ts', suites: ['check', 'scene', 'build', 'tree'], why: 'portable diagnostic output folder naming, and makeOutDir for build\'s --out' },
   { pattern: 'src/physicscontrib.ts', suites: ['retune', 'check', 'tree'], why: 'PHYSICS_CONTRIBUTES check row owned by check and retune' },
   { pattern: 'src/supportdomains.ts', suites: ['check', 'parts', 'tree'], why: 'support domain check owned by check and parts' },
 

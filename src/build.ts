@@ -70,6 +70,7 @@ import { setFocusProblems } from './setfocus.ts';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+import { makeOutDir } from './outputpaths.ts';
 import { type AnimFrame, EncodeError, encodeApng, encodeIndexedApng, INDEXED_DEFAULTS } from './apng.ts';
 import { assemble, type AssembleResult, boxOf, cutLines, edgeSplitLines, ERROR_LIMIT, type ExcludedCount, excludedLines, setExclusions, islandLines, setIslandSources, type IslandCount, hiddenLines, SINGLE_RUN_FACE_TAGS, singleRunHeadBox, softOcclusionLine, driftLine, limbLines, FIGURE_MASK_FILE, figureMaskLines, figuresLine, groundWarning, holeKindsLine, holeLines, measurePinholes, measureRecomposite, pinholeProblems, pinholesLine, type ProjectRule, recomposite, recompositeRecord, scenePhrase, type SeamRule, sourceInRig, projectedStageFields, stageFields, uncoveredLine, underBox } from './assemble.ts';
 import { allocationClause, type Reducer, stageBClause, unboundedClause } from './automesh.ts';
@@ -1169,10 +1170,10 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
 
   // Emit only after green: every refusal above has already thrown.
   if (input.resetBuildOutput === true) resetBuildOutput(dirname(outs.partsJson));
-  mkdirSync(outs.partsDir, { recursive: true });
-  mkdirSync(dirname(outs.partsJson), { recursive: true });
-  mkdirSync(dirname(outs.recomposite), { recursive: true });
-  mkdirSync(dirname(outs.errorMap), { recursive: true });
+  makeOutDir(outs.partsDir);
+  makeOutDir(dirname(outs.partsJson));
+  makeOutDir(dirname(outs.recomposite));
+  makeOutDir(dirname(outs.errorMap));
   const paintingBytes = encodePngBytes(result.paintingInRig);
   result.parts.painting_in_rig = { path: PAINTING_IN_RIG_FILE,
     sha256: createHash('sha256').update(paintingBytes).digest('hex'), resample: 'lanczos3-rgb-opaque' };
@@ -2951,15 +2952,15 @@ export interface BuildRunners {
   scratch: string;
 }
 
-/** Every path `build` writes under `--out`, relative — and so every path it clears first. */
 /** The `rig-run/2` record `build` writes beside its outputs (issue #1541); cleared with them, so a refused build leaves none. */
 export const BUILD_RUN_FILE = 'build-run.json';
+/** Every path `build` writes under `--out`, relative — and so every path it clears first. */
 export const BUILD_OWNS: readonly string[] = ['parts', 'parts.json', SOURCE_COVER_FILE, PAINTING_IN_RIG_FILE, 'recomposite_rig.png', ERROR_MAP_FILE, 'rig', 'check', 'idle.gif', 'idle.png', 'idle-indexed.png', BUILD_RUN_FILE];
 /** The single files a build may also write at the top of its `--out`, cleared with {@link BUILD_OWNS}. */
 export const BUILD_OWNS_FILES: readonly string[] = [CUT_MATERIAL_SOURCES, EDGE_RESIDUAL_FILE, SUPPORT_DOMAINS_FILE, FIGURE_MASK_FILE];
 
 function resetBuildOutput(out: string): void {
-  mkdirSync(out, { recursive: true });
+  makeOutDir(out);
   for (const p of BUILD_OWNS) rmSync(join(out, p), { recursive: true, force: true });
   for (const p of BUILD_OWNS_FILES) rmSync(join(out, p), { force: true });
 }

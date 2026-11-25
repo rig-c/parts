@@ -9,7 +9,8 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, posix, resolve, win32 } from 'node:path';
 import { BUILD_RUN_FILE } from '../src/build.ts';
-import { argvPathFromOut, argvReplayProblems, type ArgvTable, CHECK_RUN_FILE, effectiveArgv, isRunRecordFile, recordArgv, RUN_RECORD_SPEC, type RunRecord } from '../src/runstamp.ts';
+import { makeOutDir } from '../src/outputpaths.ts';
+import { argvPathFromOut, argvReplayProblems, type ArgvTable, CHECK_RUN_FILE, effectiveArgv, isRunRecordFile, recordArgv, recordedConfigPath, RUN_RECORD_SPEC, type RunRecord } from '../src/runstamp.ts';
 
 type Say = (name: string, ok: boolean, detail: string, why: string) => void;
 
@@ -76,6 +77,34 @@ export function runRunRecordPureChecks(say: Say): void {
       !isRunRecordFile('check/check.json') && !isRunRecordFile('run.json.png') && eff.get('--alt')?.[0] === 'b=/w/in/b.png:/w/in/full',
     `build/run.json ${isRunRecordFile('build/run.json')}, ${CHECK_RUN_FILE} ${isRunRecordFile(CHECK_RUN_FILE)}, ${BUILD_RUN_FILE} ${isRunRecordFile(BUILD_RUN_FILE)}; build/skeleton.json ${isRunRecordFile('build/skeleton.json')}, check/check.json ${isRunRecordFile('check/check.json')}, run.json.png ${isRunRecordFile('run.json.png')}; --alt resolves to ${JSON.stringify(eff.get('--alt'))}`,
     'issue #1541: rigc\'s run.json carries its own clock, so a record that hashed it would differ between two runs of the same inputs');
+
+  // Bun on Windows refuses mkdirSync('.', { recursive: true }) with EEXIST (windows-latest CI, BU1541F's replay with
+  // --out . from the directory it names). The model below refuses the same way on every host, on `.`.
+  // makeOutDir hands it the resolved path; the plant is the call the build made before.
+  const made: string[] = [];
+  const windowsBun = (path: string): void => {
+    if (path === '.') throw new Error(`EEXIST: file already exists, mkdir '${path}'`);
+    made.push(path);
+  };
+  let fixed = 'made';
+  try { makeOutDir('.', windowsBun); } catch (e) { fixed = (e as Error).message; }
+  let planted = 'made';
+  try { windowsBun('.'); } catch (e) { planted = (e as Error).message; }
+  say('BU1541I_AN_OUT_THAT_IS_THE_WORKING_DIRECTORY_IS_MADE_BY_ITS_RESOLVED_PATH',
+    fixed === 'made' && made.length === 1 && made[0] === resolve('.') && planted.startsWith('EEXIST'),
+    `makeOutDir('.') ${fixed}, path handed over ${JSON.stringify(made[0])}; planted mkdirSync('.') ${JSON.stringify(planted)}`,
+    'issue #1541: build --out . run from that directory reached resetBuildOutput\'s mkdirSync(\'.\'), which Bun on Windows refuses');
+
+  // A config given through a link: the record names the link (its directory resolved, its own name kept), as rig-c
+  // core's render-run.json does; resolving the file itself, as rig-run/1 does, names the link's target instead.
+  const links: Record<string, string> = { '/w/out': '/w/out', '/w/cfg': '/w/store', '/w/cfg/config.json': '/w/store/shared.json' };
+  const real = (p: string): string => links[p] ?? p;
+  const kept = recordedConfigPath('/w/out', '/w/cfg/config.json', real, posix);
+  const followed = posix.relative(real('/w/out'), real('/w/cfg/config.json'));
+  say('BU1541J_A_LINKED_CONFIG_IS_RECORDED_BY_THE_LINK_NAME_WITH_ITS_DIRECTORY_RESOLVED',
+    kept === '../store/config.json' && followed === '../store/shared.json',
+    `recorded ${JSON.stringify(kept)}; planted (the file resolved too) ${JSON.stringify(followed)}`,
+    'issue #1541: a replay from --out reads what the link names when it runs, as rig-c core records an input');
 }
 
 /**

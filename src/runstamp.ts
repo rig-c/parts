@@ -99,6 +99,18 @@ function relativeToOutRoot(outDir: string, targetPath: string): string {
   return relative(realOut, realTarget).split(sep).join('/');
 }
 
+/**
+ * `config.path` in a `rig-run/2` record: relative to the real `--out` directory, the config's directory resolved through
+ * its links and the file's own name kept, `/`-separated. A config given through a link is recorded by the link's name,
+ * as rig-c core's render-run.json records an input (core issue #1770), so a replay reads what the link names then.
+ * `rig-run/1`'s `config.path` ({@link relativeToOutRoot}) still resolves the file itself and is unchanged.
+ * `real` and `api` are the resolution and path rules used, for the control.
+ */
+export function recordedConfigPath(outDir: string, configPath: string, real: (path: string) => string = realpathSync, api: PlatformPath = nodePath): string {
+  const absolute = api.resolve(configPath);
+  return api.relative(real(api.resolve(outDir)), api.join(real(api.dirname(absolute)), api.basename(absolute))).split(api.sep).join('/');
+}
+
 function relativeToCwd(cwd: string, targetPath: string): string {
   const rel = relative(resolve(cwd), resolve(cwd, targetPath)).split(sep).join('/');
   return rel === '' ? '.' : rel;
@@ -426,7 +438,7 @@ export function buildRunRecord(input: RunRecordInput): RunRecord {
     command: input.command,
     started_at: input.startedAt,
     finished_at: input.finishedAt,
-    ...(input.configPath === undefined ? {} : { config: { path: relativeToOutRoot(input.outDir, input.configPath), sha256: sha256OnDisk(input.configPath) } }),
+    ...(input.configPath === undefined ? {} : { config: { path: recordedConfigPath(input.outDir, input.configPath), sha256: sha256OnDisk(input.configPath) } }),
     outputs: paths.map((p) => ({ path: p, sha256: sha256OnDisk(join(input.outDir, ...p.split('/'))) })),
     argv: [...input.argv],
   };
