@@ -104,10 +104,11 @@ function relativeToOutRoot(outDir: string, targetPath: string): string {
  * its links and the file's own name kept, `/`-separated. A config given through a link is recorded by the link's name,
  * as rig-c core's render-run.json records an input (core issue #1770), so a replay reads what the link names then.
  * `rig-run/1`'s `config.path` ({@link relativeToOutRoot}) still resolves the file itself and is unchanged.
+ * The links are resolved by {@link linkRuleFor}'s rule, so on Windows the path is relative to `--out` as spelled.
  * `real` and `api` are the resolution and path rules used, for the control.
  */
-export function recordedConfigPath(outDir: string, configPath: string, real: (path: string) => string = realpathSync, api: PlatformPath = nodePath): string {
-  return relativeKeepingName(outDir, configPath, real, api).split(api.sep).join('/');
+export function recordedConfigPath(outDir: string, configPath: string, real?: (path: string) => string, api: PlatformPath = nodePath): string {
+  return relativeKeepingName(outDir, configPath, real ?? linkRuleFor(api), api).split(api.sep).join('/');
 }
 
 /**
@@ -121,8 +122,26 @@ function relativeKeepingName(outDir: string, path: string, real: (path: string) 
 }
 
 /** A directory through its links when it exists; as given when it does not (nothing on disk to resolve). */
-function realWhereItExists(path: string): string {
+export function realWhereItExists(path: string): string {
   return existsSync(path) ? realpathSync(path) : path;
+}
+
+/** A path as spelled: no link resolved. */
+function asSpelled(path: string): string {
+  return path;
+}
+
+/**
+ * The link rule a path is rebased to `--out` by, chosen by `api`'s platform: the rule its `..` follows when a replay
+ * runs from the `--out` directory. On POSIX `..` is the physical parent, and the working directory is reported by its
+ * real path, so both ends are resolved through their links ({@link realWhereItExists}). On Windows `..` is textual:
+ * measured (issue #1551, Bun 1.4.4 on Windows build 26100), a process started in a directory spelled through a
+ * junction reports that spelling as `process.cwd()` and resolves `..` against it, while `realpathSync` and
+ * `realpathSync.native` both resolve the junction; resolving the ends there climbed one level too many from the
+ * `--out` the run was given. So on Windows a path is rebased as spelled, from `--out` as the run was given it.
+ */
+export function linkRuleFor(api: PlatformPath): (path: string) => string {
+  return api.sep === '\\' ? asSpelled : realWhereItExists;
 }
 
 function relativeToCwd(cwd: string, targetPath: string): string {
@@ -338,9 +357,10 @@ export interface ArgvTable {
  * Measured (issue #1544): with `--out` given through a linked directory (`/var` -> `/private/var` on macOS) and the
  * argument relative to a working directory the process reports by its real path, plain path arithmetic climbed out
  * through the link and named a path that, replayed from the `--out` directory, did not exist. `real` is the link
- * resolution used; the control passes the identity to plant that arithmetic.
+ * resolution used, {@link linkRuleFor} the platform's by default (on Windows, as spelled: issue #1551); the control
+ * passes the other platform's rule to plant the wrong arithmetic.
  */
-export function argvPathFromOut(given: string, out: string, cwd: string, api: PlatformPath = nodePath, real: (path: string) => string = realWhereItExists): string {
+export function argvPathFromOut(given: string, out: string, cwd: string, api: PlatformPath = nodePath, real: (path: string) => string = linkRuleFor(api)): string {
   const rel = relativeKeepingName(api.resolve(cwd, out), api.resolve(cwd, given), real, api);
   if (api.isAbsolute(rel)) return given;
   return rel === '' ? '.' : rel.split(api.sep).join('/');
@@ -364,7 +384,7 @@ function argvPairs(args: readonly string[], table: ArgvTable): { values: Array<[
  * flags, a repeated one in the order given, then the switches present), every path written by
  * {@link argvPathFromOut} and `--out` as `.`. Defaults the run used and did not take as an argument are not written.
  */
-export function recordArgv(command: RunRecordCommand, args: readonly string[], table: ArgvTable, out: string, cwd: string, api: PlatformPath = nodePath, real: (path: string) => string = realWhereItExists): string[] {
+export function recordArgv(command: RunRecordCommand, args: readonly string[], table: ArgvTable, out: string, cwd: string, api: PlatformPath = nodePath, real: (path: string) => string = linkRuleFor(api)): string[] {
   const { values, on } = argvPairs(args, table);
   const path = (p: string): string => argvPathFromOut(p, out, cwd, api, real);
   const argv: string[] = [command];

@@ -35,6 +35,9 @@ bun run selftest:pre -- --only rig,propose
 
 Run targeted checks plus `selftest:pre` on an ordinary slot of the remote job pool. The full-tree
 verdict and the **full forms of every suite** belong to PR CI's sharded selftest.
+A change that touches paths, links, the filesystem or process spawning runs the full tier
+(`workflow_dispatch` of `ci.yml` with `tier=full` on its branch) green on all three OSes before it
+merges: the light tier has no Windows build, and Windows resolves `..` and links differently (#1551).
 The pre command uses these fixed minimum forms, with one worker at a time:
 
 | Member | Fixed pre form |
