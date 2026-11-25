@@ -1,15 +1,15 @@
-/** Stopped weighted surfaces: setup alias resolution must not change emitted names. */
+/** Stop aliases on weighted and generated grid turn surfaces. */
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stoppedSurfaceFixture } from '../fixtures/turn_surface_stops.ts';
-import { weightedSurfaceFixture } from '../fixtures/turn_surface.ts';
+import { weightedSurfaceEarFixture, weightedSurfaceFixture } from '../fixtures/turn_surface.ts';
 import { parseConfig } from '../src/config.ts';
 import { buildRig, type MeshAttachment, type RigOutput } from '../src/rig.ts';
 import { rigOutputTexts } from '../src/build.ts';
-import { buildDepth25DTurn } from '../src/turn.ts';
+import { buildDepth25DTurn, turnSurfaceBone } from '../src/turn.ts';
 import { PartsError } from '../src/errors.ts';
 import { writePng } from '../src/raster/png.ts';
 
@@ -20,6 +20,57 @@ const fields = (b: RigOutput) => ['turn', 'tilt', 'body_turn'].map(name => (b.mo
 const hash = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
 
 export function runTurnSurfaceStopChecks(dir: string, say: Say): void {
+  const grid = stoppedSurfaceFixture();
+  const meshes = grid.config.meshes as Record<string, unknown>;
+  delete meshes.hair_front;
+  delete meshes.topwear;
+  grid.config.regions = { hair_front: 'head', topwear: 'chest' };
+  const gridBuild = buildRig(parseConfig(grid.config), grid.parts, grid.images);
+  const stopLinks = gridBuild.rig.stops?.flatMap(s => s.links) ?? [];
+  for (const part of ['hair_front', 'topwear']) {
+    const att = mesh(gridBuild, part);
+    const slot = gridBuild.rig.slots.find(s => s.name === part);
+    const bone = turnSurfaceBone(part);
+    say(`STS06_${part.toUpperCase()}_GRID_SURFACE_KEEPS_SLOT_BINDING_WITH_STOPS`,
+      att.generator?.kind === 'grid' && !Object.hasOwn(att, 'weights') && slot?.bone === bone &&
+        gridBuild.rig.bones.some(b => b.name === bone) && stopLinks.length > 0 && !stopLinks.includes(bone),
+      `generator ${att.generator?.kind}; weights present: ${Object.hasOwn(att, 'weights')}; slot bone ${slot?.bone}; ${stopLinks.length} stopped links`);
+  }
+
+  const legacy = (part: 'hair_front' | 'face') => {
+    const f = weightedSurfaceEarFixture();
+    if (part === 'hair_front') {
+      delete (f.config.meshes as Record<string, unknown>).hair_front;
+      (f.config.regions as Record<string, unknown>).hair_front = 'head';
+    }
+    const pivot = 20;
+    f.config.turn = {
+      pivot,
+      depths: { hair_back: pivot, hair_front: part === 'hair_front' ? pivot : 5, face: part === 'face' ? pivot : 5 },
+      body: { pivot, grid: [5, 5], roles: { [part]: 'surface' } },
+    };
+    return buildRig(parseConfig(f.config), f.parts, f.images);
+  };
+  const legacyTurn = { turn: { duration: 1, tracks: [{ bone: 'head', property: 'translatex', keys: [
+    { t: 0, derive: { kind: 'yaw', degrees: -15, depth: 25 } }, { t: 1, v: [0] },
+  ] }] } };
+  const legacyHair = legacy('hair_front');
+  const motionText = rigOutputTexts(legacyHair, legacyTurn).find(([name]) => name === 'motion.json')?.[1];
+  const legacyDeforms = (JSON.parse(motionText ?? '{}') as { animations?: { turn?: Animation } }).animations?.turn?.deform;
+  say('STS07_LEGACY_HEAD_TURN_SKIPS_UNWEIGHTED_HAIR_GRID',
+    !Object.hasOwn(mesh(legacyHair, 'hair_front'), 'weights') && legacyDeforms?.some(d => d.slot === 'face') === true &&
+      legacyDeforms.every(d => d.slot !== 'hair_front'),
+    'the legacy head turn emits its face deform and leaves the generated hair grid to the body turn');
+  const legacyFace = legacy('face');
+  let missingFrame: PartsError | undefined;
+  try {
+    rigOutputTexts(legacyFace, legacyTurn);
+  } catch (e) { if (e instanceof PartsError) missingFrame = e; else throw e; }
+  const faceProblem = missingFrame?.problems.find(p => p.code === 'RIG_TURN_LEGACY_FACE_WEIGHTS');
+  say('STS08_LEGACY_HEAD_TURN_REFUSES_UNWEIGHTED_FACE_FRAME',
+    faceProblem?.object === 'skins.default.face.face' && faceProblem.detail.includes('use config.turn.roles'),
+    faceProblem === undefined ? 'missing named refusal' : `${faceProblem.code}: ${faceProblem.object} — ${faceProblem.detail}`);
+
   const original = weightedSurfaceFixture(), plain = buildRig(parseConfig(original.config), original.parts, original.images);
   let complete: RigOutput | undefined;
   for (const mode of ['all', 'first', 'tip'] as const) {

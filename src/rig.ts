@@ -4156,7 +4156,7 @@ function applyStops(
   }
   for (const atts of Object.values(skin)) {
     for (const att of Object.values(atts)) {
-      if (!('type' in att)) continue;
+      if (!('type' in att) || att.weights === undefined) continue;
       for (const v of att.weights) {
         for (const w of v) {
           const d = drawn.get(w.bone);
