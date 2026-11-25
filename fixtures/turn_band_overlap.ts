@@ -22,6 +22,22 @@ export type BandOverlapVariant = 'single' | 'band-depth' | 'band-groups' | 'scar
 
 export const BAND_OVERLAP = { height: 96, chin: 30, band: 8, headPivot: 16, bodyPivot: 24 } as const;
 
+export const BAND_COVER_FIXTURE = {
+  height: 96,
+  chin: 28,
+  band: 8,
+  zScale: 51,
+  headPivot: 16,
+  bodyPivot: 24,
+  faceEyeLevel: 80,
+  faceJawLevel: 90,
+  torsoLevel: 230,
+  headZRef: 16,
+  headCoverDepth: 18,
+  headOwnOvershootDepth: 46,
+  bodyDepth: 24,
+} as const;
+
 export function bandOverlapTurnFixture(v: BandOverlapVariant) {
   const hairClear = v !== 'band-groups' && v !== 'rim-groups';
   const rim = v === 'rim-depth' || v === 'rim-groups';
@@ -70,6 +86,85 @@ export function bandOverlapTurnFixture(v: BandOverlapVariant) {
       pivot: BAND_OVERLAP.headPivot, grid: [5, 5],
       roles: { face: 'surface', fringe: 'surface', hairback: 'surface' },
       body: { pivot: BAND_OVERLAP.bodyPivot, roles: { topwear: 'surface', coat: 'surface', glove: 'surface', ...(v.startsWith('scarf') ? { scarf: 'surface' as const } : {}) } },
+    },
+  };
+  return { config, parts, images };
+}
+
+/**
+ * Issue #1548: body-group torso surface whose own depth sheet (`level = 230`, `z = 46`) sits far
+ * in front of the head `face` sheet (`eye level = 80 -> zRef = 16`, `jaw level = 90 -> z = 18`).
+ * Band vertices span `y = 28..36`, strictly below `face`'s crop `[22, 4]..[41, 27]`, while the
+ * `collar` region bone stands at `[32, 26]` on opaque `face` art (`alpha = 255`, or `jawEdgeAlpha`
+ * at `y = 27` for planted support checks).
+ */
+export function bandCoverTurnFixture(opts?: {
+  cover?: string;
+  collarAt?: [number, number];
+  regionBone?: string;
+  jawEdgeAlpha?: number;
+  omitFaceDepth?: boolean;
+}) {
+  const { height, chin, band, zScale, headPivot, bodyPivot, faceEyeLevel, faceJawLevel, torsoLevel } = BAND_COVER_FIXTURE;
+  const boxes: Array<[string, string, number, number, number, number]> = [
+    ['topwear', 'full:topwear', 16, 10, 32, 80],
+    ['coat', 'full:bottomwear', 16, 44, 14, 46],
+    ['face', 'head:face', 22, 4, 20, 24],
+    ['eyewhite_r', 'head:eyewhite-r', 25, 11, 3, 3],
+    ['eyewhite_l', 'head:eyewhite-l', 37, 11, 3, 3],
+  ];
+  const parts = rigParts(), template = parts.parts[0];
+  parts.rig_size = [64, height]; parts.scale_rig_per_source = 1;
+  parts.parts = boxes.map(([name, from, x, y, w, h]) => ({ ...template, name, from, x, y, w, h, opaque_px: w * h }));
+  const images = new Map<string, Raster>();
+  for (const p of parts.parts) {
+    const art = block(p.w, p.h), scalar = block(p.w, p.h);
+    if (p.name === 'face' && opts?.jawEdgeAlpha !== undefined) {
+      for (let x = 0; x < p.w; x++) art.data[((p.h - 1) * p.w + x) * 4 + 3] = opts.jawEdgeAlpha;
+    }
+    for (let y = 0; y < p.h; y++) for (let x = 0; x < p.w; x++) {
+      const level = p.name === 'face' ? (p.y + y >= 22 ? faceJawLevel : faceEyeLevel) : p.name.startsWith('eyewhite_') ? faceEyeLevel : torsoLevel;
+      scalar.data.set([level, level, level, 255], 4 * (y * p.w + x));
+    }
+    if (!(p.name === 'face' && opts?.omitFaceDepth)) {
+      p.depth = {
+        image: `${p.name}_depth.png`,
+        near: 'white',
+        zScale,
+        sources: [{ from: p.from, image: 'scalar.png', sha256: createHash('sha256').update(encodePngBytes(scalar)).digest('hex'), crop: [p.x, p.y, p.x + p.w, p.y + p.h], reading: depthReading(scalar, art, null) }],
+      };
+      images.set(p.depth.image, scalar);
+    }
+    images.set(p.name, art);
+  }
+  const region: Record<string, unknown> = {
+    name: 'collar',
+    shape: 'polygon',
+    points: [[12, 2], [52, 2], [52, chin], [12, chin]],
+    bone: opts?.regionBone ?? 'collar',
+    spacing: 2,
+    band,
+    ...(opts?.cover === undefined ? {} : { cover: opts.cover }),
+  };
+  const config: Record<string, unknown> = {
+    key: 'band_cover',
+    assemble: { rig_scale: 1, plan: parts.parts.map(p => [p.name, ...p.from.split(':')]) },
+    bones: [
+      { name: 'chest', parent: 'root', at: [32, 90] },
+      { name: 'torso', parent: 'chest', at: [32, 90] },
+      { name: 'head', parent: 'chest', at: [32, chin] },
+      { name: 'eye_r', parent: 'head', at: [26, 12] },
+      { name: 'eye_l', parent: 'head', at: [38, 12] },
+      { name: 'collar', parent: 'head', at: opts?.collarAt ?? [32, 26], inherit: 'onlyTranslation' },
+    ],
+    regions: { face: 'head', eyewhite_r: 'eye_r', eyewhite_l: 'eye_l', coat: 'torso' },
+    meshes: { topwear: { segments: [['torso', [32, 90], [32, 34]]], r: 4, contour: { tolerance: 0, margin: 0, spacing: 4, regions: [region] } } },
+    motion: { duration: 2, tracks: [{ bone: 'chest', prop: 'rotate', amp: 2, period: 2, phase: 0 }] },
+    turn: {
+      pivot: headPivot,
+      grid: [5, 5],
+      roles: { face: 'surface', eyewhite_r: 'unit', eyewhite_l: 'unit' },
+      body: { pivot: bodyPivot, roles: { topwear: 'surface', coat: 'surface' } },
     },
   };
   return { config, parts, images };

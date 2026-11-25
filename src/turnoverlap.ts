@@ -14,11 +14,13 @@ export interface ClassifiedTurnSurface {
   groups: ReadonlyMap<string, Group>;
 }
 
-/** Each part's declared contour regions, in config order: the bands a turn surface may carry (#1543). */
-export function turnContourBands(meshes: Readonly<Record<string, MeshSpec>>): Record<string, Array<{ name: string; bone: string }>> {
-  const out: Record<string, Array<{ name: string; bone: string }>> = {};
+/** Each part's declared contour regions, in config order: the bands a turn surface may carry (#1543, #1548). */
+export function turnContourBands(meshes: Readonly<Record<string, MeshSpec>>): Record<string, Array<{ name: string; bone: string; cover?: string }>> {
+  const out: Record<string, Array<{ name: string; bone: string; cover?: string }>> = {};
   for (const [part, mesh] of Object.entries(meshes)) {
-    if ('contour' in mesh && mesh.contour.regions !== undefined) out[part] = mesh.contour.regions.map(r => ({ name: r.name, bone: r.bone }));
+    if ('contour' in mesh && mesh.contour.regions !== undefined) {
+      out[part] = mesh.contour.regions.map(r => ({ name: r.name, bone: r.bone, ...(r.cover === undefined ? {} : { cover: r.cover }) }));
+    }
   }
   return out;
 }
