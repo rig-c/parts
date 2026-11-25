@@ -5,7 +5,7 @@ import { DIFF_DRAFTS_SPEC, diffDraftsCommand } from './src/diffdrafts.ts';
 import { applyTakenLayers } from './src/takelayers.ts';
 import { applyDepth, bindDepthMap, prepareDepth } from './src/depthworkflow.ts';
 import { externalReceipt } from './src/externalreceipt.ts';
-import { BUST_LANDMARKS_ACT_SCHEMA, BUST_LANDMARKS_PROVENANCE_SPEC, BUST_LANDMARKS_PROVENANCE_SUFFIX, BUST_POINT_SHAPE_FIELDS, bustShapeClause, type BustSidecar, effectiveBustShape, planBustLandmarks, readBustSidecar, stageBustLandmarks, stageReplacements, type StagedBustLandmarks } from './src/bustlandmarks.ts';
+import { BUST_LANDMARKS_ACT_SCHEMA, BUST_LANDMARKS_COMMENT_ACT_SCHEMA, BUST_LANDMARKS_PROVENANCE_SPEC, BUST_LANDMARKS_PROVENANCE_SUFFIX, BUST_POINT_SHAPE_FIELDS, bustShapeClause, type BustSidecar, effectiveBustShape, planBustLandmarks, readBustSidecar, stageBustLandmarks, stageReplacements, type StagedBustLandmarks } from './src/bustlandmarks.ts';
 import { writeEditedPart } from './tools/edited-part-cli.ts';
 /**
  * rig-parts — one painting and its See-through layers in, Spine-ready parts
@@ -389,10 +389,13 @@ usage:
   rig-parts bust-landmarks --from-act <act.json> --parts <dir> --config <config.json> --out <landmarks.json> [--write-config]
       Write the file propose --bust-landmarks reads (apex_r, apex_l and
       optional cleavage, rig px) from the one chest row of a Review
-      ${BUST_LANDMARKS_ACT_SCHEMA} act, and <out>${BUST_LANDMARKS_PROVENANCE_SUFFIX} beside it (spec
+      ${BUST_LANDMARKS_ACT_SCHEMA} act, or of the one chest-landmarks carrier of a
+      ${BUST_LANDMARKS_COMMENT_ACT_SCHEMA} comment-only act (its file must equal the act's
+      source.model), and <out>${BUST_LANDMARKS_PROVENANCE_SUFFIX} beside it (spec
       "${BUST_LANDMARKS_PROVENANCE_SPEC}": the act's schema, id and
-      file sha256, the row's sha256, verified against the row's edit, the
-      slot, the source hash and frame). The row's slot must be a part of
+      file sha256, the carrier's file for a comment-only act, the row's
+      sha256, verified against the row's edit, the slot, the source hash and
+      frame). The row's slot must be a part of
       parts.json whose config mesh is a contour, its frame parts.json's
       rig_size, and its alpha, clearance, spacing, bone_r and bone_l those of
       the config's contour.bust. --write-config instead takes those five into

@@ -240,7 +240,7 @@ export function runBustLandmarkChecks(dir: string, say: (name: string, pass: boo
     try { bustLandmarksFromAct({ act: join(dir, 'pv'), parts: partsDir, config: noBustConfig, out: join(dir, 'out', 'dir-act.json') }); }
     catch (error) { if (error instanceof PartsError) problems = error.problems; else throw error; }
     const hit = problems.find(p => p.code === 'BUST_LANDMARKS_ACT');
-    say('AN_UNREADABLE_ACT_GIVES_THE_ERROR_CODE', hit?.detail === 'is not readable (EISDIR); a rig-review/act@9 JSON file is required', hit === undefined ? digestOf(problems) || 'no refusal' : hit.detail);
+    say('AN_UNREADABLE_ACT_GIVES_THE_ERROR_CODE', hit?.detail === 'is not readable (EISDIR); a rig-review/act@9 or rig-review/act@10 JSON file is required', hit === undefined ? digestOf(problems) || 'no refusal' : hit.detail);
   }
   // Item 3: atomic outputs. A provenance path that is a directory: exit 1, the landmarks file not created.
   const pdir = join(dir, 'out', 'pdir.json');
@@ -462,4 +462,143 @@ export function runBustLandmarkChecks(dir: string, say: (name: string, pass: boo
   say('NO_RECORD_IS_THE_HAND_WRITTEN_PATH_UNCHANGED',
     handRun.status === 0 && handProposal !== '' && handProposal === readOr(proposalPath) && JSON.stringify(bustOf(handConfig)) === '{"apex_r":[75.5,125],"apex_l":[125.25,125],"cleavage":[100,126.5]}' && !handRun.stdout.includes('propose: wrote the pending shape'),
     `exit ${handRun.status}; proposal.json ${handProposal === readOr(proposalPath) ? 'byte-identical to the redraft beside a record with nothing pending' : 'differs'}; contour.bust ${JSON.stringify(bustOf(handConfig))}`);
+  // Issue #1539: the comment-only act (rig-review/act@10). Its chest rows ride the one carrier of kind
+  // "chest-landmarks", bound by the carrier's file to the act's source.model. Numbered after the controls above.
+  const model = { path: 'rig/model.json', sha256: hex('b') };
+  const chestCarrier = (rows: unknown[], file: unknown = model): Record<string, unknown> => ({ kind: 'chest-landmarks', file, chestLandmarks: rows });
+  const meshCarrier = { kind: 'mesh-edits', file: model, meshEdits: [] };
+  const act10 = (carriers?: unknown[], source: unknown = { model }): Record<string, unknown> => ({
+    schema: 'rig-review/act@10', actId: 'act-1539', jobId: 'job-1', publicationId: 'pub-1', kind: 'comments',
+    authority: { kind: 'human' }, at: '2026-11-25T00:00:00.000Z', source,
+    value: { comments: [], ...(carriers === undefined ? {} : { carriers }) },
+  });
+  const commentRecord = (path: string, shape?: { status: string; fields: Record<string, unknown> }, rowSha = row().sha256): string => JSON.stringify({
+    spec: 'rig-parts-bust-landmarks-provenance/1',
+    act: { schema: 'rig-review/act@10', act_id: 'act-1539', file_sha256: createHash('sha256').update(readFileSync(path)).digest('hex'), carrier_file: model },
+    row_sha256: rowSha,
+    slot: 'bodice',
+    source: { hash: hex('a'), frame: { width: 200, height: 300 } },
+    landmarks_sha256: landmarksSha,
+    ...(shape === undefined ? {} : { shape }),
+  }, null, 2) + '\n';
+  {
+    // The positive control: the carrier's row writes the act@9 row's landmarks bytes, and the record names the act and the carrier's file.
+    const a = writeJson('act10.json', act10([chestCarrier([row()])]));
+    const o = join(dir, 'out', 'act10.json');
+    const run = cli(...args(a, noBustConfig, o));
+    const rec = readOr(o + BUST_LANDMARKS_PROVENANCE_SUFFIX);
+    say('A_COMMENT_ACT_CHEST_CARRIER_WRITES_THE_SAME_FILE_AND_RECORDS_ITS_FILE',
+      run.status === 0 && readOr(o) === expectedText && readOr(o) === text && rec === commentRecord(a),
+      `exit ${run.status}; landmarks ${readOr(o) === expectedText ? 'the act@9 row\'s bytes' : JSON.stringify(readOr(o))}; record ${rec === commentRecord(a) ? 'exact' : JSON.stringify(rec)}${run.status === 0 ? '' : `; ${run.stdout.split('\n')[0].trim()}`}`);
+  }
+  {
+    // A mesh-edits carrier beside it is not read; the chest carrier at index 1 is.
+    const a = writeJson('act10-mesh-first.json', act10([meshCarrier, chestCarrier([row()])]));
+    const o = join(dir, 'out', 'act10-mesh-first.json');
+    let detail = 'accepted';
+    try { bustLandmarksFromAct({ act: a, parts: partsDir, config: noBustConfig, out: o }); } catch (error) { detail = error instanceof Error ? error.message : String(error); }
+    say('A_MESH_EDITS_CARRIER_BESIDE_THE_CHEST_CARRIER_IS_NOT_READ', detail === 'accepted' && readOr(o) === expectedText && readOr(o + BUST_LANDMARKS_PROVENANCE_SUFFIX) === commentRecord(a), detail);
+  }
+  // The carrier's rows go through the same row reader and checks, named at their own place in the act.
+  const carrierRow = 'value.carriers[0].chestLandmarks[0]';
+  refused('ACT10_ROW_DIGEST_CHECKED', act10([chestCarrier([pointEdited])]), 'BUST_LANDMARKS_ROW', `${carrierRow}.sha256`);
+  refused('ACT10_SLOT_CHECKED', act10([chestCarrier([row({ slot: 'cape', attachment: 'cape' })])]), 'BUST_LANDMARKS_SLOT', `${carrierRow}.edit.slot`);
+  refused('ACT10_FRAME_CHECKED', act10([chestCarrier([row({ source: { hash: hex('a'), frame: { width: 200, height: 301 } } })])]), 'BUST_LANDMARKS_FRAME', `${carrierRow}.edit.source.frame`);
+  refused('ACT10_ONE_ROW_RULE', act10([chestCarrier([row(), row({ slot: 'skirt', attachment: 'skirt' })])]), 'BUST_LANDMARKS_ROWS', 'value.carriers[0].chestLandmarks');
+  refused('ACT10_SHAPE_CHECKED', act10([chestCarrier([row({}, declaredPoints)])]), 'BUST_LANDMARKS_SHAPE', `${carrierRow}.edit.bust.alpha`, bustConfig);
+  refused('ACT10_CARRIER_WITHOUT_ROWS', act10([chestCarrier([])]), 'BUST_LANDMARKS_ACT', `${join(dir, 'act-ACT10_CARRIER_WITHOUT_ROWS.json')} value.carriers[0].chestLandmarks`);
+  // No chest carrier: no carriers, and mesh edits only.
+  {
+    const noCarrier = (name: string, value: unknown, found: string): void => {
+      const a = writeJson(`act-${name}.json`, value);
+      let problems: readonly { code: string; object: string; detail: string }[] = [];
+      try { bustLandmarksFromAct({ act: a, parts: partsDir, config: noBustConfig, out: join(dir, 'out', `${name}.json`) }); }
+      catch (error) { if (error instanceof PartsError) problems = error.problems; else throw error; }
+      const expected = `act "act-1539" (rig-review/act@10) ${found}; one value.carriers[] entry of kind "chest-landmarks", with chestLandmarks rows and a file equal to source.model, is required: the comment-only act carries the chest points only there (a mesh-edits carrier is not this command's)`;
+      const hit = problems.find(p => p.code === 'BUST_LANDMARKS_NO_CHEST_CARRIER' && p.object === `${a} value.carriers`);
+      say(name, hit?.detail === expected && !existsSync(join(dir, 'out', `${name}.json`)), hit === undefined ? digestOf(problems) || 'no refusal' : `${hit.code}: ${hit.object} — ${hit.detail}`);
+    };
+    noCarrier('ACT10_WITHOUT_CARRIERS_IS_REFUSED_BY_NAME', act10(), 'has no carriers');
+    noCarrier('ACT10_WITH_MESH_EDITS_ONLY_IS_REFUSED_BY_NAME', act10([meshCarrier]), 'has carriers of kind "mesh-edits" and none of kind "chest-landmarks"');
+  }
+  refused('ACT10_TWO_CHEST_CARRIERS', act10([chestCarrier([row()]), chestCarrier([row()])]), 'BUST_LANDMARKS_ACT', `${join(dir, 'act-ACT10_TWO_CHEST_CARRIERS.json')} value.carriers`);
+  // A carriers value that is not a list.
+  {
+    const a = writeJson('act-ACT10_CARRIERS_OBJECT.json', { ...act10(), value: { comments: [], carriers: { kind: 'chest-landmarks' } } });
+    let problems: readonly { code: string; object: string; detail: string }[] = [];
+    try { bustLandmarksFromAct({ act: a, parts: partsDir, config: noBustConfig, out: join(dir, 'out', 'carriers-object.json') }); }
+    catch (error) { if (error instanceof PartsError) problems = error.problems; else throw error; }
+    const hit = problems.find(p => p.code === 'BUST_LANDMARKS_ACT' && p.object === `${a} value.carriers`);
+    say('ACT10_CARRIERS_NOT_A_LIST_IS_REFUSED', hit?.detail === 'is {"kind":"chest-landmarks"}; a list of carriers is required', hit === undefined ? digestOf(problems) || 'no refusal' : hit.detail);
+  }
+  // The binding: the carrier's file, the act's source.model, and their equality.
+  const fileAt = (name: string): string => `${join(dir, `act-${name}.json`)} value.carriers[0].file`;
+  refused('ACT10_CARRIER_FILE_MISSING', act10([{ kind: 'chest-landmarks', chestLandmarks: [row()] }]), 'BUST_LANDMARKS_CARRIER_FILE', fileAt('ACT10_CARRIER_FILE_MISSING'));
+  refused('ACT10_CARRIER_FILE_MALFORMED', act10([chestCarrier([row()], { path: model.path, sha256: 'B'.repeat(64) })]), 'BUST_LANDMARKS_CARRIER_FILE', fileAt('ACT10_CARRIER_FILE_MALFORMED'));
+  refused('ACT10_CARRIER_FILE_EMPTY_PATH', act10([chestCarrier([row()], { path: '', sha256: model.sha256 })]), 'BUST_LANDMARKS_CARRIER_FILE', fileAt('ACT10_CARRIER_FILE_EMPTY_PATH'));
+  refused('ACT10_SOURCE_MODEL_MISSING', act10([chestCarrier([row()])], {}), 'BUST_LANDMARKS_CARRIER_FILE', `${join(dir, 'act-ACT10_SOURCE_MODEL_MISSING.json')} source.model`);
+  {
+    const stale = (name: string, file: { path: string; sha256: string }, differs: string): void => {
+      const a = writeJson(`act-${name}.json`, act10([chestCarrier([row()], file)]));
+      let problems: readonly { code: string; object: string; detail: string }[] = [];
+      try { bustLandmarksFromAct({ act: a, parts: partsDir, config: noBustConfig, out: join(dir, 'out', `${name}.json`) }); }
+      catch (error) { if (error instanceof PartsError) problems = error.problems; else throw error; }
+      const expected = `is ${JSON.stringify(file)}; source.model ${JSON.stringify(model)} is required (the ${differs}): the points were placed on another model file than the one the act is bound to`;
+      const hit = problems.find(p => p.code === 'BUST_LANDMARKS_CARRIER_FILE' && p.object === fileAt(name));
+      say(name, hit?.detail === expected && !existsSync(join(dir, 'out', `${name}.json`)), hit === undefined ? digestOf(problems) || 'no refusal' : hit.detail);
+    };
+    stale('ACT10_CARRIER_FILE_OTHER_SHA256', { path: model.path, sha256: hex('c') }, 'sha256 differs');
+    stale('ACT10_CARRIER_FILE_OTHER_PATH', { path: 'rig/other.json', sha256: model.sha256 }, 'path differs');
+  }
+  {
+    // Another schema names both the schemas this command reads.
+    const a = writeJson('act-OTHER_SCHEMA_NAMES_BOTH.json', { ...act10([chestCarrier([row()])]), schema: 'rig-review/act@11' });
+    let problems: readonly { code: string; object: string; detail: string }[] = [];
+    try { bustLandmarksFromAct({ act: a, parts: partsDir, config: noBustConfig, out: join(dir, 'out', 'other-schema.json') }); }
+    catch (error) { if (error instanceof PartsError) problems = error.problems; else throw error; }
+    const hit = problems.find(p => p.code === 'BUST_LANDMARKS_ACT' && p.object === `${a} schema`);
+    say('ANOTHER_SCHEMA_IS_REFUSED_NAMING_BOTH_SCHEMAS',
+      hit?.detail === 'is "rig-review/act@11"; "rig-review/act@9" (the chest-landmarks act) or "rig-review/act@10" (the comment-only act with a chest-landmarks carrier) is required',
+      hit === undefined ? digestOf(problems) || 'no refusal' : hit.detail);
+  }
+  {
+    // --write-config takes a carrier row's shape into a declared contour.bust, as for an act@9 row.
+    const config = configCase('act10-flag-alpha', points);
+    const run = flagged(writeJson('act10-alpha.json', act10([chestCarrier([row({}, { ...points, alpha: 0.3 })])])), config, join(dir, 'out', 'act10-flag-alpha.json'));
+    const bust = JSON.stringify(bustOf(config));
+    say('ACT10_WRITE_CONFIG_TAKES_ALPHA_INTO_THE_CONFIG',
+      run.status === 0 && bust === '{"apex_r":[70,120],"apex_l":[130,120],"cleavage":[100,121],"alpha":0.3}' && run.stderr === `config ${config}: added meshes.bodice.contour.bust.alpha\n`,
+      `exit ${run.status}; contour.bust ${bust}; stderr ${JSON.stringify(run.stderr)}`);
+  }
+  {
+    // The pending chain from a comment act: the record carries the carrier's file pending and applied, and propose reads it.
+    const c10 = join(dir, 'chain10');
+    mkdirSync(c10, { recursive: true });
+    const tunedBust = { apex_r: [75.5, 125], apex_l: [125.25, 125], cleavage: [100, 126.5], alpha: 0.3, clearance: 3 };
+    const a = writeJson('act10-tuned.json', act10([chestCarrier([row({}, tunedBust)])]));
+    const config = join(c10, 'config.json');
+    writeFileSync(config, readFileSync(noBustConfig));
+    const o = join(c10, 'landmarks.json');
+    const shapeFields = { alpha: 0.3, clearance: 3 };
+    const firstRun = cli(...args(a, config, o));
+    const pendingOk = firstRun.status === 0 && readOr(o + BUST_LANDMARKS_PROVENANCE_SUFFIX) === commentRecord(a, { status: 'pending', fields: shapeFields }, row({}, tunedBust).sha256);
+    const secondRun = cli(...proposeArgs(join(c10, 'p'), '--write-config', config, '--bust-landmarks', o));
+    const appliedOk = secondRun.status === 0 && readOr(o + BUST_LANDMARKS_PROVENANCE_SUFFIX) === commentRecord(a, { status: 'applied', fields: shapeFields }, row({}, tunedBust).sha256) &&
+      JSON.stringify(bustOf(config)) === appliedBust && secondRun.stdout.includes('propose: wrote the pending shape of act "act-1539"');
+    say('ACT10_PENDING_SHAPE_IS_APPLIED_BY_PROPOSE_AND_THE_RECORD_KEEPS_THE_CARRIER_FILE', pendingOk && appliedOk,
+      `bust-landmarks exit ${firstRun.status}, record pending exact ${pendingOk}; propose exit ${secondRun.status}, record applied exact and contour.bust written ${appliedOk}; contour.bust ${JSON.stringify(bustOf(config))}`);
+    // The record's act and carrier_file go together: a comment act's record without it, an act@9 record with it.
+    const sidecar = (name: string, edit: (record: { act: Record<string, unknown> }) => void): void => {
+      const lo = join(c10, `${name}.json`);
+      writeFileSync(lo, readFileSync(o));
+      const rec = JSON.parse(commentRecord(a, { status: 'applied', fields: shapeFields }, row({}, tunedBust).sha256)) as { act: Record<string, unknown> };
+      edit(rec);
+      writeFileSync(lo + BUST_LANDMARKS_PROVENANCE_SUFFIX, JSON.stringify(rec, null, 2) + '\n');
+      const run = cli(...proposeArgs(join(c10, `p-${name}`), '--bust-landmarks', lo));
+      say(name, run.status === 1 && run.stdout.startsWith(`  FAIL  PROPOSE_BUST_SIDECAR: ${lo + BUST_LANDMARKS_PROVENANCE_SUFFIX} act — is `) && run.stdout.includes('or {schema: "rig-review/act@10", act_id, file_sha256, carrier_file: {path, sha256}}, is required') &&
+        !existsSync(join(c10, `p-${name}`, 'proposal.json')), `exit ${run.status}: ${run.stdout.split('\n')[0].trim()}`);
+    };
+    sidecar('A_COMMENT_ACT_RECORD_WITHOUT_ITS_CARRIER_FILE_IS_REFUSED', rec => { delete rec.act.carrier_file; });
+    sidecar('AN_ACT9_RECORD_WITH_A_CARRIER_FILE_IS_REFUSED', rec => { rec.act.schema = 'rig-review/act@9'; });
+  }
 }

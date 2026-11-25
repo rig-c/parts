@@ -19,6 +19,14 @@ import { type PartsFile, readParts } from './parts.ts';
  * not imported; its grammar for the act is its own, and this reader refuses by
  * name what it cannot use.
  *
+ * Issue #1539: the comment-only act (`rig-review/act@10`, kind `comments`) is read
+ * too. Its rows sit in the one `value.carriers[]` entry of kind `chest-landmarks`,
+ * whose `chestLandmarks` rows are act@9's rows unchanged and go through the same
+ * row reader and checks. That carrier's `file` (`{path, sha256}`) must equal the
+ * envelope's `source.model`, the binding Review writes; the reader holds it to
+ * that and records it in the provenance record. Carriers of another kind (the
+ * mesh edits) are not this command's and are not read.
+ *
  * The row's `sha256` is recomputed and a mismatch is refused: sha256 (lowercase
  * hex) of `JSON.stringify` of the row's raw `edit` with object keys sorted
  * recursively (`Object.keys(v).sort()`) and array order kept. That rule is a
@@ -35,8 +43,16 @@ import { type PartsFile, readParts } from './parts.ts';
  * staged; a failure removes the temporaries and leaves earlier files as they were.
  */
 
-/** The act schema this command reads; another act version is refused by name. */
+/** The chest-landmarks act schema this command reads; another act version is refused by name. */
 export const BUST_LANDMARKS_ACT_SCHEMA = 'rig-review/act@9';
+/** Issue #1539: the comment-only act schema, read for its one `chest-landmarks` carrier. */
+export const BUST_LANDMARKS_COMMENT_ACT_SCHEMA = 'rig-review/act@10';
+/** The two act schemas, as every refusal of the act names them. */
+const ACCEPTED_ACTS = `${BUST_LANDMARKS_ACT_SCHEMA} or ${BUST_LANDMARKS_COMMENT_ACT_SCHEMA}`;
+/** The act schemas a provenance record may name. */
+type ActSchema = typeof BUST_LANDMARKS_ACT_SCHEMA | typeof BUST_LANDMARKS_COMMENT_ACT_SCHEMA;
+/** A model file as Review names one: a path and its sha256. */
+export interface ModelFile { path: string; sha256: string }
 /** The provenance record's spec. */
 export const BUST_LANDMARKS_PROVENANCE_SPEC = 'rig-parts-bust-landmarks-provenance/1';
 /** The provenance record is written beside `--out` under this suffix, as `depth-bind` writes `<map>.binding.json`. */
@@ -69,7 +85,9 @@ export interface BustLandmarksFile {
 /** The provenance record written beside the landmarks file. Fixed key order, no clock. */
 export interface BustLandmarksProvenance {
   spec: typeof BUST_LANDMARKS_PROVENANCE_SPEC;
-  act: { schema: typeof BUST_LANDMARKS_ACT_SCHEMA; act_id: string; file_sha256: string };
+  /** `carrier_file` (issue #1539) is present exactly when `schema` is the comment-only act: the chest carrier's `file`,
+   * which equals the act's `source.model`. A chest-landmarks act's record has none, so its bytes are as before. */
+  act: { schema: ActSchema; act_id: string; file_sha256: string; carrier_file?: ModelFile };
   row_sha256: string;
   slot: string;
   source: { hash: string; frame: { width: number; height: number } };
@@ -83,6 +101,8 @@ export interface BustLandmarksProvenance {
 }
 
 interface ChestRow {
+  /** Where the act holds the rows: `value.chestLandmarks`, or `value.carriers[k].chestLandmarks` in a comment-only act. */
+  base: string;
   index: number;
   slot: string;
   skin: string;
@@ -116,9 +136,9 @@ const sha256 = (bytes: Uint8Array | string): string => createHash('sha256').upda
 const isPoint = (v: unknown): v is Point => Array.isArray(v) && v.length === 2 && v.every(n => typeof n === 'number' && Number.isFinite(n));
 const isName = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
 
-/** Read one `value.chestLandmarks[i]` row; every problem it has is pushed, and null returned when any is. */
-function readRow(raw: unknown, index: number, problems: Problem[]): ChestRow | null {
-  const at = `value.chestLandmarks[${index}]`;
+/** Read one `<base>[i]` row; every problem it has is pushed, and null returned when any is. */
+function readRow(raw: unknown, index: number, problems: Problem[], base: string): ChestRow | null {
+  const at = `${base}[${index}]`;
   const before = problems.length;
   const fail = (object: string, detail: string): void => { problems.push({ code: 'BUST_LANDMARKS_ROW', object, detail }); };
   if (!isObject(raw)) {
@@ -178,52 +198,118 @@ function readRow(raw: unknown, index: number, problems: Problem[]): ChestRow | n
   const landmarks: BustLandmarksFile = { apex_r: [...(bust.apex_r as Point)], apex_l: [...(bust.apex_l as Point)] };
   if (Object.hasOwn(bust, 'cleavage')) landmarks.cleavage = [...(bust.cleavage as Point)];
   return {
-    index, slot: edit.slot as string, skin: edit.skin as string, attachment: edit.attachment as string,
+    base, index, slot: edit.slot as string, skin: edit.skin as string, attachment: edit.attachment as string,
     hash: source.hash as string, frame, landmarks, shape, sha256: digest as string,
   };
 }
 
+/** A `{path, sha256}` model file, or null when the value is not one. */
+const modelFile = (v: unknown): ModelFile | null =>
+  isObject(v) && isName(v.path) && typeof v.sha256 === 'string' && SHA256_PATTERN.test(v.sha256) ? { path: v.path, sha256: v.sha256 } : null;
+
+/** The act as read: its schema and id, the rows, and with a comment-only act the chest carrier's `file`. */
+interface ReadAct { schema: ActSchema; actId: string; rows: ChestRow[]; carrierFile?: ModelFile }
+
 /** Read the act's envelope and rows: every problem pushed, the rows that read returned. */
-function readAct(bytes: Buffer | string, path: string, problems: Problem[]): { actId: string; rows: ChestRow[] } | null {
+function readAct(bytes: Buffer | string, path: string, problems: Problem[]): ReadAct | null {
   if (typeof bytes === 'string') {
-    problems.push({ code: 'BUST_LANDMARKS_ACT', object: path, detail: `is not readable (${bytes}); a ${BUST_LANDMARKS_ACT_SCHEMA} JSON file is required` });
+    problems.push({ code: 'BUST_LANDMARKS_ACT', object: path, detail: `is not readable (${bytes}); a ${ACCEPTED_ACTS} JSON file is required` });
     return null;
   }
   let raw: unknown;
   try { raw = JSON.parse(bytes.toString('utf8')); }
   catch (error) {
-    problems.push({ code: 'BUST_LANDMARKS_ACT', object: path, detail: `does not parse as JSON (${error instanceof Error ? error.message : String(error)}); a ${BUST_LANDMARKS_ACT_SCHEMA} JSON file is required` });
+    problems.push({ code: 'BUST_LANDMARKS_ACT', object: path, detail: `does not parse as JSON (${error instanceof Error ? error.message : String(error)}); a ${ACCEPTED_ACTS} JSON file is required` });
     return null;
   }
   if (!isObject(raw)) {
-    problems.push({ code: 'BUST_LANDMARKS_ACT', object: path, detail: `is ${show(raw)}; a ${BUST_LANDMARKS_ACT_SCHEMA} act object is required` });
+    problems.push({ code: 'BUST_LANDMARKS_ACT', object: path, detail: `is ${show(raw)}; a ${ACCEPTED_ACTS} act object is required` });
     return null;
   }
   const before = problems.length;
-  if (raw.schema !== BUST_LANDMARKS_ACT_SCHEMA) problems.push({ code: 'BUST_LANDMARKS_ACT', object: `${path} schema`, detail: `is ${show(raw.schema)}; "${BUST_LANDMARKS_ACT_SCHEMA}" is required (the chest-landmarks act)` });
+  const schema = raw.schema;
+  if (schema !== BUST_LANDMARKS_ACT_SCHEMA && schema !== BUST_LANDMARKS_COMMENT_ACT_SCHEMA) {
+    problems.push({ code: 'BUST_LANDMARKS_ACT', object: `${path} schema`, detail: `is ${show(schema)}; "${BUST_LANDMARKS_ACT_SCHEMA}" (the chest-landmarks act) or "${BUST_LANDMARKS_COMMENT_ACT_SCHEMA}" (the comment-only act with a chest-landmarks carrier) is required` });
+  }
   if (!isName(raw.actId)) problems.push({ code: 'BUST_LANDMARKS_ACT', object: `${path} actId`, detail: `is ${show(raw.actId)}; a non-empty act id is required` });
   const value = raw.value;
-  const list = isObject(value) ? value.chestLandmarks : undefined;
+  let base = 'value.chestLandmarks';
+  let list: unknown = isObject(value) ? value.chestLandmarks : undefined;
+  let carrierFile: ModelFile | undefined;
+  if (schema === BUST_LANDMARKS_COMMENT_ACT_SCHEMA) {
+    const carrier = chestCarrier(raw, path, problems);
+    if (carrier === null) return null;
+    base = `value.carriers[${carrier.index}].chestLandmarks`;
+    list = carrier.rows;
+    carrierFile = carrier.file ?? undefined;
+  }
   if (!Array.isArray(list) || list.length === 0) {
-    problems.push({ code: 'BUST_LANDMARKS_ACT', object: `${path} value.chestLandmarks`, detail: `is ${Array.isArray(list) ? 'an empty list' : show(list)}; one chest-landmarks row is required` });
+    problems.push({ code: 'BUST_LANDMARKS_ACT', object: `${path} ${base}`, detail: `is ${Array.isArray(list) ? 'an empty list' : show(list)}; one chest-landmarks row is required` });
     return null;
   }
-  const rows = list.map((item, index) => readRow(item, index, problems)).filter((row): row is ChestRow => row !== null);
-  return problems.length > before ? null : { actId: raw.actId as string, rows };
+  const rows = list.map((item, index) => readRow(item, index, problems, base)).filter((row): row is ChestRow => row !== null);
+  if (problems.length > before || carrierFile === undefined && schema === BUST_LANDMARKS_COMMENT_ACT_SCHEMA) return null;
+  return { schema: schema as ActSchema, actId: raw.actId as string, rows, ...(carrierFile === undefined ? {} : { carrierFile }) };
+}
+
+/**
+ * Issue #1539: the one `chest-landmarks` carrier of a comment-only act, its rows and its `file` bound to the act's
+ * `source.model`. None is `BUST_LANDMARKS_NO_CHEST_CARRIER`; a `file` that is missing, malformed or not the model
+ * the act is bound to is `BUST_LANDMARKS_CARRIER_FILE` (`file` null then, the rows still read so every problem is
+ * named at once). Other carriers (mesh edits) are not read.
+ */
+function chestCarrier(raw: Record<string, unknown>, path: string, problems: Problem[]): { index: number; rows: unknown; file: ModelFile | null } | null {
+  const value = raw.value;
+  const carriers = isObject(value) ? value.carriers : undefined;
+  if (carriers !== undefined && !Array.isArray(carriers)) {
+    problems.push({ code: 'BUST_LANDMARKS_ACT', object: `${path} value.carriers`, detail: `is ${show(carriers)}; a list of carriers is required` });
+    return null;
+  }
+  const list = carriers ?? [];
+  const chest = list.flatMap((c: unknown, index) => isObject(c) && c.kind === 'chest-landmarks' ? [{ index, carrier: c }] : []);
+  if (chest.length === 0) {
+    const found = !isObject(value) ? `value is ${show(value)}` : carriers === undefined ? 'has no carriers'
+      : `has ${list.length === 0 ? 'an empty carrier list' : `carriers of kind ${list.map((c: unknown) => show(isObject(c) ? c.kind : c)).join(', ')}`} and none of kind "chest-landmarks"`;
+    problems.push({
+      code: 'BUST_LANDMARKS_NO_CHEST_CARRIER', object: `${path} value.carriers`,
+      detail: `act ${show(raw.actId)} (${BUST_LANDMARKS_COMMENT_ACT_SCHEMA}) ${found}; one value.carriers[] entry of kind "chest-landmarks", with chestLandmarks rows and a file equal to source.model, is required: the comment-only act carries the chest points only there (a mesh-edits carrier is not this command's)`,
+    });
+    return null;
+  }
+  if (chest.length > 1) {
+    problems.push({ code: 'BUST_LANDMARKS_ACT', object: `${path} value.carriers`, detail: `has ${chest.length} carriers of kind "chest-landmarks" (value.carriers[${chest.map(c => c.index).join('], [')}]); one is required, as Review writes each carrier kind at most once` });
+    return null;
+  }
+  const { index, carrier } = chest[0];
+  const at = `${path} value.carriers[${index}].file`;
+  const file = modelFile(carrier.file);
+  const model = isObject(raw.source) ? modelFile(raw.source.model) : null;
+  const before = problems.length;
+  if (file === null) problems.push({ code: 'BUST_LANDMARKS_CARRIER_FILE', object: at, detail: `is ${show(carrier.file)}; {path, sha256}, a non-empty path and 64 lowercase hex digits, is required: the model file the points were placed on` });
+  if (model === null) {
+    const found = isObject(raw.source) ? raw.source.model : raw.source;
+    problems.push({ code: 'BUST_LANDMARKS_CARRIER_FILE', object: `${path} source.model`, detail: `is ${show(found)}; {path, sha256}, a non-empty path and 64 lowercase hex digits, is required: the chest carrier's file is bound to the model the act was made on` });
+  }
+  if (file !== null && model !== null && (file.path !== model.path || file.sha256 !== model.sha256)) {
+    const differs = [file.path === model.path ? '' : 'path', file.sha256 === model.sha256 ? '' : 'sha256'].filter(Boolean).join(' and ');
+    problems.push({ code: 'BUST_LANDMARKS_CARRIER_FILE', object: at, detail: `is ${show(file)}; source.model ${show(model)} is required (the ${differs} differ${differs.includes(' and ') ? '' : 's'}): the points were placed on another model file than the one the act is bound to` });
+  }
+  return { index, rows: carrier.chestLandmarks, file: problems.length > before ? null : file };
 }
 
 /** One chest row: the landmarks file names no part, and `propose` drafts one chest carrier, so one row is required. */
 function oneRow(rows: readonly ChestRow[], problems: Problem[]): ChestRow | null {
   if (rows.length === 1) return rows[0];
+  const base = rows[0]?.base ?? 'value.chestLandmarks';
   const bySlot = new Map<string, number[]>();
   for (const row of rows) bySlot.set(row.slot, [...(bySlot.get(row.slot) ?? []), row.index]);
   for (const [slot, indices] of bySlot) {
     if (indices.length > 1) {
-      problems.push({ code: 'BUST_LANDMARKS_PART_ROWS', object: `slot "${slot}"`, detail: `has ${indices.length} rows (value.chestLandmarks[${indices.join('], [')}]); one row per part is required` });
+      problems.push({ code: 'BUST_LANDMARKS_PART_ROWS', object: `slot "${slot}"`, detail: `has ${indices.length} rows (${base}[${indices.join('], [')}]); one row per part is required` });
     }
   }
   if (bySlot.size > 1) {
-    problems.push({ code: 'BUST_LANDMARKS_ROWS', object: 'value.chestLandmarks', detail: `names ${bySlot.size} parts (${[...bySlot.keys()].map(s => `"${s}"`).join(', ')}); one chest row is required, because propose drafts one chest carrier and the landmarks file names no part` });
+    problems.push({ code: 'BUST_LANDMARKS_ROWS', object: base, detail: `names ${bySlot.size} parts (${[...bySlot.keys()].map(s => `"${s}"`).join(', ')}); one chest row is required, because propose drafts one chest carrier and the landmarks file names no part` });
   }
   return null;
 }
@@ -278,7 +364,7 @@ export function bustPointsMoved(act: { apex_r: readonly number[]; apex_l: readon
 }
 
 function checkRow(row: ChestRow, parts: PartsFile | null, config: CharacterConfig | null, writeConfig: boolean, problems: Problem[]): { fields: ShapeField[]; pending: PendingBustShape['fields']; moved: boolean } {
-  const at = `value.chestLandmarks[${row.index}]`;
+  const at = `${row.base}[${row.index}]`;
   if (parts !== null) {
     const [width, height] = parts.rig_size;
     if (row.frame.width !== width || row.frame.height !== height) {
@@ -458,7 +544,10 @@ export function planBustLandmarks(input: { act: string; parts: string; config: s
   const text = bustLandmarksText(row.landmarks);
   const provenance: BustLandmarksProvenance = {
     spec: BUST_LANDMARKS_PROVENANCE_SPEC,
-    act: { schema: BUST_LANDMARKS_ACT_SCHEMA, act_id: act.actId, file_sha256: sha256(actBytes) },
+    act: {
+      schema: act.schema, act_id: act.actId, file_sha256: sha256(actBytes),
+      ...(act.carrierFile === undefined ? {} : { carrier_file: { path: act.carrierFile.path, sha256: act.carrierFile.sha256 } }),
+    },
     row_sha256: row.sha256,
     slot: row.slot,
     source: { hash: row.hash, frame: { width: row.frame.width, height: row.frame.height } },
@@ -605,8 +694,12 @@ export function readBustSidecar(landmarksPath: string, landmarksBytes: Uint8Arra
   if (raw.spec !== BUST_LANDMARKS_PROVENANCE_SPEC) fail(`${path} spec`, `is ${show(raw.spec)}; "${BUST_LANDMARKS_PROVENANCE_SPEC}" is required`);
   const hex = (v: unknown): v is string => typeof v === 'string' && SHA256_PATTERN.test(v);
   const act = raw.act;
-  if (!isObject(act) || act.schema !== BUST_LANDMARKS_ACT_SCHEMA || !isName(act.act_id) || !hex(act.file_sha256)) {
-    fail(`${path} act`, `is ${show(act)}; {schema: "${BUST_LANDMARKS_ACT_SCHEMA}", act_id, file_sha256} is required`);
+  // Issue #1539: a comment-only act's record carries the chest carrier's file; a chest-landmarks act's carries none.
+  const comment = isObject(act) && act.schema === BUST_LANDMARKS_COMMENT_ACT_SCHEMA;
+  const carrierFile = isObject(act) ? act.carrier_file : undefined;
+  if (!isObject(act) || (act.schema !== BUST_LANDMARKS_ACT_SCHEMA && !comment) || !isName(act.act_id) || !hex(act.file_sha256)
+    || (comment ? modelFile(carrierFile) === null : Object.hasOwn(act, 'carrier_file'))) {
+    fail(`${path} act`, `is ${show(act)}; {schema: "${BUST_LANDMARKS_ACT_SCHEMA}", act_id, file_sha256}, or {schema: "${BUST_LANDMARKS_COMMENT_ACT_SCHEMA}", act_id, file_sha256, carrier_file: {path, sha256}}, is required`);
   }
   if (!hex(raw.row_sha256)) fail(`${path} row_sha256`, `is ${show(raw.row_sha256)}; 64 lowercase hex digits are required`);
   if (!isName(raw.slot)) fail(`${path} slot`, `is ${show(raw.slot)}; the chest carrier's part name is required`);
@@ -643,7 +736,10 @@ export function readBustSidecar(landmarksPath: string, landmarksBytes: Uint8Arra
   const a = act as Record<string, unknown>, src = source as Record<string, unknown>, f = frame as Record<string, unknown>;
   const provenance: BustLandmarksProvenance = {
     spec: BUST_LANDMARKS_PROVENANCE_SPEC,
-    act: { schema: BUST_LANDMARKS_ACT_SCHEMA, act_id: a.act_id as string, file_sha256: a.file_sha256 as string },
+    act: {
+      schema: a.schema as ActSchema, act_id: a.act_id as string, file_sha256: a.file_sha256 as string,
+      ...(comment ? { carrier_file: modelFile(carrierFile) as ModelFile } : {}),
+    },
     row_sha256: raw.row_sha256 as string,
     slot: raw.slot as string,
     source: { hash: src.hash as string, frame: { width: f.width as number, height: f.height as number } },
