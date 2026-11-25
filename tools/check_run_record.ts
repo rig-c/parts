@@ -6,11 +6,12 @@
  * the original `--out`, at the same depth, so every recorded relative path names the same file.
  */
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, posix, relative, resolve, sep, win32 } from 'node:path';
 import { BUILD_RUN_FILE } from '../src/build.ts';
 import { makeOutDir } from '../src/outputpaths.ts';
-import { argvPathFromOut, argvReplayProblems, type ArgvTable, CHECK_RUN_FILE, effectiveArgv, isRunRecordFile, linkRuleFor, realWhereItExists, recordArgv, recordedConfigPath, RUN_RECORD_SPEC, type RunRecord } from '../src/runstamp.ts';
+import { argvPathFromOut, argvReplayProblems, type ArgvTable, CHECK_RUN_FILE, effectiveArgv, isRunRecordFile, linkRuleFor, realWhereItExists, recordArgv, recordedConfigPath, recordedInputPath, RUN_RECORD_SPEC, type RunRecord, RUN_STAMP_FILE, type RunStamp } from '../src/runstamp.ts';
 
 type Say = (name: string, ok: boolean, detail: string, why: string) => void;
 
@@ -121,6 +122,39 @@ export function runRunRecordPureChecks(say: Say): void {
       throughJunction[throughJunction.indexOf('--rig') + 1] === '../../../../out/rig' && replayed(throughJunction) === 'C:\\out\\rig',
     `POSIX rule resolves links ${linkRuleFor(posix) === realWhereItExists}; Windows rule recorded --rig ${JSON.stringify(asRule[asRule.indexOf('--rig') + 1])}, replayed from --out as spelled ${JSON.stringify(replayed(asRule))}; planted (junction resolved) ${JSON.stringify(throughJunction[throughJunction.indexOf('--rig') + 1])}, replayed ${JSON.stringify(replayed(throughJunction))}`,
     'issue #1551: Bun on Windows reports a working directory spelled through a junction as spelled and resolves `..` textually against it, so resolving the junction before rebasing climbs one level per hidden one');
+
+  // Issue #1554: input paths recorded by assemble (rig-run/1) and check (check.json) use the same --out-relative
+  // per-platform rule, and directory inputs name `<dir>/layers.json` so the recorded path names the hashed file.
+  const posixLinks1554: Record<string, string> = {
+    '/w/ln/out': '/w/deep/er/out',
+    '/w/art/ln-head': '/w/store/head-dir',
+    '/w/art/ln-head/layers.json': '/w/store/shared-manifest.json',
+  };
+  const real1554 = (p: string): string => posixLinks1554[p] ?? p;
+  const posixCwd1554 = '/w/runner';
+  const posixOut1554 = '/w/ln/out';
+  const posixSource = recordedInputPath('../art/painting.png', posixOut1554, posixCwd1554, false, posix, real1554);
+  const posixFullDir = recordedInputPath('../art/full', posixOut1554, posixCwd1554, true, posix, real1554);
+  const posixLinkedHeadFile = recordedInputPath('../art/ln-head/layers.json', posixOut1554, posixCwd1554, false, posix, real1554);
+  const plantedCwdSource = '../art/painting.png';
+  const plantedDirOnly = recordedInputPath('../art/full', posixOut1554, posixCwd1554, false, posix, real1554);
+  const winAsmOut = 'C:\\t\\ln\\work\\assembled';
+  const winFullAsSpelled = recordedInputPath('..\\..\\..\\art\\full', winAsmOut, 'C:\\t\\deep\\er\\work', true, win32);
+  const winFullPlantedJunction = recordedInputPath('..\\..\\..\\art\\full', winAsmOut, 'C:\\t\\deep\\er\\work', true, win32, junction);
+  say('BU1554A_RECORDED_INPUT_PATHS_REBASE_TO_OUT_AND_NAME_LAYERS_JSON_BY_THE_PER_PLATFORM_LINK_RULE',
+    posixSource === '../../../art/painting.png' &&
+      posix.resolve('/w/deep/er/out', posixSource) === '/w/art/painting.png' &&
+      posixFullDir === '../../../art/full/layers.json' &&
+      posix.resolve('/w/deep/er/out', posixFullDir) === '/w/art/full/layers.json' &&
+      posixLinkedHeadFile === '../../../store/head-dir/layers.json' &&
+      posix.resolve('/w/deep/er/out', plantedCwdSource) !== '/w/art/painting.png' &&
+      plantedDirOnly === '../../../art/full' && !plantedDirOnly.endsWith('/layers.json') &&
+      winFullAsSpelled === '../../../art/full/layers.json' &&
+      win32.resolve(winAsmOut, winFullAsSpelled) === 'C:\\t\\art\\full\\layers.json' &&
+      winFullPlantedJunction === '../../../../art/full/layers.json' &&
+      win32.resolve(winAsmOut, winFullPlantedJunction) === 'C:\\art\\full\\layers.json',
+    `POSIX: source ${JSON.stringify(posixSource)}, full dir ${JSON.stringify(posixFullDir)}, linked head ${JSON.stringify(posixLinkedHeadFile)}; planted cwd-relative resolves to ${JSON.stringify(posix.resolve('/w/deep/er/out', plantedCwdSource))}, dir-only ${JSON.stringify(plantedDirOnly)}; Windows: recorded ${JSON.stringify(winFullAsSpelled)} -> ${JSON.stringify(win32.resolve(winAsmOut, winFullAsSpelled))}, planted junction-resolved ${JSON.stringify(winFullPlantedJunction)} -> ${JSON.stringify(win32.resolve(winAsmOut, winFullPlantedJunction))}`,
+    'issue #1554: assemble inputs rebase to --out by linkRuleFor(api) and name layers.json for directories; planted cwd-relative, directory-only and wrong-platform-rule paths miss the hashed file');
 }
 
 /**
@@ -195,6 +229,7 @@ export function runRunRecordCliChecks(dir: string, out: string, say: Say): void 
     'issue #1541: the record is cleared before the check starts and written only when it completed its report');
 
   runLinkedOutReplay(dir, out, say);
+  runOutRelativeInputRecordChecks(dir, out, say);
 }
 
 /** `check`'s flag row as cli.ts records it, for the planted argv: the valued flags and switches this control gives. */
@@ -256,4 +291,242 @@ function runLinkedOutReplay(dir: string, out: string, say: Say): void {
     plantedRig === wantPlanted && plantedReplay.status !== 0 && plantedReplay.status !== 2 && !existsSync(join(given, CHECK_RUN_FILE)),
     `planted --rig ${JSON.stringify(plantedRig)} (want ${JSON.stringify(wantPlanted)}, ${windows ? 'Windows: the junction resolved first' : 'POSIX: plain arithmetic, the link not resolved'}); replay exit ${plantedReplay.status}, record after ${existsSync(join(given, CHECK_RUN_FILE))}`,
     'issues #1544, #1551: on POSIX the arithmetic main 6cd3be2 used names a rig a level too high from the real --out; on Windows the rule main 0c1d234 used names one a level too high from the spelled --out; either way the check refuses it');
+}
+
+function sha256File(path: string): string {
+  return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
+
+/**
+ * Issue #1554: CLI controls from a working directory (`runner/`, depth +1) that is NOT `--out`'s parent, writing into a
+ * deeper `--out` (`outputs/deep/...`, depth +3) so every old cwd-relative path (`../...`) resolves to the wrong place
+ * from `--out` and fails. Covers `assemble`'s `run.json` (`inputs[].path`, including `<dir>/layers.json` for directory
+ * inputs) and `check.json`'s `requirements.file.path`, `environment.path` and `WIND_BAND.path`.
+ */
+function runOutRelativeInputRecordChecks(dir: string, out: string, say: Say): void {
+  const runnerCwd = join(dir, 'runner-1554');
+  mkdirSync(runnerCwd, { recursive: true });
+  const asmOut = join(dir, 'outputs-1554', 'deep', 'assembled');
+  const oldCwdPaths = { source: '../painting.png', full: '../full', head: '../head' };
+  const asmRun = cli([
+    'assemble',
+    '--source', oldCwdPaths.source,
+    '--full', oldCwdPaths.full,
+    '--head', oldCwdPaths.head,
+    '--config', '../config.json',
+    '--out', '../outputs-1554/deep/assembled',
+  ], runnerCwd);
+  const stamp: RunStamp | null = existsSync(join(asmOut, RUN_STAMP_FILE))
+    ? (JSON.parse(readFileSync(join(asmOut, RUN_STAMP_FILE), 'utf8')) as RunStamp)
+    : null;
+  const wantInputs = [
+    { role: 'source', path: '../../../painting.png', sha256: sha256File(join(dir, 'painting.png')) },
+    { role: 'full', path: '../../../full/layers.json', sha256: sha256File(join(dir, 'full', 'layers.json')) },
+    { role: 'head', path: '../../../head/layers.json', sha256: sha256File(join(dir, 'head', 'layers.json')) },
+  ];
+  const inputsResolveFromOut =
+    stamp?.inputs !== undefined &&
+    stamp.inputs.length === 3 &&
+    stamp.inputs.every((entry) => {
+      const target = resolve(asmOut, entry.path);
+      return existsSync(target) && statSync(target).isFile() && sha256File(target) === entry.sha256;
+    });
+  const plantedCwdFailsFromOut = Object.values(oldCwdPaths).every((oldRel) => !existsSync(resolve(asmOut, oldRel)));
+  const asmReplayOut = join(dir, 'outputs-1554', 'deep', 'assembled-replay');
+  mkdirSync(asmReplayOut, { recursive: true });
+  const asmReplay = stamp?.inputs === undefined
+    ? { status: -1, out: 'no stamp' }
+    : cli([
+        'assemble',
+        ...stamp.inputs.flatMap((entry) => [`--${entry.role}`, resolve(asmOut, entry.path)]),
+        '--config', resolve(asmOut, stamp.config.path),
+        '--out', '.',
+      ], asmReplayOut);
+  const timelessStamp = (at: string): string => {
+    if (!existsSync(join(at, RUN_STAMP_FILE))) return 'absent';
+    const parsed = JSON.parse(readFileSync(join(at, RUN_STAMP_FILE), 'utf8')) as RunStamp;
+    const { started_at: _s, finished_at: _f, ...rest } = parsed;
+    return JSON.stringify(rest);
+  };
+  say('BU1554B_ASSEMBLE_FROM_NON_PARENT_CWD_RECORDS_OUT_RELATIVE_INPUTS_AND_LAYERS_JSON_AND_PLANTED_CWD_PATHS_FAIL',
+    asmRun.status === 0 &&
+      JSON.stringify(stamp?.inputs) === JSON.stringify(wantInputs) &&
+      inputsResolveFromOut &&
+      plantedCwdFailsFromOut &&
+      asmReplay.status === 0 &&
+      timelessStamp(asmOut) === timelessStamp(asmReplayOut),
+    `assemble exit ${asmRun.status}; recorded inputs ${JSON.stringify(stamp?.inputs?.map((e) => e.path) ?? null)}; all resolve from --out to files matching sha256 ${inputsResolveFromOut}; planted cwd-relative paths [${Object.values(oldCwdPaths).join(', ')}] missing from --out ${plantedCwdFailsFromOut}; replay exit ${asmReplay.status}, stamps equal modulo clock ${timelessStamp(asmOut) === timelessStamp(asmReplayOut)}`,
+    'issue #1554: run from a working directory that is not --out\'s parent, assemble records source, full/layers.json and head/layers.json relative to --out, each resolving from --out alone with matching sha256 while the old cwd-relative paths fail');
+
+  // Create a wind-answering copy of the built rig with a leveraged child bone and an overlapping pair of slots so one
+  // standalone check from the non-parent cwd exercises all three check.json input-file records together:
+  // requirements.file.path, environment.path, and WIND_BAND.path.
+  const physRigDir = join(dir, 'phys-rig-1554');
+  cpSync(join(out, 'rig'), physRigDir, { recursive: true });
+  const rigDoc = JSON.parse(readFileSync(join(physRigDir, 'rig.json'), 'utf8')) as {
+    bones: Array<Record<string, unknown>>;
+    slots: Array<{ name: string; bone: string; attachment?: string }>;
+    skins: { default: Record<string, Record<string, unknown>> };
+    constraints?: Array<Record<string, unknown>>;
+  };
+  rigDoc.bones.push({ name: 'tassel_1554', parent: 'skirt', length: 10 });
+  const baseSlot = rigDoc.slots.find((s) => s.attachment !== undefined && rigDoc.skins.default[s.name]?.[s.attachment] !== undefined) ?? rigDoc.slots[0];
+  const baseAttName = baseSlot.attachment ?? baseSlot.name;
+  rigDoc.slots.push({ name: 'lining_1554', bone: baseSlot.bone, attachment: baseAttName });
+  rigDoc.skins.default.lining_1554 = { [baseAttName]: structuredClone(rigDoc.skins.default[baseSlot.name][baseAttName]) };
+  rigDoc.constraints = [
+    ...(rigDoc.constraints ?? []),
+    { type: 'physics', name: 'rec1554_phys', bone: 'tassel_1554', wind: 1, gravity: 1, rotate: 1, inertia: 0.5, strength: 100, damping: 0.85, mass: 1, mix: 1 },
+  ];
+  writeFileSync(join(physRigDir, 'rig.json'), `${JSON.stringify(rigDoc, null, 2)}\n`);
+  const reqPath = join(dir, 'reqs-1554.json');
+  const envPath = join(dir, 'env-1554.json');
+  const wbPath = join(dir, 'wb-1554.json');
+  writeFileSync(reqPath, JSON.stringify({ spec: 'spine-parts-requirements/1', fps: 12, requirements: [] }));
+  writeFileSync(envPath, JSON.stringify({ spec: 'rigc-environment/1', steps: [{ t: 0, wind: [1, 0], gravity: [0, 1] }] }));
+  writeFileSync(wbPath, JSON.stringify({
+    spec: 'rig-parts-wind-band/1',
+    min: 0,
+    max: 2,
+    step: 2,
+    fps: 12,
+    max_gap: 500,
+    max_ghost: 500,
+    pairs: [`${baseSlot.name}:lining_1554`],
+  }));
+
+  const chkOut = join(dir, 'outputs-1554', 'deep', 'checked');
+  const oldReqArg = '../reqs-1554.json';
+  const oldEnvArg = '../env-1554.json';
+  const oldWbArg = '../wb-1554.json';
+  const chkRun = cli([
+    'check',
+    '--rig', '../phys-rig-1554',
+    '--out', '../outputs-1554/deep/checked',
+    '--requirements', oldReqArg,
+    '--environment', oldEnvArg,
+    '--wind-band', oldWbArg,
+    '--no-extremes',
+  ], runnerCwd);
+  const chkReport = existsSync(join(chkOut, 'check.json'))
+    ? (JSON.parse(readFileSync(join(chkOut, 'check.json'), 'utf8')) as {
+        requirements?: { file?: { path?: string; sha256?: string } };
+        environment?: { path?: string; sha256?: string };
+        WIND_BAND?: { path?: string; sha256?: string };
+      })
+    : null;
+  const chkRec = readRecord(join(chkOut, CHECK_RUN_FILE));
+  const chkReplayDir = join(dir, 'outputs-1554', 'deep', 'checked-replay');
+  mkdirSync(chkReplayDir, { recursive: true });
+  const chkReplay = chkRec === null ? { status: -1, out: 'no record' } : cli(chkRec.argv, chkReplayDir);
+  const reqRecorded = chkReport?.requirements?.file;
+  const envRecorded = chkReport?.environment;
+  const wbRecorded = chkReport?.WIND_BAND;
+  const resolvesWithHash = (entry: { path?: string; sha256?: string } | undefined, expectedFile: string): boolean => {
+    if (entry?.path === undefined || entry.sha256 === undefined) return false;
+    const target = resolve(chkOut, entry.path);
+    return target === resolve(expectedFile) && existsSync(target) && sha256File(target) === entry.sha256;
+  };
+  const plantedCheckCwdFails = [oldReqArg, oldEnvArg, oldWbArg].every((oldArg) => !existsSync(resolve(chkOut, oldArg)));
+  const replayCheckSame =
+    existsSync(join(chkOut, 'check.json')) &&
+    existsSync(join(chkReplayDir, 'check.json')) &&
+    readFileSync(join(chkOut, 'check.json')).equals(readFileSync(join(chkReplayDir, 'check.json')));
+  say('BU1554C_CHECK_JSON_REQUIREMENTS_ENVIRONMENT_AND_WIND_BAND_PATHS_RESOLVE_FROM_OUT_AND_REPLAY_BYTE_EQUAL',
+    chkRun.status === 0 &&
+      reqRecorded?.path === '../../../reqs-1554.json' &&
+      envRecorded?.path === '../../../env-1554.json' &&
+      wbRecorded?.path === '../../../wb-1554.json' &&
+      resolvesWithHash(reqRecorded, reqPath) &&
+      resolvesWithHash(envRecorded, envPath) &&
+      resolvesWithHash(wbRecorded, wbPath) &&
+      plantedCheckCwdFails &&
+      chkReplay.status === 0 &&
+      replayCheckSame,
+    `check exit ${chkRun.status}; recorded requirements=${JSON.stringify(reqRecorded?.path)}, environment=${JSON.stringify(envRecorded?.path)}, WIND_BAND=${JSON.stringify(wbRecorded?.path)}; all resolve from --out with matching sha256 ${resolvesWithHash(reqRecorded, reqPath) && resolvesWithHash(envRecorded, envPath) && resolvesWithHash(wbRecorded, wbPath)}; planted cwd-relative paths fail from --out ${plantedCheckCwdFails}; sibling replay exit ${chkReplay.status}, check.json byte-equal ${replayCheckSame}${chkRun.status === 0 ? '' : `; ${chkRun.out.trim().split('\n').slice(-3).join(' | ')}`}`,
+    'issue #1554: check.json records requirements.file.path, environment.path and WIND_BAND.path relative to --out, so each resolves from --out alone, planted cwd-relative paths fail, and check-run.json replayed from a sibling writes byte-identical check.json');
+
+  // Issue #1554, review P2 + macOS /var -> /private/var shape: a --out directory that does not exist yet under a
+  // linked ancestor (`link -> deep/real`, `--out link/new-check`), with the input files beside `link` (and the
+  // both-under-link shape of BU178/BU211 on macOS). Before `mkdirSync` creates `new-check`, `realWhereItExists`
+  // resolves the deepest existing prefix (`link` -> `deep/real`) and appends `new-check`; the old rule left a
+  // nonexistent `--out` unresolved while resolving the input's existing directory, climbing the wrong number of levels
+  // and changing its answer on a repeat run once `--out` existed. Windows stays as spelled (#1551).
+  const sandbox = join(realpathSync(dir), 'linked-out-1554', 'ws');
+  const linkedTarget = join(sandbox, 'deep', 'real');
+  mkdirSync(linkedTarget, { recursive: true });
+  const link = join(sandbox, 'link');
+  symlinkSync(linkedTarget, link, 'junction');
+  const besideReq = join(sandbox, 'reqs-linked-1554.json');
+  const besideEnv = join(sandbox, 'env-linked-1554.json');
+  const besideWb = join(sandbox, 'wb-linked-1554.json');
+  writeFileSync(besideReq, readFileSync(reqPath));
+  writeFileSync(besideEnv, readFileSync(envPath));
+  writeFileSync(besideWb, readFileSync(wbPath));
+  writeFileSync(join(linkedTarget, 'reqs-in-link-1554.json'), readFileSync(reqPath));
+  const newCheckOut = join(link, 'new-check');
+  const outAbsentBefore = !existsSync(newCheckOut);
+  const oldPosixRule = (p: string): string => (existsSync(p) ? realpathSync(p) : p);
+  const windows = sep === '\\';
+  const ancestorResolved = realWhereItExists(join(link, 'missing', 'leaf')) === join(realpathSync(linkedTarget), 'missing', 'leaf');
+  const ancestorPlanted = oldPosixRule(join(link, 'missing', 'leaf')) === join(link, 'missing', 'leaf');
+  const sameLinkFixed = argvPathFromOut(join(link, 'reqs-in-link-1554.json'), join(link, 'req-flag', 'check'), sandbox, undefined, realWhereItExists);
+  const sameLinkPlanted = argvPathFromOut(join(link, 'reqs-in-link-1554.json'), join(link, 'req-flag', 'check'), sandbox, undefined, oldPosixRule);
+  const wantPreMkdirPlanted = windows ? '../../../reqs-linked-1554.json' : '../../reqs-linked-1554.json';
+  const plantedPreMkdir = argvPathFromOut('reqs-linked-1554.json', 'link/new-check', sandbox, undefined, windows ? realWhereItExists : oldPosixRule);
+  const rigFromSandbox = relative(sandbox, physRigDir).split('\\').join('/');
+  const linkCheckArgs = [
+    'check',
+    '--rig', rigFromSandbox,
+    '--out', 'link/new-check',
+    '--requirements', 'reqs-linked-1554.json',
+    '--environment', 'env-linked-1554.json',
+    '--wind-band', 'wb-linked-1554.json',
+    '--no-extremes',
+  ];
+  const firstLinkRun = cli(linkCheckArgs, sandbox);
+  const firstLinkBytes = existsSync(join(newCheckOut, 'check.json')) ? readFileSync(join(newCheckOut, 'check.json')) : Buffer.alloc(0);
+  const secondLinkRun = cli(linkCheckArgs, sandbox);
+  const secondLinkBytes = existsSync(join(newCheckOut, 'check.json')) ? readFileSync(join(newCheckOut, 'check.json')) : Buffer.alloc(0);
+  const linkChkReport = firstLinkBytes.length > 0
+    ? (JSON.parse(firstLinkBytes.toString('utf8')) as {
+        requirements?: { file?: { path?: string; sha256?: string } };
+        environment?: { path?: string; sha256?: string };
+        WIND_BAND?: { path?: string; sha256?: string };
+      })
+    : null;
+  const wantFromLinkedOut = (file: string): string => (windows ? `../../${file}` : `../../../${file}`);
+  const fromLinkedOut = (rel: string): string => resolve(windows ? newCheckOut : realpathSync(newCheckOut), rel);
+  const resolvesFromLinkedOut = (entry: { path?: string; sha256?: string } | undefined, expectedFile: string): boolean => {
+    if (entry?.path === undefined || entry.sha256 === undefined) return false;
+    const target = fromLinkedOut(entry.path);
+    const kernelOk = windows || (existsSync(`${newCheckOut}/${entry.path}`) && sha256File(`${newCheckOut}/${entry.path}`) === entry.sha256);
+    return kernelOk && target === realpathSync(expectedFile) && existsSync(target) && sha256File(target) === entry.sha256;
+  };
+  const linkReqRec = linkChkReport?.requirements?.file;
+  const linkEnvRec = linkChkReport?.environment;
+  const linkWbRec = linkChkReport?.WIND_BAND;
+  const plantedMissesFromLinkedOut =
+    !existsSync(fromLinkedOut(plantedPreMkdir)) &&
+    (windows || !existsSync(`${newCheckOut}/${plantedPreMkdir}`));
+  const repeatByteEqual = firstLinkBytes.length > 0 && firstLinkBytes.equals(secondLinkBytes);
+  say('BU1554D_NONEXISTENT_OUT_UNDER_A_LINKED_ANCESTOR_REBASES_THROUGH_THE_ANCESTOR_AND_PLANTED_OLD_RULE_FAILS',
+    outAbsentBefore &&
+      ancestorResolved &&
+      ancestorPlanted &&
+      sameLinkFixed === '../../reqs-in-link-1554.json' &&
+      sameLinkPlanted === '../../../deep/real/reqs-in-link-1554.json' &&
+      plantedPreMkdir === wantPreMkdirPlanted &&
+      firstLinkRun.status === 0 &&
+      secondLinkRun.status === 0 &&
+      linkReqRec?.path === wantFromLinkedOut('reqs-linked-1554.json') &&
+      linkEnvRec?.path === wantFromLinkedOut('env-linked-1554.json') &&
+      linkWbRec?.path === wantFromLinkedOut('wb-linked-1554.json') &&
+      resolvesFromLinkedOut(linkReqRec, besideReq) &&
+      resolvesFromLinkedOut(linkEnvRec, besideEnv) &&
+      resolvesFromLinkedOut(linkWbRec, besideWb) &&
+      plantedMissesFromLinkedOut &&
+      repeatByteEqual,
+    `absent before=${outAbsentBefore}; ancestor resolved=${ancestorResolved} (planted=${ancestorPlanted}); both-under-link=${JSON.stringify(sameLinkFixed)} (planted old rule=${JSON.stringify(sameLinkPlanted)}); check exit ${firstLinkRun.status}/${secondLinkRun.status}, requirements=${JSON.stringify(linkReqRec?.path)}, environment=${JSON.stringify(linkEnvRec?.path)}, WIND_BAND=${JSON.stringify(linkWbRec?.path)}; planted=${JSON.stringify(plantedPreMkdir)} misses=${plantedMissesFromLinkedOut}; repeat byte-equal=${repeatByteEqual}${firstLinkRun.status === 0 ? '' : `; ${firstLinkRun.out.trim().split('\n').slice(-3).join(' | ')}`}`,
+    'issue #1554: when --out does not exist yet beneath a linked ancestor, realWhereItExists resolves the deepest existing prefix and appends missing segments (Windows stays as spelled, #1551), so recorded paths resolve from --out on the first run and match a repeat run byte for byte, while the planted pre-fix rule misses');
 }

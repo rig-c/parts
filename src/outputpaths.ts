@@ -1,6 +1,101 @@
-import { mkdirSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, mkdirSync, realpathSync } from 'node:fs';
+import nodePath, { resolve } from 'node:path';
 import { PartsError } from './errors.ts';
+
+/** `node:path`, or its `win32`/`posix` twin a control passes in. */
+export type PlatformPath = typeof nodePath.posix;
+
+/**
+ * A directory through its links when it or an ancestor exists: the deepest existing prefix is resolved by
+ * `realpathSync` and any not-yet-created trailing segments are appended, so rebasing before `mkdirSync` agrees with
+ * rebasing after it. As given when only the filesystem root exists (nothing on disk to resolve).
+ */
+export function realWhereItExists(path: string): string {
+  if (nodePath.sep === '\\' && path.startsWith('/')) return path;
+  if (nodePath.dirname(path) === path) return path;
+  if (existsSync(path)) return realpathSync(path);
+  const missing: string[] = [];
+  let cur = path;
+  for (;;) {
+    const parent = nodePath.dirname(cur);
+    if (parent === cur) return path;
+    missing.push(nodePath.basename(cur));
+    cur = parent;
+    if (nodePath.dirname(cur) === cur) return path;
+    if (existsSync(cur)) {
+      let resolved = realpathSync(cur);
+      for (let i = missing.length - 1; i >= 0; i--) resolved = nodePath.join(resolved, missing[i]);
+      return resolved;
+    }
+  }
+}
+
+/** A path as spelled: no link resolved. */
+function asSpelled(path: string): string {
+  return path;
+}
+
+/**
+ * The link rule a path is rebased to `--out` by, chosen by `api`'s platform: the rule its `..` follows when a replay
+ * runs from the `--out` directory. On POSIX `..` is the physical parent, and the working directory is reported by its
+ * real path, so both ends are resolved through their links ({@link realWhereItExists}). On Windows `..` is textual:
+ * measured (issue #1551, Bun 1.4.4 on Windows build 26100), a process started in a directory spelled through a
+ * junction reports that spelling as `process.cwd()` and resolves `..` against it, while `realpathSync` and
+ * `realpathSync.native` both resolve the junction; resolving the ends there climbed one level too many from the
+ * `--out` the run was given. So on Windows a path is rebased as spelled, from `--out` as the run was given it.
+ */
+export function linkRuleFor(api: PlatformPath): (path: string) => string {
+  return api.sep === '\\' ? asSpelled : realWhereItExists;
+}
+
+/**
+ * `path` relative to `outDir` in `api`'s separators, with `outDir` and `path`'s directory resolved through their
+ * links by `real` and `path`'s own last segment kept: the rule {@link recordedConfigPath}, {@link argvPathFromOut}
+ * and {@link recordedInputPath} share, rig-c core's `relativeToOut` (core issue #1770).
+ */
+export function relativeKeepingName(outDir: string, path: string, real: (path: string) => string, api: PlatformPath): string {
+  const absolute = api.resolve(path);
+  return api.relative(real(api.resolve(outDir)), api.join(real(api.dirname(absolute)), api.basename(absolute)));
+}
+
+/**
+ * `config.path` in a `rig-run/2` record: relative to the real `--out` directory, the config's directory resolved through
+ * its links and the file's own name kept, `/`-separated. A config given through a link is recorded by the link's name,
+ * as rig-c core's render-run.json records an input (core issue #1770), so a replay reads what the link names then.
+ * `rig-run/1`'s `config.path` still resolves the file itself and is unchanged.
+ * The links are resolved by {@link linkRuleFor}'s rule, so on Windows the path is relative to `--out` as spelled.
+ * `real` and `api` are the resolution and path rules used, for the control.
+ */
+export function recordedConfigPath(outDir: string, configPath: string, real?: (path: string) => string, api: PlatformPath = nodePath): string {
+  return relativeKeepingName(outDir, configPath, real ?? linkRuleFor(api), api).split(api.sep).join('/');
+}
+
+/**
+ * One path argument written relative to the `--out` directory, with `/` separators: both taken from `cwd`, the
+ * `--out` directory and the argument's directory resolved through their links, the argument's own last segment kept
+ * (a linked file keeps its own name), as {@link recordedConfigPath} records `config.path`. `.` when it is the directory
+ * itself. Written as given when it cannot be expressed relative to `--out` (another Windows drive).
+ *
+ * Measured (issue #1544): with `--out` given through a linked directory (`/var` -> `/private/var` on macOS) and the
+ * argument relative to a working directory the process reports by its real path, plain path arithmetic climbed out
+ * through the link and named a path that, replayed from the `--out` directory, did not exist. `real` is the link
+ * resolution used, {@link linkRuleFor} the platform's by default (on Windows, as spelled: issue #1551); the control
+ * passes the other platform's rule to plant the wrong arithmetic.
+ */
+export function argvPathFromOut(given: string, out: string, cwd: string, api: PlatformPath = nodePath, real: (path: string) => string = linkRuleFor(api)): string {
+  const rel = relativeKeepingName(api.resolve(cwd, out), api.resolve(cwd, given), real, api);
+  if (api.isAbsolute(rel)) return given;
+  return rel === '' ? '.' : rel.split(api.sep).join('/');
+}
+
+/**
+ * One `assemble` input (`source`, `full`, `head`) recorded relative to `--out` by {@link argvPathFromOut} (issue
+ * #1554): when `isDirectory` is true (a See-through directory run), records the hashed manifest `<given>/layers.json`
+ * rather than the directory itself so the recorded `path` names the exact file `sha256` digests.
+ */
+export function recordedInputPath(given: string, out: string, cwd: string, isDirectory = false, api: PlatformPath = nodePath, real: (path: string) => string = linkRuleFor(api)): string {
+  return argvPathFromOut(isDirectory ? api.join(given, 'layers.json') : given, out, cwd, api, real);
+}
 
 /**
  * Make an output directory and its parents, from its resolved path. Bun on Windows refuses

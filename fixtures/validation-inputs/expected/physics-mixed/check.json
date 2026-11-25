@@ -3524,7 +3524,7 @@
   },
   "requirements": {
     "file": {
-      "path": "requirements.json",
+      "path": "../../requirements.json",
       "sha256": "3531ea227403afca22b5423e4937c2f37972ed52a989e20b7f0a13c7371b8c47",
       "keys": [
         "spec",

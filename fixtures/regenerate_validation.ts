@@ -14,12 +14,17 @@ export const VALIDATION_NO_BUST = 'synthetic fixture has no bust landmarks';
 
 /**
  * A variant's expected check.json as this regeneration writes it: the build's
- * report with its config path typed relative to the repository, two spaces of
- * indent. `tools/regenerate_examples.ts --set validation` writes the same text.
+ * report with its config path typed relative to the repository and its
+ * requirements.file.path relative to a build at `fixtures/validation-inputs/<out>`,
+ * two spaces of indent. `tools/regenerate_examples.ts --set validation` writes the same text.
  */
 export function validationCheckText(buildOut: string, variant: ValidationVariant): string {
-  const check = JSON.parse(readFileSync(join(buildOut, 'check', 'check.json'), 'utf8')) as { config: { path: string } };
+  const check = JSON.parse(readFileSync(join(buildOut, 'check', 'check.json'), 'utf8')) as {
+    config: { path: string };
+    requirements?: { file?: { path: string } };
+  };
   check.config.path = `fixtures/validation-inputs/${validationConfigName(variant)}`;
+  if (check.requirements?.file !== undefined) check.requirements.file.path = '../../requirements.json';
   return JSON.stringify(check, null, 2) + '\n';
 }
 

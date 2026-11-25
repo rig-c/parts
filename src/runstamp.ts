@@ -7,6 +7,7 @@ import { CUT_MATERIAL_SOURCES } from './cutmaterial.ts';
 import { EDGE_RESIDUAL_FILE } from './edgeresidual.ts';
 import { PartsError } from './errors.ts';
 import { LAYOUT_FILE } from './limblayout.ts';
+import { argvPathFromOut, linkRuleFor, type PlatformPath, realWhereItExists, recordedConfigPath, recordedInputPath } from './outputpaths.ts';
 import { PAINTING_ALLOCATION_FILE } from './paintingedges.ts';
 import { PAINTING_IN_RIG_FILE } from './parts.ts';
 import { STAGE_MAP_FILE } from './provenance.ts';
@@ -14,8 +15,7 @@ import { rigJsonText, type RigOutput, SETS_FILE } from './rig.ts';
 import { SOURCE_COVER_FILE } from './sourcecover.ts';
 import { SUPPORT_DOMAINS_FILE } from './supportdomains.ts';
 
-/** `node:path`, or its `win32`/`posix` twin a control passes in. */
-type PlatformPath = typeof nodePath.posix;
+export { argvPathFromOut, linkRuleFor, type PlatformPath, realWhereItExists, recordedConfigPath, recordedInputPath };
 
 export const RUN_STAMP_SPEC = 'rig-run/1' as const;
 export const RUN_STAMP_FILE = 'run.json' as const;
@@ -100,66 +100,11 @@ function relativeToOutRoot(outDir: string, targetPath: string): string {
 }
 
 /**
- * `config.path` in a `rig-run/2` record: relative to the real `--out` directory, the config's directory resolved through
- * its links and the file's own name kept, `/`-separated. A config given through a link is recorded by the link's name,
- * as rig-c core's render-run.json records an input (core issue #1770), so a replay reads what the link names then.
- * `rig-run/1`'s `config.path` ({@link relativeToOutRoot}) still resolves the file itself and is unchanged.
- * The links are resolved by {@link linkRuleFor}'s rule, so on Windows the path is relative to `--out` as spelled.
- * `real` and `api` are the resolution and path rules used, for the control.
- */
-export function recordedConfigPath(outDir: string, configPath: string, real?: (path: string) => string, api: PlatformPath = nodePath): string {
-  return relativeKeepingName(outDir, configPath, real ?? linkRuleFor(api), api).split(api.sep).join('/');
-}
-
-/**
- * `path` relative to `outDir` in `api`'s separators, with `outDir` and `path`'s directory resolved through their
- * links by `real` and `path`'s own last segment kept: the rule {@link recordedConfigPath} and {@link argvPathFromOut}
- * share, rig-c core's `relativeToOut` (core issue #1770).
- */
-function relativeKeepingName(outDir: string, path: string, real: (path: string) => string, api: PlatformPath): string {
-  const absolute = api.resolve(path);
-  return api.relative(real(api.resolve(outDir)), api.join(real(api.dirname(absolute)), api.basename(absolute)));
-}
-
-/** A directory through its links when it exists; as given when it does not (nothing on disk to resolve). */
-export function realWhereItExists(path: string): string {
-  return existsSync(path) ? realpathSync(path) : path;
-}
-
-/** A path as spelled: no link resolved. */
-function asSpelled(path: string): string {
-  return path;
-}
-
-/**
- * The link rule a path is rebased to `--out` by, chosen by `api`'s platform: the rule its `..` follows when a replay
- * runs from the `--out` directory. On POSIX `..` is the physical parent, and the working directory is reported by its
- * real path, so both ends are resolved through their links ({@link realWhereItExists}). On Windows `..` is textual:
- * measured (issue #1551, Bun 1.4.4 on Windows build 26100), a process started in a directory spelled through a
- * junction reports that spelling as `process.cwd()` and resolves `..` against it, while `realpathSync` and
- * `realpathSync.native` both resolve the junction; resolving the ends there climbed one level too many from the
- * `--out` the run was given. So on Windows a path is rebased as spelled, from `--out` as the run was given it.
- */
-export function linkRuleFor(api: PlatformPath): (path: string) => string {
-  return api.sep === '\\' ? asSpelled : realWhereItExists;
-}
-
-function relativeToCwd(cwd: string, targetPath: string): string {
-  const rel = relative(resolve(cwd), resolve(cwd, targetPath)).split(sep).join('/');
-  return rel === '' ? '.' : rel;
-}
-
-function inputSha256OnDisk(cwd: string, targetPath: string): string {
-  const resolved = resolve(cwd, targetPath);
-  const filePath = statSync(resolved).isDirectory() ? join(resolved, 'layers.json') : resolved;
-  return sha256OnDisk(filePath);
-}
-
-/**
  * Build the ordered `inputs` list (`source`, `full`, and `head` when given) for an `assemble` run stamp:
- * each entry records `role`, `path` relative to `cwd`, and `sha256` of the file or of `<dir>/layers.json`.
+ * each entry records `role`, `path` relative to `outDir` by {@link argvPathFromOut} (naming `<dir>/layers.json`
+ * when given a See-through directory), and `sha256` of the file that `path` names (issue #1554).
  */
-export function buildAssembleInputs(inputs: RunStampAssembleInputs): RunStampInputEntry[] {
+export function buildAssembleInputs(inputs: RunStampAssembleInputs, outDir: string): RunStampInputEntry[] {
   const cwd = inputs.cwd ?? process.cwd();
   const raw: ReadonlyArray<readonly [RunStampInputRole, string | null | undefined]> = [
     ['source', inputs.source],
@@ -169,10 +114,12 @@ export function buildAssembleInputs(inputs: RunStampAssembleInputs): RunStampInp
   const entries: RunStampInputEntry[] = [];
   for (const [role, given] of raw) {
     if (given === undefined || given === null) continue;
+    const resolved = resolve(cwd, given);
+    const isDir = statSync(resolved).isDirectory();
     entries.push({
       role,
-      path: relativeToCwd(cwd, given),
-      sha256: inputSha256OnDisk(cwd, given),
+      path: recordedInputPath(given, outDir, cwd, isDir),
+      sha256: sha256OnDisk(isDir ? join(resolved, 'layers.json') : resolved),
     });
   }
   return entries;
@@ -282,7 +229,7 @@ export function buildRunStamp(input: RunStampInput): RunStamp {
     path: rel,
     sha256: sha256OnDisk(join(input.outDir, ...rel.split('/'))),
   }));
-  const inputs = input.inputs === undefined ? undefined : buildAssembleInputs(input.inputs);
+  const inputs = input.inputs === undefined ? undefined : buildAssembleInputs(input.inputs, input.outDir);
   return {
     spec: RUN_STAMP_SPEC,
     package: {
@@ -346,24 +293,6 @@ export interface ArgvTable {
   paths: readonly string[];
   /** Valued flags whose value holds paths inside it (`build --alt <name>=<source>:<full>[:<head>]`): rewrite each path with `path`. */
   compound?: Readonly<Record<string, (value: string, path: (p: string) => string) => string>>;
-}
-
-/**
- * One path argument written relative to the `--out` directory, with `/` separators: both taken from `cwd`, the
- * `--out` directory and the argument's directory resolved through their links, the argument's own last segment kept
- * (a linked file keeps its own name), as {@link recordedConfigPath} records `config.path`. `.` when it is the directory
- * itself. Written as given when it cannot be expressed relative to `--out` (another Windows drive).
- *
- * Measured (issue #1544): with `--out` given through a linked directory (`/var` -> `/private/var` on macOS) and the
- * argument relative to a working directory the process reports by its real path, plain path arithmetic climbed out
- * through the link and named a path that, replayed from the `--out` directory, did not exist. `real` is the link
- * resolution used, {@link linkRuleFor} the platform's by default (on Windows, as spelled: issue #1551); the control
- * passes the other platform's rule to plant the wrong arithmetic.
- */
-export function argvPathFromOut(given: string, out: string, cwd: string, api: PlatformPath = nodePath, real: (path: string) => string = linkRuleFor(api)): string {
-  const rel = relativeKeepingName(api.resolve(cwd, out), api.resolve(cwd, given), real, api);
-  if (api.isAbsolute(rel)) return given;
-  return rel === '' ? '.' : rel.split(api.sep).join('/');
 }
 
 /** The accepted arguments, as given: valued flags as `[flag, value]` in the order given, and the switches present. */

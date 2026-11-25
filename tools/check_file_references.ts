@@ -118,7 +118,7 @@ export function runCheckFileReferenceChecks(dir: string, rawConfig: Record<strin
   symlinkSync(join(root, 'node_modules'), join(isolated, 'node_modules'), 'dir');
   const check = join(isolated, 'src/check.ts');
   const original = readFileSync(check, 'utf8');
-  const marker = 'reqRecord = requirementsFileRecord(requirements, requirementsAs ?? requirements);';
+  const marker = 'reqRecord = requirementsFileRecord(requirements, argvPathFromOut(requirements, outDir, process.cwd()));';
   const planted = original.replace(marker, `${marker}\n    readFileSync(resolve(dirname(requirements), 'extra.png'));`);
   writeFileSync(join(spec, 'extra.png'), bytes);
   try {
