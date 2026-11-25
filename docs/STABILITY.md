@@ -1481,7 +1481,11 @@ path's directory resolved through their links, and the path's own name kept (a p
 given through a link is written by the link's name, as `config.path` is);
 `--out` itself is `.`; a path that cannot be written that way (another Windows drive)
 is written as given. These arguments reproduce the check with the same package
-version, run from the --out directory. A switch's default is not written, so a later
+version, run from the --out directory. When `--out` was given through a link, the
+replay's `build/skeleton.json`, `build/skeleton.model.json` and `check.json` can
+differ from the first run's: rigc spells the skeleton's `images` path from the `--out`
+it is handed without resolving links (rig-c/core#1773). Every other output and key
+matches. A switch's default is not written, so a later
 version that changed it would replay differently; that is why the version is in
 `package`. The record is written after the report, in place, and is never a reason to refuse
 the check; a run killed while writing it can leave a partial record, and no other

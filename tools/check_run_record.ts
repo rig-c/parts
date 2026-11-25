@@ -212,6 +212,7 @@ function runLinkedOutReplay(dir: string, out: string, say: Say): void {
   // rigc writes skeleton.images relative to the --out it was handed, by plain arithmetic: the first run hands it the
   // linked spelling and the replay the real one, so build/skeleton.json, the model that hashes it and check.json's
   // model_sha256 may differ (rig-c core's own spelling, outside this record). Every other key and digest is the same.
+  // rig-c/core#1773 tightens this: once core spells images through links, `spelled` goes and the records match whole.
   const spelled = new Set(['build/skeleton.json', 'build/skeleton.model.json', 'check.json']);
   const differ = (a: RunRecord | null, b: RunRecord | null): string[] => a === null || b === null ? ['absent']
     : [...new Set([...a.outputs, ...b.outputs].map((o) => o.path))].filter((p) =>
