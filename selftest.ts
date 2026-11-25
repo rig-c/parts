@@ -57,6 +57,7 @@ import { BEHIND_SEAM_LINE, UNDECLARED_BEHIND_SEAM_REASON } from './src/behindsea
 import { runCutMaterialChecks } from './tools/check_cut_material.ts';
 import { runPinholeChecks } from './tools/check_pinholes.ts';
 import { runArtJointChecks } from './tools/check_art_joints.ts';
+import { runRunRecordCliChecks, runRunRecordPureChecks } from './tools/check_run_record.ts';
 import { runTurnUnitPrecedenceChecks } from './tools/check_turn_unit_precedence.ts';
 import { runAuthoredUnitDepthChecks } from './tools/check_authored_unit_depth.ts';
 import { runDepthMapChecks } from './tools/check_depthmaps.ts';
@@ -125,7 +126,7 @@ import { readConfigWriteTarget, stageConfigWrite } from './tools/configwrite.ts'
 import { BLINK_ANIMATION } from './src/check.ts';
 import { runCorePointerChecks } from './tools/check_corepointer.ts';
 import { runLayerBoundsChecks } from './tools/check_layer_bounds.ts';
-import { COMPOSE_RUN_FILE, COMPOSE_RUN_SPEC, type ComposeRun, readPackageIdentity, RUN_STAMP_FILE, RUN_STAMP_SPEC, type RunStamp } from './src/runstamp.ts';
+import { BUILD_RUN_FILE, CHECK_RUN_FILE, COMPOSE_RUN_FILE, COMPOSE_RUN_SPEC, type ComposeRun, readPackageIdentity, RUN_STAMP_FILE, RUN_STAMP_SPEC, type RunStamp } from './src/runstamp.ts';
 /**
  * rig-parts selftest — proof that every gate here can go RED.
  *
@@ -29006,6 +29007,10 @@ function runBuildSuite(): number {
       "issue #2: the packed page is the artifact and the loose parts an intermediate, so the lines a reader stops at are the pack line and the three files; the parts.json equality is what shows build called the assemble stage rather than something like it",
     );
 
+    // Issue #1541: the rig-run/2 records check and build write, on this green build, replayed from beside its --out.
+    runRunRecordPureChecks(say);
+    runRunRecordCliChecks(dir, out, say);
+
     const buildForwardProblem = buildReportForwardProblem(join(out, 'check'), join(out, 'rig'));
     const buildDroppedCheck = join(dir, 'build-dropped-report-check');
     cpSync(join(out, 'check'), buildDroppedCheck, { recursive: true });
@@ -40643,6 +40648,9 @@ function treeDiff(a: string, b: string, normalise: (bytes: Buffer, file: string)
   const fb = existsSync(b) ? filesUnder(b) : [];
   if (fa.length === 0) out.push(`${a} holds nothing`);
   for (const f of [...new Set([...fa, ...fb])].sort()) {
+    // Issue #1541: the run records `check` and `build` write record the run (its times and the paths as given), not
+    // its product, and are outside every byte comparison; tools/check_run_record.ts holds them.
+    if (f === BUILD_RUN_FILE || f === CHECK_RUN_FILE) continue;
     if (!fa.includes(f) || !fb.includes(f)) {
       out.push(`${f}: only under ${fa.includes(f) ? a : b}`);
       continue;

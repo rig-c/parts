@@ -1435,6 +1435,58 @@ and writes no stamp. `build` and the in-process stages write no `run.json`.
 `rig-run/1` is stable: its keys, their order and their meaning do not change within
 the spec. A key added, removed or redefined is a new spec version.
 
+### Run record (`check-run.json` and `build-run.json`, spec `rig-run/2`)
+
+`check` writes `<out>/check-run.json` and `build` writes `<out>/build-run.json`
+(issue #1541) whenever the run completed its check report, green or not. The names
+cannot be a `run.json`: `rig` and `assemble` write `rig-run/1` as `run.json`, and
+rigc writes its own `run.json` in a packed build directory (`check/build/`). Neither
+file is in `check.json`, and no byte comparison this package makes reads them.
+
+```json
+{
+  "spec": "rig-run/2",
+  "package": { "name": "@rig-c/parts", "version": "<package.json version>" },
+  "command": "build",
+  "started_at": "2026-11-25T00:00:00.000Z",
+  "finished_at": "2026-11-25T00:00:01.000Z",
+  "config": { "path": "../config.json", "sha256": "<hex>" },
+  "outputs": [
+    { "path": "check/check.json", "sha256": "<hex>" }
+  ],
+  "argv": ["build", "--config", "../config.json", "--source", "../painting.png", "--full", "../layers/full", "--out", "."]
+}
+```
+
+Key order is fixed as shown: `spec`, `package`, `command`, `started_at`,
+`finished_at`, `config` (`build` only; `check` reads no config), `outputs`, `argv`.
+`package` and the two times (`SOURCE_DATE_EPOCH` included) are as in `rig-run/1`.
+`config` is the config's `sha256` and its path relative to the real `--out`
+directory, with the config's directory resolved through its links and the file's
+own name kept: a config given through a link is recorded by the link's name.
+`outputs` lists every file under the paths the run cleared and wrote —
+for `check`, the report files its `wrote` line names and the directories it names
+(`build/`, `idle_frames/`, …); for `build`, the paths it clears before it starts —
+sorted by `/`-separated `path` in UTF-16 code-unit order, each with the `sha256` of
+its bytes. A run record is not listed: `run.json` (rigc's carries its own clock) and
+any `-run.json`. Two runs of the same inputs from the same layout differ only in
+`started_at` and `finished_at`.
+
+`argv` is the command to re-run, then the options as given — not the defaults the
+run used — in the order of the command's flag table (`check --help` lists it):
+valued flags first, a repeated `--alt` in the order given, then the switches
+present. Every path is written relative to the `--out` directory with `/`
+separators, by path arithmetic from the working directory with no symlink resolved;
+`--out` itself is `.`; a path that cannot be written that way (another Windows drive)
+is written as given. These arguments reproduce the check with the same package
+version, run from the --out directory. A switch's default is not written, so a later
+version that changed it would replay differently; that is why the version is in
+`package`. The record is written after the report, in place, and is never a reason to refuse
+the check; a run killed while writing it can leave a partial record, and no other
+file.
+
+`rig-run/2` is stable on the same terms as `rig-run/1`.
+
 ## Environment
 
 The installed package reads two environment variables and no other: `PATH`, where

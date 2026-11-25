@@ -1,4 +1,16 @@
+import { mkdirSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { PartsError } from './errors.ts';
+
+/**
+ * Make an output directory and its parents, from its resolved path. Bun on Windows refuses
+ * `mkdirSync('.', { recursive: true })` with EEXIST when `.` exists (windows-latest, Bun 1.4.5, issue #1541), so an
+ * `--out .` given from the directory it names reached that refusal; the resolved path is made on every platform.
+ * `mkdir` is the call made, for the control that plants the unresolved one.
+ */
+export function makeOutDir(dir: string, mkdir: (path: string, options: { recursive: true }) => unknown = mkdirSync): void {
+  mkdir(resolve(dir), { recursive: true });
+}
 
 /**
  * Filesystem spelling for a diagnostic name. See STABILITY's "Diagnostic path
