@@ -101,6 +101,7 @@ import { writeHybridFixture } from './fixtures/hybrid_limb.ts';
 import { AUTOMATIC_WRITERS as AW817, EXCLUDED_PIXEL, NOT_OVERRIDDEN_PIXEL, STAGE_MAP_FILE, type PartStageMap, type StageMap, compactValueBaseline, pixelProvenance, provenanceAddsUp, provenanceLines } from './src/provenance.ts';
 import { runTurnBlendChecks } from './tools/check_turn_blend.ts';
 import { runTurnOverlapChecks } from './tools/check_turn_overlap.ts';
+import { runTurnBandOverlapChecks } from './tools/check_turn_band_overlap.ts';
 import { runTurnRollChecks } from './tools/check_turn_roll.ts';
 import { runTurnSurfaceChecks } from './tools/check_turn_surface.ts';
 import { runTurnSurfaceStopChecks } from './tools/check_turn_surface_stops.ts';
@@ -8453,6 +8454,7 @@ function runRigSuite(): number {
   { const dir = temp('turn-surface-stops'); try { runTurnSurfaceStopChecks(dir, (name, ok, detail) => say(name, ok, detail, 'declared stop aliases on public synthetic weighted surfaces')); } finally { rmSync(dir, { recursive: true, force: true }); } }
   runTurnBlendChecks((name, ok, detail) => say(name, ok, detail, 'two scalar turn fields, independent analytic controls on a synthetic neck'));
   runTurnOverlapChecks((name, ok, detail) => say(name, ok, detail, 'source-alpha seam ownership on a synthetic blended neck, unchanged skin bindings'));
+  runTurnBandOverlapChecks((name, ok, detail) => say(name, ok, detail, 'a declared collar band under covers keeps its blended field; undeclared mixing is still owned (#1543)'));
   runDepthSheetStillChecks((name, ok, detail) => say(name, ok, detail, 'actual source-row split and companion, independent synthetic ramp; no broad no-depth verdict'));
   { const dir = temp('depth-core'); try { runDepthSheetCoreChecks(dir, (name, ok, detail) => say(name, ok, detail, 'actual pinned Core generator, mandatory rig-play gate')); } finally { rmSync(dir, { recursive: true, force: true }); } }
   const r = buildRig(rigCfg(), rigParts(), rigImages());

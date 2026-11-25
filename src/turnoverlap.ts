@@ -2,6 +2,7 @@
 import { DRAWN_ALPHA } from '@rig-c/core/passthrough';
 import { computeWorldTransforms, setupToPaintingPoint, toWorld } from './coords.ts';
 import type { Depth25DTurnOptions } from './turn.ts';
+import type { MeshSpec } from './config.ts';
 import type { Problem } from './errors.ts';
 import { turnTriangleCoordinates } from './turnfield.ts';
 
@@ -11,6 +12,15 @@ type Owner = NonNullable<Surface['overlapOwners']>[number];
 export interface ClassifiedTurnSurface {
   mesh: Surface;
   groups: ReadonlyMap<string, Group>;
+}
+
+/** Each part's declared contour regions, in config order: the bands a turn surface may carry (#1543). */
+export function turnContourBands(meshes: Readonly<Record<string, MeshSpec>>): Record<string, Array<{ name: string; bone: string }>> {
+  const out: Record<string, Array<{ name: string; bone: string }>> = {};
+  for (const [part, mesh] of Object.entries(meshes)) {
+    if ('contour' in mesh && mesh.contour.regions !== undefined) out[part] = mesh.contour.regions.map(r => ({ name: r.name, bone: r.bone }));
+  }
+  return out;
 }
 
 /**
@@ -57,6 +67,17 @@ export function turnOverlapOwners(
     if (own === undefined) continue;
     const owners = points.get(target.mesh)!.map(([x, y], index): Owner => {
       if (!opaque(own, x, y)) return undefined;
+      // A vertex weighted in one group already carries that group's own field
+      // under the #796 split, as a single-group part does; only a vertex whose
+      // weights span both groups can slide past its cover (#806, #1543).
+      const row = target.mesh.weights[index];
+      if (new Set(row.filter(w => w.weight > 0).map(w => target.groups.get(w.bone))).size < 2) return undefined;
+      // A declaration is intent: a vertex a declared contour region weights is
+      // a band the author asked to blend, so it keeps the blended field
+      // (#1543). Mixing that arises without a declaration (explicit or segment
+      // weights, #806's rim) is still owned by its cover.
+      const bands = opts.contourBands?.[own.name] ?? [];
+      if (row.some(w => w.weight > 0 && bands.some(b => b.bone === w.bone))) return undefined;
       const anchors: Array<{ part: string; group: Group }> = [];
       for (const neighbour of opts.parts) {
         if (neighbour.name === own.name || !opaque(neighbour, x, y)) continue;

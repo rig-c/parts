@@ -191,6 +191,7 @@ import { boneHeat, type HeatDust, heatInfluences, HEAT_LIMITS, heatRow, type Hea
 import type { PosePoints } from './skeleton.ts';
 import { applyFaceSurfaceDeform, BODY_REAR_SHIFT_BONE, BODY_YAW_DIAL_BONE, BODYSHIFT_BONE, buildDepth25DTurn, type Depth25DTurnOptions, FACE_RATED_BAND, FACESHIFT_BONE, PITCH_DIAL_BONE, REAR_SHIFT_BONE, resolveTurnGrid, TURN_BONE, TURN_CARRIER_TAG, TURN_GRID_MAX_TRIANGLES_PER_SLOT, TURN_GRID_MAX_TRIANGLES_TOTAL, TURN_PLACES, TURN_RIDER_APART, TURN_RIDER_TAGS, turnRiderDepth, type TurnRole, type TurnSpec, turnConstraintName, turnFractions, turnNearest, turnSurfaceBone, turnTwin, turnUnitBone, YAW_DIAL_BONE } from './turn.ts';
 import { DISTANCE_EXPONENT, type FloorForm, type Influence, influences, type InfluenceLimits, type MeshInfluences, meshLimits, type Segment } from './weights.ts';
+import { turnContourBands } from './turnoverlap.ts';
 
 /** Transparent pixels added round every part image — the reference's `PAD`. */
 export const PAD = 4;
@@ -3818,6 +3819,7 @@ export function buildWaistPairSource(
       turn: cfg.turn,
       parts: parts.parts,
       images,
+      contourBands: turnContourBands(cfg.meshes),
       regions: cfg.regions,
       stills,
       boneLandmarks,
@@ -3836,6 +3838,7 @@ export function buildWaistPairSource(
         turn: cfg.turn,
         parts: parts.parts,
         images,
+        contourBands: turnContourBands(cfg.meshes),
         regions: cfg.regions,
         stills,
         boneLandmarks,
