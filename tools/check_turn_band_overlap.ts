@@ -1,4 +1,5 @@
 /** A collar band on a torso that other turn parts overlap (#1543, #1548): hand-derived travel, refusals by name. */
+import { createHash } from 'node:crypto';
 import { BAND_COVER_FIXTURE, BAND_OVERLAP, bandCoverTurnFixture, bandOverlapTurnFixture, type BandOverlapVariant } from '../fixtures/turn_band_overlap.ts';
 import { parseConfig } from '../src/config.ts';
 import { buildRig, type MeshAttachment, type RigOutput } from '../src/rig.ts';
@@ -260,6 +261,76 @@ function runBandCoverChecks(say: Say): void {
       semiProb.detail.includes('alpha 211'),
     `outside=${outProb?.detail ?? 'none'} | semi=${semiProb?.detail ?? 'none'}`,
   );
+
+  runBandCoverBindingChecks(say, covered.b, uncovered.b);
+}
+
+function collarChain(raw: Record<string, unknown>): void {
+  const bones = raw.bones as Array<{ name: string }>;
+  raw.bones = [
+    ...bones.filter(b => b.name !== 'collar'),
+    { chain: 'collar', parent: 'head', points: [[32, 26]], tip: [32, 34] },
+  ];
+  // Use weighted surfaces so applyStops sees named bindings on both neighbours.
+  raw.regions = { eyewhite_r: 'eye_r', eyewhite_l: 'eye_l' };
+  Object.assign(raw.meshes!, {
+    face: { grid: 4, r: 20, segments: [['head', [32, 28], [32, 4]]] },
+    coat: { grid: 4, r: 20, segments: [['torso', [32, 90], [32, 44]]] },
+  });
+}
+
+function runBandCoverBindingChecks(say: Say, covered?: RigOutput, uncovered?: RigOutput): void {
+  const stopCollar = (raw: Record<string, unknown>) => {
+    collarChain(raw);
+    raw.stops = [{ chain: 'collar', against: 'head', at: [4, 0], inward: -30, outward: 30 }];
+  };
+  const sha = (b?: RigOutput) => b === undefined ? 'refused' : createHash('sha256').update(JSON.stringify(b)).digest('hex');
+  const coverRefusal = (result: ReturnType<typeof buildCover>, code: string, index: number, ...detail: string[]) => {
+    const [problem] = result.problems;
+    return result.b === undefined && result.problems.length === 1 && problem.code === code
+      && problem.object === `config.meshes.topwear.contour.regions[${index}].cover`
+      && detail.every(s => problem.detail.includes(s));
+  };
+
+  const stoppedCover = buildCover({ cover: 'face', regionBone: 'collar0' }, stopCollar);
+  say('BV15_BAND_COVER_REFUSES_DECLARED_STOPPED_LINK',
+    coverRefusal(stoppedCover, 'CONFIG_TURN_BAND_COVER', 0, 'region "collar"', 'cover "face"', 'stopped link "collar0"', '"collar0_d"'),
+    stoppedCover.problems.map(p => p.detail).join(' | ') || 'built');
+
+  // SHA-256 of the whole serialized buildRig result on the pre-#1559 tree.
+  const stoppedAbsent = buildCover({ regionBone: 'collar0' }, stopCollar);
+  const stoppedSha = sha(stoppedAbsent.b);
+  const att = stoppedAbsent.b?.rig.skins.default.topwear.topwear;
+  const drawn = att !== undefined && 'type' in att && att.weights.some(row => row.some(w => w.bone === 'collar0_d' && w.weight > 0));
+  say('BV16_STOPPED_BAND_WITHOUT_COVER_KEEPS_BUILD_BYTES',
+    drawn && stoppedSha === 'de8a697815569131f9e43335562bc4c42aa9ed68c580ac6923d5eb67c6a7142a',
+    `positive collar0_d influence=${drawn}; build sha256=${stoppedSha}`);
+
+  const chainCover = buildCover({ cover: 'face', regionBone: 'collar0' }, collarChain);
+  const chainSha = sha(chainCover.b), coveredSha = sha(covered), uncoveredSha = sha(uncovered);
+  say('BV17_UNSTOPPED_BANDS_KEEP_BUILD_BYTES',
+    chainSha === '257486a84c1a7e31f7014fc6c623aed72567b572cf29a183276d126ab9d115af'
+      && coveredSha === 'a7211212d83a03ed6e024e6ddf12f084c1a323f8af4668ae7ba58e3a3df38634'
+      && uncoveredSha === 'daf0e125f47831fd59f389fb31b2572ea58798f09d4ab4678bb5bb515e0be09b',
+    `build sha256 chain=${chainSha}, covered=${coveredSha}, absent=${uncoveredSha}`);
+
+  const outside = buildCover({ cover: 'face' }, raw => {
+    // The active collar shares its bone and cover with the second region.
+    // A bone-level check sees its positive weights and would miss the off-mesh region.
+    const { regions } = (raw.meshes as { topwear: { contour: { regions: Array<Record<string, unknown>> } } }).topwear.contour;
+    regions.push({ ...regions[0], name: 'off_mesh', points: [[0, 0], [4, 0], [4, 4], [0, 4]] });
+    (raw.turn as { roles: Record<string, string> }).roles.topwear = 'surface';
+  });
+  say('BV18_BAND_COVER_REFUSES_REGION_WITH_ZERO_POSITIVE_INFLUENCES',
+    coverRefusal(outside, 'RIG_TURN_BAND_COVER_SUPPORT', 1, 'region "off_mesh"', 'bone "collar"', 'no mesh vertex', 'cover "face"'),
+    outside.problems.map(p => p.detail).join(' | ') || 'built');
+
+  const noBlend = buildCover({ cover: 'face' }, raw => {
+    (raw.meshes as { topwear: { segments: unknown[] } }).topwear.segments = [['collar', [32, 26], [32, 34]]];
+  });
+  say('BV19_BAND_COVER_REFUSES_OTHER_GROUP_WITHOUT_BLENDED_ATTACHMENT',
+    coverRefusal(noBlend, 'RIG_TURN_BAND_COVER_SUPPORT', 0, 'region "collar"', 'cover "face"', 'no attachment', 'other-group deform'),
+    noBlend.problems.map(p => p.detail).join(' | ') || 'built');
 }
 
 /**

@@ -1552,6 +1552,16 @@ interface Depth25DTurnRig {
   stops?: ReadonlyArray<{ links: readonly string[] }>;
 }
 
+interface TurnBandCover {
+  part: string;
+  index: number;
+  name: string;
+  bone: string;
+  cover: string;
+  field: 'head' | 'body';
+  canvas: readonly [number, number];
+}
+
 /** Stop draw bones share their link's setup frame; Core emits them later. */
 function surfaceSetupGraph(rig: Depth25DTurnRig) {
   const aliases = new Map<string, string>();
@@ -1570,6 +1580,7 @@ function buildDepth25DTurnGroup(
   },
   opts: Depth25DTurnOptions,
   group: Depth25DGroupSpec,
+  bandCovers: readonly TurnBandCover[],
   problems: Problem[],
 ): void {
   const { roles } = group;
@@ -1657,82 +1668,73 @@ function buildDepth25DTurnGroup(
   // Issue #1548: resolve declared band covers once per region, at the region bone's setup position,
   // on the cover's extended sheet, requiring full opacity (alpha 255) on the cover's art.
   const bandCoverDepthsByPart = new Map<string, Map<string, number>>();
-  {
+  if (bandCovers.length > 0) {
     const field = group.fieldPrefix === 'config.turn' ? 'head' : 'body';
     const setupForCover = surfaceSetupGraph(rig);
     const worldForCover = computeWorldTransforms(setupForCover.bones);
-    const checkedPartBones = new Set<string>();
-    for (const mesh of opts.surfaceMeshes ?? []) {
-      if (mesh.groups === undefined) continue;
-      const bands =
-        opts.contourBands?.[mesh.part]?.map((b, index) => ({ index, name: b.name, bone: b.bone, cover: b.cover })) ??
-        mesh.contourRegions?.map((r) => ({ index: r.index, name: r.name, bone: r.bone, cover: r.cover })) ??
-        [];
-      for (const reg of bands) {
-        const key = `${mesh.part}\0${reg.index}`;
-        if (reg.cover === undefined || mesh.groups.get(reg.bone) !== field || checkedPartBones.has(key)) continue;
-        checkedPartBones.add(key);
-        const coverSheet = surfaceSheets.get(reg.cover);
-        if (coverSheet === undefined) continue;
-        let pt: readonly [number, number] | undefined = opts.boneLandmarks.get(reg.bone);
-        if (pt === undefined) {
-          const frame = worldForCover.get(setupForCover.resolve(reg.bone));
-          if (frame !== undefined) {
-            const [cx, cy] = setupToPaintingPoint([frame.worldX, frame.worldY], mesh.canvas, mesh.canvas);
-            pt = [pyRound(cx, 4), pyRound(cy, 4)];
-          }
+    for (const reg of bandCovers) {
+      if (reg.field !== field) continue;
+      // Validation requires this group's surface role and input rasters for the cover.
+      // The sheet pass has already refused if it could not prepare any declared surface.
+      const coverSheet = surfaceSheets.get(reg.cover)!;
+      let pt: readonly [number, number] | undefined = opts.boneLandmarks.get(reg.bone);
+      if (pt === undefined) {
+        const frame = worldForCover.get(reg.bone);
+        if (frame !== undefined) {
+          const [cx, cy] = setupToPaintingPoint([frame.worldX, frame.worldY], reg.canvas, reg.canvas);
+          pt = [pyRound(cx, 4), pyRound(cy, 4)];
         }
-        const at = `config.meshes.${mesh.part}.contour.regions[${reg.index}].cover`;
-        if (pt === undefined) {
-          problems.push({
-            code: 'RIG_TURN_BAND_COVER_SUPPORT',
-            object: at,
-            detail: `region "${reg.name}" bone "${reg.bone}" has no resolved setup position to sample cover "${reg.cover}"`,
-          });
-          continue;
-        }
-        const { rec: cRec, ext: cExt, zRef: cZRef } = coverSheet;
-        const cArt = opts.images.get(cRec.name);
-        const padX = Math.floor((cExt.width - cRec.w) / 2);
-        const padY = Math.floor((cExt.height - cRec.h) / 2);
-        const rawX = pt[0] - cRec.x;
-        const rawY = pt[1] - cRec.y;
-        const lx = Math.round(rawX + padX);
-        const ly = Math.round(rawY + padY);
-        const artX = lx - padX;
-        const artY = ly - padY;
-        const outside =
-          rawX < 0 ||
-          rawY < 0 ||
-          rawX > cRec.w - 1 ||
-          rawY > cRec.h - 1 ||
-          artX < 0 ||
-          artY < 0 ||
-          artX >= cRec.w ||
-          artY >= cRec.h ||
-          lx < 0 ||
-          ly < 0 ||
-          lx >= cExt.width ||
-          ly >= cExt.height;
-        const alpha = outside || cArt === undefined ? 0 : cArt.data[(artY * cRec.w + artX) * 4 + 3];
-        if (outside || alpha !== 255) {
-          problems.push({
-            code: 'RIG_TURN_BAND_COVER_SUPPORT',
-            object: at,
-            detail: outside
-              ? `region "${reg.name}" bone "${reg.bone}" setup point [${pt[0]}, ${pt[1]}] lies outside cover "${cRec.name}" bounds [${cRec.x}, ${cRec.y}]..[${cRec.x + cRec.w - 1}, ${cRec.y + cRec.h - 1}] (alpha 0; alpha 255 on "${cRec.name}" is required)`
-              : `region "${reg.name}" bone "${reg.bone}" setup point [${pt[0]}, ${pt[1]}] has alpha ${alpha} on cover "${cRec.name}" (texel [${artX}, ${artY}] in [${cRec.x}, ${cRec.y}]..[${cRec.x + cRec.w - 1}, ${cRec.y + cRec.h - 1}]; alpha 255 is required)`,
-          });
-          continue;
-        }
-        const zCover = levelToDepthZ(cExt.data[(ly * cExt.width + lx) * 4], cRec.depth);
-        let boneDepths = bandCoverDepthsByPart.get(mesh.part);
-        if (boneDepths === undefined) {
-          boneDepths = new Map<string, number>();
-          bandCoverDepthsByPart.set(mesh.part, boneDepths);
-        }
-        boneDepths.set(reg.bone, pivot + zCover - cZRef);
       }
+      const at = `config.meshes.${reg.part}.contour.regions[${reg.index}].cover`;
+      if (pt === undefined) {
+        problems.push({
+          code: 'RIG_TURN_BAND_COVER_SUPPORT',
+          object: at,
+          detail: `region "${reg.name}" bone "${reg.bone}" has no resolved setup position to sample cover "${reg.cover}"`,
+        });
+        continue;
+      }
+      const { rec: cRec, ext: cExt, zRef: cZRef } = coverSheet;
+      const cArt = opts.images.get(cRec.name);
+      const padX = Math.floor((cExt.width - cRec.w) / 2);
+      const padY = Math.floor((cExt.height - cRec.h) / 2);
+      const rawX = pt[0] - cRec.x;
+      const rawY = pt[1] - cRec.y;
+      const lx = Math.round(rawX + padX);
+      const ly = Math.round(rawY + padY);
+      const artX = lx - padX;
+      const artY = ly - padY;
+      const outside =
+        rawX < 0 ||
+        rawY < 0 ||
+        rawX > cRec.w - 1 ||
+        rawY > cRec.h - 1 ||
+        artX < 0 ||
+        artY < 0 ||
+        artX >= cRec.w ||
+        artY >= cRec.h ||
+        lx < 0 ||
+        ly < 0 ||
+        lx >= cExt.width ||
+        ly >= cExt.height;
+      const alpha = outside || cArt === undefined ? 0 : cArt.data[(artY * cRec.w + artX) * 4 + 3];
+      if (outside || alpha !== 255) {
+        problems.push({
+          code: 'RIG_TURN_BAND_COVER_SUPPORT',
+          object: at,
+          detail: outside
+            ? `region "${reg.name}" bone "${reg.bone}" setup point [${pt[0]}, ${pt[1]}] lies outside cover "${cRec.name}" bounds [${cRec.x}, ${cRec.y}]..[${cRec.x + cRec.w - 1}, ${cRec.y + cRec.h - 1}] (alpha 0; alpha 255 on "${cRec.name}" is required)`
+            : `region "${reg.name}" bone "${reg.bone}" setup point [${pt[0]}, ${pt[1]}] has alpha ${alpha} on cover "${cRec.name}" (texel [${artX}, ${artY}] in [${cRec.x}, ${cRec.y}]..[${cRec.x + cRec.w - 1}, ${cRec.y + cRec.h - 1}]; alpha 255 is required)`,
+        });
+        continue;
+      }
+      const zCover = levelToDepthZ(cExt.data[(ly * cExt.width + lx) * 4], cRec.depth);
+      let boneDepths = bandCoverDepthsByPart.get(reg.part);
+      if (boneDepths === undefined) {
+        boneDepths = new Map<string, number>();
+        bandCoverDepthsByPart.set(reg.part, boneDepths);
+      }
+      boneDepths.set(reg.bone, pivot + zCover - cZRef);
     }
     if (problems.length > startProblems) return;
   }
@@ -2252,8 +2254,8 @@ export function buildDepth25DTurn(
     if (new Set(groups.values()).size === 2) blended.add(mesh.part);
     return { mesh, groups, outside };
   });
-  // Issue #1543: a contour region on a turn surface bound to a bone in the
-  // other turn group's subtree must weight at least one vertex above 0.
+  // Issue #1543: an other-group region without cover must weight at least one vertex.
+  // Regions declaring cover are checked against their emitted bindings below.
   const checkedBandParts = new Set<string>();
   for (const { mesh } of classified ?? []) {
     if (mesh.contourRegions === undefined || checkedBandParts.has(mesh.part)) continue;
@@ -2277,7 +2279,7 @@ export function buildDepth25DTurn(
           : bodySurface && !headSurface
             ? regGroup === 'head'
             : partGroups.size === 1 && !partGroups.has(regGroup);
-      if (!inOtherGroup || reg.weightedVertices > 0) continue;
+      if (!inOtherGroup || reg.weightedVertices > 0 || reg.cover !== undefined) continue;
       problems.push({
         code: 'RIG_TURN_BAND_REACHES_NO_VERTEX',
         object: `config.meshes.${mesh.part}.contour.regions[${reg.index}]`,
@@ -2285,9 +2287,13 @@ export function buildDepth25DTurn(
       });
     }
   }
-  // Issue #1548: validate contour.regions[].cover against turn roles, subtree membership, and part depth sheets.
+  // Only validated declarations reach the sampler. Cover matches the exact
+  // emitted influence name and requires a blended part to emit its other field.
+  const bandCovers: TurnBandCover[] = [];
+  const ownershipBands = { ...opts.contourBands };
   {
     const partMap = new Map(opts.parts.map((p) => [p.name, p]));
+    const stoppedLinks = new Set((rig.stops ?? []).flatMap(s => s.links));
     const groupOf = (bone: string): 'head' | 'body' | null =>
       descends(bone, 'head') ? 'head' : !descends(bodyRoot, 'head') && descends(bone, bodyRoot) ? 'body' : null;
     const bandParts = new Set<string>([
@@ -2296,11 +2302,14 @@ export function buildDepth25DTurn(
     ]);
     for (const part of bandParts) {
       const partEntries = (classified ?? []).filter((c) => c.mesh.part === part);
+      const summaries = new Map(partEntries.flatMap(({ mesh }) => (mesh.contourRegions ?? []).map(r => [r.index, r] as const)));
       const bands =
         opts.contourBands?.[part]?.map((b, index) => ({ index, name: b.name, bone: b.bone, cover: b.cover })) ??
-        partEntries[0]?.mesh.contourRegions?.map((r) => ({ index: r.index, name: r.name, bone: r.bone, cover: r.cover })) ??
-        [];
+        [...summaries.values()];
       if (!bands.some((b) => b.cover !== undefined)) continue;
+      // The normal rig path supplies contourBands; direct callers can supply
+      // covered declarations via contourRegions and get the same owner exemption.
+      ownershipBands[part] ??= bands.filter(b => b.cover !== undefined);
       const headSurface = opts.turn.roles?.[part] === 'surface';
       const bodySurface = opts.turn.body?.roles[part] === 'surface';
       const bandBoneSet = new Set(bands.map((b) => b.bone));
@@ -2325,6 +2334,15 @@ export function buildDepth25DTurn(
         }
         if (reg.cover === undefined) continue;
         const at = `config.meshes.${part}.contour.regions[${reg.index}].cover`;
+        const stoppedLink = setup.resolve(reg.bone);
+        if (stoppedLinks.has(stoppedLink)) {
+          problems.push({
+            code: 'CONFIG_TURN_BAND_COVER',
+            object: at,
+            detail: `region "${reg.name}" declares cover "${reg.cover}" on stopped link "${stoppedLink}"; stops bind the mesh to "${stoppedLink}_d", and cover requires an unstopped control bone`,
+          });
+          continue;
+        }
         if (!headSurface && !bodySurface) {
           problems.push({
             code: 'CONFIG_TURN_BAND_COVER',
@@ -2375,7 +2393,29 @@ export function buildDepth25DTurn(
             object: at,
             detail: `names "${reg.cover}", which carries no depth sheet in parts.json; run assemble with config.depth or provide "${reg.cover}_depth.png"`,
           });
+          continue;
         }
+        const binding = partEntries.find(({ groups }) => groups.get(reg.bone) === regGroup);
+        if (summaries.get(reg.index)?.weightedVertices === 0 || binding === undefined) {
+          problems.push({
+            code: 'RIG_TURN_BAND_COVER_SUPPORT',
+            object: at,
+            detail: `region "${reg.name}" bone "${reg.bone}" gives no mesh vertex a positive influence from the region to carry cover "${reg.cover}"; move the region onto the mesh or widen its band`,
+          });
+          continue;
+        }
+        if (!blended.has(part)) {
+          problems.push({
+            code: 'RIG_TURN_BAND_COVER_SUPPORT',
+            object: at,
+            detail: `region "${reg.name}" bone "${reg.bone}" cannot carry cover "${reg.cover}"; no attachment of "${part}" has positive bindings in both turn groups to emit the other-group deform`,
+          });
+          continue;
+        }
+        bandCovers.push({
+          part, index: reg.index, name: reg.name, bone: reg.bone, cover: reg.cover,
+          field: regGroup, canvas: binding.mesh.canvas,
+        });
       }
     }
   }
@@ -2401,7 +2441,7 @@ export function buildDepth25DTurn(
   });
   refuseIfAny(problems);
   if (blended.size > 0) {
-    const owners = turnOverlapOwners(rig, opts, classified ?? [], blended, problems);
+    const owners = turnOverlapOwners(rig, { ...opts, contourBands: ownershipBands }, classified ?? [], blended, problems);
     refuseIfAny(problems);
     const overlapped = surfaceMeshes?.map((mesh, i) => {
       const overlapOwners = owners.get(classified![i].mesh);
@@ -2436,6 +2476,7 @@ export function buildDepth25DTurn(
           { kind: 'pitch', animName: 'tilt', sliderName: 'pitch', dialBone: PITCH_DIAL_BONE, maxDeg: pitchMax },
         ],
       },
+      bandCovers,
       problems,
     );
   }
@@ -2463,6 +2504,7 @@ export function buildDepth25DTurn(
           { kind: 'yaw', animName: BODY_TURN_ANIM, sliderName: bodySlider, dialBone: bodySlider, maxDeg: yawMax },
         ],
       },
+      bandCovers,
       problems,
     );
   }
