@@ -9729,7 +9729,11 @@ once at the region `bone`'s setup position (requiring `alpha === 255` on the
 cover's art there, [`RIG_TURN_BAND_COVER_SUPPORT`](#RIG_TURN_BAND_COVER_SUPPORT),
 and a valid other-group surface cover,
 [`CONFIG_TURN_BAND_COVER`](#CONFIG_TURN_BAND_COVER)), so every band vertex takes
-`g · D(z_cover)` on that group's side and stays monotone in `g`. A polygon
+`g · D(z_cover)` on that group's side and stays monotone in `g`.
+A declared cover on a stopped link raises [`CONFIG_TURN_BAND_COVER`](#CONFIG_TURN_BAND_COVER),
+and a cover whose region supplies no positive mesh influence or whose part has no
+blended attachment raises [`RIG_TURN_BAND_COVER_SUPPORT`](#RIG_TURN_BAND_COVER_SUPPORT).
+A polygon
 region whose edge has short segments can make the band offset cross itself,
 refused as `CONTOUR_PARAMETER` on `regions[i].band`: on that build, a jaw line
 with two extra points, its edges there 23–29 px long, crossed at any band above
