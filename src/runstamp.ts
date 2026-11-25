@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { basename, join, relative, resolve, sep } from 'node:path';
+import { existsSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import nodePath, { basename, join, relative, resolve, sep } from 'node:path';
 import { type AssembleResult, FIGURE_MASK_FILE } from './assemble.ts';
-import { ERROR_MAP_FILE } from './build.ts';
+import { BUILD_RUN_FILE, ERROR_MAP_FILE } from './build.ts';
 import { CUT_MATERIAL_SOURCES } from './cutmaterial.ts';
 import { EDGE_RESIDUAL_FILE } from './edgeresidual.ts';
 import { PartsError } from './errors.ts';
@@ -13,6 +13,9 @@ import { STAGE_MAP_FILE } from './provenance.ts';
 import { rigJsonText, type RigOutput, SETS_FILE } from './rig.ts';
 import { SOURCE_COVER_FILE } from './sourcecover.ts';
 import { SUPPORT_DOMAINS_FILE } from './supportdomains.ts';
+
+/** `node:path`, or its `win32`/`posix` twin a control passes in. */
+type PlatformPath = typeof nodePath.posix;
 
 export const RUN_STAMP_SPEC = 'rig-run/1' as const;
 export const RUN_STAMP_FILE = 'run.json' as const;
@@ -261,4 +264,177 @@ export function writeRunStamp(input: RunStampInput): RunStamp {
   const stamp = buildRunStamp(input);
   writeFileSync(join(input.outDir, RUN_STAMP_FILE), rigJsonText(stamp));
   return stamp;
+}
+
+// ---------------------------------------------------------------------------
+// rig-run/2: the run record `check` and `build` write (issue #1541)
+// ---------------------------------------------------------------------------
+
+export const RUN_RECORD_SPEC = 'rig-run/2' as const;
+/** The record `check` writes in its `--out`; `build` writes {@link BUILD_RUN_FILE}. Neither can be the rig's `run.json`. */
+export const CHECK_RUN_FILE = 'check-run.json' as const;
+export { BUILD_RUN_FILE };
+
+export type RunRecordCommand = 'check' | 'build';
+
+/**
+ * A `rig-run/2` record: the `rig-run/1` keys `check` and `build` have, then `argv`, the arguments that reproduce
+ * the run with the same package version, run from the `--out` directory. `config` is written by `build` only;
+ * `check` reads no config.
+ */
+export interface RunRecord {
+  spec: typeof RUN_RECORD_SPEC;
+  package: RunStampPackage;
+  command: RunRecordCommand;
+  started_at: string;
+  finished_at: string;
+  config?: RunStampFileEntry;
+  outputs: RunStampFileEntry[];
+  argv: string[];
+}
+
+/** One command's flags as its parser takes them: the flag-table order, which values are paths, and values that hold paths inside them. */
+export interface ArgvTable {
+  valued: readonly string[];
+  switches: readonly string[];
+  /** The valued flags whose value is one path. `--out` is written as `.`. */
+  paths: readonly string[];
+  /** Valued flags whose value holds paths inside it (`build --alt <name>=<source>:<full>[:<head>]`): rewrite each path with `path`. */
+  compound?: Readonly<Record<string, (value: string, path: (p: string) => string) => string>>;
+}
+
+/**
+ * One path argument written relative to the `--out` directory, with `/` separators: plain path arithmetic from
+ * `cwd`, no symlink resolved. `.` when it is the directory itself. Written as given when it cannot be expressed
+ * relative to `--out` (another Windows drive).
+ */
+export function argvPathFromOut(given: string, out: string, cwd: string, api: PlatformPath = nodePath): string {
+  const rel = api.relative(api.resolve(cwd, out), api.resolve(cwd, given));
+  if (api.isAbsolute(rel)) return given;
+  return rel === '' ? '.' : rel.split(api.sep).join('/');
+}
+
+/** The accepted arguments, as given: valued flags as `[flag, value]` in the order given, and the switches present. */
+function argvPairs(args: readonly string[], table: ArgvTable): { values: Array<[string, string]>; on: Set<string> } {
+  const values: Array<[string, string]> = [];
+  const on = new Set<string>();
+  for (let i = 0; i < args.length; i++) {
+    const flag = args[i];
+    if (table.switches.includes(flag)) on.add(flag);
+    else if (table.valued.includes(flag) && i + 1 < args.length) values.push([flag, args[++i]]);
+    else throw new Error(`run record: ${JSON.stringify(flag)} is not an argument the parser accepted`);
+  }
+  return { values, on };
+}
+
+/**
+ * The `argv` a run record holds: the command, then the options as given, in the command's flag-table order (valued
+ * flags, a repeated one in the order given, then the switches present), every path written by
+ * {@link argvPathFromOut} and `--out` as `.`. Defaults the run used and did not take as an argument are not written.
+ */
+export function recordArgv(command: RunRecordCommand, args: readonly string[], table: ArgvTable, out: string, cwd: string, api: PlatformPath = nodePath): string[] {
+  const { values, on } = argvPairs(args, table);
+  const path = (p: string): string => argvPathFromOut(p, out, cwd, api);
+  const argv: string[] = [command];
+  for (const flag of table.valued) {
+    for (const [f, v] of values) {
+      if (f !== flag) continue;
+      const compound = table.compound?.[f];
+      argv.push(f, f === '--out' ? '.' : table.paths.includes(f) ? path(v) : compound === undefined ? v : compound(v, path));
+    }
+  }
+  for (const flag of table.switches) if (on.has(flag)) argv.push(flag);
+  return argv;
+}
+
+/**
+ * The options a parse of `args` from `cwd` takes, each path resolved to where it points: valued flags as their
+ * values in the order given, switches as present. Two argument lists that resolve to the same map ask for the same run.
+ */
+export function effectiveArgv(args: readonly string[], table: ArgvTable, cwd: string, api: PlatformPath = nodePath): Map<string, string[]> {
+  const { values, on } = argvPairs(args, table);
+  const at = (p: string): string => api.resolve(cwd, p);
+  const got = new Map<string, string[]>();
+  for (const [f, v] of values) {
+    const compound = table.compound?.[f];
+    got.set(f, [...(got.get(f) ?? []), table.paths.includes(f) ? at(v) : compound === undefined ? v : compound(v, at)]);
+  }
+  for (const flag of on) got.set(flag, ['on']);
+  return got;
+}
+
+/**
+ * Where a recorded `argv`, replayed from the `--out` directory, asks for another run than the arguments as given
+ * from `cwd`: one line per flag whose effective values differ, empty when the replay is the same run.
+ */
+export function argvReplayProblems(command: RunRecordCommand, args: readonly string[], recorded: readonly string[], table: ArgvTable, out: string, cwd: string, api: PlatformPath = nodePath): string[] {
+  if (recorded[0] !== command) return [`argv[0] is ${JSON.stringify(recorded[0])}; ${JSON.stringify(command)} is required`];
+  let replay: Map<string, string[]>;
+  try {
+    replay = effectiveArgv(recorded.slice(1), table, api.resolve(cwd, out), api);
+  } catch (err) {
+    return [(err as Error).message];
+  }
+  const given = effectiveArgv(args, table, cwd, api);
+  const flags = [...new Set([...given.keys(), ...replay.keys()])];
+  return flags.filter((f) => JSON.stringify(given.get(f) ?? null) !== JSON.stringify(replay.get(f) ?? null))
+    .map((f) => `${f}: given ${JSON.stringify(given.get(f) ?? null)}, replayed ${JSON.stringify(replay.get(f) ?? null)}`);
+}
+
+/** Remove a previous record before the command starts, so a refused run leaves none behind. */
+export function clearRunRecord(outDir: string, file: string): void {
+  rmSync(join(outDir, file), { force: true });
+}
+
+function filesUnder(outDir: string, entry: string): string[] {
+  const rel = entry.endsWith('/') ? entry.slice(0, -1) : entry;
+  const at = join(outDir, ...rel.split('/'));
+  if (!existsSync(at)) return [];
+  if (!statSync(at).isDirectory()) return [rel];
+  return readdirSync(at, { withFileTypes: true }).flatMap((e) => filesUnder(outDir, `${rel}/${e.name}${e.isDirectory() ? '/' : ''}`));
+}
+
+/**
+ * A record of a run, not a product of it: `run.json` (rigc's `rigc-run/1` in a packed build directory, a stage's
+ * `rig-run/1`) or a `-run.json` record such as this one. Each carries its run's clock, so a record's `outputs` leaves
+ * them out and two runs of the same inputs list the same files and digests.
+ */
+export function isRunRecordFile(path: string): boolean {
+  const name = path.split('/').at(-1) ?? path;
+  return name === RUN_STAMP_FILE || name.endsWith('-run.json');
+}
+
+export interface RunRecordInput {
+  pkg: RunStampPackage;
+  command: RunRecordCommand;
+  startedAt: string;
+  finishedAt: string;
+  outDir: string;
+  /** `build` only: the config it read. */
+  configPath?: string;
+  /** What the run wrote under `outDir`, relative, a directory standing for every file under it. */
+  outputs: readonly string[];
+  argv: readonly string[];
+}
+
+/** Build a `rig-run/2` record from the files on disk. Pure with respect to the clock: the times are the caller's. */
+export function buildRunRecord(input: RunRecordInput): RunRecord {
+  const paths = [...new Set(input.outputs.flatMap((e) => filesUnder(input.outDir, e)))].filter((p) => !isRunRecordFile(p)).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return {
+    spec: RUN_RECORD_SPEC,
+    package: { name: input.pkg.name, version: input.pkg.version },
+    command: input.command,
+    started_at: input.startedAt,
+    finished_at: input.finishedAt,
+    ...(input.configPath === undefined ? {} : { config: { path: relativeToOutRoot(input.outDir, input.configPath), sha256: sha256OnDisk(input.configPath) } }),
+    outputs: paths.map((p) => ({ path: p, sha256: sha256OnDisk(join(input.outDir, ...p.split('/'))) })),
+    argv: [...input.argv],
+  };
+}
+
+/** Write `<outDir>/check-run.json` or `<outDir>/build-run.json`, after the command's report is on disk. */
+export function writeRunRecord(input: RunRecordInput): RunRecord {
+  const record = buildRunRecord(input);
+  writeFileSync(join(input.outDir, input.command === 'check' ? CHECK_RUN_FILE : BUILD_RUN_FILE), rigJsonText(record));
+  return record;
 }

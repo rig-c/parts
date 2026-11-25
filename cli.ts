@@ -27,7 +27,7 @@ import { basename, dirname, extname, join, resolve } from 'node:path';
 import { DEFAULT_PROJECT_RULE, DEFAULT_SEAM_RULE, headGarmentOverlaps, headGarmentWarning, HOLES_LISTED, PROJECT_RULES, type ProjectRule, proposeFields, proposePlan, proposeSinglePlan, SEAM_RULES, type SeamRule } from './src/assemble.ts';
 import { proposeNeck } from './tools/neck-propose.ts';
 import { parseAltArg } from './tools/alternate-cli.ts';
-import { type AlternateCliInput, assembleStage, build, checkStage, emitFillMasksStage, ERROR_MAP_FILE, loopStage, readRuns, readSource, rigStage, suppliedCheckFlag } from './src/build.ts';
+import { type AlternateCliInput, assembleStage, build, BUILD_OWNS, BUILD_OWNS_FILES, checkStage, checkWrote, emitFillMasksStage, ERROR_MAP_FILE, loopStage, readRuns, readSource, rigStage, suppliedCheckFlag } from './src/build.ts';
 import { ACCEPTABLE_BARS, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, findRigc, PACK_PAGE_SIZE, PACK_SHAPES, rigcRunnerAt, type PackShape, PAGE_EDGES, type PageEdges, parsePageSize, PARTS_HOME_SENTENCE, RIGC_GEOMETRY_VERSION, rigcRanClause, type RigcRunner, NO_PARTS_SENTENCE, SEAM_MEAN_BAR, SOURCE_SENTENCE, SEAM_PX_BAR, SEAM_PX_LEVEL, SPINEBOY_YARDSTICK, TEXTURE_STRETCH_CEILING } from './src/check.ts';
 import { ComfyClient, resolveHost, runBackground, runMatte, runPainting, runSeeThrough } from './src/comfy/index.ts';
 import { coreCfg, DEFAULT_GROW_PX, runForeground } from './src/plate.ts';
@@ -56,7 +56,7 @@ import { REQUIREMENTS_SENTENCE } from './src/requirements.ts';
 import { composeStage, IMAGE_SEP, PLATE, PROVENANCES, SCENE_REPORT_FILE, SCENE_REPORT_SPEC, SCENE_SPEC } from './src/scene.ts';
 import { buildSheet, defaultCaption, type Tile, tilesFrom } from './src/sheet.ts';
 import { loadComparison, requiredProblems, structureLines } from './src/structure.ts';
-import { assembleOutputFiles, clearComposeRun, clearRunStamp, readPackageIdentity, rigOutputFiles, RUN_STAMP_FILE, RUN_STAMP_SPEC, writeRunStamp } from './src/runstamp.ts';
+import { type ArgvTable, assembleOutputFiles, BUILD_RUN_FILE, CHECK_RUN_FILE, clearComposeRun, clearRunRecord, clearRunStamp, readPackageIdentity, recordArgv, rigOutputFiles, RUN_STAMP_FILE, RUN_STAMP_SPEC, writeRunRecord, writeRunStamp } from './src/runstamp.ts';
 import { authorLayerLine } from './src/tags.ts';
 
 const EXIT_OK = 0;
@@ -633,6 +633,11 @@ usage:
                     [--set <name> | --all-sets] [--environment <schedule.json>]
                     [--wind-band <spec.json>] [--json]
       --json prints the completed check.json object only, with unchanged exit codes.
+      check-run.json (rig-run/2, STABILITY) records a completed run: the package,
+      the times, every file written with its sha256, and argv, the command and
+      the options as given, each path relative to --out and --out as ".": these
+      arguments reproduce the check with the same package version, run from the
+      --out directory.
       Build, gate, render and measure a rig through rig-c's CLI (the rigc at
       node_modules/.bin/rigc, or on PATH). --rig holds rig.json and motion.json:
       a rig spec, which rigc build compiles, not a compiled skeleton.json.
@@ -968,6 +973,9 @@ usage:
                     [--idle-keys ctl|direct] [--lead-in <periods>] [--seam-pairs] [--keep-stills] [--no-extremes]
                     [--alt <name>=<source>:<full>[:<head>]] [--set <name> | --all-sets]
                     [--environment <schedule.json>] [--wind-band <spec.json>]
+      build-run.json (rig-run/2, as check-run.json for check) records a run whose
+      check completed, with argv starting "build": these arguments reproduce the
+      check with the same package version, run from the --out directory.
       assemble, then rig, then check, in one process, each stage's own lines
       printed under [assemble], [rig] and [check]; the first stage that refuses
       stops the build with its own FAIL lines. The config must already carry
@@ -1279,6 +1287,21 @@ const TAKES = {
 } as const satisfies Record<string, { valued: readonly string[]; switches: readonly string[] }>;
 
 type Command = keyof typeof TAKES;
+
+/** `check`'s flags as its `check-run.json` record writes them back (issue #1541): its {@link TAKES} row and which values are paths. */
+const CHECK_ARGV: ArgvTable = { ...TAKES.check, paths: ['--rig', '--out', '--parts', '--source', '--requirements', '--environment', '--wind-band'] };
+/** `build`'s, for `build-run.json`; `--alt` holds up to three paths after its set name. */
+const BUILD_ARGV: ArgvTable = {
+  ...TAKES.build,
+  paths: ['--config', '--source', '--full', '--head', '--out', '--requirements', '--environment', '--wind-band'],
+  compound: {
+    '--alt': (value, path) => {
+      const alt = parseAltArg(value);
+      if (typeof alt === 'string') throw new Error(`run record: --alt ${JSON.stringify(value)} was accepted and no longer parses: ${alt}`);
+      return `${alt.name}=${path(alt.source)}:${path(alt.full)}${alt.head === undefined ? '' : `:${path(alt.head)}`}`;
+    },
+  },
+};
 
 /** Whether `command` takes `flag` as a valued flag, read off its {@link TAKES} row. */
 function takesValued(command: Command, flag: string): boolean {
@@ -1636,19 +1659,28 @@ function cmdCheck(args: string[]): number {
   if (allSets === 1 && f.has('--set')) return usage('--set and --all-sets are two modes; give one');
   const rig = f.get('--rig') as string;
   const out = f.get('--out') as string;
+  let fixedClock: string | undefined;
+  try { fixedClock = runStampClock(); } catch (err) { return printRefusal(err); }
   const edges = pageEdgesOf(f.get('--page-edges'));
   if (!isPageEdges(edges)) return usage(edges);
   const shape = packShapeOf(f.get('--pack-shape'));
   if (!isPackShape(shape)) return usage(shape);
   try {
     const size = parsePageSize(f.get('--page-size'));
+    const pkg = readPackageIdentity(join(import.meta.dir, 'package.json'));
+    clearRunRecord(out, CHECK_RUN_FILE);
     const bin = findRigc(import.meta.dir, process.env.PATH ?? '');
+    const startedAt = fixedClock ?? new Date().toISOString();
     const r = checkStage(
       { rig, parts: f.get('--parts'), source: f.get('--source'), out, pageEdges: edges, packShape: shape, ...(size === undefined ? {} : { pageSize: size }), requirements: f.get('--requirements'), seamPairs: seamPairs === 1, keepStills: keepStills === 1, noExtremes: noExtremes === 1, ...(f.has('--set') ? { set: f.get('--set') as string } : {}), allSets: allSets === 1, ...(f.has('--environment') ? { environment: f.get('--environment') as string } : {}), ...(f.has('--wind-band') ? { windBand: f.get('--wind-band') as string } : {}) },
       rigcRunner(bin),
       bin,
       json === 1 ? () => {} : console.log,
     );
+    // Issue #1541: the record of the run, beside the report it completed; never a refusal of its own.
+    const wrote = checkWrote(r, out);
+    writeRunRecord({ pkg, command: 'check', startedAt, finishedAt: fixedClock ?? new Date().toISOString(), outDir: out,
+      outputs: [...wrote.written, ...wrote.dirs.map((d) => `${d}/`)], argv: recordArgv('check', args, CHECK_ARGV, out, process.cwd()) });
     if (json === 1) process.stdout.write(`${JSON.stringify(r.figures, null, 1)}\n`);
     return r.figures.PASS ? EXIT_OK : EXIT_REFUSED;
   } catch (err) {
@@ -2480,11 +2512,17 @@ function cmdBuild(args: string[]): number {
   const [config, source, full, out] = ['--config', '--source', '--full', '--out'].map((f) => flags.get(f) as string);
   const head = flags.get('--head') ?? null;
   let bin: string;
+  let fixedClock: string | undefined;
+  let pkg: { name: string; version: string };
   try {
+    fixedClock = runStampClock();
+    pkg = readPackageIdentity(join(import.meta.dir, 'package.json'));
     bin = findRigc(import.meta.dir, process.env.PATH ?? '');
   } catch (err) {
     return printRefusal(err);
   }
+  clearRunRecord(out, BUILD_RUN_FILE);
+  const startedAt = fixedClock ?? new Date().toISOString();
   const scratch = mkdtempSync(join(tmpdir(), 'rig-parts-build-'));
   try {
     const r = build(
@@ -2496,6 +2534,11 @@ function cmdBuild(args: string[]): number {
       } },
       console.log,
     );
+    // Issue #1541: written whenever this build's check completed its report, green or not.
+    if (r.check !== null) {
+      writeRunRecord({ pkg, command: 'build', startedAt, finishedAt: fixedClock ?? new Date().toISOString(), outDir: out, configPath: config,
+        outputs: [...BUILD_OWNS, ...BUILD_OWNS_FILES], argv: recordArgv('build', args, BUILD_ARGV, out, process.cwd()) });
+    }
     return r.stoppedAt === null ? EXIT_OK : EXIT_REFUSED;
   } finally {
     rmSync(scratch, { recursive: true, force: true });

@@ -123,7 +123,7 @@ export const PATH_TO_SUITE_MAP: readonly MapRule[] = [
   { pattern: 'src/round.ts', suites: ['contour-wiring', 'auto-mesh', 'auto-motion', 'influence', 'tree'], why: 'deterministic rounding helper' },
   { pattern: 'src/length.ts', suites: ['tree', 'contour-wiring'], why: 'edgeLength owned by tree (TY15) and contour-wiring' },
   { pattern: 'src/pyfmt.ts', suites: ['propose', 'tree'], why: 'Python float formatter owned by propose' },
-  { pattern: 'src/runstamp.ts', suites: ['rig', 'assemble', 'scene', 'tree'], jobs: ['standalone-tools'], why: 'rig-run/1 stamp writer/reader tested by check_run_clock.ts, rig, assemble, scene' },
+  { pattern: 'src/runstamp.ts', suites: ['rig', 'assemble', 'scene', 'build', 'tree'], jobs: ['standalone-tools'], why: 'rig-run/1 stamp and rig-run/2 record writer/reader tested by check_run_clock.ts, rig, assemble, scene, build' },
 
   { pattern: 'src/config.ts', suites: ['config', 'config-write', 'depth-maps', 'tree'], why: 'config loader owned by config, TY14 in tree, and relocation in depth-maps' },
   { pattern: 'src/configrelocation.ts', suites: ['config', 'depth-maps', 'mesh-draft', 'editor-receipts', 'tree'], why: 'config relocation helper' },
@@ -264,6 +264,7 @@ export const PATH_TO_SUITE_MAP: readonly MapRule[] = [
   { pattern: 'tools/check_alternate_tips.ts', suites: ['alternate-tips', 'tree'], why: 'called by alternate-tips suite' },
   { pattern: 'tools/check_arm_split_upgrade.ts', suites: ['arm-split-upgrade', 'tree'], why: 'called by arm-split-upgrade suite' },
   { pattern: 'tools/check_art_joints.ts', suites: ['fixed-skeleton', 'tree'], why: 'called by fixed-skeleton suite' },
+  { pattern: 'tools/check_run_record.ts', suites: ['build', 'tree'], why: 'rig-run/2 run record controls called by build suite' },
   { pattern: 'tools/check_authored_unit_depth.ts', suites: ['layers-wrapper', 'tree'], why: 'called by layers-wrapper suite' },
   { pattern: 'tools/check_base_anchor.ts', suites: ['alternate-layers', 'tree'], why: 'called by alternate-layers suite' },
   { pattern: 'tools/check_behind_seams.ts', suites: ['behind-seams', 'tree'], why: 'called by behind-seams suite' },

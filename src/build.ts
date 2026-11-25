@@ -2432,6 +2432,19 @@ export function requirementText(name: string, line: RequirementLine): string {
  * whether every bar was met, and each one that was not is printed as a FAIL
  * line here. Throws a PartsError when the check could not measure at all.
  */
+/**
+ * What a completed check wrote under its `--out`, as its `wrote` line names it: the report files in the order the
+ * check wrote them, then the directories it wrote whole (`build`, and `idle_frames`, the requirements, seam and
+ * setup-still directories when they were written). The `check-run.json` record lists the files under these.
+ */
+export function checkWrote(r: CheckReport, out: string): { written: string[]; dirs: string[] } {
+  return {
+    written: r.written,
+    dirs: ['build', ...(r.idle === null ? [] : ['idle_frames']), ...(r.requirements === null ? [] : [REQUIREMENTS_DIR]),
+      ...(r.figures.seam_pairs === undefined ? [] : [SEAM_DIR]), ...(existsSync(join(out, STILL_DIR)) ? [STILL_DIR] : [])],
+  };
+}
+
 export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string, log: Log): CheckReport {
   const pageSize = parsePageSize(input.pageSize);
   const v = rigc(['--version']);
@@ -2520,7 +2533,8 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
     log(`  ${summaryText(r.requirements.summary)}`);
   }
   log(`  gate: rig-play ${fig.gate_spine_html_green ? 'green' : 'RED'} (${fig.rigc_entry.entry}${fig.rigc_entry.spine_core === null ? ', rigc\'s own validator' : `, the spine-core ${fig.rigc_entry.spine_core} round trip`})`);
-  log(`  wrote ${r.written.map((w) => join(input.out, w)).join(', ')}, ${join(input.out, 'build')}/${r.idle === null ? '' : `, ${join(input.out, 'idle_frames')}/`}${r.requirements === null ? '' : `, ${join(input.out, REQUIREMENTS_DIR)}/`}${fig.seam_pairs === undefined ? '' : `, ${join(input.out, SEAM_DIR)}/`}${existsSync(join(input.out, STILL_DIR)) ? `, ${join(input.out, STILL_DIR)}/` : ''}`);
+  const wrote = checkWrote(r, input.out);
+  log(`  wrote ${[...wrote.written.map((w) => join(input.out, w)), ...wrote.dirs.map((d) => `${join(input.out, d)}/`)].join(', ')}`);
   for (const p of r.problems) log(failLine(p));
   log(checkSummaryLine(r));
   return r;
@@ -2938,12 +2952,16 @@ export interface BuildRunners {
 }
 
 /** Every path `build` writes under `--out`, relative — and so every path it clears first. */
-export const BUILD_OWNS: readonly string[] = ['parts', 'parts.json', SOURCE_COVER_FILE, PAINTING_IN_RIG_FILE, 'recomposite_rig.png', ERROR_MAP_FILE, 'rig', 'check', 'idle.gif', 'idle.png', 'idle-indexed.png'];
+/** The `rig-run/2` record `build` writes beside its outputs (issue #1541); cleared with them, so a refused build leaves none. */
+export const BUILD_RUN_FILE = 'build-run.json';
+export const BUILD_OWNS: readonly string[] = ['parts', 'parts.json', SOURCE_COVER_FILE, PAINTING_IN_RIG_FILE, 'recomposite_rig.png', ERROR_MAP_FILE, 'rig', 'check', 'idle.gif', 'idle.png', 'idle-indexed.png', BUILD_RUN_FILE];
+/** The single files a build may also write at the top of its `--out`, cleared with {@link BUILD_OWNS}. */
+export const BUILD_OWNS_FILES: readonly string[] = [CUT_MATERIAL_SOURCES, EDGE_RESIDUAL_FILE, SUPPORT_DOMAINS_FILE, FIGURE_MASK_FILE];
 
 function resetBuildOutput(out: string): void {
   mkdirSync(out, { recursive: true });
   for (const p of BUILD_OWNS) rmSync(join(out, p), { recursive: true, force: true });
-  for (const p of [CUT_MATERIAL_SOURCES, EDGE_RESIDUAL_FILE, SUPPORT_DOMAINS_FILE, FIGURE_MASK_FILE]) rmSync(join(out, p), { force: true });
+  for (const p of BUILD_OWNS_FILES) rmSync(join(out, p), { force: true });
 }
 
 /** Only selects when cleanup occurs; the real config loader still decides validity. */
