@@ -2271,48 +2271,46 @@ function runConfigSuite(): number {
     scopedCutReads.map(({ consumed, final }) => `cut: ${consumed?.problems.map(p => p.detail).join(' | ') ?? 'loads'}; segment: ${codes(final)}`).join(' / '),
     'limb segments replace the consumed cut in final part order, so both config doors resolve only the segment names');
   {
-    const mkCoverCfg = (cover: unknown, regionBone = 'collar', faceRole: unknown = 'surface') => {
+    const mkCoverCfg = (cover: unknown, regionBone = 'collar', hairRole: unknown = 'surface') => {
       const base = minimalConfig();
       return {
         ...base,
-        assemble: { rig_scale: 1, plan: [['robe', 'full', 'topwear'], ['face', 'head', 'face']] },
         bones: [
-          { name: 'chest', parent: 'root', at: [16, 40] },
-          { name: 'head', parent: 'chest', at: [16, 20] },
-          { name: 'collar', parent: 'head', at: [16, 20], inherit: 'onlyTranslation' },
+          ...(base.bones as object[]),
+          { name: 'collar', parent: 'head', at: [32, 16], inherit: 'onlyTranslation' },
         ],
-        regions: { face: 'head' },
         meshes: {
+          ...(base.meshes as object),
           robe: {
             r: 4,
-            segments: [['chest', [16, 40], [16, 24]]],
+            segments: [['chest', [32, 30], [32, 20]]],
             contour: {
               tolerance: 0,
               margin: 0,
               spacing: 4,
-              regions: [{ name: 'collar', shape: 'circle', cx: 16, cy: 20, r: 4, spacing: 2, band: 4, bone: regionBone, ...(cover === undefined ? {} : { cover }) }],
+              regions: [{ name: 'collar', shape: 'circle', cx: 32, cy: 16, r: 4, spacing: 2, band: 4, bone: regionBone, ...(cover === undefined ? {} : { cover }) }],
             },
           },
         },
         turn: {
           pivot: 20,
-          roles: { face: faceRole },
+          roles: { face: 'surface', hair_back: hairRole },
           body: { pivot: 24, roles: { robe: 'surface' } },
         },
       };
     };
-    const ok1548 = refusals(() => parseConfig(mkCoverCfg('face')));
+    const ok1548 = refusals(() => parseConfig(mkCoverCfg('hair_back')));
     const empty1548 = refusals(() => parseConfig(mkCoverCfg('')));
     const badPart1548 = refusals(() => parseConfig(mkCoverCfg('ghost')));
-    const badRole1548 = refusals(() => parseConfig(mkCoverCfg('face', 'collar', 'unit')));
-    const ownGroup1548 = refusals(() => parseConfig(mkCoverCfg('face', 'chest')));
+    const badRole1548 = refusals(() => parseConfig(mkCoverCfg('hair_back', 'collar', 'unit')));
+    const ownGroup1548 = refusals(() => parseConfig(mkCoverCfg('hair_back', 'chest')));
     say(
       'CF1548_CONTOUR_REGION_COVER_CHECKS_NONEMPTY_STRING_AND_OTHER_GROUP_SURFACE_ROLE',
       ok1548 === null &&
-        empty1548?.problems.some(p => p.code === 'CONFIG_FIELD_TYPE' && p.object === 'config.meshes.robe.contour.regions[0].cover') === true &&
-        badPart1548?.problems.some(p => p.code === 'CONFIG_TURN_BAND_COVER' && p.detail.includes('"ghost"')) === true &&
-        badRole1548?.problems.some(p => p.code === 'CONFIG_TURN_BAND_COVER' && p.detail.includes('"unit"')) === true &&
-        ownGroup1548?.problems.some(p => p.code === 'CONFIG_TURN_BAND_COVER' && p.detail.includes('"chest"')) === true,
+        empty1548?.problems.length === 1 && empty1548.problems[0].code === 'CONFIG_FIELD_TYPE' && empty1548.problems[0].object === 'config.meshes.robe.contour.regions[0].cover' &&
+        badPart1548?.problems.length === 1 && badPart1548.problems[0].code === 'CONFIG_TURN_BAND_COVER' && badPart1548.problems[0].detail.includes('"ghost"') &&
+        badRole1548?.problems.length === 1 && badRole1548.problems[0].code === 'CONFIG_TURN_BAND_COVER' && badRole1548.problems[0].detail.includes('"unit"') &&
+        ownGroup1548?.problems.length === 1 && ownGroup1548.problems[0].code === 'CONFIG_TURN_BAND_COVER' && ownGroup1548.problems[0].detail.includes('"chest"'),
       `valid=${codes(ok1548)}; empty=${codes(empty1548)}; ghost=${codes(badPart1548)}; unit=${codes(badRole1548)}; ownGroup=${codes(ownGroup1548)}`,
       'issue #1548: contour.regions[].cover accepts an other-group 2.5D turn surface and refuses empty/non-string values, undeclared or non-surface parts, and same-group region bones',
     );
