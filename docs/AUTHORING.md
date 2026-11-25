@@ -9776,29 +9776,6 @@ art. An authored `parts.json` depth reference remains an active standalone
 guards still apply. With binding inactive there is no added reference, file or
 legacy-byte change. #773 adds no image generation, geometry or motion model.
 
-When a separate small `neck` skin part sits behind the face and above the
-garment, list `neck` as `"surface"` in `turn.roles` or `turn.body.roles` (or
-both); when no separate neck part exists and the garment itself forms the neck
-(such as a stand collar at the top of `topwear` meeting the chin), put the
-collar-carrying part in `turn.body.roles` only rather than both role tables
-(putting the whole torso in both groups applies the head deform across the
-torso and folds triangles on pitch) and blend its collar with a `contour`
-local-deformation region (#1543). Mesh that part with `contour` (`grid` has no
-`regions`, and `"surface"` with `auto` is refused by
-[`CONFIG_TURN_SURFACE_AUTO`](#CONFIG_TURN_SURFACE_AUTO)), keep its `segments`
-on the torso, and add a `contour.regions` polygon above the chin line with
-`band` equal to the collar height in rig pixels, bound to a collar bone under
-`head` with `inherit: "onlyTranslation"` so the band takes the head turn's
-translation without following head rotation in the idle. Both turn groups must
-share one `zScale` (and `near` polarity). Because `regionWeight` is `1 - d /
-band`, the falloff across the collar is linear (C0, with a slope break at both
-band edges), and the rest render is not byte-identical to the unbanded build
-because the region and its band add vertices (setup and idle remain within the
-1-level turn tolerance). A contour region on a turn surface bound to a bone in
-the other turn group's subtree that gives no vertex a weight above 0 is refused
-by [`RIG_TURN_BAND_REACHES_NO_VERTEX`](#RIG_TURN_BAND_REACHES_NO_VERTEX),
-naming the region index, bone and part.
-
 ### Head roll before a declared turn
 
 `rig` and `build` report `WARN RIG_TURN_HEAD_ROLL` when a declared head
