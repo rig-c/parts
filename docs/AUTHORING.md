@@ -9711,6 +9711,25 @@ An unrelated disconnected sibling with no actual overlap stays unselected.
 Two same-group fields with incompatible emitted offsets raise
 [`RIG_TURN_SURFACE_OVERLAP_DEPTH`](#RIG_TURN_SURFACE_OVERLAP_DEPTH).
 
+Only a vertex whose positive weights span both groups is owned (#1543); a
+vertex in one group keeps that group's own field, as a single-group part
+does. A declaration is intent: a vertex weighted by a bone that a declared
+`meshes.<part>.contour.regions[].bone` names keeps its blended field and is
+never owned, so a declared band on a part other turn parts overlap builds.
+Mixing that arises without a declaration (explicit or segment weights) is
+still owned and still refused when its covers disagree. What the band then
+moves by is the part's own depth sheet under the other group's pivot, not the
+cover's field: on one production-shaped build, the band's all-head rows
+(weight 1 on the region bone) travelled −27.0 rig px at +15° head yaw where
+the face over them travelled −9.6, so the band leads the face it sits under
+rather than trailing it. Which field a band should follow is
+[rig-c/parts#1548](https://github.com/rig-c/parts/issues/1548). A polygon
+region whose edge has short segments can make the band offset cross itself,
+refused as `CONTOUR_PARAMETER` on `regions[i].band`: on that build, a jaw line
+with two extra points, its edges there 23–29 px long, crossed at any band above
+49 px for every strip height from 1 to 80 px, and passed at band 80 without
+those two points. This is a note on the refusal, not a recommended shape.
+
 Unit/rear neighbours contribute their actual emitted rigid carrier motion,
 including its resolved unit depth or rear counter field. A unit region split by
 `motion.blink.still` supplies both emitted drawings: the lower slot and

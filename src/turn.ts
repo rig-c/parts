@@ -1491,6 +1491,8 @@ export interface Depth25DTurnOptions {
   stills: Readonly<Record<string, { row: number; bone: string }>>;
   boneLandmarks: ReadonlyMap<string, readonly [number, number]>;
   hasAlternateFaceSet: boolean;
+  /** Each part's declared contour regions in config order; a vertex a region weights keeps its blended field (#1543). */
+  contourBands?: Readonly<Record<string, ReadonlyArray<{ name: string; bone: string }>>>;
   /** Existing weighted attachments; offsets are emitted per binding, never per UV. */
   surfaceMeshes?: ReadonlyArray<{
     part: string;
