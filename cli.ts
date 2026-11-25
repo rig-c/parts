@@ -785,8 +785,8 @@ usage:
       reads what a run without the flag reads, and wind [0, 0] is a calm, not
       the default (AUTHORING §6, The world the readings are taken in). One
       environment: line names the path, the step count and the sha256's first
-      16 hex; check.json's environment holds path (as given), sha256 and
-      steps. Without the flag no environment provenance key is written.
+      16 hex; check.json's environment holds path (relative to --out), sha256
+      and steps. Without the flag no environment provenance key is written.
       Physics rigs with readable declared seam pairs also report independent
       default wind [1, 0] and still wind [0, 0], gravity [0, 1], under
       SEAM_OVER_MOTION.worlds: gap/ghost maximum and worst frame only;
@@ -1001,7 +1001,7 @@ usage:
       Without the flag, config.requirements (a path beside the config) is
       read in its place; a flag naming other bytes than the declaration is
       BUILD_REQUIREMENTS_CONFLICT, before assemble. check.json's
-      requirements.file records the path as typed or declared, its sha256
+      requirements.file records the path relative to <out>/check, its sha256
       and the file's keys.
       --environment is forwarded to check (as for check); the schedule is read
       by rig-c's reader before assemble runs, so a malformed one is refused,

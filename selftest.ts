@@ -127,7 +127,7 @@ import { readConfigWriteTarget, stageConfigWrite } from './tools/configwrite.ts'
 import { BLINK_ANIMATION } from './src/check.ts';
 import { runCorePointerChecks } from './tools/check_corepointer.ts';
 import { runLayerBoundsChecks } from './tools/check_layer_bounds.ts';
-import { BUILD_RUN_FILE, CHECK_RUN_FILE, COMPOSE_RUN_FILE, COMPOSE_RUN_SPEC, type ComposeRun, readPackageIdentity, RUN_STAMP_FILE, RUN_STAMP_SPEC, type RunStamp } from './src/runstamp.ts';
+import { argvPathFromOut, BUILD_RUN_FILE, CHECK_RUN_FILE, COMPOSE_RUN_FILE, COMPOSE_RUN_SPEC, type ComposeRun, readPackageIdentity, RUN_STAMP_FILE, RUN_STAMP_SPEC, type RunStamp } from './src/runstamp.ts';
 /**
  * rig-parts selftest — proof that every gate here can go RED.
  *
@@ -20413,7 +20413,7 @@ function runMotionSeamWorldIntegration(dir: string, say: (name: string, ok: bool
       rawReferencesHold(join(dir, 'world-default'), defaults.motionSeam.worlds, defaultCalls) &&
       rawReferencesHold(join(dir, 'world-custom'), worlds, customCalls.slice(1)) &&
       !existsSync(join(dir, 'world-plain', 'seam_motion')) && !existsSync(join(dir, 'world-custom', '_seam_motion')) &&
-      JSON.stringify(custom.figures.environment) === JSON.stringify(readCheckEnvironment(env)),
+      JSON.stringify(custom.figures.environment) === JSON.stringify({ ...readCheckEnvironment(env), path: '../custom-world.json' }),
     'default calls ' + defaultCalls.map(c => c.world) + '; custom calls ' + customCalls.map(c => c.world) + '; plain calls ' + plainCalls.map(c => c.world) + '; raw worlds match ' + sourceMatches,
     'the current custom reading remains first, default is reused without a schedule, complete raw render files survive at deterministic relative references after scratch cleanup, and nonphysics has no extra file, call or serialized byte in the seam block.');
 }
@@ -25533,7 +25533,8 @@ function runEnvironmentCheckCases(say: (name: string, ok: boolean, detail: strin
         noneHashes.length > 0 &&
         JSON.stringify(idleHashes(initial.dir)) === JSON.stringify(noneHashes) &&
         Object.keys(fig(initial.text)).slice(0, 8).join(',') === 'spec,bar_outcomes,build,gate_spine_html_green,rigc_entry,pack_mode,environment,loop_max_diff' &&
-        JSON.stringify(initialRecord) === JSON.stringify({ path: initialPath, sha256: sha(initialPath), steps: 1 }) &&
+        JSON.stringify(initialRecord) === JSON.stringify({ path: '../initial.json', sha256: sha(initialPath), steps: 1 }) &&
+        resolve(initial.dir, String(initialRecord?.path ?? '')) === resolve(initialPath) &&
         calm.status === 0 &&
         withoutEnv(calm.text) !== none.text &&
         stretchOf(calm.text) !== stretchOf(none.text) &&
@@ -25547,8 +25548,8 @@ function runEnvironmentCheckCases(say: (name: string, ok: boolean, detail: strin
       gust.status === 1 &&
         stretchOf(gust.text) !== stretchOf(none.text) &&
         foldingOf(gust.text) !== foldingOf(none.text) &&
-        JSON.stringify(fig(gust.text).environment) === JSON.stringify({ path: gustPath, sha256: sha(gustPath), steps: 2 }) &&
-        envLine(gust.out) === environmentLine({ path: gustPath, sha256: sha(gustPath), steps: 2 }) &&
+        JSON.stringify(fig(gust.text).environment) === JSON.stringify({ path: '../gust.json', sha256: sha(gustPath), steps: 2 }) &&
+        envLine(gust.out) === environmentLine({ path: '../gust.json', sha256: sha(gustPath), steps: 2 }) &&
         envLine(gust.out).includes(`sha256 ${sha(gustPath).slice(0, 16)}`),
       `wind [1, 0] then [40, 0] from 0.5 s: exit ${none.status} -> ${gust.status}; TEXTURE_STRETCH severity ${stretchOf(none.text)} -> ${stretchOf(gust.text)} (${String((fig(none.text).TEXTURE_STRETCH as Record<string, unknown> | undefined)?.status)} -> ${String((fig(gust.text).TEXTURE_STRETCH as Record<string, unknown> | undefined)?.status)}); ${FOLD_LINE} folding meshes ${foldingOf(none.text)} -> ${foldingOf(gust.text)}; TIP_OVER_ROOT ratio ${tipOf(none.text)} -> ${tipOf(gust.text)}; ${CLOTH_LINE} warnings ${warnOf(none.text)} -> ${warnOf(gust.text)}; line: ${envLine(gust.out).replace(gustPath, '<schedule>').slice(0, 90)}…; check.json sha256 ${String((fig(gust.text).environment as Record<string, unknown> | undefined)?.sha256)}`,
       "issue #538 bar 2 and the card's \"PR carries\": a schedule that moves a physics chain moves the readings taken under it, and the report names which schedule by its digest",
@@ -25680,6 +25681,9 @@ function runWindBandCases(
       wb !== null &&
       wb.status === 'REPORTED' &&
       wb.spec === WIND_BAND_SPEC &&
+      wb.path === '../good.json' &&
+      resolve(checkOut, wb.path) === resolve(specPath) &&
+      wb.sha256 === createHash('sha256').update(readFileSync(specPath)).digest('hex') &&
       wb.steady_wind_only === true &&
       JSON.stringify(wb.steps) === '[0,4,8]' &&
       JSON.stringify(wb.gravity) === '[0,1]' &&
@@ -26650,8 +26654,8 @@ function runAnimationFoldCases(say: (name: string, ok: boolean, detail: string, 
       "issue #320, HQ's reading: a fold the art means (a sleeve hidden behind the body) is the author's to accept, by slot and animation with a reason, as rig-c's invariants.deformMayFold is — and, as rig-c refuses an exemption that exempts nothing, an entry that matches no fold fails rather than sitting in the file after the fold it excused is gone",
     );
 
-    // CK521 — issue #556: check --requirements, no config in play, records the file it read first in the requirements block —
-    // the path as typed, the sha256 of its bytes and its top-level keys; check without the flag writes no requirements block.
+    // CK521 — issues #556, #1554: check --requirements, no config in play, records the file it read first in the requirements block —
+    // the path relative to --out, the sha256 of its bytes and its top-level keys; check without the flag writes no requirements block.
     const declaredPath = join(dir, 'declared.json');
     const reqBlock = (declared.fig?.requirements ?? null) as Record<string, unknown> | null;
     const fileRecord = (reqBlock?.file ?? null) as Record<string, unknown> | null;
@@ -26661,14 +26665,15 @@ function runAnimationFoldCases(say: (name: string, ok: boolean, detail: string, 
       declared.status === 0 &&
         reqBlock !== null &&
         Object.keys(reqBlock)[0] === 'file' &&
-        JSON.stringify(fileRecord) === JSON.stringify({ path: declaredPath, sha256: declaredSha, keys: ['spec', 'fps', 'requirements', 'may_fold'] }) &&
+        JSON.stringify(fileRecord) === JSON.stringify({ path: '../declared.json', sha256: declaredSha, keys: ['spec', 'fps', 'requirements', 'may_fold'] }) &&
+        resolve(declared.outDir, String(fileRecord?.path ?? '')) === resolve(declaredPath) &&
         ok.status === 0 &&
         ok.fig !== null &&
         !('requirements' in ok.fig) &&
         red.fig !== null &&
         !('requirements' in red.fig),
-      `with --requirements: requirements block keys [${reqBlock === null ? '' : Object.keys(reqBlock).join(', ')}], file ${JSON.stringify(fileRecord === null ? null : { ...fileRecord, path: String(fileRecord.path) === declaredPath ? '<as typed>' : fileRecord.path, sha256: String(fileRecord.sha256).slice(0, 16) })} (file sha256 ${declaredSha.slice(0, 16)}); without the flag: requirements ${ok.fig !== null && 'requirements' in ok.fig ? 'WRITTEN' : 'absent'} (calm), ${red.fig !== null && 'requirements' in red.fig ? 'WRITTEN' : 'absent'} (folded)`,
-      'issue #556: a check that measured against a requirements file says which, by the path its caller wrote and the digest of the bytes read, so a reader can tell a result that needed the file from one that did not; a check given none writes what it wrote before',
+      `with --requirements: requirements block keys [${reqBlock === null ? '' : Object.keys(reqBlock).join(', ')}], file ${JSON.stringify(fileRecord === null ? null : { ...fileRecord, sha256: String(fileRecord.sha256).slice(0, 16) })} (file sha256 ${declaredSha.slice(0, 16)}); without the flag: requirements ${ok.fig !== null && 'requirements' in ok.fig ? 'WRITTEN' : 'absent'} (calm), ${red.fig !== null && 'requirements' in red.fig ? 'WRITTEN' : 'absent'} (folded)`,
+      'issues #556, #1554: a check that measured against a requirements file says which, by its path relative to --out and the digest of the bytes read, so a reader can resolve the file from --out alone; a check given none writes what it wrote before',
     );
 
     // CK245 — with a physics constraint the folds are read with physics on and off side by side, and the keys' fold still fails.
@@ -29557,7 +29562,7 @@ function runBuildSuite(): number {
         byConfig.out.includes('[check]   SKIRT_RANGE: PASS — ') &&
         rebuildDiff.length === 0 &&
         filesUnder(flagOut).length > 0 &&
-        JSON.stringify(flagRecord) === JSON.stringify({ path: 'reqs.json', sha256: reqsSha, keys: ['spec', 'fps', 'requirements'] }),
+        JSON.stringify(flagRecord) === JSON.stringify({ path: '../../reqs.json', sha256: reqsSha, keys: ['spec', 'fps', 'requirements'] }),
       `--requirements reqs.json: exit ${byFlag.status}; config.requirements "reqs.json", no flag: exit ${byConfig.status}; ${rebuildDiff.length === 0 ? `${filesUnder(flagOut).length} file(s) under out/, byte-identical` : rebuildDiff.slice(0, 3).join('; ')}; check.json requirements.file ${showRecord(flagRecord)} (file sha256 ${reqsSha.slice(0, 16)})`,
       "issue #556, bar 1: a rig built with the flag rebuilds byte for byte from its config alone once the config names the file; the record is the path as the caller wrote it, never resolved, so the two writings of one relative path are the same bytes, and its digest and keys say what the file asked without opening it",
     );
@@ -29687,7 +29692,7 @@ function runBuildSuite(): number {
         namesFile(declaringConfig, join(dir, 'config-reqs.json'), join(dir, 'config-reqs.json')) &&
         keysOf(flagOut).slice(-3).join(',') === 'config,requirements,PASS' &&
         keysOf(configOut).slice(-3).join(',') === 'config,requirements,PASS' &&
-        JSON.stringify(recordOf(flagOut)) === JSON.stringify({ path: 'reqs.json', sha256: reqsSha, keys: ['spec', 'fps', 'requirements'] }),
+        JSON.stringify(recordOf(flagOut)) === JSON.stringify({ path: '../../reqs.json', sha256: reqsSha, keys: ['spec', 'fps', 'requirements'] }),
       `BU178's flag build: config ${showConfig(flagConfig)}, keys ending [${keysOf(flagOut).slice(-3).join(', ')}], requirements.file ${showRecord(recordOf(flagOut))}; its rebuild from config-reqs.json: config ${showConfig(declaringConfig)}, keys ending [${keysOf(configOut).slice(-3).join(', ')}]`,
       'issue #607: the record sits just before #556\'s requirements block, and #556\'s record keeps its path, digest and keys; two builds from two config files are tied each to its own (an absolute --config is recorded absolute, as typed), so BU178 sets this one record aside and compares every other byte',
     );
@@ -32696,10 +32701,20 @@ export function chainCheckWholeFile(expectedText: string, currentText: string, p
   const expected = JSON.parse(expectedText) as Record<string, unknown>;
   const current = JSON.parse(currentText) as Record<string, unknown>;
   const withoutModel = (v: Record<string, unknown>): Record<string, unknown> => {
-    const build = v.build;
-    if (build === null || typeof build !== 'object' || Array.isArray(build)) return v;
-    const { model_sha256: _model, ...rest } = build as Record<string, unknown>;
-    return { ...v, build: rest };
+    const out = { ...v };
+    const build = out.build;
+    if (build !== null && typeof build === 'object' && !Array.isArray(build)) {
+      const { model_sha256: _model, ...rest } = build as Record<string, unknown>;
+      out.build = rest;
+    }
+    const req = out.requirements;
+    if (req !== null && typeof req === 'object' && !Array.isArray(req)) {
+      const file = (req as Record<string, unknown>).file;
+      if (file !== null && typeof file === 'object' && !Array.isArray(file)) {
+        out.requirements = { ...(req as Record<string, unknown>), file: { ...(file as Record<string, unknown>), path: '<from check out>' } };
+      }
+    }
+    return out;
   };
   const diffs = jsonDiffs(withoutModel(expected), withoutModel(current), chainTolerance('check.json', expected));
   const machine: string[] = [];
@@ -32726,6 +32741,15 @@ function chainCheckGoldenCase(ex: string, out: string, key: string, say: ReturnT
       const check = chainCheckWholeFile(expectedText, currentText, process.platform);
       const outcomeFaults = checkOutcomeFaults(current);
       const modelMatch = checkBuildMatchesModel(join(out, 'check', 'check.json'), join(out, 'check', 'build', 'skeleton.model.json'));
+      const reqFileRec = ((current.requirements as Record<string, unknown> | undefined)?.file ?? null) as { path?: unknown; sha256?: unknown } | null;
+      const valInputDir = validationInput(ROOT);
+      const wantReqPath = valInputDir === null ? null : argvPathFromOut(join(valInputDir, 'requirements.json'), join(out, 'check'), ROOT);
+      const resolvedReq = reqFileRec !== null && typeof reqFileRec.path === 'string' ? resolve(join(out, 'check'), reqFileRec.path) : '';
+      const reqMatch = reqFileRec === null || (
+        reqFileRec.path === wantReqPath &&
+        existsSync(resolvedReq) &&
+        createHash('sha256').update(readFileSync(resolvedReq)).digest('hex') === reqFileRec.sha256
+      );
       const support = report as SupportReport | undefined;
       const droppedPair = support === undefined ? undefined : { ...support, pairs: support.pairs.slice(1) };
       say(`CH943_SUPPORT_COVERAGE_IS_EXPLICIT[${key}]`, sampleSupportCoverage(support) && !sampleSupportCoverage(droppedPair),
@@ -32751,9 +32775,9 @@ function chainCheckGoldenCase(ex: string, out: string, key: string, say: ReturnT
           'issue #1439: CH04 compares the whole file, so the versioned outcome fields the legacy projection stripped are held to the snapshot.');
       }
       say(`CH1372_COMPLETED_CHAIN_REPORT_HAS_THE_DECLARED_OUTCOMES[${key}]`,
-        outcomeFaults.length === 0 && current.PASS === true && modelMatch,
-        JSON.stringify({ faults: outcomeFaults, modelMatch, build: current.build }),
-        'The outcome map is well formed and the build model digest is the hash of the model file beside the report; the values against the snapshot are CH04\'s.');
+        outcomeFaults.length === 0 && current.PASS === true && modelMatch && reqMatch,
+        JSON.stringify({ faults: outcomeFaults, modelMatch, reqMatch, build: current.build }),
+        'The outcome map is well formed, the build model digest matches the model file beside the report, and requirements.file.path resolves from check/ to the requirements file with its sha256.');
 
 }
 function chainGateGoldenCase(ex: string, out: string, key: string, partCount: number, say: ReturnType<typeof counter>['say']) {
@@ -37712,7 +37736,7 @@ function runAssembleSuite(): number {
       });
       return { status: r.status ?? 1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
     };
-    const asStampInputFaults = (cwdDir: string, stamp: RunStamp | null, expectedRoles: readonly string[]): string[] => {
+    const asStampInputFaults = (outDir: string, stamp: RunStamp | null, expectedRoles: readonly string[]): string[] => {
       if (stamp === null) return ['missing run.json'];
       if (!Array.isArray(stamp.inputs)) return ['missing inputs array'];
       const faults: string[] = [];
@@ -37726,20 +37750,19 @@ function runAssembleSuite(): number {
         const keys = Object.keys(entry).join(',');
         if (keys !== 'role,path,sha256') faults.push(`inputs[${idx}] keys are ${keys}; expected role,path,sha256`);
         if (entry.path.startsWith('/') || entry.path.startsWith('~') || entry.path.includes('\\')) {
-          faults.push(`inputs[${idx}] (${entry.role}): path "${entry.path}" is not a clean cwd-relative path`);
+          faults.push(`inputs[${idx}] (${entry.role}): path "${entry.path}" is not a clean --out-relative path`);
           return;
         }
-        const resolved = join(cwdDir, ...entry.path.split('/'));
+        const resolved = join(outDir, ...entry.path.split('/'));
         if (!existsSync(resolved)) {
-          faults.push(`inputs[${idx}] (${entry.role}): "${entry.path}" does not exist under cwd`);
+          faults.push(`inputs[${idx}] (${entry.role}): "${entry.path}" does not exist from --out`);
           return;
         }
-        const hashFile = statSync(resolved).isDirectory() ? join(resolved, 'layers.json') : resolved;
-        if (!existsSync(hashFile)) {
-          faults.push(`inputs[${idx}] (${entry.role}): directory "${entry.path}" holds no layers.json`);
+        if (statSync(resolved).isDirectory()) {
+          faults.push(`inputs[${idx}] (${entry.role}): "${entry.path}" names a directory rather than the hashed file`);
           return;
         }
-        const actualSha = asSha256(hashFile);
+        const actualSha = asSha256(resolved);
         if (entry.sha256 !== actualSha) {
           faults.push(`inputs[${idx}] (${entry.role}): sha256 is ${entry.sha256}; disk has ${actualSha}`);
         }
@@ -37752,11 +37775,12 @@ function runAssembleSuite(): number {
       ? (JSON.parse(readFileSync(join(asInputsOut, RUN_STAMP_FILE), 'utf8')) as RunStamp)
       : null;
     const expectedThreeInputs = [
-      { role: 'source', path: 'painting.png', sha256: asSha256(join(dir, 'painting.png')) },
-      { role: 'full', path: 'full', sha256: asSha256(join(dir, 'full', 'layers.json')) },
-      { role: 'head', path: 'head', sha256: asSha256(join(dir, 'head', 'layers.json')) },
+      { role: 'source', path: '../../painting.png', sha256: asSha256(join(dir, 'painting.png')) },
+      { role: 'full', path: '../../full/layers.json', sha256: asSha256(join(dir, 'full', 'layers.json')) },
+      { role: 'head', path: '../../head/layers.json', sha256: asSha256(join(dir, 'head', 'layers.json')) },
     ];
     const asInputsRebuildOut = join(dir, 'stamp-inputs', 'rebuilt');
+    mkdirSync(asInputsRebuildOut, { recursive: true });
     const rebuildArgs =
       asInputsStamp?.inputs === undefined
         ? []
@@ -37764,11 +37788,11 @@ function runAssembleSuite(): number {
             'assemble',
             ...asInputsStamp.inputs.flatMap((entry) => [`--${entry.role}`, entry.path]),
             '--config',
-            join('stamp-inputs/out', ...asInputsStamp.config.path.split('/')),
+            asInputsStamp.config.path,
             '--out',
-            'stamp-inputs/rebuilt',
+            '.',
           ];
-    const rInputsRebuild = rebuildArgs.length === 0 ? { status: 1, out: 'no inputs' } : runCliInCwd(dir, rebuildArgs);
+    const rInputsRebuild = rebuildArgs.length === 0 ? { status: 1, out: 'no inputs' } : runCliInCwd(asInputsRebuildOut, rebuildArgs);
     const asInputsFiles = existsSync(asInputsOut) ? filesUnder(asInputsOut) : [];
     const asRebuildFiles = existsSync(asInputsRebuildOut) ? filesUnder(asInputsRebuildOut) : [];
     const asRebuildIdentical =
@@ -37784,16 +37808,16 @@ function runAssembleSuite(): number {
       ? (JSON.parse(readFileSync(join(asSingleDir, 'out', RUN_STAMP_FILE), 'utf8')) as RunStamp)
       : null;
     const expectedSingleInputs = [
-      { role: 'source', path: 'painting.png', sha256: asSha256(join(asSingleDir, 'painting.png')) },
-      { role: 'full', path: 'art.psd', sha256: asSha256(join(asSingleDir, 'art.psd')) },
+      { role: 'source', path: '../painting.png', sha256: asSha256(join(asSingleDir, 'painting.png')) },
+      { role: 'full', path: '../art.psd', sha256: asSha256(join(asSingleDir, 'art.psd')) },
     ];
-    const threeInputFaults = asStampInputFaults(dir, asInputsStamp, ['source', 'full', 'head']);
-    const singleInputFaults = asStampInputFaults(asSingleDir, asSingleStamp, ['source', 'full']);
+    const threeInputFaults = asStampInputFaults(asInputsOut, asInputsStamp, ['source', 'full', 'head']);
+    const singleInputFaults = asStampInputFaults(join(asSingleDir, 'out'), asSingleStamp, ['source', 'full']);
     const plantedWrongInputHash =
       asInputsStamp?.inputs === undefined
         ? []
         : asStampInputFaults(
-            dir,
+            asInputsOut,
             {
               ...asInputsStamp,
               inputs: asInputsStamp.inputs.map((e, i) => (i === 1 ? { ...e, sha256: '0'.repeat(64) } : e)),
@@ -37803,12 +37827,12 @@ function runAssembleSuite(): number {
     const plantedMissingInput =
       asInputsStamp?.inputs === undefined
         ? []
-        : asStampInputFaults(dir, { ...asInputsStamp, inputs: asInputsStamp.inputs.slice(0, 2) }, ['source', 'full', 'head']);
+        : asStampInputFaults(asInputsOut, { ...asInputsStamp, inputs: asInputsStamp.inputs.slice(0, 2) }, ['source', 'full', 'head']);
     const plantedSwappedInputOrder =
       asInputsStamp?.inputs === undefined
         ? []
         : asStampInputFaults(
-            dir,
+            asInputsOut,
             { ...asInputsStamp, inputs: [asInputsStamp.inputs[1], asInputsStamp.inputs[0], asInputsStamp.inputs[2]] },
             ['source', 'full', 'head'],
           );
@@ -37816,8 +37840,8 @@ function runAssembleSuite(): number {
       asSingleStamp?.inputs === undefined
         ? []
         : asStampInputFaults(
-            asSingleDir,
-            { ...asSingleStamp, inputs: [...asSingleStamp.inputs, { role: 'head', path: 'art.psd', sha256: expectedSingleInputs[1].sha256 }] },
+            join(asSingleDir, 'out'),
+            { ...asSingleStamp, inputs: [...asSingleStamp.inputs, { role: 'head', path: '../art.psd', sha256: expectedSingleInputs[1].sha256 }] },
             ['source', 'full'],
           );
     const asSharedManifestDir = join(dir, 'shared');
@@ -37835,11 +37859,12 @@ function runAssembleSuite(): number {
       ? (JSON.parse(readFileSync(join(asSymlinkOut, RUN_STAMP_FILE), 'utf8')) as RunStamp)
       : null;
     const expectedSymlinkInputs = [
-      { role: 'source', path: 'painting.png', sha256: asSha256(join(dir, 'painting.png')) },
-      { role: 'full', path: 'symlink-full/layers.json', sha256: asSha256(join(asSharedManifestDir, 'manifest.json')) },
-      { role: 'head', path: 'head', sha256: asSha256(join(dir, 'head', 'layers.json')) },
+      { role: 'source', path: '../../painting.png', sha256: asSha256(join(dir, 'painting.png')) },
+      { role: 'full', path: '../../symlink-full/layers.json', sha256: asSha256(join(asSharedManifestDir, 'manifest.json')) },
+      { role: 'head', path: '../../head/layers.json', sha256: asSha256(join(dir, 'head', 'layers.json')) },
     ];
     const asSymlinkRebuildOut = join(dir, 'stamp-symlink', 'rebuilt');
+    mkdirSync(asSymlinkRebuildOut, { recursive: true });
     const symlinkRebuildArgs =
       asSymlinkStamp?.inputs === undefined
         ? []
@@ -37847,11 +37872,11 @@ function runAssembleSuite(): number {
             'assemble',
             ...asSymlinkStamp.inputs.flatMap((entry) => [`--${entry.role}`, entry.path]),
             '--config',
-            join('stamp-symlink/out', ...asSymlinkStamp.config.path.split('/')),
+            asSymlinkStamp.config.path,
             '--out',
-            'stamp-symlink/rebuilt',
+            '.',
           ];
-    const rSymlinkRebuild = symlinkRebuildArgs.length === 0 ? { status: 1, out: 'no inputs' } : runCliInCwd(dir, symlinkRebuildArgs);
+    const rSymlinkRebuild = symlinkRebuildArgs.length === 0 ? { status: 1, out: 'no inputs' } : runCliInCwd(asSymlinkRebuildOut, symlinkRebuildArgs);
     const asSymlinkFiles = existsSync(asSymlinkOut) ? filesUnder(asSymlinkOut) : [];
     const asSymlinkRebuildFiles = existsSync(asSymlinkRebuildOut) ? filesUnder(asSymlinkRebuildOut) : [];
     const asSymlinkRebuildIdentical =
@@ -37860,11 +37885,11 @@ function runAssembleSuite(): number {
       asSymlinkFiles.length > 0 &&
       asSymlinkFiles.join(',') === asSymlinkRebuildFiles.join(',') &&
       asSymlinkFiles.every((f) => Buffer.compare(readFileSync(join(asSymlinkOut, f)), readFileSync(join(asSymlinkRebuildOut, f))) === 0);
-    const symlinkInputFaults = asStampInputFaults(dir, asSymlinkStamp, ['source', 'full', 'head']);
-    const realpathMutantFullPath = relative(realpathSync(resolve(dir)), realpathSync(resolve(dir, 'symlink-full/layers.json'))).split(sep).join('/');
-    const rRealpathMutantRebuild = runCliInCwd(dir, ['assemble', '--source', 'painting.png', '--full', realpathMutantFullPath, '--head', 'head', '--config', 'config.json', '--out', 'stamp-symlink/mutant-out']);
+    const symlinkInputFaults = asStampInputFaults(asSymlinkOut, asSymlinkStamp, ['source', 'full', 'head']);
+    const realpathMutantFullPath = relative(realpathSync(resolve(asSymlinkOut)), realpathSync(resolve(dir, 'symlink-full/layers.json'))).split(sep).join('/');
+    const rRealpathMutantRebuild = runCliInCwd(asSymlinkOut, ['assemble', '--source', '../../painting.png', '--full', realpathMutantFullPath, '--head', '../../head/layers.json', '--config', '../../config.json', '--out', '../mutant-out']);
     const realpathMutantFails =
-      realpathMutantFullPath === 'shared/manifest.json' &&
+      realpathMutantFullPath === '../../shared/manifest.json' &&
       realpathMutantFullPath !== asSymlinkStamp?.inputs?.[1]?.path &&
       rRealpathMutantRebuild.status === 1 &&
       rRealpathMutantRebuild.out.includes('LAYERS_INPUT_KIND:') &&
@@ -37886,7 +37911,7 @@ function runAssembleSuite(): number {
         plantedSwappedInputOrder.join(';') === 'inputs roles are full,source,head; expected source,full,head' &&
         plantedGuessedHead.join(';') === 'inputs roles are source,full,head; expected source,full',
       `3-input stamp inputs=${JSON.stringify(asInputsStamp?.inputs ?? null)} (faults: ${threeInputFaults.join('; ') || 'none'}); 2-input (no --head) inputs=${JSON.stringify(asSingleStamp?.inputs ?? null)} (faults: ${singleInputFaults.join('; ') || 'none'}); symlinked layers.json inputs[1]=${JSON.stringify(asSymlinkStamp?.inputs?.[1] ?? null)} (rebuild byte-identical across ${asSymlinkFiles.length} file(s): ${asSymlinkRebuildIdentical}; realpath mutant "${realpathMutantFullPath}" fails LAYERS_INPUT_KIND exit ${rRealpathMutantRebuild.status}: ${realpathMutantFails}); rebuild from recorded inputs byte-identical across ${asInputsFiles.length} file(s) (incl. ${RUN_STAMP_FILE}): ${asRebuildIdentical}; planted wrong full hash -> "${plantedWrongInputHash.join(';')}", planted missing head -> "${plantedMissingInput.join(';')}", planted swapped order -> "${plantedSwappedInputOrder.join(';')}", planted guessed head -> "${plantedGuessedHead.join(';')}"`,
-      'issue #1316: assemble run.json records inputs (source, full, and head when given) in fixed order with lexical cwd-relative paths (preserving symlinked input spellings) and file or layers.json sha256 hashes, omits an ungiven input, and rerunning assemble from the recorded inputs reproduces every output byte for byte',
+      'issues #1316, #1554: assemble run.json records inputs (source, full, and head when given) in fixed order with --out-relative paths by the per-platform link rule (naming layers.json for directories and preserving symlinked file spellings) and matching file sha256 hashes, omits an ungiven input, and rerunning assemble from --out reproduces every output byte for byte',
     );
 
     // Issue #233: a full-run body no planned part covers is named, by the proposer and by the assemble summary

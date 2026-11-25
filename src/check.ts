@@ -99,7 +99,7 @@ import { createRequire } from 'node:module';
 import type { Candidate, Piece, Viewport as RootCoverageViewport } from '@rig-c/core/render-shared';
 import { fillHoles } from './raster/morph.ts';
 import { closeSync, copyFileSync, cpSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
-import { diagnosticSegment, diagnosticSiblings, unsafeSegmentReason } from './outputpaths.ts';
+import { argvPathFromOut, diagnosticSegment, diagnosticSiblings, unsafeSegmentReason } from './outputpaths.ts';
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { measureRecomposite, type RecompositeFigures, recompositeRecord, scenePhrase, sourceInRig, figureSilhouette } from './assemble.ts';
 import { type BoneTransform, computeExactFrameTransforms, cropToSpineY, normaliseDegrees, toBoneLocal } from './coords.ts';
@@ -6828,7 +6828,7 @@ function renderExtremes(build: string, out: string, animations: readonly string[
  * MEASURABLE is a problem. Without it nothing here reads, writes or prints
  * anything it did not before.
  */
-export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, partsHome?: string, mode: PackMode = DEFAULT_PACK_MODE, source?: string, requirements?: string, seamPairsAsked = false, keepStills = false, set?: string, allSets = false, environment?: string, requirementsAs: string | undefined = requirements, config?: InputFileRecord, windBand?: string, noExtremes = false, supportSource?: string, supportFigure?: Mask, assemblyRules?: AssemblyRules): CheckReport {
+export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, partsHome?: string, mode: PackMode = DEFAULT_PACK_MODE, source?: string, requirements?: string, seamPairsAsked = false, keepStills = false, set?: string, allSets = false, environment?: string, _requirementsAs: string | undefined = requirements, config?: InputFileRecord, windBand?: string, noExtremes = false, supportSource?: string, supportFigure?: Mask, assemblyRules?: AssemblyRules): CheckReport {
   const pageSize = parsePageSize(mode.pageSize);
   let inp: CheckInputs;
   let reqFile: RequirementsFile | null = null;
@@ -6868,7 +6868,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
       if (got !== null && wb !== null) take(() => resolveWindBand(wb, got));
       refuseIfAny(refused);
     }
-    reqRecord = requirementsFileRecord(requirements, requirementsAs ?? requirements);
+    reqRecord = requirementsFileRecord(requirements, argvPathFromOut(requirements, outDir, process.cwd()));
     inp = got as CheckInputs;
     const file = reqFile as RequirementsFile;
     const ready = inp;
@@ -7006,7 +7006,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   let windBandRead: WindBandLine | null = null;
   if (wb !== null) {
     try {
-      windBandRead = measureWindBand(wb, buildDir, windBandDir, animationNames, rigc);
+      windBandRead = { ...measureWindBand(wb, buildDir, windBandDir, animationNames, rigc), path: argvPathFromOut(wb.path, outDir, process.cwd()) };
     } catch (err) {
       rmSync(windBandDir, { recursive: true, force: true });
       for (const p of [join(out, 'gate_spine-html.txt'), buildReportPath]) rmSync(p, { force: true });
@@ -7755,11 +7755,12 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const skipped: { loop?: string; seam?: string } = {};
   if (inp.noIdle !== null) skipped.loop = inp.noIdle;
   if (inp.noParts !== null) skipped.seam = inp.noParts;
+  const recordedEnv: CheckEnvironment | null = env === null ? null : { ...env, path: argvPathFromOut(env.path, outDir, process.cwd()) };
   const readings: Omit<CheckFigures, 'spec' | 'bar_outcomes' | 'build' | 'PASS'> = {
     gate_spine_html_green: htmlGreen,
     rigc_entry: rigcEntry,
     pack_mode: { page_edges: mode.pageEdges, pack_shape: mode.packShape, ...(pageSize === undefined ? {} : { page_size: pageSize }) },
-    ...(env === null ? {} : { environment: env }),
+    ...(recordedEnv === null ? {} : { environment: recordedEnv }),
     loop_max_diff: loop === null ? null : loop.max,
     ...(loopPhysics === null ? {} : { loop_physics: loopPhysics.map(row => ({ ...row, ...checkRow('loop_physics', 'rig', false, []) })) }),
     seam_mean: seam === null ? null : round3(seam.mean),
@@ -7921,10 +7922,9 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
 export const REQUIREMENTS_DIR = 'requirements';
 
 /**
- * Issue #556: the requirements file a check read, first in `check.json`'s
- * `requirements` block — the path as the caller wrote it (the `--requirements`
- * flag as typed, or `config.requirements` as declared; never resolved, so the
- * bytes do not move with the directory the build ran in), the sha256 of the
+ * Issue #556, #1554: the requirements file a check read, first in `check.json`'s
+ * `requirements` block — `path` relative to `check`'s `--out` directory by
+ * {@link argvPathFromOut} (`<out>/check` under `build`), the sha256 of the
  * bytes read, and the file's top-level keys in its order, so a reader sees
  * what the file asked (a `not_swinging`, a `may_fold`) without opening it.
  */
