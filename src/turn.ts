@@ -585,6 +585,10 @@ interface DeformRegionAttachment {
   rotation?: number;
 }
 
+function hasDeformWeights(att: DeformMeshAttachment | DeformRegionAttachment | undefined): att is DeformMeshAttachment {
+  return att !== undefined && 'type' in att && att.weights !== undefined;
+}
+
 interface DeriveSpec {
   kind: 'yaw' | 'pitch';
   degrees: number;
@@ -754,6 +758,15 @@ export function applyFaceSurfaceDeform(
       });
     });
   }
+  const faceSlot = rig.skins.default.face;
+  const faceAtt = faceSlot?.face;
+  if (faceAtt !== undefined && 'type' in faceAtt && !hasDeformWeights(faceAtt)) {
+    preProblems.push({
+      code: 'RIG_TURN_LEGACY_FACE_WEIGHTS',
+      object: 'skins.default.face.face',
+      detail: 'has no weight rows for the legacy head turn face frame; use config.turn.roles for a generated face surface',
+    });
+  }
   refuseIfAny(preProblems);
 
   const tiltAnim = rawTilt === undefined ? undefined : structuredClone(rawTilt);
@@ -818,9 +831,7 @@ export function applyFaceSurfaceDeform(
     rig.constraints = nextConstraints;
   }
 
-  const faceSlot = rig.skins.default.face;
-  if (faceSlot === undefined || faceSlot.face === undefined) return;
-  const faceAtt = faceSlot.face;
+  if (faceSlot === undefined || faceAtt === undefined) return;
 
   let faceW = opts.imageWidth ?? 114;
   let faceH = opts.imageHeight ?? 136;
@@ -883,7 +894,7 @@ export function applyFaceSurfaceDeform(
   for (const slotName of ['hair_front', 'hair_back', 'hairpin']) {
     const slotObj = rig.skins.default[slotName];
     const att = slotObj?.[slotName];
-    if (att !== undefined && 'type' in att) {
+    if (hasDeformWeights(att)) {
       for (const infls of att.weights) {
         infls.sort((a, b) => (boneOrder.get(a.bone) ?? 0) - (boneOrder.get(b.bone) ?? 0));
       }
@@ -1026,9 +1037,9 @@ export function applyFaceSurfaceDeform(
   const hairFrontAtt = rig.skins.default.hair_front?.hair_front;
   const hairBackAtt = rig.skins.default.hair_back?.hair_back;
   const hairpinAtt = rig.skins.default.hairpin?.hairpin;
-  const hairFrontVerts = hairFrontAtt !== undefined && 'type' in hairFrontAtt ? getMeshSetup(hairFrontAtt) : null;
-  const hairBackVerts = hairBackAtt !== undefined && 'type' in hairBackAtt ? getMeshSetup(hairBackAtt) : null;
-  const hairpinVerts = hairpinAtt !== undefined && 'type' in hairpinAtt && !boneMap.has('hairpin') ? getMeshSetup(hairpinAtt) : null;
+  const hairFrontVerts = hasDeformWeights(hairFrontAtt) ? getMeshSetup(hairFrontAtt) : null;
+  const hairBackVerts = hasDeformWeights(hairBackAtt) ? getMeshSetup(hairBackAtt) : null;
+  const hairpinVerts = hasDeformWeights(hairpinAtt) && !boneMap.has('hairpin') ? getMeshSetup(hairpinAtt) : null;
 
   const hyCrown = Y0 + (67 / 128) * H;
   const hyCrownStart = Y0 + (24 / 128) * H;
@@ -1207,8 +1218,7 @@ export function applyFaceSurfaceDeform(
     const rawBackFrac = opts.turn != null ? headTurnFraction(opts.turn, 'hair_back', headParts, opts.partAreas) : null;
     const rawHairpinFrac = opts.turn != null ? headTurnFraction(opts.turn, 'hairpin', headParts, opts.partAreas) : null;
     const hairpinRidesBack =
-      hairpinAtt !== undefined &&
-      'type' in hairpinAtt &&
+      hasDeformWeights(hairpinAtt) &&
       hairpinAtt.weights.some((infls) => infls.some((w) => w.bone.includes('hairback_')));
 
     const dxFaceCenterAt = (deg: number): number => FACE_DEFORM_MULT * deg * W * unmult(f.turn_mid_x);
