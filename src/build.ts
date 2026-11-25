@@ -2952,7 +2952,7 @@ export interface BuildRunners {
   scratch: string;
 }
 
-/** The `rig-run/2` record `build` writes beside its outputs (issue #1541); cleared with them, so a refused build leaves none. */
+/** The `rig-run/3` record `build` writes beside its outputs after the check report (issues #1541, #1556). */
 export const BUILD_RUN_FILE = 'build-run.json';
 /** Every path `build` writes under `--out`, relative — and so every path it clears first. */
 export const BUILD_OWNS: readonly string[] = ['parts', 'parts.json', SOURCE_COVER_FILE, PAINTING_IN_RIG_FILE, 'recomposite_rig.png', ERROR_MAP_FILE, 'rig', 'check', 'idle.gif', 'idle.png', 'idle-indexed.png', BUILD_RUN_FILE];

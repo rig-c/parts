@@ -54,8 +54,8 @@ export interface ComposeRun {
   plates: Array<{ name: string; path: string; sha256: string }>;
 }
 
-export interface RunStampInputEntry {
-  role: RunStampInputRole;
+export interface RunStampInputEntry<Role extends string = RunStampInputRole> {
+  role: Role;
   path: string;
   sha256: string;
 }
@@ -99,20 +99,12 @@ function relativeToOutRoot(outDir: string, targetPath: string): string {
   return relative(realOut, realTarget).split(sep).join('/');
 }
 
-/**
- * Build the ordered `inputs` list (`source`, `full`, and `head` when given) for an `assemble` run stamp:
- * each entry records `role`, `path` relative to `outDir` by {@link argvPathFromOut} (naming `<dir>/layers.json`
- * when given a See-through directory), and `sha256` of the file that `path` names (issue #1554).
- */
-export function buildAssembleInputs(inputs: RunStampAssembleInputs, outDir: string): RunStampInputEntry[] {
-  const cwd = inputs.cwd ?? process.cwd();
-  const raw: ReadonlyArray<readonly [RunStampInputRole, string | null | undefined]> = [
-    ['source', inputs.source],
-    ['full', inputs.full],
-    ['head', inputs.head],
-  ];
-  const entries: RunStampInputEntry[] = [];
-  for (const [role, given] of raw) {
+type RunInputPaths<Role extends string> = Array<readonly [Role, string | null | undefined]>;
+
+/** Name and hash the same file. A See-through directory names its manifest (issue #1554). */
+function recordInputs<Role extends string>(paths: RunInputPaths<Role>, outDir: string, cwd: string): RunStampInputEntry<Role>[] {
+  const entries: RunStampInputEntry<Role>[] = [];
+  for (const [role, given] of paths) {
     if (given === undefined || given === null) continue;
     const resolved = resolve(cwd, given);
     const isDir = statSync(resolved).isDirectory();
@@ -123,6 +115,15 @@ export function buildAssembleInputs(inputs: RunStampAssembleInputs, outDir: stri
     });
   }
   return entries;
+}
+
+/** The ordered inputs (`source`, `full`, and `head` when given) for an `assemble` run stamp. */
+export function buildAssembleInputs(inputs: RunStampAssembleInputs, outDir: string): RunStampInputEntry[] {
+  return recordInputs<RunStampInputRole>([
+    ['source', inputs.source],
+    ['full', inputs.full],
+    ['head', inputs.head],
+  ], outDir, inputs.cwd ?? process.cwd());
 }
 
 function sortCodeUnits(paths: readonly string[]): string[] {
@@ -259,31 +260,31 @@ export function writeRunStamp(input: RunStampInput): RunStamp {
 }
 
 // ---------------------------------------------------------------------------
-// rig-run/2: the run record `check` and `build` write (issue #1541)
+// Run records: check (rig-run/2) and build (rig-run/3)
 // ---------------------------------------------------------------------------
 
 export const RUN_RECORD_SPEC = 'rig-run/2' as const;
+export const BUILD_RUN_RECORD_SPEC = 'rig-run/3' as const;
 /** The record `check` writes in its `--out`; `build` writes {@link BUILD_RUN_FILE}. Neither can be the rig's `run.json`. */
 export const CHECK_RUN_FILE = 'check-run.json' as const;
 export { BUILD_RUN_FILE };
 
 export type RunRecordCommand = 'check' | 'build';
 
-/**
- * A `rig-run/2` record: the `rig-run/1` keys `check` and `build` have, then `argv`, the arguments that reproduce
- * the run with the same package version, run from the `--out` directory. `config` is written by `build` only;
- * `check` reads no config.
- */
-export interface RunRecord {
-  spec: typeof RUN_RECORD_SPEC;
+/** Both records carry the arguments to reproduce the run with the same version, run from `--out`. */
+interface RunRecordFields {
   package: RunStampPackage;
-  command: RunRecordCommand;
   started_at: string;
   finished_at: string;
-  config?: RunStampFileEntry;
   outputs: RunStampFileEntry[];
   argv: string[];
 }
+
+export type BuildRunInputRole = RunStampInputRole | 'requirements' | 'environment' | 'wind-band' | `alt[${number}].${RunStampInputRole}`;
+
+export type RunRecord =
+  | (RunRecordFields & { spec: typeof RUN_RECORD_SPEC; command: 'check' })
+  | (RunRecordFields & { spec: typeof BUILD_RUN_RECORD_SPEC; command: 'build'; config: RunStampFileEntry; inputs: RunStampInputEntry<BuildRunInputRole>[] });
 
 /** One command's flags as its parser takes them: the flag-table order, which values are paths, and values that hold paths inside them. */
 export interface ArgvTable {
@@ -385,31 +386,64 @@ export function isRunRecordFile(path: string): boolean {
   return name === RUN_STAMP_FILE || name.endsWith('-run.json');
 }
 
-export interface RunRecordInput {
+interface RunRecordInputFields {
   pkg: RunStampPackage;
-  command: RunRecordCommand;
   startedAt: string;
   finishedAt: string;
   outDir: string;
-  /** `build` only: the config it read. */
-  configPath?: string;
   /** What the run wrote under `outDir`, relative, a directory standing for every file under it. */
   outputs: readonly string[];
   argv: readonly string[];
 }
 
-/** Build a `rig-run/2` record from the files on disk. Pure with respect to the clock: the times are the caller's. */
+interface BuildRunInputs extends RunStampAssembleInputs {
+  requirements?: string;
+  environment?: string;
+  windBand?: string;
+  alts?: readonly Omit<RunStampAssembleInputs, 'cwd'>[];
+}
+
+export type RunRecordInput = RunRecordInputFields & (
+  | { command: 'check' }
+  | { command: 'build'; configPath: string; inputs: BuildRunInputs }
+);
+
+function buildRunInputs(inputs: BuildRunInputs, outDir: string): RunStampInputEntry<BuildRunInputRole>[] {
+  const paths: RunInputPaths<BuildRunInputRole> = [
+    ['source', inputs.source],
+    ['full', inputs.full],
+    ['head', inputs.head],
+    ['requirements', inputs.requirements],
+    ['environment', inputs.environment],
+    ['wind-band', inputs.windBand],
+  ];
+  inputs.alts?.forEach(({ source, full, head }, i) => {
+    paths.push([`alt[${i}].source`, source], [`alt[${i}].full`, full], [`alt[${i}].head`, head]);
+  });
+  return recordInputs(paths, outDir, inputs.cwd ?? process.cwd());
+}
+
+/** Build a run record from the files on disk using the caller's timestamps. */
 export function buildRunRecord(input: RunRecordInput): RunRecord {
   const paths = [...new Set(input.outputs.flatMap((e) => filesUnder(input.outDir, e)))].filter((p) => !isRunRecordFile(p)).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  return {
-    spec: RUN_RECORD_SPEC,
-    package: { name: input.pkg.name, version: input.pkg.version },
-    command: input.command,
+  const pkg = { name: input.pkg.name, version: input.pkg.version };
+  const times = {
     started_at: input.startedAt,
     finished_at: input.finishedAt,
-    ...(input.configPath === undefined ? {} : { config: { path: recordedConfigPath(input.outDir, input.configPath), sha256: sha256OnDisk(input.configPath) } }),
+  };
+  const tail = {
     outputs: paths.map((p) => ({ path: p, sha256: sha256OnDisk(join(input.outDir, ...p.split('/'))) })),
     argv: [...input.argv],
+  };
+  if (input.command === 'check') return { spec: RUN_RECORD_SPEC, package: pkg, command: 'check', ...times, ...tail };
+  return {
+    spec: BUILD_RUN_RECORD_SPEC,
+    package: pkg,
+    command: 'build',
+    ...times,
+    config: { path: recordedConfigPath(input.outDir, input.configPath), sha256: sha256OnDisk(input.configPath) },
+    inputs: buildRunInputs(input.inputs, input.outDir),
+    ...tail,
   };
 }
 
