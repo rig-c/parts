@@ -284,6 +284,25 @@ them an explicit depth under the group's `unitDepths`. Which depth a unit ends
 up using is spelled out in
 [Unit depth precedence](AUTHORING.md#unit-depth-precedence).
 
+**Join head and body with a neck part or a collar band.** When the character
+has a separate small `neck` skin part behind the face and above the collar,
+make `neck` a `"surface"` with bindings in both groups so it stretches cleanly
+between them; when the garment itself is the neck — a stand collar at the top
+of the torso part meeting the chin — keep that garment in `turn.body.roles`
+only (putting the whole torso in both groups folds triangles on pitch) and
+mesh it with `contour` (`grid` has no `regions`, and `auto` on a `"surface"` is
+refused by [`CONFIG_TURN_SURFACE_AUTO`](AUTHORING.md#CONFIG_TURN_SURFACE_AUTO)).
+Keep the mesh's `segments` on the torso and add a `contour.regions` polygon
+above the chin line with `band` set to the collar height in rig pixels, bound
+to a collar bone under `head` with `inherit: "onlyTranslation"` so the band
+receives the head turn's translation without tilting with head rotation. Use
+one shared `zScale` (and `near` polarity) across both groups; an other-group
+band region that weights no vertex is refused by
+[`RIG_TURN_BAND_REACHES_NO_VERTEX`](AUTHORING.md#RIG_TURN_BAND_REACHES_NO_VERTEX).
+The region falloff is linear (`1 - d / band`, C0 with a slope break at both
+band edges), and the rest render is not byte-identical to the build without the
+band because the region adds vertices.
+
 ## What it will not do
 
 - **Depth supplies no unseen drawing.** The rig has one painting. The turn is

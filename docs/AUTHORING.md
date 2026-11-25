@@ -7230,6 +7230,7 @@ and stay absent).
 | <a id="CONFIG_TURN_HEAD_BONE"></a>`CONFIG_TURN_HEAD_BONE` | `config.turn.roles` is declared without a single bone `"head"` in `config.bones`, or `config.turn.body` without a single bone `"chest"` / `"hip"` (or its declared `bone`) | declare `"head"` (or the body turn root bone) as a single bone in `config.bones` |
 | <a id="CONFIG_TURN_SLIDER_NAME_FREE"></a>`CONFIG_TURN_SLIDER_NAME_FREE` | `config.turn.body.slider` (or the default `"body_yaw_dial"`) collides with a head turn dial (`"yaw"`, `"pitch"`, `"yaw_dial"`, `"pitch_dial"`) or an existing slider constraint in `config.constraints` (#787) | choose a distinct slider name in `config.turn.body.slider` |
 | <a id="RIG_TURN_SURFACE_MESH_GROUPS"></a>`RIG_TURN_SURFACE_MESH_GROUPS` | a surface part contains a blended attachment but lacks one 2.5D group, includes an ungrouped positive influence in any attachment, or also declares a unit/rear role | declare both `turn.roles` and `turn.body`, a body root outside head, surface in one or both groups, and bindings wholly inside those two subtrees |
+| <a id="RIG_TURN_BAND_REACHES_NO_VERTEX"></a>`RIG_TURN_BAND_REACHES_NO_VERTEX` | a turn `"surface"` part has a `meshes.<part>.contour.regions[i]` entry bound to a bone in the other turn group's subtree that gives 0 vertices a weight above 0; the detail names the region index, bone and part | move or enlarge the region polygon (or circle) so it overlaps the part's mesh vertices, or widen its `band` |
 | <a id="RIG_TURN_SURFACE_OVERLAP_GROUPS"></a>`RIG_TURN_SURFACE_OVERLAP_GROUPS` | a blended surface vertex overlaps incompatible single-group neighbours, or a neighbour without a blended attachment declares both turn groups | keep one neighbour group at that source-alpha overlap, or separate the overlapping art; the refusal names the vertex and neighbours |
 | <a id="RIG_TURN_SURFACE_OVERLAP_SUPPORT"></a>`RIG_TURN_SURFACE_OVERLAP_SUPPORT` | a selected neighbour has missing/invalid geometry, unresolved emitted vectors, or no triangle covering the requested setup point | supply its actual shown setup triangles and existing emitted field; no nearest triangle, extrapolation or target-field fallback is used; an unrelated disconnected drawing with no actual overlap is not selected |
 | <a id="RIG_TURN_SURFACE_OVERLAP_DEPTH"></a>`RIG_TURN_SURFACE_OVERLAP_DEPTH` | same-group overlap neighbours demand incompatible emitted offsets at one target setup point | separate the conflicting support or provide coincident neighbour fields; the refusal names the fields and target vertex |
@@ -9774,6 +9775,29 @@ art. An authored `parts.json` depth reference remains an active standalone
 `rig` declaration even without config opt-in: its file/size/color/opacity
 guards still apply. With binding inactive there is no added reference, file or
 legacy-byte change. #773 adds no image generation, geometry or motion model.
+
+When a separate small `neck` skin part sits behind the face and above the
+garment, list `neck` as `"surface"` in `turn.roles` or `turn.body.roles` (or
+both); when no separate neck part exists and the garment itself forms the neck
+(such as a stand collar at the top of `topwear` meeting the chin), put the
+collar-carrying part in `turn.body.roles` only rather than both role tables
+(putting the whole torso in both groups applies the head deform across the
+torso and folds triangles on pitch) and blend its collar with a `contour`
+local-deformation region (#1543). Mesh that part with `contour` (`grid` has no
+`regions`, and `"surface"` with `auto` is refused by
+[`CONFIG_TURN_SURFACE_AUTO`](#CONFIG_TURN_SURFACE_AUTO)), keep its `segments`
+on the torso, and add a `contour.regions` polygon above the chin line with
+`band` equal to the collar height in rig pixels, bound to a collar bone under
+`head` with `inherit: "onlyTranslation"` so the band takes the head turn's
+translation without following head rotation in the idle. Both turn groups must
+share one `zScale` (and `near` polarity). Because `regionWeight` is `1 - d /
+band`, the falloff across the collar is linear (C0, with a slope break at both
+band edges), and the rest render is not byte-identical to the unbanded build
+because the region and its band add vertices (setup and idle remain within the
+1-level turn tolerance). A contour region on a turn surface bound to a bone in
+the other turn group's subtree that gives no vertex a weight above 0 is refused
+by [`RIG_TURN_BAND_REACHES_NO_VERTEX`](#RIG_TURN_BAND_REACHES_NO_VERTEX),
+naming the region index, bone and part.
 
 ### Head roll before a declared turn
 
