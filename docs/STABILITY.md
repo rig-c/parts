@@ -1476,10 +1476,16 @@ any `-run.json`. Two runs of the same inputs from the same layout differ only in
 run used — in the order of the command's flag table (`check --help` lists it):
 valued flags first, a repeated `--alt` in the order given, then the switches
 present. Every path is written relative to the `--out` directory with `/`
-separators, by path arithmetic from the working directory with no symlink resolved;
+separators: both taken from the working directory, the `--out` directory and the
+path's directory resolved through their links, and the path's own name kept (a path
+given through a link is written by the link's name, as `config.path` is);
 `--out` itself is `.`; a path that cannot be written that way (another Windows drive)
 is written as given. These arguments reproduce the check with the same package
-version, run from the --out directory. A switch's default is not written, so a later
+version, run from the --out directory. When `--out` was given through a link, the
+replay's `build/skeleton.json`, `build/skeleton.model.json` and `check.json` can
+differ from the first run's: rigc spells the skeleton's `images` path from the `--out`
+it is handed without resolving links (rig-c/core#1773). Every other output and key
+matches. A switch's default is not written, so a later
 version that changed it would replay differently; that is why the version is in
 `package`. The record is written after the report, in place, and is never a reason to refuse
 the check; a run killed while writing it can leave a partial record, and no other

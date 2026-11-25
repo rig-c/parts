@@ -107,8 +107,22 @@ function relativeToOutRoot(outDir: string, targetPath: string): string {
  * `real` and `api` are the resolution and path rules used, for the control.
  */
 export function recordedConfigPath(outDir: string, configPath: string, real: (path: string) => string = realpathSync, api: PlatformPath = nodePath): string {
-  const absolute = api.resolve(configPath);
-  return api.relative(real(api.resolve(outDir)), api.join(real(api.dirname(absolute)), api.basename(absolute))).split(api.sep).join('/');
+  return relativeKeepingName(outDir, configPath, real, api).split(api.sep).join('/');
+}
+
+/**
+ * `path` relative to `outDir` in `api`'s separators, with `outDir` and `path`'s directory resolved through their
+ * links by `real` and `path`'s own last segment kept: the rule {@link recordedConfigPath} and {@link argvPathFromOut}
+ * share, rig-c core's `relativeToOut` (core issue #1770).
+ */
+function relativeKeepingName(outDir: string, path: string, real: (path: string) => string, api: PlatformPath): string {
+  const absolute = api.resolve(path);
+  return api.relative(real(api.resolve(outDir)), api.join(real(api.dirname(absolute)), api.basename(absolute)));
+}
+
+/** A directory through its links when it exists; as given when it does not (nothing on disk to resolve). */
+function realWhereItExists(path: string): string {
+  return existsSync(path) ? realpathSync(path) : path;
 }
 
 function relativeToCwd(cwd: string, targetPath: string): string {
@@ -316,12 +330,18 @@ export interface ArgvTable {
 }
 
 /**
- * One path argument written relative to the `--out` directory, with `/` separators: plain path arithmetic from
- * `cwd`, no symlink resolved. `.` when it is the directory itself. Written as given when it cannot be expressed
- * relative to `--out` (another Windows drive).
+ * One path argument written relative to the `--out` directory, with `/` separators: both taken from `cwd`, the
+ * `--out` directory and the argument's directory resolved through their links, the argument's own last segment kept
+ * (a linked file keeps its own name), as {@link recordedConfigPath} records `config.path`. `.` when it is the directory
+ * itself. Written as given when it cannot be expressed relative to `--out` (another Windows drive).
+ *
+ * Measured (issue #1544): with `--out` given through a linked directory (`/var` -> `/private/var` on macOS) and the
+ * argument relative to a working directory the process reports by its real path, plain path arithmetic climbed out
+ * through the link and named a path that, replayed from the `--out` directory, did not exist. `real` is the link
+ * resolution used; the control passes the identity to plant that arithmetic.
  */
-export function argvPathFromOut(given: string, out: string, cwd: string, api: PlatformPath = nodePath): string {
-  const rel = api.relative(api.resolve(cwd, out), api.resolve(cwd, given));
+export function argvPathFromOut(given: string, out: string, cwd: string, api: PlatformPath = nodePath, real: (path: string) => string = realWhereItExists): string {
+  const rel = relativeKeepingName(api.resolve(cwd, out), api.resolve(cwd, given), real, api);
   if (api.isAbsolute(rel)) return given;
   return rel === '' ? '.' : rel.split(api.sep).join('/');
 }
@@ -344,9 +364,9 @@ function argvPairs(args: readonly string[], table: ArgvTable): { values: Array<[
  * flags, a repeated one in the order given, then the switches present), every path written by
  * {@link argvPathFromOut} and `--out` as `.`. Defaults the run used and did not take as an argument are not written.
  */
-export function recordArgv(command: RunRecordCommand, args: readonly string[], table: ArgvTable, out: string, cwd: string, api: PlatformPath = nodePath): string[] {
+export function recordArgv(command: RunRecordCommand, args: readonly string[], table: ArgvTable, out: string, cwd: string, api: PlatformPath = nodePath, real: (path: string) => string = realWhereItExists): string[] {
   const { values, on } = argvPairs(args, table);
-  const path = (p: string): string => argvPathFromOut(p, out, cwd, api);
+  const path = (p: string): string => argvPathFromOut(p, out, cwd, api, real);
   const argv: string[] = [command];
   for (const flag of table.valued) {
     for (const [f, v] of values) {

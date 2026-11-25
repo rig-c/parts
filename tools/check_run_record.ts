@@ -6,8 +6,8 @@
  * the original `--out`, at the same depth, so every recorded relative path names the same file.
  */
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, posix, resolve, win32 } from 'node:path';
+import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { join, posix, relative, resolve, win32 } from 'node:path';
 import { BUILD_RUN_FILE } from '../src/build.ts';
 import { makeOutDir } from '../src/outputpaths.ts';
 import { argvPathFromOut, argvReplayProblems, type ArgvTable, CHECK_RUN_FILE, effectiveArgv, isRunRecordFile, recordArgv, recordedConfigPath, RUN_RECORD_SPEC, type RunRecord } from '../src/runstamp.ts';
@@ -177,4 +177,59 @@ export function runRunRecordCliChecks(dir: string, out: string, say: Say): void 
     hadRecord && refused.status !== 0 && refused.status !== 2 && !existsSync(join(reused, CHECK_RUN_FILE)),
     `reused --out held a record ${hadRecord}; refused exit ${refused.status}; record after ${existsSync(join(reused, CHECK_RUN_FILE))}`,
     'issue #1541: the record is cleared before the check starts and written only when it completed its report');
+
+  runLinkedOutReplay(dir, out, say);
+}
+
+/** `check`'s flag row as cli.ts records it, for the planted argv: the valued flags and switches this control gives. */
+const CHECK_PLANT_TABLE: ArgvTable = { valued: ['--rig', '--out', '--parts'], switches: ['--no-extremes'], paths: ['--rig', '--out', '--parts'] };
+
+/**
+ * Issue #1544, the real command: `--out` given through a directory link whose target sits deeper than the link, and
+ * `--rig` and `--parts` given relative to a working directory the process reports by its real path (as
+ * `/var` -> `/private/var` on macOS; here a link of our own, so every host has it). The record's argv, replayed with
+ * the CLI from the `--out` directory, is the same check and writes the same record but for the times. The plant
+ * records the same arguments by plain path arithmetic (no link resolved), and its replay from `--out` does not find
+ * the rig.
+ */
+function runLinkedOutReplay(dir: string, out: string, say: Say): void {
+  const root = join(realpathSync(dir), 'linked-1544');
+  const target = join(root, 'deep', 'er');
+  const work = join(target, 'work');
+  mkdirSync(work, { recursive: true });
+  const link = join(root, 'ln');
+  symlinkSync(target, link, 'junction');
+  const realOut = realpathSync(out);
+  const rig = relative(work, join(realOut, 'rig')).split('\\').join('/');
+  const parts = relative(work, realOut).split('\\').join('/');
+  const given = join(link, 'work', 'chk');
+  const args = ['--rig', rig, '--out', given, '--parts', parts, '--no-extremes'];
+  const first = cli(['check', ...args], work);
+  const rec = readRecord(join(given, CHECK_RUN_FILE));
+  const recordedRig = rec === null ? undefined : rec.argv[rec.argv.indexOf('--rig') + 1];
+  const replay = rec === null ? { status: -1, out: 'no record' } : cli(rec.argv, given);
+  const again = readRecord(join(given, CHECK_RUN_FILE));
+  // rigc writes skeleton.images relative to the --out it was handed, by plain arithmetic: the first run hands it the
+  // linked spelling and the replay the real one, so build/skeleton.json, the model that hashes it and check.json's
+  // model_sha256 may differ (rig-c core's own spelling, outside this record). Every other key and digest is the same.
+  // rig-c/core#1773 tightens this: once core spells images through links, `spelled` goes and the records match whole.
+  const spelled = new Set(['build/skeleton.json', 'build/skeleton.model.json', 'check.json']);
+  const differ = (a: RunRecord | null, b: RunRecord | null): string[] => a === null || b === null ? ['absent']
+    : [...new Set([...a.outputs, ...b.outputs].map((o) => o.path))].filter((p) =>
+      JSON.stringify(a.outputs.find((o) => o.path === p)) !== JSON.stringify(b.outputs.find((o) => o.path === p)));
+  const aside = (r: RunRecord | null): string => r === null ? 'absent' : timeless({ ...r, outputs: r.outputs.map((o) => spelled.has(o.path) ? { ...o, sha256: '<spelled by rigc>' } : o) });
+  const moved = differ(rec, again);
+  say('BU1544A_ARGV_RECORDED_THROUGH_A_LINKED_OUT_REPLAYS_FROM_OUT_AS_THE_SAME_CHECK',
+    first.status === 0 && rec !== null && recordedRig === `../${rig}` && replay.status === 0 && aside(again) === aside(rec) && moved.every((p) => spelled.has(p)),
+    `check exit ${first.status}; --rig given ${JSON.stringify(rig)} from the real working directory, recorded ${JSON.stringify(recordedRig)}; replay from --out exit ${replay.status}; records equal but for the times and rigc's spelled files ${aside(again) === aside(rec)}; digests that moved ${JSON.stringify(moved)}${replay.status === 0 ? '' : `; ${replay.out.trim().split('\n').slice(-2).join(' | ')}`}`,
+    'issue #1544: --out and each path\'s directory are resolved through their links before the path is rebased, so the replay climbs the real tree; the link sits two levels above its target, so one level more is the hand-written answer');
+
+  // The plant: the same arguments recorded by plain path arithmetic (the identity for link resolution), replayed the same way.
+  const planted = recordArgv('check', args, CHECK_PLANT_TABLE, given, work, undefined, (p) => p);
+  const plantedRig = planted[planted.indexOf('--rig') + 1];
+  const plantedReplay = cli(planted, given);
+  say('BU1544B_PLANTED_ARGV_BY_PLAIN_ARITHMETIC_CLIMBS_OUT_THROUGH_THE_LINK_AND_THE_REPLAY_FAILS',
+    plantedRig === rig && plantedReplay.status !== 0 && plantedReplay.status !== 2 && !existsSync(join(given, CHECK_RUN_FILE)),
+    `planted --rig ${JSON.stringify(plantedRig)} (the link is two levels shallower than its target, so plain arithmetic keeps the working directory's climb); replay exit ${plantedReplay.status}, record after ${existsSync(join(given, CHECK_RUN_FILE))}`,
+    'issue #1544: the arithmetic main 6cd3be2 used; replayed from the real --out directory it names a rig two levels too high, and the check refuses it');
 }
