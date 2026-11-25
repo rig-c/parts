@@ -1461,9 +1461,9 @@ file is in `check.json`, and no byte comparison this package makes reads them.
 Key order is fixed as shown: `spec`, `package`, `command`, `started_at`,
 `finished_at`, `config` (`build` only; `check` reads no config), `outputs`, `argv`.
 `package` and the two times (`SOURCE_DATE_EPOCH` included) are as in `rig-run/1`.
-`config` is the config's `sha256` and its path relative to the real `--out`
-directory, with the config's directory resolved through its links and the file's
-own name kept: a config given through a link is recorded by the link's name.
+`config` is the config's `sha256` and its path relative to `--out`, using the
+same directory spelling rule as `argv` below. A config given through a link is
+recorded by the link's name.
 `outputs` lists every file under the paths the run cleared and wrote —
 for `check`, the report files its `wrote` line names and the directories it names
 (`build/`, `idle_frames/`, …); for `build`, the paths it clears before it starts —
@@ -1475,17 +1475,13 @@ any `-run.json`. Two runs of the same inputs from the same layout differ only in
 `argv` is the command to re-run, then the options as given — not the defaults the
 run used — in the order of the command's flag table (`check --help` lists it):
 valued flags first, a repeated `--alt` in the order given, then the switches
-present. Every path is written relative to the `--out` directory with `/`
-separators: both taken from the working directory, the `--out` directory and the
-path's directory resolved through their links, and the path's own name kept (a path
-given through a link is written by the link's name, as `config.path` is);
-`--out` itself is `.`; a path that cannot be written that way (another Windows drive)
-is written as given. These arguments reproduce the check with the same package
-version, run from the --out directory. When `--out` was given through a link, the
-replay's `build/skeleton.json`, `build/skeleton.model.json` and `check.json` can
-differ from the first run's: rigc spells the skeleton's `images` path from the `--out`
-it is handed without resolving links (rig-c/core#1773). Every other output and key
-matches. A switch's default is not written, so a later
+present. Each path and `--out` are taken from the working directory. On POSIX,
+the `--out` directory and the path's directory are resolved through their links.
+On Windows, both directories keep their supplied spelling. The path keeps its
+own name and is written relative to `--out` with `/` separators. `--out` itself
+is `.`. A path on another Windows drive is written as given. These arguments
+reproduce the check when run from the `--out` directory with the same package
+version. A switch's default is not written, so a later
 version that changed it would replay differently; that is why the version is in
 `package`. The record is written after the report, in place, and is never a reason to refuse
 the check; a run killed while writing it can leave a partial record, and no other

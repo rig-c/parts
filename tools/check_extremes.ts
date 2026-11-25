@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeCheckRig, writeMergedCheckRig } from '../fixtures/checkrig.ts';
-import { blankRigcRunClock } from '../fixtures/rigc_run_clock.ts';
+import { blankRigcRunClock, RIGC_RENDER_RUN_FILE } from '../fixtures/rigc_run_clock.ts';
 import { checkStage } from '../src/build.ts';
 import { measureRequirements, preflightCheckPaths, readCheckInputs, readFrameSet, retainCheckRender, runCheck, seamPairRows, type RigcRunner } from '../src/check.ts';
 import { diagnosticSegment, diagnosticSiblings } from '../src/outputpaths.ts';
@@ -20,6 +20,7 @@ function tree(dir: string, prefix = ''): string[] {
   return readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0).flatMap(e => {
     if (prefix === '' && e.name === 'extremes') return [];
     const name = prefix + e.name;
+    if (e.isFile() && name === `idle_frames/${RIGC_RENDER_RUN_FILE}`) return [];
     return e.isDirectory() ? tree(join(dir, e.name), name + '/') : [name + ':' + bytes(join(dir, e.name), name)];
   });
 }
@@ -270,7 +271,15 @@ export function runExtremesChecks(root: string, say: Say, rigc: RigcRunner): voi
   };
   const onDir = join(root, 'on'), offDir = join(root, 'off');
   const on = run(onDir), off = run(offDir, true);
-  say('CK839_EXTREMES_ONLY_OMITS_DISCARDED_RENDER_OUTPUTS', on.calls.filter(isExtremes).length === 3 && on.calls.filter(isExtremes).every(args => args.includes('--extremes-only') && !args.includes('--extremes')) && on.observationFiles.length === 3 && on.observationFiles.every(files => files.length > 0 && files.every(file => /(^|\/)extremes\.(json|png)$/.test(file))), JSON.stringify(on.observationFiles));
+  const observationOnly = on.observationFiles.every(files => {
+    const products = files.filter(file => file !== RIGC_RENDER_RUN_FILE);
+    return files.includes(RIGC_RENDER_RUN_FILE) && products.length > 0 && products.every(file => /(^|\/)extremes\.(json|png)$/.test(file));
+  });
+  say('CK839_EXTREMES_ONLY_OMITS_DISCARDED_RENDER_OUTPUTS',
+    on.calls.filter(isExtremes).length === 3 &&
+    on.calls.filter(isExtremes).every(args => args.includes('--extremes-only') && !args.includes('--extremes')) &&
+    on.observationFiles.length === 3 && observationOnly,
+    JSON.stringify(on.observationFiles));
   const paths = ['idle', 'wave'].map(name => join(onDir, 'extremes', name));
   const pairs = paths.map(dir => existsSync(join(dir, 'extremes.json')) ? json(join(dir, 'extremes.json')).geometryPair : null);
   const exact = pairs.every(pair => {

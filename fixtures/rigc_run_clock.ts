@@ -11,3 +11,5 @@ export function blankRigcRunClock(bytes: Buffer, file: string): Buffer {
   if (!text.includes('"spec": "rigc-run/1"')) return bytes;
   return Buffer.from(text.replace(/"(started_at|finished_at)": "[^"]*"/g, '"$1": "<clock>"'), 'utf8');
 }
+
+export const RIGC_RENDER_RUN_FILE = 'render-run.json';

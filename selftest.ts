@@ -12,7 +12,7 @@ import { modelDocument as boundaryModelDocument } from '@rig-c/core/model';
 import { readModel as readBoundaryModel, poseRawSetup as boundarySetup, poseRawAnimation as boundaryAnimation } from '@rig-c/core/core';
 import { stretchLine as boundaryStretchLine } from './src/check.ts';
 import { PHYSICS_CONTRIBUTES_LINE, PHYSICS_LEVERS_TEXT, PHYSICS_OFF_TEXT, physicsDecls, physicsReach, type PhysicsContributionLine, type PhysicsContributionRow } from './src/physicscontrib.ts';
-import { blankRigcRunClock } from './fixtures/rigc_run_clock.ts';
+import { blankRigcRunClock, RIGC_RENDER_RUN_FILE } from './fixtures/rigc_run_clock.ts';
 import { CONTOUR_TURN_STAGE_A_HASHES, writeContourTurnFixture } from './fixtures/contour-turn.ts';
 import { runRigcRunClockChecks } from './fixtures/rigc_run_clock_checks.ts';
 import { runPartsCheckChecks } from './fixtures/parts_check_checks.ts';
@@ -29047,6 +29047,11 @@ function runBuildSuite(): number {
       path: 'painting_in_rig.png', sha256: createHash('sha256').update(buildPainting).digest('hex'), resample: 'lanczos3-rgb-opaque',
     } };
     const partsSame = existsSync(join(out, 'parts.json')) && withoutAssemblyConfig(serializeParts(readParts(join(out, 'parts.json')))) === serializeParts(buildExpectedParts);
+    const idleReceipt = readJsonFile(join(out, 'check', 'idle_frames', RIGC_RENDER_RUN_FILE));
+    const buildReceipt = readJsonFile(join(out, BUILD_RUN_FILE));
+    const buildOutputs = Array.isArray(buildReceipt?.outputs) ? buildReceipt.outputs : [];
+    const listedRenderReceipts = buildOutputs.filter(row => typeof row?.path === 'string' && row.path.split('/').at(-1) === RIGC_RENDER_RUN_FILE).length;
+    const listedIdleFrames = buildOutputs.some(row => row?.path === 'check/idle_frames/frames.json');
     say(
       'BU01_A_GREEN_BUILD_WRITES_ITS_TREE_AND_ENDS_WITH_THE_PACK_LINE_AND_THE_THREE_ARTIFACT_PATHS',
       green.status === 0 &&
@@ -29054,8 +29059,11 @@ function runBuildSuite(): number {
         /^pack: skeleton\.png \d+x\d+, \d+ region\(s\), [\d.]+% covered, padding \d+, page edges free, shape polygon; page opaque [\d.]+% \(alpha > 0\) — spineboy yardstick /.test(tail[0]?.trim() ?? '') &&
         sameOutputFiles(artifacts, expectedArtifacts) &&
         stageOrder.every((at, i) => at > 0 && (i === 0 || at > stageOrder[i - 1])) &&
-        partsSame,
-      `exit ${green.status}; --out holds [${tree.join(', ')}]; last lines: ${tail.map((l) => l.trim()).join(' | ')}; stage prefixes at ${stageOrder.join(', ')}; parts.json equals the fixture's hand-derived one: ${partsSame}`,
+        partsSame && idleReceipt?.spec === 'rigc-run/2' && idleReceipt.command === 'render' &&
+        buildReceipt?.spec === 'rig-run/2' && listedRenderReceipts === 0 && listedIdleFrames,
+      `exit ${green.status}; --out holds [${tree.join(', ')}]; last lines: ${tail.map((l) => l.trim()).join(' | ')}; stage prefixes at ${stageOrder.join(', ')}; parts.json equals the fixture's hand-derived one: ${partsSame}; ` +
+        `check/idle_frames/${RIGC_RENDER_RUN_FILE} on disk: ${idleReceipt?.spec ?? 'absent'} (${idleReceipt?.command ?? 'no command'}); ` +
+        `${BUILD_RUN_FILE} ${buildReceipt?.spec ?? 'absent'} outputs: ${listedRenderReceipts} render receipts, idle frames.json listed ${listedIdleFrames}`,
       "issue #2: the packed page is the artifact and the loose parts an intermediate, so the lines a reader stops at are the pack line and the three files; the parts.json equality is what shows build called the assemble stage rather than something like it",
     );
 
@@ -29132,7 +29140,10 @@ function runBuildSuite(): number {
     const plainFig = readJsonFile(join(plainCheck, 'check.json'));
     const pairLinesOf = (text: string, prefix: string): string[] => text.split('\n').filter((l) => l.startsWith(`${prefix}  seam pair `)).map((l) => l.slice(prefix.length));
     const filesUnder = (at: string): string[] => (existsSync(at) ? (readdirSync(at, { recursive: true }) as string[]).filter((f) => statSync(join(at, f)).isFile()).sort() : []);
-    const sameFiles = (a: string, b: string): boolean => filesUnder(a).length > 0 && filesUnder(a).join() === filesUnder(b).join() && filesUnder(a).every((f) => Buffer.compare(readFileSync(join(a, f)), readFileSync(join(b, f))) === 0);
+    const sameFiles = (a: string, b: string, inventory = filesUnder): boolean => {
+      const files = inventory(a);
+      return files.length > 0 && files.join() === inventory(b).join() && files.every(f => readFileSync(join(a, f)).equals(readFileSync(join(b, f))));
+    };
     const fwdRows = fwdFig?.seam_pairs;
     const handRows = handFig?.seam_pairs;
     const fwdPictures = filesUnder(join(fwdCheck, SEAM_DIR));
@@ -29185,18 +29196,20 @@ function runBuildSuite(): number {
       'issue #257: build dropped the flag, so a consumer who needed the pairs ran check a second time by hand and the artifact build reported was checked without them; forwarded, the check inside build is the check by hand, row for row and byte for byte, and without the flag build writes what it wrote before',
     );
     const fwdStill = join(fwdCheck, STILL_DIR);
+    const stillFiles = (at: string): string[] => filesUnder(at).filter(f => f !== RIGC_RENDER_RUN_FILE);
+    const sameStill = sameFiles(fwdStill, join(byHand, STILL_DIR), stillFiles);
     const keepTwice = runBuildCli([...buildArgs(cutDir, join(cutDir, 'out-keep-twice')), '--keep-stills', '--keep-stills']);
     say(
       'BU166_BUILD_KEEP_STILLS_LEAVES_THE_STILL_CHECK_KEEP_STILLS_LEAVES_ON_THE_SAME_RIG',
       filesUnder(fwdStill).includes('frames.json') &&
-        sameFiles(fwdStill, join(byHand, STILL_DIR)) &&
+        sameStill &&
         fwd.out.includes(`[check]   wrote `) &&
         fwd.out.includes(`${fwdStill}/`) &&
         !existsSync(join(plainCheck, STILL_DIR)) &&
         keepTwice.status === 2 &&
         keepTwice.out.includes('--keep-stills is given twice') &&
         !existsSync(join(cutDir, 'out-keep-twice')),
-      `build --keep-stills: ${STILL_DIR}/ holds [${filesUnder(fwdStill).join(', ')}], ${sameFiles(fwdStill, join(byHand, STILL_DIR)) ? "byte-identical to check --keep-stills's" : 'DIFFERENT from check --keep-stills\'s, or empty'}, the wrote line ${fwd.out.includes(`${fwdStill}/`) ? 'names it' : 'DOES NOT name it'}; the same build without it: ${existsSync(join(plainCheck, STILL_DIR)) ? 'WROTE it' : 'none'}; given twice: exit ${keepTwice.status}`,
+      `build --keep-stills: ${STILL_DIR}/ products [${stillFiles(fwdStill).join(', ')}], ${sameStill ? "byte-identical to check --keep-stills's" : 'DIFFERENT from check --keep-stills\'s, or empty'}, the wrote line ${fwd.out.includes(`${fwdStill}/`) ? 'names it' : 'DOES NOT name it'}; the same build without it: ${existsSync(join(plainCheck, STILL_DIR)) ? 'WROTE it' : 'none'}; given twice: exit ${keepTwice.status}`,
       "issue #257's audit: --keep-stills was the other check switch build dropped; forwarded, the frame the seam read and the viewport it was mapped by are the check's own, and a build not asked leaves check/ as before",
     );
 
@@ -29385,8 +29398,8 @@ function runBuildSuite(): number {
     const recDiff = treeDiff(out, recOut, withoutConfigRecord);
     const hemRecDiff = treeDiff(hemOut, hemRecOut, withoutConfigRecord);
     const plantDiff = treeDiff(out, plantOut, withoutConfigRecord);
-    const recFiles = existsSync(recOut) ? filesUnder(recOut).length : 0;
-    const hemRecFiles = existsSync(hemRecOut) ? filesUnder(hemRecOut).length : 0;
+    const recFiles = treeProductFiles(recOut).length;
+    const hemRecFiles = treeProductFiles(hemRecOut).length;
     say(
       'BU08_X_RECORDS_IN_EVERY_VOUCHED_OBJECT_LEAVE_EVERY_FILE_A_BUILD_WRITES_BYTE_IDENTICAL_AND_ONE_TRACK_VALUE_DOES_NOT',
       recRun.status === 0 && hemRecRun.status === 0 && plantRun.status === 0 && recDiff.length === 0 && hemRecDiff.length === 0 && plantDiff.some((d) => d.startsWith(join('rig', 'motion.json'))),
@@ -29519,7 +29532,7 @@ function runBuildSuite(): number {
     say(
       'BU14_A_RECORD_AND_A_NOTE_ON_A_CONSTRAINT_LEAVE_EVERY_FILE_THE_BUILD_WRITES_BYTE_IDENTICAL_AND_ONE_VALUE_DOES_NOT',
       plain.status === 0 && half.status === 0 && sameTree.length === 0 && rigBytesDiffer && constraintValues,
-      `with the note and record against without: ${sameTree.length === 0 ? `${filesUnder(plainOut).length} file(s), byte-identical` : sameTree.slice(0, 3).join('; ')}; mixRotate 0.5 against none written (1): ${halfTree.length} file(s) differ (${halfTree.slice(0, 2).join('; ')}); rig.json file bytes differ: ${rigBytesDiffer}, constraint values preserved: ${constraintValues}`,
+      `with the note and record against without: ${sameTree.length === 0 ? `${treeProductFiles(plainOut).length} file(s), byte-identical` : sameTree.slice(0, 3).join('; ')}; mixRotate 0.5 against none written (1): ${halfTree.length} file(s) differ (${halfTree.slice(0, 2).join('; ')}); rig.json file bytes differ: ${rigBytesDiffer}, constraint values preserved: ${constraintValues}`,
       'issue #70\'s door holds on a constraint too: a record and a note are read by nothing, so they move no byte; the planted value is the witness that the comparison sees a change in the constraint',
     );
 
@@ -29606,9 +29619,9 @@ function runBuildSuite(): number {
         byConfig.status === 0 &&
         byConfig.out.includes('[check]   SKIRT_RANGE: PASS — ') &&
         rebuildDiff.length === 0 &&
-        filesUnder(flagOut).length > 0 &&
+        treeProductFiles(flagOut).length > 0 &&
         JSON.stringify(flagRecord) === JSON.stringify({ path: '../../reqs.json', sha256: reqsSha, keys: ['spec', 'fps', 'requirements'] }),
-      `--requirements reqs.json: exit ${byFlag.status}; config.requirements "reqs.json", no flag: exit ${byConfig.status}; ${rebuildDiff.length === 0 ? `${filesUnder(flagOut).length} file(s) under out/, byte-identical` : rebuildDiff.slice(0, 3).join('; ')}; check.json requirements.file ${showRecord(flagRecord)} (file sha256 ${reqsSha.slice(0, 16)})`,
+      `--requirements reqs.json: exit ${byFlag.status}; config.requirements "reqs.json", no flag: exit ${byConfig.status}; ${rebuildDiff.length === 0 ? `${treeProductFiles(flagOut).length} file(s) under out/, byte-identical` : rebuildDiff.slice(0, 3).join('; ')}; check.json requirements.file ${showRecord(flagRecord)} (file sha256 ${reqsSha.slice(0, 16)})`,
       "issue #556, bar 1: a rig built with the flag rebuilds byte for byte from its config alone once the config names the file; the record is the path as the caller wrote it, never resolved, so the two writings of one relative path are the same bytes, and its digest and keys say what the file asked without opening it",
     );
 
@@ -29644,7 +29657,7 @@ function runBuildSuite(): number {
         sameDiff.length === 0 &&
         copyDiff.length === 0 &&
         JSON.stringify(recordOf(sameOut)) === JSON.stringify(recordOf(configOut)),
-      `the same file by its absolute path: exit ${same.status}, ${sameDiff.length === 0 ? 'every file byte-identical to the config-only build' : sameDiff.slice(0, 2).join('; ')}; a copy of its bytes: exit ${copy.status}, ${copyDiff.length === 0 ? 'byte-identical' : copyDiff.slice(0, 2).join('; ')}; record ${showRecord(recordOf(sameOut))}`,
+      `the same file by its absolute path: exit ${same.status}, ${sameDiff.length === 0 ? 'compared files byte-identical to the config-only build' : sameDiff.slice(0, 2).join('; ')}; a copy of its bytes: exit ${copy.status}, ${copyDiff.length === 0 ? 'byte-identical' : copyDiff.slice(0, 2).join('; ')}; record ${showRecord(recordOf(sameOut))}`,
       "issue #556, bar 2's other half: one file named twice is one input — the declaration is read and recorded, so a build given both writes what the config alone writes; the record names the file once",
     );
 
@@ -29880,7 +29893,7 @@ function runBuildSuite(): number {
       'BU24_NO_IDLE_KEYS_AND_IDLE_KEYS_CTL_WRITE_AND_PRINT_THE_SAME_BUILD_AND_DIRECT_DOES_NOT',
       files.length === 0 && sameLines && !bare.lines[0].includes('idle keys') &&
         plantFiles.some((d) => d.startsWith(join('rig', 'rig.json'))) && plantLines > 0 && dir2.lines[0].endsWith(', idle keys direct'),
-      `no flag (exit ${bare.status}) against --idle-keys ctl (exit ${ctl.status}): ${files.length === 0 ? `${filesUnder(bare.out).length} file(s) byte-identical` : files.slice(0, 3).join('; ')}, ${bare.lines.length} printed line(s) ${sameLines ? 'identical' : 'DIFFER'} (--out written as <out>); planted, --idle-keys direct (exit ${dir2.status}): ${plantFiles.length} file(s) differ (${plantFiles.slice(0, 2).join('; ')}), ${plantLines} line(s) differ`,
+      `no flag (exit ${bare.status}) against --idle-keys ctl (exit ${ctl.status}): ${files.length === 0 ? `${treeProductFiles(bare.out).length} file(s) byte-identical` : files.slice(0, 3).join('; ')}, ${bare.lines.length} printed line(s) ${sameLines ? 'identical' : 'DIFFER'} (--out written as <out>); planted, --idle-keys direct (exit ${dir2.status}): ${plantFiles.length} file(s) differ (${plantFiles.slice(0, 2).join('; ')}), ${plantLines} line(s) differ`,
       'issue #95, ruling 2: the flag is new, so where it is not used, or names the default, the build is the one main writes — the first line names the value only when it is not the default — and the plant shows the comparison sees the value when it moves',
     );
 
@@ -40707,22 +40720,29 @@ interface HarnessResult {
   fronts?: number;
 }
 
+/** Inventory for byte parity. Render receipts sit beside frames.json under build's check/. */
+function treeProductFiles(dir: string): string[] {
+  const files = filesUnder(dir);
+  const paths = new Set(files);
+  return files.filter(file => {
+    // Issue #1541: Parts' stage records measure the run and are checked by tools/check_run_record.ts.
+    if (file === BUILD_RUN_FILE || file === CHECK_RUN_FILE) return false;
+    return !(file.startsWith(`check${sep}`) && basename(file) === RIGC_RENDER_RUN_FILE &&
+      paths.has(join(dirname(file), 'frames.json')));
+  });
+}
+
 /**
- * Where two output trees differ: every file under either, byte for byte, after
- * `normalise` (identity unless a caller names a value the clock writes; rigc's
- * own run stamp always has its two clock values blanked first). Each
- * line names the file relative to its tree. Empty means byte-identical; an
- * empty first tree is a difference, so two trees of nothing never agree.
+ * Compare the output inventories and bytes, blanking the two clocks in rigc's
+ * build run stamp before applying the caller's normaliser. Each difference
+ * names the relative path. An empty first inventory is also a difference.
  */
 function treeDiff(a: string, b: string, normalise: (bytes: Buffer, file: string) => Buffer = (bytes) => bytes): string[] {
   const out: string[] = [];
-  const fa = existsSync(a) ? filesUnder(a) : [];
-  const fb = existsSync(b) ? filesUnder(b) : [];
+  const fa = treeProductFiles(a);
+  const fb = treeProductFiles(b);
   if (fa.length === 0) out.push(`${a} holds nothing`);
   for (const f of [...new Set([...fa, ...fb])].sort()) {
-    // Issue #1541: the run records `check` and `build` write record the run (its times and the paths as given), not
-    // its product, and are outside every byte comparison; tools/check_run_record.ts holds them.
-    if (f === BUILD_RUN_FILE || f === CHECK_RUN_FILE) continue;
     if (!fa.includes(f) || !fb.includes(f)) {
       out.push(`${f}: only under ${fa.includes(f) ? a : b}`);
       continue;
@@ -40739,8 +40759,8 @@ function treeDiff(a: string, b: string, normalise: (bytes: Buffer, file: string)
 
 /**
  * A {@link treeDiff} normaliser for two builds from two config files (issue #607): `check/check.json`'s `config`
- * record names the config each build read, by path and digest, so it differs by construction; every other byte of
- * every file is compared. The record itself is held where it is the claim (BU210–BU212).
+ * record names the config each build read, by path and digest, so it differs by construction. The config record
+ * itself is held where it is the claim (BU210–BU212).
  */
 function withoutConfigRecord(bytes: Buffer, file: string): Buffer {
   if (file !== join('check', 'check.json')) return bytes;
@@ -49845,6 +49865,19 @@ function runSceneSuite(): number {
       const windowsDigest = compareSceneBytes(windowsPaths(firstClock), windowsPaths(parityBytes('2000-01-01T00:00:02.000Z', '2000-01-01T00:00:03.000Z', 'changed')));
       const windowsRig = compareSceneBytes(windowsPaths(firstClock), windowsPaths(changedRig));
       const windowsMissing = compareSceneBytes(windowsPaths(firstClock), windowsPaths(missingRig));
+      const idleRenderPath = 'check/idle_frames/render-run.json';
+      const renderBytes = (path: string, started_at: string, sha256 = 'synthetic', spec = 'rigc-run/2') => new Map([
+        [path, Buffer.from(JSON.stringify({ spec, started_at, finished_at: started_at, outputs: [{ path: 'frames.json', sha256 }] }))],
+      ]);
+      const firstRender = renderBytes(idleRenderPath, '2000-01-01T00:00:00.000Z');
+      const nextRender = renderBytes(idleRenderPath, '2000-01-01T00:00:01.000Z');
+      const renderClock = compareSceneBytes(windowsPaths(firstRender), windowsPaths(nextRender));
+      const renderPlants = [
+        compareSceneBytes(firstRender, new Map()),
+        compareSceneBytes(firstRender, renderBytes(idleRenderPath, '2000-01-01T00:00:01.000Z', 'changed')),
+        compareSceneBytes(firstRender, renderBytes(idleRenderPath, '2000-01-01T00:00:01.000Z', 'synthetic', 'foreign/1')),
+        compareSceneBytes(renderBytes('rig/render-run.json', '2000-01-01T00:00:00.000Z'), renderBytes('rig/render-run.json', '2000-01-01T00:00:01.000Z')),
+      ];
       const outsideReceipt = ['check\\run.json', 'other\\check\\build\\run.json', '/check/build/run.json', 'check/build/../build/run.json'].map(path => {
         const before = new Map([[path, firstClock.get('check/build/run.json')!]]);
         const after = new Map([[path, nextClock.get('check/build/run.json')!]]);
@@ -49859,8 +49892,11 @@ function runSceneSuite(): number {
           !windowsClock.rawEqual && windowsClock.stableEqual && windowsClock.differences.length === 1 && windowsClock.differences[0].clockOnly &&
           windowsClock.differences[0].path === 'check\\build\\run.json' && windowsClock.differences[0].fields.join(',') === 'finished_at,started_at' &&
           !windowsDigest.rawEqual && !windowsDigest.stableEqual && !windowsRig.rawEqual && !windowsRig.stableEqual &&
-          !windowsMissing.rawEqual && !windowsMissing.stableEqual && outsideReceipt.every(Boolean),
-        `clock-only ${JSON.stringify(clockComparison)}; changed inputs accepted ${changedDigest.stableEqual}; other-file timestamps ${JSON.stringify(otherFileClock)}; Windows clocks ${JSON.stringify(windowsClock)}; Windows digest/rig/missing accepted ${[windowsDigest, windowsRig, windowsMissing].map(result => result.stableEqual)}; outside receipt refused ${outsideReceipt}`, why);
+          !windowsMissing.rawEqual && !windowsMissing.stableEqual && outsideReceipt.every(Boolean) &&
+          !renderClock.rawEqual && renderClock.stableEqual && renderClock.differences[0]?.fields.join(',') === 'finished_at,started_at' &&
+          renderPlants.every(result => !result.rawEqual && !result.stableEqual),
+        `clock-only ${JSON.stringify(clockComparison)}; changed inputs accepted ${changedDigest.stableEqual}; other-file timestamps ${JSON.stringify(otherFileClock)}; Windows clocks ${JSON.stringify(windowsClock)}; Windows digest/rig/missing accepted ${[windowsDigest, windowsRig, windowsMissing].map(result => result.stableEqual)}; outside receipt refused ${outsideReceipt}; ` +
+        `idle render clocks ${JSON.stringify(renderClock)}; missing, digest, spec and out-of-scope render plants accepted ${renderPlants.map(result => result.stableEqual)}`, why);
 
 
       // SC130..SC136: #1358 loop diagnostics; SC137..SC139 belong to the dial controls.
