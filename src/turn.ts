@@ -1506,6 +1506,14 @@ export interface Depth25DTurnOptions {
     overlapOwners?: ReadonlyArray<{ group: 'head' | 'body'; neighbours: readonly string[] } | undefined>;
     /** Every attachment of a part containing a blended mesh carries its own group mask. */
     groups?: ReadonlyMap<string, 'head' | 'body'>;
+    /** Declared contour regions on this part, to refuse an other-group band that weights no vertex (#1543). */
+    contourRegions?: ReadonlyArray<{
+      index: number;
+      name: string;
+      shape: 'circle' | 'polygon';
+      bone: string;
+      weightedVertices: number;
+    }>;
   }>;
   /** Final weighted unit/rear drawings are support only, never surface targets. */
   neighbourMeshes?: Depth25DTurnOptions['surfaceMeshes'];
@@ -2156,6 +2164,39 @@ export function buildDepth25DTurn(
     if (new Set(groups.values()).size === 2) blended.add(mesh.part);
     return { mesh, groups, outside };
   });
+  // Issue #1543: a contour region on a turn surface bound to a bone in the
+  // other turn group's subtree must weight at least one vertex above 0.
+  const checkedBandParts = new Set<string>();
+  for (const { mesh } of classified ?? []) {
+    if (mesh.contourRegions === undefined || checkedBandParts.has(mesh.part)) continue;
+    checkedBandParts.add(mesh.part);
+    const headSurface = opts.turn.roles?.[mesh.part] === 'surface';
+    const bodySurface = opts.turn.body?.roles[mesh.part] === 'surface';
+    if (!headSurface && !bodySurface) continue;
+    const partEntries = (classified ?? []).filter((c) => c.mesh.part === mesh.part);
+    const totalVertices = partEntries.reduce((sum, c) => sum + c.mesh.weights.length, 0);
+    const partGroups = new Set(partEntries.flatMap((c) => [...c.groups.values()]));
+    for (const reg of mesh.contourRegions) {
+      const regGroup: 'head' | 'body' | null = descends(reg.bone, 'head')
+        ? 'head'
+        : !descends(bodyRoot, 'head') && descends(reg.bone, bodyRoot)
+          ? 'body'
+          : null;
+      if (regGroup === null) continue;
+      const inOtherGroup =
+        headSurface && !bodySurface
+          ? regGroup === 'body'
+          : bodySurface && !headSurface
+            ? regGroup === 'head'
+            : partGroups.size === 1 && !partGroups.has(regGroup);
+      if (!inOtherGroup || reg.weightedVertices > 0) continue;
+      problems.push({
+        code: 'RIG_TURN_BAND_REACHES_NO_VERTEX',
+        object: `config.meshes.${mesh.part}.contour.regions[${reg.index}]`,
+        detail: `region ${reg.index} ("${reg.name}") on turn surface part "${mesh.part}" binds bone "${reg.bone}" in the ${regGroup} turn group's subtree and gives 0 of ${totalVertices} vertices a weight above 0 (at least 1 is required); the region ${reg.shape} must overlap "${mesh.part}"'s mesh vertices, or its band must be wider`,
+      });
+    }
+  }
   // A part's role covers every island, but each attachment keeps its own mask.
   // Without a blended attachment the explicit role still owns the legacy path.
   const surfaceMeshes = classified?.map(({ mesh, groups, outside }) => {

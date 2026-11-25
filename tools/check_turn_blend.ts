@@ -1,10 +1,10 @@
 /** Analytic controls for two depth fields on one authored weighted attachment. */
-import { blendedTurnFixture, blendedTurnIslandsFixture, singleGroupTurnFixture } from '../fixtures/turn_blend.ts';
+import { bandTurnFixture, blendedTurnFixture, blendedTurnIslandsFixture, singleGroupTurnFixture } from '../fixtures/turn_blend.ts';
 import { parseConfig } from '../src/config.ts';
 import { buildRig, type MeshAttachment, type RigOutput } from '../src/rig.ts';
-import { computeWorldTransforms, toWorld } from '../src/coords.ts';
+import { computeWorldTransforms, setupToPaintingPoint, toWorld } from '../src/coords.ts';
 import { buildDepth25DTurn } from '../src/turn.ts';
-import { PartsError } from '../src/errors.ts';
+import { PartsError, type Problem } from '../src/errors.ts';
 import { alphaAbove, connectedComponents } from '../src/raster/index.ts';
 import { pyRound } from '../src/round.ts';
 
@@ -12,6 +12,77 @@ type Say = (name: string, ok: boolean, detail: string) => void;
 type Animation = { duration: number; deform?: Array<{ slot: string; attachment: string; keys: Array<{ t: number; vertices?: number[] }> }> };
 const mesh = (b: RigOutput) => b.rig.skins.default.neck.neck as MeshAttachment;
 const code = (f: () => unknown) => { try { f(); return ''; } catch(e) { if(e instanceof PartsError) return e.problems.map(p=>p.code).join(','); throw e; } };
+const problemsOf = (f: () => unknown): readonly Problem[] => { try { f(); return []; } catch(e) { if(e instanceof PartsError) return e.problems; throw e; } };
+
+/** Mean x travel at ±15° by 2 px height band from y = 26 to y = 34 (d = 0, 2, 4, 6, 8) on topwear (#1543). */
+function bandTravelReading(b: RigOutput) {
+  const att = b.rig.skins.default.topwear.topwear as MeshAttachment;
+  const world = computeWorldTransforms(b.rig.bones);
+  const canvas: readonly [number, number] = [b.rig.skeleton.width, b.rig.skeleton.height];
+  const key = (animation: string, index: number) =>
+    (b.motion.animations[animation] as unknown as Animation | undefined)?.deform?.find(d => d.slot === 'topwear')?.keys[index].vertices ?? [];
+  const posePoints = (indices: readonly [number, number, number]) => {
+    const offsets = ['turn', 'tilt', 'body_turn'].map((n, i) => key(n, indices[i]));
+    let at = 0;
+    return att.weights.map(row => {
+      let x = 0, y = 0;
+      for (const w of row) {
+        const [wx, wy] = toWorld(
+          world.get(w.bone)!,
+          w.x + offsets.reduce((s, v) => s + (v[at] ?? 0), 0),
+          w.y + offsets.reduce((s, v) => s + (v[at + 1] ?? 0), 0),
+        );
+        x += wx * w.weight;
+        y += wy * w.weight;
+        at += 2;
+      }
+      return setupToPaintingPoint([x, y], canvas, canvas);
+    });
+  };
+  const rest = posePoints([2, 2, 2]);
+  const headPosPts = posePoints([4, 2, 2]), headNegPts = posePoints([0, 2, 2]);
+  const bodyPosPts = posePoints([2, 2, 4]), bodyNegPts = posePoints([2, 2, 0]);
+  const bothPosPts = posePoints([4, 2, 4]), bothNegPts = posePoints([0, 2, 0]);
+  const ds = [0, 2, 4, 6, 8] as const;
+  const sin15 = Math.sin((15 * Math.PI) / 180);
+  const counts: number[] = [];
+  const headPos: number[] = [], bodyPos: number[] = [], bothPos: number[] = [];
+  const headNeg: number[] = [], bodyNeg: number[] = [], bothNeg: number[] = [];
+  let maxError = 0;
+  for (const d of ds) {
+    const centerY = 26 + d;
+    const indices = rest.flatMap(([, ry], i) => (ry >= centerY - 1 && ry < centerY + 1 ? [i] : []));
+    counts.push(indices.length);
+    const meanDx = (pts: number[][]) =>
+      indices.length === 0 ? NaN : indices.reduce((s, i) => s + (pts[i][0] - rest[i][0]), 0) / indices.length;
+    const hp = meanDx(headPosPts), bp = meanDx(bodyPosPts), tp = meanDx(bothPosPts);
+    const hn = meanDx(headNegPts), bn = meanDx(bodyNegPts), tn = meanDx(bothNegPts);
+    headPos.push(hp); bodyPos.push(bp); bothPos.push(tp);
+    headNeg.push(hn); bodyNeg.push(bn); bothNeg.push(tn);
+    const wantHead = 16 * sin15 * (1 - d / 8);
+    const wantBody = 24 * sin15 * (d / 8);
+    maxError = Math.max(
+      maxError,
+      Math.abs(hp - -wantHead),
+      Math.abs(bp - -wantBody),
+      Math.abs(tp - (-wantHead - wantBody)),
+      Math.abs(hn - wantHead),
+      Math.abs(bn - wantBody),
+      Math.abs(tn - (wantHead + wantBody)),
+    );
+  }
+  const strictlyIncreasing = (xs: readonly number[]) => xs.every((v, i) => i === 0 || xs[i - 1] < v - 1e-6);
+  const strictlyDecreasing = (xs: readonly number[]) => xs.every((v, i) => i === 0 || xs[i - 1] > v + 1e-6);
+  const monotone =
+    counts.every(c => c > 0) &&
+    strictlyIncreasing(headPos) &&
+    strictlyDecreasing(bodyPos) &&
+    strictlyDecreasing(bothPos) &&
+    strictlyDecreasing(headNeg) &&
+    strictlyIncreasing(bodyNeg) &&
+    strictlyIncreasing(bothNeg);
+  return { counts, headPos, bodyPos, bothPos, headNeg, bodyNeg, bothNeg, maxError, monotone };
+}
 
 /** Scalar=120 everywhere; the median is rounded to four places by the public producer. */
 function oracle(b: RigOutput, plant: 'none' | 'all' | 'twice' | 'swapped' = 'none', slot = 'neck') {
@@ -188,4 +259,52 @@ export function runTurnBlendChecks(say: Say): void {
   const moved=blendedTurnFixture();(moved.config.turn as {body:{roles:Record<string,string>}}).body.roles={topwear:'unit',neck:'surface'};
   const movedCode=code(()=>buildRig(parseConfig(moved.config),moved.parts,moved.images));
   say('BT07_SHARED_MOVING_FRAME_REMAINS_REFUSED',movedCode.includes('RIG_TURN_SURFACE_MESH_BINDINGS'),'a surface spanning both subtrees does not excuse another role moving its torso ancestor; no second carrier displacement is silently added');
+
+  const band = bandTurnFixture();
+  const bandBuild = buildRig(parseConfig(band.config), band.parts, band.images);
+  const bandRead = bandTravelReading(bandBuild);
+  const bandFolds = blendSliderFolds(bandBuild, 'topwear');
+  const fmt = (xs: readonly number[]) => xs.map(v => pyRound(v, 4)).join(', ');
+  say(
+    'BT18_COLLAR_BAND_TRAVEL_IS_MONOTONE_AND_LINEAR_BY_HEIGHT',
+    bandRead.monotone && bandRead.maxError < 0.00001 && bandFolds.count === 0 && bandFolds.flat === 0,
+    `+15° head=[${fmt(bandRead.headPos)}] body=[${fmt(bandRead.bodyPos)}] both=[${fmt(bandRead.bothPos)}]; -15° head=[${fmt(bandRead.headNeg)}] body=[${fmt(bandRead.bodyNeg)}] both=[${fmt(bandRead.bothNeg)}]; counts=[${bandRead.counts.join(',')}]; maxError=${pyRound(bandRead.maxError, 8)}; folds=${bandFolds.count}, flat=${bandFolds.flat}`,
+  );
+
+  const sameGroupBand = bandTurnFixture();
+  ((sameGroupBand.config.meshes as Record<string, { contour: { regions: Array<{ bone: string }> } }>).topwear.contour.regions[0]).bone = 'torso';
+  const sameGroupBuild = buildRig(parseConfig(sameGroupBand.config), sameGroupBand.parts, sameGroupBand.images);
+  const sameGroupRead = bandTravelReading(sameGroupBuild);
+  say(
+    'BT19_COLLAR_BAND_SAME_GROUP_BONE_FAILS_MONOTONE_CHECK',
+    !sameGroupRead.monotone && sameGroupRead.maxError > 4,
+    `region on torso accepted (same group), monotone=${sameGroupRead.monotone}, +15° head=[${fmt(sameGroupRead.headPos)}] body=[${fmt(sameGroupRead.bodyPos)}] both=[${fmt(sameGroupRead.bothPos)}], maxError=${pyRound(sameGroupRead.maxError, 4)}`,
+  );
+
+  const outsideBand = bandTurnFixture();
+  ((outsideBand.config.meshes as Record<string, { contour: { regions: Array<{ points: number[][] }> } }>).topwear.contour.regions[0]).points = [[0, 0], [10, 0], [10, 8], [0, 8]];
+  const outsideProblems = problemsOf(() => buildRig(parseConfig(outsideBand.config), outsideBand.parts, outsideBand.images));
+  const outsideHit = outsideProblems.find(p => p.code === 'RIG_TURN_BAND_REACHES_NO_VERTEX');
+  const outsideSameGroup = bandTurnFixture();
+  Object.assign((outsideSameGroup.config.meshes as Record<string, { contour: { regions: Array<Record<string, unknown>> } }>).topwear.contour.regions[0], {
+    bone: 'torso',
+    points: [[0, 0], [10, 0], [10, 8], [0, 8]],
+  });
+  const outsideNonSurface = bandTurnFixture();
+  ((outsideNonSurface.config.meshes as Record<string, { contour: { regions: Array<{ points: number[][] }> } }>).topwear.contour.regions[0]).points = [[0, 0], [10, 0], [10, 8], [0, 8]];
+  delete (outsideNonSurface.config.turn as { body?: unknown }).body;
+  say(
+    'BT20_COLLAR_BAND_OUTSIDE_PART_REFUSED_BY_NAME',
+    outsideProblems.length === 1 &&
+      outsideHit !== undefined &&
+      outsideHit.object === 'config.meshes.topwear.contour.regions[0]' &&
+      outsideHit.detail.includes('region 0') &&
+      outsideHit.detail.includes('"crown"') &&
+      outsideHit.detail.includes('"topwear"') &&
+      outsideHit.detail.includes('overlap') &&
+      outsideHit.detail.includes('band') &&
+      code(() => buildRig(parseConfig(outsideSameGroup.config), outsideSameGroup.parts, outsideSameGroup.images)) === '' &&
+      code(() => buildRig(parseConfig(outsideNonSurface.config), outsideNonSurface.parts, outsideNonSurface.images)) === '',
+    `outside crown region -> ${outsideHit === undefined ? 'none' : `${outsideHit.code}: ${outsideHit.object} — ${outsideHit.detail}`}; outside same-group torso and non-surface part quiet`,
+  );
 }

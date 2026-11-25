@@ -116,3 +116,70 @@ export function singleGroupTurnFixture(group: 'head' | 'body', role: 'head' | 'b
   f.config.turn = { pivot: 16, roles: { face: 'surface', ...(role === 'head' ? { neck: 'surface' } : {}) }, body: { pivot: 24, roles: { topwear: 'surface', ...(role === 'body' ? { neck: 'surface' } : {}) } } };
   return f;
 }
+
+/** A 64x64 figure whose topwear includes the collar and blends to head via a contour band (#1543). */
+export function bandTurnFixture() {
+  const parts = rigParts(), template = parts.parts[0];
+  parts.rig_size = [64, 64]; parts.scale_rig_per_source = 1;
+  parts.parts = [
+    { ...template, name: 'topwear', from: 'full:topwear', x: 20, y: 26, w: 24, h: 34, opaque_px: 816 },
+    { ...template, name: 'face', from: 'head:face', x: 24, y: 12, w: 16, h: 14, opaque_px: 224 },
+  ];
+  const images = new Map<string, Raster>();
+  for (const p of parts.parts) {
+    const art = block(p.w, p.h), scalar = block(p.w, p.h);
+    // 153 / 255 = 0.6 exact, so z = 24 exact at zScale 40 and z - zRef = 0 without rounding residual.
+    for (let i = 0; i < p.w * p.h; i++) scalar.data.set([153, 153, 153, 255], 4 * i);
+    p.depth = {
+      image: `${p.name}_depth.png`,
+      near: 'white',
+      zScale: 40,
+      sources: [{ from: p.from, image: 'scalar.png', sha256: createHash('sha256').update(encodePngBytes(scalar)).digest('hex'), crop: [p.x, p.y, p.x + p.w, p.y + p.h], reading: depthReading(scalar, art, null) }],
+    };
+    images.set(p.name, art); images.set(p.depth.image, scalar);
+  }
+  const config: Record<string, unknown> = {
+    key: 'band_turn',
+    assemble: { rig_scale: 1, plan: parts.parts.map(p => [p.name, ...p.from.split(':')]) },
+    bones: [
+      { name: 'chest', parent: 'root', at: [32, 50] },
+      { name: 'torso', parent: 'chest', at: [32, 50] },
+      { name: 'head', parent: 'chest', at: [32, 26] },
+      { name: 'crown', parent: 'head', at: [32, 26] },
+    ],
+    regions: { face: 'crown' },
+    meshes: {
+      topwear: {
+        r: 8,
+        segments: [['torso', [32, 58], [32, 30]]],
+        contour: {
+          tolerance: 0,
+          margin: 0,
+          spacing: 4,
+          regions: [
+            {
+              name: 'collar',
+              shape: 'polygon',
+              points: [[12, 4], [52, 4], [52, 26], [12, 26]],
+              bone: 'crown',
+              band: 8,
+              spacing: 2,
+            },
+          ],
+        },
+      },
+    },
+    motion: { duration: 2, tracks: [{ bone: 'chest', prop: 'rotate', amp: 2, period: 2, phase: 0 }] },
+    turn: {
+      pivot: 16,
+      grid: [5, 5],
+      roles: { face: 'surface' },
+      body: {
+        pivot: 24,
+        grid: [5, 5],
+        roles: { topwear: 'surface' },
+      },
+    },
+  };
+  return { config, parts, images };
+}

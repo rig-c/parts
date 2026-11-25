@@ -189,7 +189,7 @@ import { alphaAbove, crop, pad, type Raster } from './raster/index.ts';
 import { pyRound } from './round.ts';
 import { boneHeat, type HeatDust, heatInfluences, HEAT_LIMITS, heatRow, type HeatRow, latticeSilhouette, tracedSilhouette } from './heat.ts';
 import type { PosePoints } from './skeleton.ts';
-import { applyFaceSurfaceDeform, BODY_REAR_SHIFT_BONE, BODY_YAW_DIAL_BONE, BODYSHIFT_BONE, buildDepth25DTurn, FACE_RATED_BAND, FACESHIFT_BONE, PITCH_DIAL_BONE, REAR_SHIFT_BONE, resolveTurnGrid, TURN_BONE, TURN_CARRIER_TAG, TURN_GRID_MAX_TRIANGLES_PER_SLOT, TURN_GRID_MAX_TRIANGLES_TOTAL, TURN_PLACES, TURN_RIDER_APART, TURN_RIDER_TAGS, turnRiderDepth, type TurnRole, type TurnSpec, turnConstraintName, turnFractions, turnNearest, turnSurfaceBone, turnTwin, turnUnitBone, YAW_DIAL_BONE } from './turn.ts';
+import { applyFaceSurfaceDeform, BODY_REAR_SHIFT_BONE, BODY_YAW_DIAL_BONE, BODYSHIFT_BONE, buildDepth25DTurn, type Depth25DTurnOptions, FACE_RATED_BAND, FACESHIFT_BONE, PITCH_DIAL_BONE, REAR_SHIFT_BONE, resolveTurnGrid, TURN_BONE, TURN_CARRIER_TAG, TURN_GRID_MAX_TRIANGLES_PER_SLOT, TURN_GRID_MAX_TRIANGLES_TOTAL, TURN_PLACES, TURN_RIDER_APART, TURN_RIDER_TAGS, turnRiderDepth, type TurnRole, type TurnSpec, turnConstraintName, turnFractions, turnNearest, turnSurfaceBone, turnTwin, turnUnitBone, YAW_DIAL_BONE } from './turn.ts';
 import { DISTANCE_EXPONENT, type FloorForm, type Influence, influences, type InfluenceLimits, type MeshInfluences, meshLimits, type Segment } from './weights.ts';
 
 /** Transparent pixels added round every part image — the reference's `PAD`. */
@@ -2009,6 +2009,7 @@ export function buildWaistPairSource(
   };
   const skin: RigSpec['skins']['default'] = {};
   const meshReport: MeshReport[] = [];
+  const contourRegionSummaries = new Map<string, NonNullable<NonNullable<Depth25DTurnOptions['surfaceMeshes']>[number]['contourRegions']>>();
   const outImages: Array<[string, Raster]> = [];
   const depthReferences: NonNullable<RigOutput['depthReferences']> = [];
   const emitDepth = (part: string, reference: PartDepthReference, scalar: Raster): void => {
@@ -2135,6 +2136,7 @@ export function buildWaistPairSource(
     const weights: WeightEntry[][] = [];
     const reached = regions.map(() => 0);
     const whole = regions.map(() => 0);
+    const weighted = regions.map(() => 0);
     let infl = 0;
     let maxInfl = 0;
     let overlapped = false;
@@ -2182,6 +2184,9 @@ export function buildWaistPairSource(
         if (li.g >= 1) whole[li.region]++;
       }
       const shares = writtenShares(li, limits.floor);
+      if (li.region >= 0 && shares.some((s) => s.bone === regions[li.region].bone && s.weight > 0)) {
+        weighted[li.region]++;
+      }
       const ent: WeightEntry[] = shares.map(({ bone, weight }) => {
         const [x, y] = toBoneLocal(world.get(bone) as BoneTransform, spineX(wx), spineY(wy));
         return { bone, x: places(x), y: places(y), weight };
@@ -2199,6 +2204,19 @@ export function buildWaistPairSource(
     for (const [x, y] of cm.vertices) uvs.push(pyRound(x / w, 6), pyRound(y / h, 6));
     const bones = new Set(segs.map((s) => s.bone));
     for (const rg of regions) bones.add(rg.bone);
+    const explicitRegions = spec.regions?.length ?? 0;
+    if (explicitRegions > 0) {
+      contourRegionSummaries.set(
+        p.name,
+        regions.slice(0, explicitRegions).map((rg, index) => ({
+          index,
+          name: rg.name,
+          shape: rg.shape,
+          bone: rg.bone,
+          weightedVertices: weighted[index],
+        })),
+      );
+    }
     const rep = cm.report;
     return {
       attachment: { type: 'mesh', image: file, width: w, height: h, uvs, triangles: cm.triangles, hull: cm.hull, weights },
@@ -3804,7 +3822,7 @@ export function buildWaistPairSource(
       stills,
       boneLandmarks,
       hasAlternateFaceSet,
-      surfaceMeshes: turnSurfaceMeshes(cfg, rig, parts.rig_size),
+      surfaceMeshes: turnSurfaceMeshes(cfg, rig, parts.rig_size, contourRegionSummaries),
       neighbourMeshes: turnNeighbourMeshes(cfg, rig, parts, new Map(outImages)),
       coverageMeshes: cfg.turn.body === undefined ? undefined : turnNeighbourMeshes(cfg, rig, parts, new Map(outImages), true),
     });
@@ -3822,7 +3840,7 @@ export function buildWaistPairSource(
         stills,
         boneLandmarks,
         hasAlternateFaceSet,
-        surfaceMeshes: turnSurfaceMeshes(cfg, rig, parts.rig_size),
+        surfaceMeshes: turnSurfaceMeshes(cfg, rig, parts.rig_size, contourRegionSummaries),
         neighbourMeshes: turnNeighbourMeshes(cfg, rig, parts, new Map(outImages)),
       });
     }
@@ -4324,10 +4342,16 @@ function refuseSharedWaistMotion(motion: MotionSpec, top: string, bone: string):
 }
 
 /** Final named bindings, including explicit islands; grid surfaces keep their Core path. */
-function turnSurfaceMeshes(cfg: CharacterConfig, rig: RigSpec, canvas: readonly [number, number]) {
+function turnSurfaceMeshes(
+  cfg: CharacterConfig,
+  rig: RigSpec,
+  canvas: readonly [number, number],
+  contourRegions?: ReadonlyMap<string, NonNullable<NonNullable<Depth25DTurnOptions['surfaceMeshes']>[number]['contourRegions']>>,
+) {
   const meshes = [];
   for (const part of Object.keys(cfg.meshes)) {
     if (cfg.turn?.roles?.[part] !== 'surface' && cfg.turn?.body?.roles?.[part] !== 'surface') continue;
+    let firstForPart = true;
     for (const slot of rig.slots) {
       if (slot.name !== part && !slot.name.startsWith(`${part}__island`)) continue;
       for (const [attachment, att] of Object.entries(rig.skins.default[slot.name] ?? {})) {
@@ -4337,7 +4361,17 @@ function turnSurfaceMeshes(cfg: CharacterConfig, rig: RigSpec, canvas: readonly 
         if (attachment !== part && !slot.name.startsWith(`${part}__island`)) {
           throw new PartsError([{ code: 'RIG_TURN_SURFACE_MESH_ATTACHMENT', object: `surface mesh "${slot.name}/${attachment}"`, detail: `requires the base drawing "${part}"; alternate drawings need their own registered depth sampling frame` }]);
         }
-        meshes.push({ part, slot: slot.name, attachment, weights: att.weights, triangles: att.triangles, canvas });
+        const regionsForPart = firstForPart ? contourRegions?.get(part) : undefined;
+        firstForPart = false;
+        meshes.push({
+          part,
+          slot: slot.name,
+          attachment,
+          weights: att.weights,
+          triangles: att.triangles,
+          canvas,
+          ...(regionsForPart === undefined ? {} : { contourRegions: regionsForPart }),
+        });
       }
     }
   }
