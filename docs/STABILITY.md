@@ -1476,7 +1476,9 @@ any `-run.json`. Two runs of the same inputs from the same layout differ only in
 run used — in the order of the command's flag table (`check --help` lists it):
 valued flags first, a repeated `--alt` in the order given, then the switches
 present. Every path is written relative to the `--out` directory with `/`
-separators, by path arithmetic from the working directory with no symlink resolved;
+separators: both taken from the working directory, the `--out` directory and the
+path's directory resolved through their links, and the path's own name kept (a path
+given through a link is written by the link's name, as `config.path` is);
 `--out` itself is `.`; a path that cannot be written that way (another Windows drive)
 is written as given. These arguments reproduce the check with the same package
 version, run from the --out directory. A switch's default is not written, so a later
