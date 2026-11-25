@@ -2428,11 +2428,6 @@ export function requirementText(name: string, line: RequirementLine): string {
 }
 
 /**
- * Run the check and print its report. Returns the report; `figures.PASS` says
- * whether every bar was met, and each one that was not is printed as a FAIL
- * line here. Throws a PartsError when the check could not measure at all.
- */
-/**
  * What a completed check wrote under its `--out`, as its `wrote` line names it: the report files in the order the
  * check wrote them, then the directories it wrote whole (`build`, and `idle_frames`, the requirements, seam and
  * setup-still directories when they were written). The `check-run.json` record lists the files under these.
@@ -2445,6 +2440,11 @@ export function checkWrote(r: CheckReport, out: string): { written: string[]; di
   };
 }
 
+/**
+ * Run the check and print its report. Returns the report; `figures.PASS` says
+ * whether every bar was met, and each one that was not is printed as a FAIL
+ * line here. Throws a PartsError when the check could not measure at all.
+ */
 export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string, log: Log): CheckReport {
   const pageSize = parsePageSize(input.pageSize);
   const v = rigc(['--version']);
