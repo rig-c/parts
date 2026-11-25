@@ -118,7 +118,7 @@ export function runRunRecordPureChecks(say: Say): void {
   const replayed = (argv: string[]): string => win32.resolve(winOut, argv[argv.indexOf('--rig') + 1]);
   say('BU1551A_ON_WINDOWS_A_PATH_IS_REBASED_TO_OUT_AS_SPELLED_SO_THE_REPLAY_FROM_OUT_NAMES_THE_SAME_RIG',
     linkRuleFor(posix) === realWhereItExists && asRule[asRule.indexOf('--rig') + 1] === '../../../out/rig' && replayed(asRule) === 'C:\\t\\out\\rig' &&
-      throughJunction[throughJunction.indexOf('--rig') + 1] === '../../../../../out/rig' && replayed(throughJunction) === 'C:\\out\\rig',
+      throughJunction[throughJunction.indexOf('--rig') + 1] === '../../../../out/rig' && replayed(throughJunction) === 'C:\\out\\rig',
     `POSIX rule resolves links ${linkRuleFor(posix) === realWhereItExists}; Windows rule recorded --rig ${JSON.stringify(asRule[asRule.indexOf('--rig') + 1])}, replayed from --out as spelled ${JSON.stringify(replayed(asRule))}; planted (junction resolved) ${JSON.stringify(throughJunction[throughJunction.indexOf('--rig') + 1])}, replayed ${JSON.stringify(replayed(throughJunction))}`,
     'issue #1551: Bun on Windows reports a working directory spelled through a junction as spelled and resolves `..` textually against it, so resolving the junction before rebasing climbs one level per hidden one');
 }
