@@ -24,6 +24,8 @@ numeric findings, a refusal names the object, the value found and the value
 required, nothing is written after a red, and no value is invented where the
 input is silent.
 
+New to the rig-c toolchain? The [getting-started guide](https://github.com/rig-c/getting-started#the-whole-thing-in-one-glance) shows what each package takes and gives.
+
 ## What you get
 
 <p align="center">
