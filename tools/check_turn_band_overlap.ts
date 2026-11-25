@@ -1,9 +1,11 @@
-/** A collar band on a torso that other turn parts overlap (#1543): hand-derived travel, refusals by name. */
-import { BAND_OVERLAP, bandOverlapTurnFixture, type BandOverlapVariant } from '../fixtures/turn_band_overlap.ts';
+/** A collar band on a torso that other turn parts overlap (#1543, #1548): hand-derived travel, refusals by name. */
+import { BAND_COVER_FIXTURE, BAND_OVERLAP, bandCoverTurnFixture, bandOverlapTurnFixture, type BandOverlapVariant } from '../fixtures/turn_band_overlap.ts';
 import { parseConfig } from '../src/config.ts';
 import { buildRig, type MeshAttachment, type RigOutput } from '../src/rig.ts';
 import { computeWorldTransforms, toWorld } from '../src/coords.ts';
+import { extendDepthSilhouette, sampleDepthFloat } from '../src/depthsheets.ts';
 import { PartsError, type Problem } from '../src/errors.ts';
+import { levelToDepthZ } from '../src/turn.ts';
 import { turnKeyFlips } from './measure_turn_flips.ts';
 
 type Say = (name: string, ok: boolean, detail: string) => void;
@@ -121,6 +123,143 @@ export function runTurnBandOverlapChecks(say: Say): void {
   say('BV08_FOLD_READING_IS_SILENT_ON_A_BUILT_BAND', clean.flips.length === 0 && clean.unread.length === 5 && clean.unread.every(u => u.endsWith('a grid generator rigc expands')) && !clean.unread.some(u => u.startsWith('topwear/')),
     `${clean.flips.length} fold(s); not read: ${clean.unread.join('; ')}`);
   say('BV09_FOLD_READING_NAMES_A_PLANTED_FOLD', plantedFoldNamed(banded.b), 'triangle 0 of topwear reflected across its far edge at turn key 4 only');
+  runBandCoverChecks(say);
+}
+
+function buildCover(opts?: Parameters<typeof bandCoverTurnFixture>[0], mutate?: (raw: Record<string, unknown>) => void): { b?: RigOutput; problems: readonly Problem[] } {
+  const f = bandCoverTurnFixture(opts);
+  mutate?.(f.config);
+  try { return { b: buildRig(parseConfig(f.config), f.parts, f.images), problems: [] }; }
+  catch (e) { if (e instanceof PartsError) return { problems: e.problems }; throw e; }
+}
+
+function runBandCoverChecks(say: Say): void {
+  const TOL = 0.00002;
+  const { chin, band: width, headCoverDepth, headOwnOvershootDepth, bodyDepth, headPivot, headZRef } = BAND_COVER_FIXTURE;
+  const covered = buildCover({ cover: 'face' });
+  const uncovered = buildCover();
+
+  // Face mean travel at ±15° from its 5x5 grid over padded [22-4..42+4] x [4-4..28+4], computed from definition.
+  const fFix = bandCoverTurnFixture({ cover: 'face' });
+  const faceRec = fFix.parts.parts.find(p => p.name === 'face')!;
+  const faceExt = extendDepthSilhouette(fFix.images.get(faceRec.depth!.image)!, fFix.images.get('face')!);
+  let facePos15 = 0, faceN = 0;
+  for (let r = 0; r <= 5; r++) for (let c = 0; c <= 5; c++) {
+    const gx = faceRec.x - 4 + (c / 5) * (faceRec.w + 8), gy = faceRec.y - 4 + (r / 5) * (faceRec.h + 8);
+    const z = levelToDepthZ(sampleDepthFloat(faceExt, gx - faceRec.x, gy - faceRec.y), faceRec.depth!);
+    facePos15 += -(headPivot + z - headZRef) * SIN15;
+    faceN++;
+  }
+  const faceMeanPos = facePos15 / faceN, faceMeanNeg = -faceMeanPos;
+
+  const evalCover = (b: RigOutput, headD: number) => {
+    const rest = posed(b, [2, 2, 2]);
+    const hPos = posed(b, [4, 2, 2]), hNeg = posed(b, [0, 2, 2]);
+    const bPos = posed(b, [2, 2, 4]), bNeg = posed(b, [2, 2, 0]);
+    const bothPos = posed(b, [4, 2, 4]), bothNeg = posed(b, [0, 2, 0]);
+    let maxErr = 0, bandVertsOutsideFace = 0;
+    const bandRows: Array<[number, number, number, number, number, number]> = [];
+    const chestRows: Array<[number, number, number, number, number, number]> = [];
+    for (const [i, [x, y]] of rest.entries()) {
+      const g = Math.min(1, Math.max(0, y <= chin ? 1 : 1 - (y - chin) / width));
+      if (g > 0 && y > faceRec.y + faceRec.h - 1) bandVertsOutsideFace++;
+      if (x >= 36 && y >= 20 && y <= 46) {
+        const wH = -headD * SIN15 * g, wB = -bodyDepth * SIN15 * (1 - g);
+        maxErr = Math.max(
+          maxErr,
+          Math.abs(hPos[i][0] - x - wH),
+          Math.abs(hNeg[i][0] - x + wH),
+          Math.abs(bPos[i][0] - x - wB),
+          Math.abs(bNeg[i][0] - x + wB),
+          Math.abs(bothPos[i][0] - x - wH - wB),
+          Math.abs(bothNeg[i][0] - x + wH + wB),
+        );
+      }
+      const row: [number, number, number, number, number, number] = [
+        hPos[i][0] - x, hNeg[i][0] - x, bPos[i][0] - x, bNeg[i][0] - x, bothPos[i][0] - x, bothNeg[i][0] - x,
+      ];
+      if (y > chin && y < chin + width) bandRows.push(row);
+      else if (y >= 42 && y <= 60) chestRows.push(row);
+    }
+    const meanAt = (rs: typeof bandRows, k: number) => rs.reduce((s, r) => s + r[k], 0) / rs.length;
+    const bandMean = [0, 1, 2, 3, 4, 5].map(k => meanAt(bandRows, k));
+    const chestMean = [0, 1, 2, 3, 4, 5].map(k => meanAt(chestRows, k));
+    const between = (a: number, m: number, c: number) => (a <= m && m <= c) || (a >= m && m >= c);
+    const monotone =
+      between(faceMeanPos, bandMean[0], chestMean[0]) &&
+      between(faceMeanNeg, bandMean[1], chestMean[1]) &&
+      between(0, bandMean[2], chestMean[2]) &&
+      between(0, bandMean[3], chestMean[3]) &&
+      between(faceMeanPos, bandMean[4], chestMean[4]) &&
+      between(faceMeanNeg, bandMean[5], chestMean[5]);
+    return { maxErr, monotone, bandVertsOutsideFace, bandMean, chestMean, flips: turnKeyFlips(b).flips.length, gridFolds: folds(b) };
+  };
+
+  const covRead = covered.b === undefined ? undefined : evalCover(covered.b, headCoverDepth);
+  say(
+    'BV10_BAND_COVER_READS_COVER_SHEET_AT_REGION_BONE_AND_TURNS_MONOTONICALLY',
+    covRead !== undefined && covRead.maxErr < TOL && covRead.monotone && covRead.bandVertsOutsideFace > 0 && covRead.flips === 0 && covRead.gridFolds === 0,
+    covRead === undefined
+      ? `refused: ${JSON.stringify(tally(covered.problems))}`
+      : `maxErr=${covRead.maxErr.toExponential(2)}, monotone=${covRead.monotone}, outsideFace=${covRead.bandVertsOutsideFace}, face=[${faceMeanPos.toFixed(2)}, 0, ${faceMeanPos.toFixed(2)}], band=[${covRead.bandMean[0].toFixed(2)}, ${covRead.bandMean[2].toFixed(2)}, ${covRead.bandMean[4].toFixed(2)}], chest=[${covRead.chestMean[0].toFixed(2)}, ${covRead.chestMean[2].toFixed(2)}, ${covRead.chestMean[4].toFixed(2)}], folds=${covRead.gridFolds}`,
+  );
+
+  // Planted defect: without `cover`, the band reads topwear's own sheet (depth 46 vs face 16..18 and chest 24) and overshoots both.
+  const uncovRead = uncovered.b === undefined ? undefined : evalCover(uncovered.b, headOwnOvershootDepth);
+  say(
+    'BV11_ABSENT_BAND_COVER_REPRODUCES_TORSO_SHEET_OVERSHOOT',
+    uncovRead !== undefined && uncovRead.maxErr < TOL && !uncovRead.monotone && uncovRead.bandMean[0] < faceMeanPos && uncovRead.bandMean[4] < uncovRead.chestMean[4],
+    uncovRead === undefined
+      ? `refused: ${JSON.stringify(tally(uncovered.problems))}`
+      : `maxErr=${uncovRead.maxErr.toExponential(2)}, monotone=${uncovRead.monotone}, band+15=[head ${uncovRead.bandMean[0].toFixed(2)} vs face ${faceMeanPos.toFixed(2)}, both ${uncovRead.bandMean[4].toFixed(2)} vs chest ${uncovRead.chestMean[4].toFixed(2)}]`,
+  );
+
+  // Absent cover moves no byte: omitting `cover` and `cover: undefined` serialize identically.
+  const fOmit = bandCoverTurnFixture(), fUndef = bandCoverTurnFixture({ cover: undefined });
+  const outOmit = JSON.stringify(buildRig(parseConfig(fOmit.config), fOmit.parts, fOmit.images));
+  const outUndef = JSON.stringify(buildRig(parseConfig(fUndef.config), fUndef.parts, fUndef.images));
+  say('BV12_ABSENT_BAND_COVER_MOVES_NO_BYTE', outOmit === outUndef && outOmit.length > 0, `serialized length ${outOmit.length}, equal=${outOmit === outUndef}`);
+
+  // Planted CONFIG_TURN_BAND_COVER refusals: unknown part, wrong-group surface, unit role, missing depth sheet, own-group bone, non-surface target.
+  const rUnknown = buildCover({ cover: 'missing_part' });
+  const rWrongGroup = buildCover({ cover: 'coat' });
+  const rUnitRole = buildCover({ cover: 'eyewhite_r' });
+  const rNoSheet = buildCover({ cover: 'face', omitFaceDepth: true });
+  const rSameGroup = buildCover({ cover: 'face', regionBone: 'torso' });
+  const rNoTurnSurface = buildCover({ cover: 'face' }, raw => { raw.turn = { pivot: 16, roles: { face: 'surface' } }; });
+  const coverRefusals = [
+    ['unknown', rUnknown, 'missing_part'],
+    ['wrong-group', rWrongGroup, 'coat'],
+    ['unit-role', rUnitRole, 'eyewhite_r'],
+    ['no-sheet', rNoSheet, 'carries no depth sheet'],
+    ['same-group', rSameGroup, 'torso'],
+    ['non-surface-target', rNoTurnSurface, 'topwear'],
+  ] as const;
+  say(
+    'BV13_BAND_COVER_REFUSES_INVALID_PART_ROLE_SHEET_AND_GROUP_BY_NAME',
+    coverRefusals.every(([, r, needle]) => r.b === undefined && r.problems.some(p => p.code === 'CONFIG_TURN_BAND_COVER' && p.detail.includes(needle))),
+    coverRefusals.map(([k, r]) => `${k}:${r.problems.map(p => p.code).join('+') || 'built'}`).join(', '),
+  );
+
+  // Planted RIG_TURN_BAND_COVER_SUPPORT refusals: bone outside cover rect, and bone on semi-transparent jaw edge (alpha 211 < 255).
+  const rOutside = buildCover({ cover: 'face', collarAt: [32, 30] });
+  const rSemi = buildCover({ cover: 'face', collarAt: [32, 27], jawEdgeAlpha: 211 });
+  const outProb = rOutside.problems.find(p => p.code === 'RIG_TURN_BAND_COVER_SUPPORT');
+  const semiProb = rSemi.problems.find(p => p.code === 'RIG_TURN_BAND_COVER_SUPPORT');
+  say(
+    'BV14_BAND_COVER_REFUSES_OUTSIDE_OR_NON_OPAQUE_REGION_BONE_SUPPORT',
+    rOutside.b === undefined &&
+      rSemi.b === undefined &&
+      outProb !== undefined &&
+      outProb.detail.includes('"collar"') &&
+      outProb.detail.includes('[32, 30]') &&
+      outProb.detail.includes('alpha 0') &&
+      semiProb !== undefined &&
+      semiProb.detail.includes('"collar"') &&
+      semiProb.detail.includes('[32, 27]') &&
+      semiProb.detail.includes('alpha 211'),
+    `outside=${outProb?.detail ?? 'none'} | semi=${semiProb?.detail ?? 'none'}`,
+  );
 }
 
 /**

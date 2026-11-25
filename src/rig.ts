@@ -2215,6 +2215,7 @@ export function buildWaistPairSource(
           shape: rg.shape,
           bone: rg.bone,
           weightedVertices: weighted[index],
+          ...(rg.cover === undefined ? {} : { cover: rg.cover }),
         })),
       );
     }
@@ -2592,6 +2593,19 @@ export function buildWaistPairSource(
           roleField,
           `declares role "surface" for "${p.name}", which requires a depth sheet in parts.json; run assemble with config.depth or provide "${p.name}_depth.png"`,
         );
+        for (const [mPart, mSpec] of Object.entries(cfg.meshes)) {
+          if ('contour' in mSpec && mSpec.contour.regions !== undefined) {
+            mSpec.contour.regions.forEach((rg, ri) => {
+              if (rg.cover === p.name) {
+                fail(
+                  'CONFIG_TURN_BAND_COVER',
+                  `config.meshes.${mPart}.contour.regions[${ri}].cover`,
+                  `names "${p.name}", which carries no depth sheet in parts.json; run assemble with config.depth or provide "${p.name}_depth.png"`,
+                );
+              }
+            });
+          }
+        }
         continue;
       }
     }

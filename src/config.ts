@@ -633,8 +633,8 @@ export function contourRegionsOf(spec: ContourSpec): ContourRegionSpec[] {
  * are decided exactly on that grid.
  */
 export type ContourRegionSpec =
-  | { name: string; shape: 'circle'; cx: number; cy: number; r: number; spacing: number; band: number; bone: string }
-  | { name: string; shape: 'polygon'; points: Point[]; spacing: number; band: number; bone: string };
+  | { name: string; shape: 'circle'; cx: number; cy: number; r: number; spacing: number; band: number; bone: string; cover?: string }
+  | { name: string; shape: 'polygon'; points: Point[]; spacing: number; band: number; bone: string; cover?: string };
 
 /**
  * One mesh in the automatic mode (issue #126, item 2): the contour mesh over
@@ -2169,6 +2169,7 @@ function parseConfigFrom(raw: Json, base: string | null): { config: CharacterCon
   }
   const meshParts = isPlainObject(t.meshes) ? new Set(Object.keys(t.meshes).filter((k) => !isRecordKey(k))) : new Set<string>();
   if ('turn' in t) checkTurn(c, t.turn, attached, names.bones, hasAltFace, parts, declaredSliders, meshParts, t.meshes, names.chains, names.parents);
+  checkContourBandCovers(c, t.meshes, t.turn, attached, names.bones, names.chains, names.parents);
   if ('scene' in t) checkScene(c, t.scene);
   if ('cloth' in t) checkCloth(c, t.cloth);
   if ('requirements' in t && c.string('config.requirements', t.requirements) && base !== null) checkRequirementsFile(c, configFilePath('requirements', base, t.requirements) as string);
@@ -3874,7 +3875,7 @@ function checkContour(c: Check, at: string, v: Json, bones: Set<string>): void {
       const rat = `${at}.regions[${i}]`;
       const shape = typeof rv === 'object' && rv !== null && !Array.isArray(rv) ? (rv as Record<string, Json>).shape : undefined;
       const own = shape === 'circle' ? ['cx', 'cy', 'r'] : shape === 'polygon' ? ['points'] : [];
-      const r = c.object(rat, rv, ['name', 'shape', 'bone', 'spacing', 'band', ...own], []);
+      const r = c.object(rat, rv, ['name', 'shape', 'bone', 'spacing', 'band', ...own], ['cover']);
       if (r === null) return;
       if ('shape' in r && own.length === 0) c.fail('CONFIG_FIELD_TYPE', `${rat}.shape`, `is ${show(r.shape)}; "circle" (with cx, cy, r) or "polygon" (with points) is required`);
       if ('name' in r && c.string(`${rat}.name`, r.name)) {
@@ -3883,6 +3884,9 @@ function checkContour(c: Check, at: string, v: Json, bones: Set<string>): void {
       }
       if ('bone' in r && (typeof r.bone !== 'string' || !bones.has(r.bone))) {
         c.fail('CONFIG_NAME_RESOLVES', `${rat}.bone`, `is ${show(r.bone)}; a bone config.bones declares is required — the region's control bone`);
+      }
+      if ('cover' in r && (typeof r.cover !== 'string' || r.cover.length === 0)) {
+        c.fail('CONFIG_FIELD_TYPE', `${rat}.cover`, `is ${show(r.cover)}; a non-empty part name is required`);
       }
       if ('spacing' in r) c.number(`${rat}.spacing`, r.spacing, 'positive');
       if ('band' in r) onGrid(`${rat}.band`, r.band, 'non-negative');
@@ -5783,6 +5787,133 @@ function checkTurn(
   }
   if (!hasRoles && (!hasBody || hasDepths) && bones.has(TURN_BONE)) {
     c.fail('CONFIG_TURN_BONE_FREE', `bone "${TURN_BONE}"`, `is the control the rig stage adds under root for config.turn, and config.bones already declares a bone of that name; rename it`);
+  }
+}
+
+/**
+ * Issue #1548: `meshes.<part>.contour.regions[i].cover` names the `"surface"` part in the
+ * other 2.5D turn group whose extended depth sheet supplies the region's other-group depth.
+ * Refuses (`CONFIG_TURN_BAND_COVER`) when `part` is not a 2.5D turn surface, when the region's
+ * bone is not in the other turn group (where `cover` would read nothing), when `cover` is not
+ * an attached part, when `cover` lacks role `"surface"` in that other group, or when two regions
+ * on one mesh share a bone with disagreeing `cover` declarations.
+ */
+function checkContourBandCovers(
+  c: Check,
+  rawMeshes: Json,
+  rawTurn: Json,
+  attached: ReadonlySet<string>,
+  bones: ReadonlySet<string>,
+  chains: ReadonlyMap<string, number>,
+  parents: ReadonlyMap<string, string>,
+): void {
+  if (!isPlainObject(rawMeshes)) return;
+  const turnObj = isPlainObject(rawTurn) ? rawTurn : null;
+  const headRoles = turnObj !== null && isPlainObject(turnObj.roles) ? turnObj.roles : null;
+  const bodyObj = turnObj !== null && isPlainObject(turnObj.body) ? turnObj.body : null;
+  const bodyRoles = bodyObj !== null && isPlainObject(bodyObj.roles) ? bodyObj.roles : null;
+  const bodyRoot =
+    bodyObj !== null && typeof bodyObj.bone === 'string' && bones.has(bodyObj.bone)
+      ? bodyObj.bone
+      : bones.has('chest')
+        ? 'chest'
+        : 'hip';
+  const descends = (bone: string, root: string): boolean => {
+    if (!bones.has(bone) || !bones.has(root)) return false;
+    const seen = new Set<string>();
+    for (let cur: string | undefined = bone; cur !== undefined && !seen.has(cur); cur = parents.get(cur)) {
+      if (cur === root) return true;
+      seen.add(cur);
+    }
+    return false;
+  };
+  const groupOf = (bone: string): 'head' | 'body' | null =>
+    descends(bone, 'head') ? 'head' : !descends(bodyRoot, 'head') && descends(bone, bodyRoot) ? 'body' : null;
+
+  for (const [part, spec] of Object.entries(rawMeshes)) {
+    if (isRecordKey(part) || !isPlainObject(spec) || !isPlainObject(spec.contour) || !Array.isArray(spec.contour.regions)) continue;
+    const headSurface = headRoles?.[part] === 'surface';
+    const bodySurface = bodyRoles?.[part] === 'surface';
+    const segGroups = new Set<'head' | 'body'>();
+    if (Array.isArray(spec.segments)) {
+      for (const s of spec.segments) {
+        if (typeof s === 'string') {
+          const count = chains.get(s);
+          const list = count !== undefined ? Array.from({ length: count }, (_, k) => `${s}${k}`) : [s];
+          for (const b of list) {
+            const g = groupOf(b);
+            if (g !== null) segGroups.add(g);
+          }
+        } else if (Array.isArray(s) && typeof s[0] === 'string') {
+          const g = groupOf(s[0]);
+          if (g !== null) segGroups.add(g);
+        }
+      }
+    }
+    const coverByBone = new Map<string, string | null>();
+    spec.contour.regions.forEach((rv, i) => {
+      if (!isPlainObject(rv)) return;
+      const bone = typeof rv.bone === 'string' ? rv.bone : null;
+      const hasCover = 'cover' in rv;
+      if (bone !== null && bones.has(bone)) {
+        const curCover = hasCover && typeof rv.cover === 'string' && rv.cover.length > 0 ? rv.cover : null;
+        const prev = coverByBone.get(bone);
+        if (prev !== undefined && prev !== curCover) {
+          c.fail(
+            'CONFIG_TURN_BAND_COVER',
+            `config.meshes.${part}.contour.regions[${i}].cover`,
+            `disagrees with an earlier contour region on bone "${bone}" (${prev === null ? 'absent' : `"${prev}"`} vs ${curCover === null ? 'absent' : `"${curCover}"`}); regions sharing a control bone on one mesh must agree on cover`,
+          );
+        } else if (prev === undefined) {
+          coverByBone.set(bone, curCover);
+        }
+      }
+      if (!hasCover || typeof rv.cover !== 'string' || rv.cover.length === 0) return;
+      const cover = rv.cover;
+      const at = `config.meshes.${part}.contour.regions[${i}].cover`;
+      const regName = typeof rv.name === 'string' ? rv.name : String(i);
+      if (!headSurface && !bodySurface) {
+        c.fail(
+          'CONFIG_TURN_BAND_COVER',
+          at,
+          `is "${cover}" on region "${regName}" of "${part}", which has no 2.5D turn "surface" role; cover reads a depth sheet only on a turn "surface" part`,
+        );
+        return;
+      }
+      if (bone === null || !bones.has(bone)) return;
+      const regGroup = groupOf(bone);
+      const inOtherGroup =
+        headSurface && !bodySurface
+          ? regGroup === 'body'
+          : bodySurface && !headSurface
+            ? regGroup === 'head'
+            : regGroup !== null && segGroups.size === 1 && !segGroups.has(regGroup);
+      if (!inOtherGroup || regGroup === null) {
+        c.fail(
+          'CONFIG_TURN_BAND_COVER',
+          at,
+          `is "${cover}" on region "${regName}" (bone "${bone}"), which is ${regGroup === null ? 'outside both 2.5D turn subtrees' : `in "${part}"'s own ${regGroup} turn group`}, so cover would read nothing; bind the region to a bone in the other turn group or remove cover`,
+        );
+        return;
+      }
+      const otherRoles = regGroup === 'head' ? headRoles : bodyRoles;
+      const otherPath = regGroup === 'head' ? 'config.turn.roles' : 'config.turn.body.roles';
+      if (!attached.has(cover)) {
+        c.fail(
+          'CONFIG_TURN_BAND_COVER',
+          at,
+          `names "${cover}", which config.meshes and config.regions do not attach; a declared part with role "surface" in ${otherPath} is required`,
+        );
+        return;
+      }
+      if (otherRoles?.[cover] !== 'surface') {
+        c.fail(
+          'CONFIG_TURN_BAND_COVER',
+          at,
+          `names "${cover}", which has role ${otherRoles === null || !(cover in otherRoles) ? 'none' : show(otherRoles[cover])} in ${otherPath}; role "surface" in the ${regGroup} turn group is required`,
+        );
+      }
+    });
   }
 }
 

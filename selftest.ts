@@ -2270,6 +2270,53 @@ function runConfigSuite(): number {
       consumed.problems[0].detail === 'names "sleeve"; config.limbs.arm consumes it; list its final segment parts instead ("upper", "lower")'),
     scopedCutReads.map(({ consumed, final }) => `cut: ${consumed?.problems.map(p => p.detail).join(' | ') ?? 'loads'}; segment: ${codes(final)}`).join(' / '),
     'limb segments replace the consumed cut in final part order, so both config doors resolve only the segment names');
+  {
+    const mkCoverCfg = (cover: unknown, regionBone = 'collar', faceRole: unknown = 'surface') => {
+      const base = minimalConfig();
+      return {
+        ...base,
+        assemble: { rig_scale: 1, plan: [['robe', 'full', 'topwear'], ['face', 'head', 'face']] },
+        bones: [
+          { name: 'chest', parent: 'root', at: [16, 40] },
+          { name: 'head', parent: 'chest', at: [16, 20] },
+          { name: 'collar', parent: 'head', at: [16, 20], inherit: 'onlyTranslation' },
+        ],
+        regions: { face: 'head' },
+        meshes: {
+          robe: {
+            r: 4,
+            segments: [['chest', [16, 40], [16, 24]]],
+            contour: {
+              tolerance: 0,
+              margin: 0,
+              spacing: 4,
+              regions: [{ name: 'collar', shape: 'circle', cx: 16, cy: 20, r: 4, spacing: 2, band: 4, bone: regionBone, ...(cover === undefined ? {} : { cover }) }],
+            },
+          },
+        },
+        turn: {
+          pivot: 20,
+          roles: { face: faceRole },
+          body: { pivot: 24, roles: { robe: 'surface' } },
+        },
+      };
+    };
+    const ok1548 = refusals(() => parseConfig(mkCoverCfg('face')));
+    const empty1548 = refusals(() => parseConfig(mkCoverCfg('')));
+    const badPart1548 = refusals(() => parseConfig(mkCoverCfg('ghost')));
+    const badRole1548 = refusals(() => parseConfig(mkCoverCfg('face', 'collar', 'unit')));
+    const ownGroup1548 = refusals(() => parseConfig(mkCoverCfg('face', 'chest')));
+    say(
+      'CF1548_CONTOUR_REGION_COVER_CHECKS_NONEMPTY_STRING_AND_OTHER_GROUP_SURFACE_ROLE',
+      ok1548 === null &&
+        empty1548?.problems.some(p => p.code === 'CONFIG_FIELD_TYPE' && p.object === 'config.meshes.robe.contour.regions[0].cover') === true &&
+        badPart1548?.problems.some(p => p.code === 'CONFIG_TURN_BAND_COVER' && p.detail.includes('"ghost"')) === true &&
+        badRole1548?.problems.some(p => p.code === 'CONFIG_TURN_BAND_COVER' && p.detail.includes('"unit"')) === true &&
+        ownGroup1548?.problems.some(p => p.code === 'CONFIG_TURN_BAND_COVER' && p.detail.includes('"chest"')) === true,
+      `valid=${codes(ok1548)}; empty=${codes(empty1548)}; ghost=${codes(badPart1548)}; unit=${codes(badRole1548)}; ownGroup=${codes(ownGroup1548)}`,
+      'issue #1548: contour.regions[].cover accepts an other-group 2.5D turn surface and refuses empty/non-string values, undeclared or non-surface parts, and same-group region bones',
+    );
+  }
   const seamDir = temp('seam-config-905');
   try { runSeamConfigChecks(seamDir, (name, ok, detail) => say(name, ok, detail, 'issue #905: CLI > config > unchanged default, with real readers and CLI controls')); }
   finally { rmSync(seamDir, { recursive: true, force: true }); }
