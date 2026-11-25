@@ -7,10 +7,10 @@
  */
 import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
-import { join, posix, relative, resolve, win32 } from 'node:path';
+import { join, posix, relative, resolve, sep, win32 } from 'node:path';
 import { BUILD_RUN_FILE } from '../src/build.ts';
 import { makeOutDir } from '../src/outputpaths.ts';
-import { argvPathFromOut, argvReplayProblems, type ArgvTable, CHECK_RUN_FILE, effectiveArgv, isRunRecordFile, recordArgv, recordedConfigPath, RUN_RECORD_SPEC, type RunRecord } from '../src/runstamp.ts';
+import { argvPathFromOut, argvReplayProblems, type ArgvTable, CHECK_RUN_FILE, effectiveArgv, isRunRecordFile, linkRuleFor, realWhereItExists, recordArgv, recordedConfigPath, RUN_RECORD_SPEC, type RunRecord } from '../src/runstamp.ts';
 
 type Say = (name: string, ok: boolean, detail: string, why: string) => void;
 
@@ -105,6 +105,22 @@ export function runRunRecordPureChecks(say: Say): void {
     kept === '../store/config.json' && followed === '../store/shared.json',
     `recorded ${JSON.stringify(kept)}; planted (the file resolved too) ${JSON.stringify(followed)}`,
     'issue #1541: a replay from --out reads what the link names when it runs, as rig-c core records an input');
+
+  // Windows, modelled on every host: a junction C:\t\ln -> C:\t\deep\er, the check run from C:\t\deep\er\work with
+  // --out C:\t\ln\work\chk. The replay runs from --out as spelled, and Windows resolves `..` against that spelling
+  // (measured, issue #1551), so the recorded --rig must name the rig from it textually. The plant resolves the junction
+  // first, the POSIX rule main 0c1d234 applied on every platform.
+  const junction = (p: string): string => p.startsWith('C:\\t\\ln') ? `C:\\t\\deep\\er${p.slice('C:\\t\\ln'.length)}` : p;
+  const winOut = 'C:\\t\\ln\\work\\chk';
+  const winArgs = ['--rig', '..\\..\\..\\out\\rig', '--out', winOut];
+  const asRule = recordArgv('check', winArgs, CHECK_PLANT_TABLE, winOut, 'C:\\t\\deep\\er\\work', win32);
+  const throughJunction = recordArgv('check', winArgs, CHECK_PLANT_TABLE, winOut, 'C:\\t\\deep\\er\\work', win32, junction);
+  const replayed = (argv: string[]): string => win32.resolve(winOut, argv[argv.indexOf('--rig') + 1]);
+  say('BU1551A_ON_WINDOWS_A_PATH_IS_REBASED_TO_OUT_AS_SPELLED_SO_THE_REPLAY_FROM_OUT_NAMES_THE_SAME_RIG',
+    linkRuleFor(posix) === realWhereItExists && asRule[asRule.indexOf('--rig') + 1] === '../../../out/rig' && replayed(asRule) === 'C:\\t\\out\\rig' &&
+      throughJunction[throughJunction.indexOf('--rig') + 1] === '../../../../../out/rig' && replayed(throughJunction) === 'C:\\out\\rig',
+    `POSIX rule resolves links ${linkRuleFor(posix) === realWhereItExists}; Windows rule recorded --rig ${JSON.stringify(asRule[asRule.indexOf('--rig') + 1])}, replayed from --out as spelled ${JSON.stringify(replayed(asRule))}; planted (junction resolved) ${JSON.stringify(throughJunction[throughJunction.indexOf('--rig') + 1])}, replayed ${JSON.stringify(replayed(throughJunction))}`,
+    'issue #1551: Bun on Windows reports a working directory spelled through a junction as spelled and resolves `..` textually against it, so resolving the junction before rebasing climbs one level per hidden one');
 }
 
 /**
@@ -188,9 +204,11 @@ const CHECK_PLANT_TABLE: ArgvTable = { valued: ['--rig', '--out', '--parts'], sw
  * Issue #1544, the real command: `--out` given through a directory link whose target sits deeper than the link, and
  * `--rig` and `--parts` given relative to a working directory the process reports by its real path (as
  * `/var` -> `/private/var` on macOS; here a link of our own, so every host has it). The record's argv, replayed with
- * the CLI from the `--out` directory, is the same check and writes the same record but for the times. The plant
- * records the same arguments by plain path arithmetic (no link resolved), and its replay from `--out` does not find
- * the rig.
+ * the CLI from the `--out` directory as the run was given it, is the same check and writes the same record but for the
+ * times. What "through a link" means is the host's (issue #1551, {@link linkRuleFor}): on POSIX `..` is physical, so the
+ * recorded path climbs the real tree, one level more than from the working directory; on Windows `..` is textual
+ * against the spelling, so it climbs the link's spelling, as many levels as from the working directory. The plant
+ * records the same arguments by the other platform's rule, and its replay from `--out` does not find the rig.
  */
 function runLinkedOutReplay(dir: string, out: string, say: Say): void {
   const root = join(realpathSync(dir), 'linked-1544');
@@ -207,6 +225,10 @@ function runLinkedOutReplay(dir: string, out: string, say: Say): void {
   const first = cli(['check', ...args], work);
   const rec = readRecord(join(given, CHECK_RUN_FILE));
   const recordedRig = rec === null ? undefined : rec.argv[rec.argv.indexOf('--rig') + 1];
+  // POSIX: the link sits two levels above its target, so from its real --out the rig is one level further than from
+  // the working directory. Windows: the spelling ln\work\chk is as deep as work, so the climb is the same.
+  const windows = sep === '\\';
+  const wantRig = windows ? rig : `../${rig}`;
   const replay = rec === null ? { status: -1, out: 'no record' } : cli(rec.argv, given);
   const again = readRecord(join(given, CHECK_RUN_FILE));
   // rigc writes skeleton.images relative to the --out it was handed, by plain arithmetic: the first run hands it the
@@ -220,16 +242,18 @@ function runLinkedOutReplay(dir: string, out: string, say: Say): void {
   const aside = (r: RunRecord | null): string => r === null ? 'absent' : timeless({ ...r, outputs: r.outputs.map((o) => spelled.has(o.path) ? { ...o, sha256: '<spelled by rigc>' } : o) });
   const moved = differ(rec, again);
   say('BU1544A_ARGV_RECORDED_THROUGH_A_LINKED_OUT_REPLAYS_FROM_OUT_AS_THE_SAME_CHECK',
-    first.status === 0 && rec !== null && recordedRig === `../${rig}` && replay.status === 0 && aside(again) === aside(rec) && moved.every((p) => spelled.has(p)),
-    `check exit ${first.status}; --rig given ${JSON.stringify(rig)} from the real working directory, recorded ${JSON.stringify(recordedRig)}; replay from --out exit ${replay.status}; records equal but for the times and rigc's spelled files ${aside(again) === aside(rec)}; digests that moved ${JSON.stringify(moved)}${replay.status === 0 ? '' : `; ${replay.out.trim().split('\n').slice(-2).join(' | ')}`}`,
-    'issue #1544: --out and each path\'s directory are resolved through their links before the path is rebased, so the replay climbs the real tree; the link sits two levels above its target, so one level more is the hand-written answer');
+    first.status === 0 && rec !== null && recordedRig === wantRig && replay.status === 0 && aside(again) === aside(rec) && moved.every((p) => spelled.has(p)),
+    `check exit ${first.status}; --rig given ${JSON.stringify(rig)} from the real working directory, recorded ${JSON.stringify(recordedRig)} (want ${JSON.stringify(wantRig)}, ${windows ? 'Windows: as spelled' : 'POSIX: through the link'}); replay from --out exit ${replay.status}; records equal but for the times and rigc's spelled files ${aside(again) === aside(rec)}; digests that moved ${JSON.stringify(moved)}${replay.status === 0 ? '' : `; ${replay.out.trim().split('\n').slice(-2).join(' | ')}`}`,
+    'issues #1544, #1551: on POSIX --out and each path\'s directory are resolved through their links before the path is rebased, so the replay climbs the real tree (one level more, by hand); on Windows the path is rebased as spelled, as Windows resolves `..` from the spelling (the same climb, by hand)');
 
-  // The plant: the same arguments recorded by plain path arithmetic (the identity for link resolution), replayed the same way.
-  const planted = recordArgv('check', args, CHECK_PLANT_TABLE, given, work, undefined, (p) => p);
+  // The plant: the same arguments recorded by the other platform's rule, replayed the same way. On POSIX that is plain
+  // arithmetic (no link resolved); on Windows it is the links resolved first, as main 0c1d234 did there.
+  const planted = recordArgv('check', args, CHECK_PLANT_TABLE, given, work, undefined, windows ? realWhereItExists : (p) => p);
   const plantedRig = planted[planted.indexOf('--rig') + 1];
+  const wantPlanted = windows ? `../${rig}` : rig;
   const plantedReplay = cli(planted, given);
-  say('BU1544B_PLANTED_ARGV_BY_PLAIN_ARITHMETIC_CLIMBS_OUT_THROUGH_THE_LINK_AND_THE_REPLAY_FAILS',
-    plantedRig === rig && plantedReplay.status !== 0 && plantedReplay.status !== 2 && !existsSync(join(given, CHECK_RUN_FILE)),
-    `planted --rig ${JSON.stringify(plantedRig)} (the link is two levels shallower than its target, so plain arithmetic keeps the working directory's climb); replay exit ${plantedReplay.status}, record after ${existsSync(join(given, CHECK_RUN_FILE))}`,
-    'issue #1544: the arithmetic main 6cd3be2 used; replayed from the real --out directory it names a rig two levels too high, and the check refuses it');
+  say('BU1544B_PLANTED_ARGV_BY_THE_OTHER_PLATFORMS_LINK_RULE_MISSES_THE_RIG_AND_THE_REPLAY_FAILS',
+    plantedRig === wantPlanted && plantedReplay.status !== 0 && plantedReplay.status !== 2 && !existsSync(join(given, CHECK_RUN_FILE)),
+    `planted --rig ${JSON.stringify(plantedRig)} (want ${JSON.stringify(wantPlanted)}, ${windows ? 'Windows: the junction resolved first' : 'POSIX: plain arithmetic, the link not resolved'}); replay exit ${plantedReplay.status}, record after ${existsSync(join(given, CHECK_RUN_FILE))}`,
+    'issues #1544, #1551: on POSIX the arithmetic main 6cd3be2 used names a rig a level too high from the real --out; on Windows the rule main 0c1d234 used names one a level too high from the spelled --out; either way the check refuses it');
 }
