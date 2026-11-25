@@ -445,4 +445,88 @@ function runOutRelativeInputRecordChecks(dir: string, out: string, say: Say): vo
       replayCheckSame,
     `check exit ${chkRun.status}; recorded requirements=${JSON.stringify(reqRecorded?.path)}, environment=${JSON.stringify(envRecorded?.path)}, WIND_BAND=${JSON.stringify(wbRecorded?.path)}; all resolve from --out with matching sha256 ${resolvesWithHash(reqRecorded, reqPath) && resolvesWithHash(envRecorded, envPath) && resolvesWithHash(wbRecorded, wbPath)}; planted cwd-relative paths fail from --out ${plantedCheckCwdFails}; sibling replay exit ${chkReplay.status}, check.json byte-equal ${replayCheckSame}${chkRun.status === 0 ? '' : `; ${chkRun.out.trim().split('\n').slice(-3).join(' | ')}`}`,
     'issue #1554: check.json records requirements.file.path, environment.path and WIND_BAND.path relative to --out, so each resolves from --out alone, planted cwd-relative paths fail, and check-run.json replayed from a sibling writes byte-identical check.json');
+
+  // Issue #1554, review P2 + macOS /var -> /private/var shape: a --out directory that does not exist yet under a
+  // linked ancestor (`link -> deep/real`, `--out link/new-check`), with the input files beside `link` (and the
+  // both-under-link shape of BU178/BU211 on macOS). Before `mkdirSync` creates `new-check`, `realWhereItExists`
+  // resolves the deepest existing prefix (`link` -> `deep/real`) and appends `new-check`; the old rule left a
+  // nonexistent `--out` unresolved while resolving the input's existing directory, climbing the wrong number of levels
+  // and changing its answer on a repeat run once `--out` existed. Windows stays as spelled (#1551).
+  const sandbox = join(realpathSync(dir), 'linked-out-1554', 'ws');
+  const linkedTarget = join(sandbox, 'deep', 'real');
+  mkdirSync(linkedTarget, { recursive: true });
+  const link = join(sandbox, 'link');
+  symlinkSync(linkedTarget, link, 'junction');
+  const besideReq = join(sandbox, 'reqs-linked-1554.json');
+  const besideEnv = join(sandbox, 'env-linked-1554.json');
+  const besideWb = join(sandbox, 'wb-linked-1554.json');
+  writeFileSync(besideReq, readFileSync(reqPath));
+  writeFileSync(besideEnv, readFileSync(envPath));
+  writeFileSync(besideWb, readFileSync(wbPath));
+  writeFileSync(join(linkedTarget, 'reqs-in-link-1554.json'), readFileSync(reqPath));
+  const newCheckOut = join(link, 'new-check');
+  const outAbsentBefore = !existsSync(newCheckOut);
+  const oldPosixRule = (p: string): string => (existsSync(p) ? realpathSync(p) : p);
+  const windows = sep === '\\';
+  const ancestorResolved = realWhereItExists(join(link, 'missing', 'leaf')) === join(realpathSync(linkedTarget), 'missing', 'leaf');
+  const ancestorPlanted = oldPosixRule(join(link, 'missing', 'leaf')) === join(link, 'missing', 'leaf');
+  const sameLinkFixed = argvPathFromOut(join(link, 'reqs-in-link-1554.json'), join(link, 'req-flag', 'check'), sandbox, undefined, realWhereItExists);
+  const sameLinkPlanted = argvPathFromOut(join(link, 'reqs-in-link-1554.json'), join(link, 'req-flag', 'check'), sandbox, undefined, oldPosixRule);
+  const wantPreMkdirPlanted = windows ? '../../../reqs-linked-1554.json' : '../../reqs-linked-1554.json';
+  const plantedPreMkdir = argvPathFromOut('reqs-linked-1554.json', 'link/new-check', sandbox, undefined, windows ? realWhereItExists : oldPosixRule);
+  const rigFromSandbox = relative(sandbox, physRigDir).split('\\').join('/');
+  const linkCheckArgs = [
+    'check',
+    '--rig', rigFromSandbox,
+    '--out', 'link/new-check',
+    '--requirements', 'reqs-linked-1554.json',
+    '--environment', 'env-linked-1554.json',
+    '--wind-band', 'wb-linked-1554.json',
+    '--no-extremes',
+  ];
+  const firstLinkRun = cli(linkCheckArgs, sandbox);
+  const firstLinkBytes = existsSync(join(newCheckOut, 'check.json')) ? readFileSync(join(newCheckOut, 'check.json')) : Buffer.alloc(0);
+  const secondLinkRun = cli(linkCheckArgs, sandbox);
+  const secondLinkBytes = existsSync(join(newCheckOut, 'check.json')) ? readFileSync(join(newCheckOut, 'check.json')) : Buffer.alloc(0);
+  const linkChkReport = firstLinkBytes.length > 0
+    ? (JSON.parse(firstLinkBytes.toString('utf8')) as {
+        requirements?: { file?: { path?: string; sha256?: string } };
+        environment?: { path?: string; sha256?: string };
+        WIND_BAND?: { path?: string; sha256?: string };
+      })
+    : null;
+  const wantFromLinkedOut = (file: string): string => (windows ? `../../${file}` : `../../../${file}`);
+  const fromLinkedOut = (rel: string): string => resolve(windows ? newCheckOut : realpathSync(newCheckOut), rel);
+  const resolvesFromLinkedOut = (entry: { path?: string; sha256?: string } | undefined, expectedFile: string): boolean => {
+    if (entry?.path === undefined || entry.sha256 === undefined) return false;
+    const target = fromLinkedOut(entry.path);
+    const kernelOk = windows || (existsSync(`${newCheckOut}/${entry.path}`) && sha256File(`${newCheckOut}/${entry.path}`) === entry.sha256);
+    return kernelOk && target === realpathSync(expectedFile) && existsSync(target) && sha256File(target) === entry.sha256;
+  };
+  const linkReqRec = linkChkReport?.requirements?.file;
+  const linkEnvRec = linkChkReport?.environment;
+  const linkWbRec = linkChkReport?.WIND_BAND;
+  const plantedMissesFromLinkedOut =
+    !existsSync(fromLinkedOut(plantedPreMkdir)) &&
+    (windows || !existsSync(`${newCheckOut}/${plantedPreMkdir}`));
+  const repeatByteEqual = firstLinkBytes.length > 0 && firstLinkBytes.equals(secondLinkBytes);
+  say('BU1554D_NONEXISTENT_OUT_UNDER_A_LINKED_ANCESTOR_REBASES_THROUGH_THE_ANCESTOR_AND_PLANTED_OLD_RULE_FAILS',
+    outAbsentBefore &&
+      ancestorResolved &&
+      ancestorPlanted &&
+      sameLinkFixed === '../../reqs-in-link-1554.json' &&
+      sameLinkPlanted === '../../../deep/real/reqs-in-link-1554.json' &&
+      plantedPreMkdir === wantPreMkdirPlanted &&
+      firstLinkRun.status === 0 &&
+      secondLinkRun.status === 0 &&
+      linkReqRec?.path === wantFromLinkedOut('reqs-linked-1554.json') &&
+      linkEnvRec?.path === wantFromLinkedOut('env-linked-1554.json') &&
+      linkWbRec?.path === wantFromLinkedOut('wb-linked-1554.json') &&
+      resolvesFromLinkedOut(linkReqRec, besideReq) &&
+      resolvesFromLinkedOut(linkEnvRec, besideEnv) &&
+      resolvesFromLinkedOut(linkWbRec, besideWb) &&
+      plantedMissesFromLinkedOut &&
+      repeatByteEqual,
+    `absent before=${outAbsentBefore}; ancestor resolved=${ancestorResolved} (planted=${ancestorPlanted}); both-under-link=${JSON.stringify(sameLinkFixed)} (planted old rule=${JSON.stringify(sameLinkPlanted)}); check exit ${firstLinkRun.status}/${secondLinkRun.status}, requirements=${JSON.stringify(linkReqRec?.path)}, environment=${JSON.stringify(linkEnvRec?.path)}, WIND_BAND=${JSON.stringify(linkWbRec?.path)}; planted=${JSON.stringify(plantedPreMkdir)} misses=${plantedMissesFromLinkedOut}; repeat byte-equal=${repeatByteEqual}${firstLinkRun.status === 0 ? '' : `; ${firstLinkRun.out.trim().split('\n').slice(-3).join(' | ')}`}`,
+    'issue #1554: when --out does not exist yet beneath a linked ancestor, realWhereItExists resolves the deepest existing prefix and appends missing segments (Windows stays as spelled, #1551), so recorded paths resolve from --out on the first run and match a repeat run byte for byte, while the planted pre-fix rule misses');
 }

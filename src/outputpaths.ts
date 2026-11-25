@@ -5,9 +5,29 @@ import { PartsError } from './errors.ts';
 /** `node:path`, or its `win32`/`posix` twin a control passes in. */
 export type PlatformPath = typeof nodePath.posix;
 
-/** A directory through its links when it exists; as given when it does not (nothing on disk to resolve). */
+/**
+ * A directory through its links when it or an ancestor exists: the deepest existing prefix is resolved by
+ * `realpathSync` and any not-yet-created trailing segments are appended, so rebasing before `mkdirSync` agrees with
+ * rebasing after it. As given when only the filesystem root exists (nothing on disk to resolve).
+ */
 export function realWhereItExists(path: string): string {
-  return existsSync(path) ? realpathSync(path) : path;
+  if (nodePath.sep === '\\' && path.startsWith('/')) return path;
+  if (nodePath.dirname(path) === path) return path;
+  if (existsSync(path)) return realpathSync(path);
+  const missing: string[] = [];
+  let cur = path;
+  for (;;) {
+    const parent = nodePath.dirname(cur);
+    if (parent === cur) return path;
+    missing.push(nodePath.basename(cur));
+    cur = parent;
+    if (nodePath.dirname(cur) === cur) return path;
+    if (existsSync(cur)) {
+      let resolved = realpathSync(cur);
+      for (let i = missing.length - 1; i >= 0; i--) resolved = nodePath.join(resolved, missing[i]);
+      return resolved;
+    }
+  }
 }
 
 /** A path as spelled: no link resolved. */
