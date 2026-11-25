@@ -272,7 +272,10 @@ on a drafted rig, and the act review emits carries them. The order is:
    as a contour, which the review chest editor needs.
 2. Build the draft and let the person place or correct apex_r, apex_l and
    cleavage in review's chest editor. Their Request changes is a
-   `rig-review/act@9` act with a `value.chestLandmarks` row.
+   `rig-review/act@9` act with a `value.chestLandmarks` row. A comment on the
+   publication with the points is a `rig-review/act@10` comment-only act whose
+   `value.carriers[]` holds one `chest-landmarks` carrier with the same rows;
+   `bust-landmarks` reads either.
 3. `rig-parts bust-landmarks --from-act <act.json> --parts <dir> --config <config.json> --out <landmarks.json>`
    writes the landmarks file from that row. It writes
    `<landmarks.json>.provenance.json` beside it. When the person changed a
@@ -318,11 +321,18 @@ on a drafted rig, and the act review emits carries them. The order is:
 
 The hand-written file stays the fallback when no review act exists.
 `bust-landmarks` reads the act's JSON itself. It reads `schema`, `actId` and the
-rows of `value.chestLandmarks`. From each row it reads `edit.slot`, `edit.skin`,
+rows of `value.chestLandmarks`; from a `rig-review/act@10` comment-only act it
+reads the rows of the one `value.carriers[]` entry of kind `chest-landmarks`, that
+carrier's `file` and the act's `source.model`, and no other carrier (mesh edits
+are applied elsewhere). The record beside the landmarks file then carries the
+carrier's `file` as `act.carrier_file`. From each row it reads `edit.slot`, `edit.skin`,
 `edit.attachment`, `edit.basis`, `edit.source.hash`, `edit.source.frame`,
 `edit.bust` and `sha256`. It refuses by name:
 
 - an act that is not readable JSON, has another `schema`, or has no chest row (`BUST_LANDMARKS_ACT`);
+- a comment-only act with no `chest-landmarks` carrier (`BUST_LANDMARKS_NO_CHEST_CARRIER`),
+  or whose chest carrier's `file` is missing, malformed or not the act's
+  `source.model` (`BUST_LANDMARKS_CARRIER_FILE`);
 - a row that is malformed for what it reads (`BUST_LANDMARKS_ROW`). That covers a
   point that is not two finite numbers, a missing apex, a `basis` other than
   `"setup"`, a `sha256` or `source.hash` that is not 64 lowercase hex digits, a
@@ -408,7 +418,9 @@ config hash: the act carries none.
 
 | rule | means | change |
 | --- | --- | --- |
-| <a id="BUST_LANDMARKS_ACT"></a>`BUST_LANDMARKS_ACT` | the `--from-act` file is unreadable, is not JSON, is not a `rig-review/act@9` act, has no `actId`, or has no `value.chestLandmarks` row | pass the chest-landmarks act review emitted, unchanged |
+| <a id="BUST_LANDMARKS_ACT"></a>`BUST_LANDMARKS_ACT` | the `--from-act` file is unreadable, is not JSON, is neither a `rig-review/act@9` nor a `rig-review/act@10` act, has no `actId`, or has no chest row (`value.chestLandmarks`, or the chest carrier's `chestLandmarks`); a comment-only act whose `value.carriers` is not a list or holds more than one `chest-landmarks` carrier | pass the act review emitted, unchanged |
+| <a id="BUST_LANDMARKS_NO_CHEST_CARRIER"></a>`BUST_LANDMARKS_NO_CHEST_CARRIER` | a `rig-review/act@10` comment-only act has no `value.carriers[]` entry of kind `chest-landmarks` (no carriers, or mesh edits only) | pass the comment act that carries the chest points, or the `rig-review/act@9` chest-landmarks act |
+| <a id="BUST_LANDMARKS_CARRIER_FILE"></a>`BUST_LANDMARKS_CARRIER_FILE` | the chest carrier's `file`, or the act's `source.model`, is not `{path, sha256}` (a non-empty path, 64 lowercase hex digits), or the two differ in path or sha256 | re-emit the act from review on the model it shows, unedited |
 | <a id="BUST_LANDMARKS_ROW"></a>`BUST_LANDMARKS_ROW` | a `value.chestLandmarks[i]` field the command reads is missing or malformed: a point, `basis`, `sha256` (or a `sha256` that is not the digest of the row's `edit`), `source.hash`, `source.frame`, a shape field, or an unknown `bust` field | re-emit the act from review, unedited; the named field is the one to fix |
 | <a id="BUST_LANDMARKS_SLOT"></a>`BUST_LANDMARKS_SLOT` | the row's slot is not a part of `parts.json` or not a contour mesh in `config.meshes`, its attachment is not the slot, or its skin is not `default` | place the points on the chest carrier's own slot; pass the `--parts` and `--config` the reviewed rig was built from |
 | <a id="BUST_LANDMARKS_PART_ROWS"></a>`BUST_LANDMARKS_PART_ROWS` | the act has more than one row for one part | keep one chest-landmarks row for the part in review |
@@ -4831,7 +4843,7 @@ existing hardlinks are refused before artifact output; the ordinary mode names
 | `propose … --keypoints <file> [--person <id>]` | read a posed figure's joints from one explicit file (space, image size, people, each joint observed, occluded or missing, its source): a joint with a position places the neck, hip, chest or a sleeve chain as given, a note says how every joint was used or which rule stood in, and LINT reads the torso and sleeves along the joints instead of by screen y ([AUTHORING §3](AUTHORING.md)) |
 | `propose … --full <run> --head <run> --write-config <config>` | [draft an independent neck](AUTHORING.md#a-neck-that-moves-on-its-own) in an existing sampled body turn and reassemble its full-run source under `<out>/rig` |
 | `propose … --grid-rule figure\|part` | how each drafted lattice's spacing is chosen: `figure` (the default) one spacing for the figure, round(H / 37) rig px, a part already coarser keeping its own, with a note on its calibration and cost; `part` the reference's rule, a tenth of the part's short side (the oracle examples are proposed under it) |
-| `bust-landmarks --from-act <act.json> --parts <dir> --config <config.json> --out <landmarks.json> [--write-config]` | write the file `propose --bust-landmarks` reads from the one chest row of a review `rig-review/act@9` act, with `<out>.provenance.json` beside it; `--write-config` takes the act's shape fields into the config's `contour.bust` ([drafting the chest carrier](#drafting-the-chest-carrier)) |
+| `bust-landmarks --from-act <act.json> --parts <dir> --config <config.json> --out <landmarks.json> [--write-config]` | write the file `propose --bust-landmarks` reads from the one chest row of a review `rig-review/act@9` act or of the chest-landmarks carrier of a `rig-review/act@10` comment-only act, with `<out>.provenance.json` beside it; `--write-config` takes the act's shape fields into the config's `contour.bust` ([drafting the chest carrier](#drafting-the-chest-carrier)) |
 | `propose --parts --source --out --from-config <config> [--keypoints <file> [--person <id>]]` | draw and LINT the config's current bones (by the joints too, given `--keypoints`); proposes nothing, so takes only these flags (not `--full`, `--head`, `--cloth`, `--write-config`, `--wrist-snap`, `--grid-rule`, `--only-missing` or `--compare`) |
 | `compare --left <file> --right <file> [--map <bonemap.json>]` | compare two skeletons — a config, a proposal or a `rig.json` — bone by bone: origin, parent, tip, length and direction per pair, the bones neither side pairs, the required ones missing, and each side's roles read off the spec; no frame is guessed, and nothing pairs by resemblance (`propose --compare` reads origins only) |
 | `rig --config --parts --out [--idle-keys ctl\|direct]` | author `rig.json` + `motion.json` (plus `mesh_report.json` and `run.json`, `spec` `rig-run/1`), written only after rig-c's gate is green; each mesh is in the mode its config entry names — `grid` (the lattice, what `propose` writes), `contour` (the traced outline with declared interior points) or `auto` (the contour mesh at alpha 1 and above, reduced and locally refined by rig-c's `reduceMesh` under the author's declared bounds, written only when its motion against the unreduced source on the idle passes the author's `motion` bounds through rig-c's `compareMeshesInMotion`; [AUTHORING §3](AUTHORING.md)); every chain link is turned along its chain and carries its `length`, so a physics constraint added later has a lever, with every offset under it in the turned frame so nothing moves; `--idle-keys` says whether the idle's keys on mesh-driving bones go through `<bone>_ctl` parents (default) or stay on the bones with `invariants.idleDrivesMeshes` declared; the config's `constraints` go to rigc as written, and a two-bone ik over keyed links needs `--idle-keys direct` (on `rig` or `build`) |
