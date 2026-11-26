@@ -1,24 +1,29 @@
 /**
- * The `rig-run/2` run record `check` and `build` write (issue #1541), on the build suite's green build.
+ * The run records `check` and `build` write (issues #1541, #1556), on the build suite's green build.
  *
  * Every expected value is written by hand from the fixture's layout: the record's argv is the command, the options as
  * given in the flag-table order, each path relative to `--out` and `--out` as `.`. The replays run from a sibling of
  * the original `--out`, at the same depth, so every recorded relative path names the same file.
  */
+import { pngChunk } from '@rig-c/core/plate';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, posix, relative, resolve, sep, win32 } from 'node:path';
+import { RIGC_RENDER_RUN_FILE } from '../fixtures/rigc_run_clock.ts';
 import { BUILD_RUN_FILE } from '../src/build.ts';
 import { makeOutDir } from '../src/outputpaths.ts';
-import { argvPathFromOut, argvReplayProblems, type ArgvTable, CHECK_RUN_FILE, effectiveArgv, isRunRecordFile, linkRuleFor, realWhereItExists, recordArgv, recordedConfigPath, recordedInputPath, RUN_RECORD_SPEC, type RunRecord, RUN_STAMP_FILE, type RunStamp } from '../src/runstamp.ts';
+import { decodePngBytes } from '../src/raster/png.ts';
+import { argvPathFromOut, argvReplayProblems, type ArgvTable, buildRunRecord, CHECK_RUN_FILE, effectiveArgv, isRunRecordFile, linkRuleFor, realWhereItExists, recordArgv, recordedConfigPath, recordedInputPath, type RunRecord, RUN_STAMP_FILE, type RunStamp } from '../src/runstamp.ts';
 
 type Say = (name: string, ok: boolean, detail: string, why: string) => void;
 
 const ROOT = resolve(import.meta.dir, '..');
-/** The record's keys, in order: rig-run/1's for the command, then argv (`config` on build only). */
+/** The record keys in write order. */
 export const RECORD_KEYS_CHECK = ['spec', 'package', 'command', 'started_at', 'finished_at', 'outputs', 'argv'];
-export const RECORD_KEYS_BUILD = ['spec', 'package', 'command', 'started_at', 'finished_at', 'config', 'outputs', 'argv'];
+export const RECORD_KEYS_BUILD = ['spec', 'package', 'command', 'started_at', 'finished_at', 'config', 'inputs', 'outputs', 'argv'];
+const FIXED_EPOCH = '1762560000';
+const FIXED_TIME = '2025-11-08T00:00:00.000Z';
 
 /** A table shaped like a command's flag row, for the pure controls: two path flags, one plain, one compound, two switches. */
 const TABLE: ArgvTable = {
@@ -28,8 +33,9 @@ const TABLE: ArgvTable = {
   compound: { '--alt': (value, path) => { const [name, rest] = value.split('='); return `${name}=${rest.split(':').map(path).join(':')}`; } },
 };
 
-function cli(args: readonly string[], cwd: string): { status: number; out: string } {
-  const r = spawnSync('bun', [join(ROOT, 'cli.ts'), ...args], { cwd, encoding: 'utf8', maxBuffer: 1 << 28 });
+function cli(args: readonly string[], cwd: string, epoch?: string): { status: number; out: string } {
+  const env = epoch === undefined ? process.env : { ...process.env, SOURCE_DATE_EPOCH: epoch };
+  const r = spawnSync('bun', [join(ROOT, 'cli.ts'), ...args], { cwd, env, encoding: 'utf8', maxBuffer: 1 << 28 });
   return { status: r.status ?? 1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
 }
 
@@ -167,13 +173,26 @@ export function runRunRecordCliChecks(dir: string, out: string, say: Say): void 
   const pkgName = (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { name: string }).name;
   const built = readRecord(join(out, BUILD_RUN_FILE));
   const outputs = built?.outputs.map((o) => o.path) ?? [];
+  const buildRecord = built?.command === 'build' ? built : undefined;
   say('BU1541E_A_GREEN_BUILD_WRITES_BUILD_RUN_JSON_WITH_ITS_KEYS_ITS_VERSION_AND_ITS_ARGV',
-    built !== null && JSON.stringify(Object.keys(built)) === JSON.stringify(RECORD_KEYS_BUILD) && built.spec === RUN_RECORD_SPEC &&
-      built.package.name === pkgName && built.package.version === version && built.command === 'build' && built.config?.path === '../config.json' &&
-      built.argv[0] === 'build' && built.argv[built.argv.indexOf('--out') + 1] === '.' && built.argv[built.argv.indexOf('--config') + 1] === '../config.json' &&
+    buildRecord !== undefined && JSON.stringify(Object.keys(buildRecord)) === JSON.stringify(RECORD_KEYS_BUILD) && buildRecord.spec === 'rig-run/3' &&
+      buildRecord.package.name === pkgName && buildRecord.package.version === version && buildRecord.config?.path === '../config.json' &&
+      buildRecord.argv[0] === 'build' && buildRecord.argv[buildRecord.argv.indexOf('--out') + 1] === '.' &&
+      buildRecord.argv[buildRecord.argv.indexOf('--config') + 1] === '../config.json' &&
       outputs.includes('check/check.json') && outputs.includes('parts.json') && !outputs.some(isRunRecordFile),
-    `keys ${JSON.stringify(built === null ? null : Object.keys(built))}; package ${built?.package.name}@${built?.package.version} against --version ${version}; config ${built?.config?.path}; argv ${JSON.stringify(built?.argv)}; ${outputs.length} output(s), check/check.json ${outputs.includes('check/check.json')}, a run record among them ${outputs.some(isRunRecordFile)}`,
+    `keys ${JSON.stringify(built === null ? null : Object.keys(built))}; package ${built?.package.name}@${built?.package.version} against --version ${version}; config ${buildRecord?.config?.path}; argv ${JSON.stringify(built?.argv)}; ${outputs.length} output(s), check/check.json ${outputs.includes('check/check.json')}, a run record among them ${outputs.some(isRunRecordFile)}`,
     'issue #1541: the version is read from package.json the way --version reads it, never written by hand; the config and every path are relative to --out');
+
+  const expectedInputs = [
+    { role: 'source', path: '../painting.png', sha256: sha256File(join(dir, 'painting.png')) },
+    { role: 'full', path: '../full/layers.json', sha256: sha256File(join(dir, 'full', 'layers.json')) },
+    { role: 'head', path: '../head/layers.json', sha256: sha256File(join(dir, 'head', 'layers.json')) },
+  ];
+  const builtInputs = built !== null && 'inputs' in built ? built.inputs : undefined;
+  say('BU1556A_BUILD_CLI_RECORDS_ORDERED_INPUT_FILES_AND_RAW_HASHES',
+    JSON.stringify(builtInputs) === JSON.stringify(expectedInputs),
+    `inputs ${JSON.stringify(builtInputs ?? null)}; expected ${JSON.stringify(expectedInputs)}`,
+    'issue #1556: the pre-change build record carries the paths in argv only; the emitted inputs must name and hash the painting and the two manifests');
 
   // Replay build's argv from a sibling of --out. check.json records the config path as --config was typed (issue
   // #607), so the replay's report differs from the original there and nowhere else; every measured key is the same.
@@ -201,21 +220,46 @@ export function runRunRecordCliChecks(dir: string, out: string, say: Say): void 
     'issue #1541: these arguments reproduce the check with the same package version, run from the --out directory; the one key that records a path as typed records the replay\'s spelling');
 
   // A standalone check of the build, from dir with relative paths, and its replay from a sibling at the same depth.
-  const checked = cli(['check', '--rig', 'out/rig', '--out', 'check-1541', '--parts', 'out', '--no-extremes'], dir);
-  const rec = readRecord(join(dir, 'check-1541', CHECK_RUN_FILE));
+  const checked = cli(['check', '--rig', 'out/rig', '--out', 'check-1541', '--parts', 'out', '--no-extremes'], dir, FIXED_EPOCH);
+  const checkOut = join(dir, 'check-1541');
+  const rec = readRecord(join(checkOut, CHECK_RUN_FILE));
   const checkWant = ['check', '--rig', '../out/rig', '--out', '.', '--parts', '../out', '--no-extremes'];
   const checkReplayDir = join(dir, 'check-1541-replay');
   mkdirSync(checkReplayDir, { recursive: true });
-  const checkReplay = rec === null ? { status: -1, out: 'no record' } : cli(rec.argv, checkReplayDir);
+  const checkReplay = rec === null ? { status: -1, out: 'no record' } : cli(rec.argv, checkReplayDir, FIXED_EPOCH);
   const recAgain = readRecord(join(checkReplayDir, CHECK_RUN_FILE));
   const checkSame = existsSync(join(checkReplayDir, 'check.json')) &&
     readFileSync(join(dir, 'check-1541', 'check.json')).equals(readFileSync(join(checkReplayDir, 'check.json')));
   say('BU1541G_CHECK_WRITES_CHECK_RUN_JSON_AND_ITS_ARGV_REPLAYED_FROM_OUT_IS_THE_SAME_CHECK',
-    checked.status === 0 && rec !== null && JSON.stringify(Object.keys(rec)) === JSON.stringify(RECORD_KEYS_CHECK) && rec.package.version === version &&
+    checked.status === 0 && rec?.command === 'check' && rec.spec === 'rig-run/2' && JSON.stringify(Object.keys(rec)) === JSON.stringify(RECORD_KEYS_CHECK) && rec.package.version === version &&
       JSON.stringify(rec.argv) === JSON.stringify(checkWant) && rec.outputs.some((o) => o.path === 'check.json') &&
       checkReplay.status === 0 && checkSame && timeless(recAgain) === timeless(rec),
     `check exit ${checked.status}; keys ${JSON.stringify(rec === null ? null : Object.keys(rec))}; argv ${JSON.stringify(rec?.argv)} against ${JSON.stringify(checkWant)}; replay exit ${checkReplay.status}, check.json byte-equal ${checkSame}, records equal but for the times ${timeless(recAgain) === timeless(rec)}`,
     'issue #1541: a check given relative paths from its working directory records them from --out; the replay is the same check');
+
+  const checkEntries = existsSync(checkOut) ? readdirSync(checkOut, { recursive: true, withFileTypes: true }) : [];
+  const checkFiles = checkEntries.filter((entry) => entry.isFile())
+    .map((entry) => relative(checkOut, join(entry.parentPath, entry.name)).split(sep).join('/'));
+  // STABILITY excludes run.json and any -run.json by basename.
+  const checkOutputs = checkFiles.filter((path) => !/(?:^|-)run\.json$/.test(posix.basename(path))).sort()
+    .map((path) => ({ path, sha256: sha256File(join(checkOut, path)) }));
+  const idleReceiptPath = `idle_frames/${RIGC_RENDER_RUN_FILE}`;
+  const idleReceiptOnDisk = checkFiles.includes(idleReceiptPath);
+  const idleReceiptListed = rec?.outputs.some((o) => o.path === idleReceiptPath);
+  const idleFramesListed = rec?.outputs.some((o) => o.path === 'idle_frames/frames.json');
+  const legacyCheck = {
+    spec: 'rig-run/2', package: { name: pkgName, version }, command: 'check',
+    started_at: FIXED_TIME, finished_at: FIXED_TIME, outputs: checkOutputs, argv: checkWant,
+  };
+  const checkBytes = rec === null ? Buffer.alloc(0) : readFileSync(join(checkOut, CHECK_RUN_FILE));
+  const legacyBytes = Buffer.from(`${JSON.stringify(legacyCheck, null, 1)}\n`);
+  const changedSpec = Buffer.from(`${JSON.stringify({ ...legacyCheck, spec: 'rig-run/3' }, null, 1)}\n`);
+  say('BU1556B_CHECK_RUN_2_MATCHES_LEGACY_BYTES_AT_A_FIXED_CLOCK',
+    checked.status === 0 && checkOutputs.length > 0 && idleReceiptOnDisk && idleReceiptListed === false && idleFramesListed === true &&
+      checkBytes.equals(legacyBytes) && !checkBytes.equals(changedSpec),
+    `${checkBytes.length} actual bytes, ${legacyBytes.length} legacy bytes, ${checkOutputs.length} independently listed outputs; changed spec differs ${!checkBytes.equals(changedSpec)}; ` +
+      `${idleReceiptPath} on disk ${idleReceiptOnDisk}, listed ${idleReceiptListed}; idle frames.json listed ${idleFramesListed}`,
+    'issue #1556: compare the actual record to the legacy serializer and fixture layout, including field order, indentation and final newline');
 
   // A refused check over a reused --out clears the earlier record and writes none.
   const reused = join(dir, 'check-1541-refused');
@@ -230,6 +274,7 @@ export function runRunRecordCliChecks(dir: string, out: string, say: Say): void 
 
   runLinkedOutReplay(dir, out, say);
   runOutRelativeInputRecordChecks(dir, out, say);
+  runBuildInputRecordChecks(dir, out, say);
 }
 
 /** `check`'s flag row as cli.ts records it, for the planted argv: the valued flags and switches this control gives. */
@@ -290,6 +335,127 @@ function runLinkedOutReplay(dir: string, out: string, say: Say): void {
 
 function sha256File(path: string): string {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
+
+function runBuildInputRecordChecks(dir: string, out: string, say: Say): void {
+  const root = join(realpathSync(dir), 'input-record-1556');
+  const target = join(root, 'deep', 'target');
+  mkdirSync(target, { recursive: true });
+  const link = join(root, 'link');
+  symlinkSync(target, link, 'junction');
+  const linkedOut = join(link, 'out');
+  // Leave parts/ absent, as in the Windows failure. Rig writes its own files without clearing unrelated entries.
+  const staleRig = join(target, 'out', 'rig');
+  mkdirSync(staleRig, { recursive: true });
+  const staleFile = join(staleRig, 'stale-output.txt');
+  writeFileSync(staleFile, 'from an earlier build');
+  const runner = join(root, 'runner');
+  mkdirSync(runner);
+  const configPath = join(dir, 'config.json');
+  // The wrong Windows climb reaches dir, which already holds the byte-identical original painting.png.
+  const paintingName = 'painting-linked-1556.png';
+  const painting = join(root, paintingName);
+  cpSync(join(dir, 'painting.png'), painting);
+  const manifest = join(dir, 'full', 'layers.json');
+  const head = join(dir, 'head', 'layers.json');
+  const fullLink = join(root, 'full-link');
+  symlinkSync(join(realpathSync(dir), 'full'), fullLink, 'junction');
+  const requirements = join(root, 'requirements.json');
+  writeFileSync(requirements, JSON.stringify({ spec: 'spine-parts-requirements/1', fps: 12, requirements: [] }));
+  const givenSource = `../${paintingName}`;
+  const given = ['build', '--requirements', '../requirements.json', '--config', '../../config.json', '--source', givenSource,
+    '--full', '../full-link', '--head', '../../head/layers.json', '--out', '../link/out', '--no-extremes'];
+  const linkedBuild = cli(given, runner);
+  const recorded = readRecord(join(linkedOut, BUILD_RUN_FILE));
+  const linkedInputs = recorded !== null && 'inputs' in recorded ? recorded.inputs : undefined;
+  const windows = sep === '\\';
+  const climb = windows ? '../..' : '../../..';
+  const wantLinked = [
+    { role: 'source', path: `${climb}/${paintingName}`, sha256: sha256File(painting) },
+    { role: 'full', path: windows ? '../../full-link/layers.json' : '../../../../full/layers.json', sha256: sha256File(manifest) },
+    { role: 'head', path: `${climb}/../head/layers.json`, sha256: sha256File(head) },
+    { role: 'requirements', path: `${climb}/requirements.json`, sha256: sha256File(requirements) },
+  ];
+  const fromOut = windows ? linkedOut : join(target, 'out');
+  const namedFilesMatch = wantLinked.every(({ path, sha256 }) => {
+    const absolute = resolve(fromOut, path);
+    return existsSync(absolute) && statSync(absolute).isFile() && sha256File(absolute) === sha256;
+  });
+  const wrongLinkRule = `${windows ? '../../..' : '../..'}/${paintingName}`;
+  const wrongLinkMiss = !existsSync(resolve(fromOut, wrongLinkRule));
+  const cwdSpellingMiss = !existsSync(resolve(fromOut, givenSource));
+  const staleCleared = !existsSync(staleFile);
+  say('BU1556C_LINKED_BUILD_OUT_REBASES_INPUTS_BY_THE_HOST_RULE',
+    linkedBuild.status === 0 && JSON.stringify(linkedInputs) === JSON.stringify(wantLinked) && namedFilesMatch &&
+      wrongLinkMiss && cwdSpellingMiss && staleCleared,
+    `build exit ${linkedBuild.status}; inputs ${JSON.stringify(linkedInputs ?? null)}; expected files resolve with matching hashes ${namedFilesMatch}; ` +
+      `planted ${wrongLinkRule} misses ${wrongLinkMiss}; planted ${givenSource} misses ${cwdSpellingMiss}; stale rig file cleared ${staleCleared}` +
+      (linkedBuild.status === 0 ? '' : `; ${linkedBuild.out.trim().split('\n').slice(-3).join(' | ')}`),
+    'issue #1556: build through a relative junction clears stale outputs and follows the #1555 host link rule from a non-parent cwd; the cwd spelling and the other host rule both miss the painting');
+
+  // Reuse the build's products. A full repaint build also updates source_cover.json's painting hash.
+  const recordedSourcePath = `../input-record-1556/${paintingName}`;
+  const argv = ['build', '--source', recordedSourcePath, '--full', '../full', '--out', '.'];
+  const recordInput = {
+    command: 'build' as const, pkg: { name: '@rig-c/parts', version: '0.0.0' },
+    startedAt: FIXED_TIME, finishedAt: FIXED_TIME, outDir: out, configPath, outputs: ['parts.json', 'rig/'], argv,
+    inputs: { source: painting, full: join(dir, 'full') },
+  };
+  const before = buildRunRecord(recordInput);
+  const original = readFileSync(painting);
+  // Add a valid ancillary tEXt chunk immediately before the fixed-size IEND chunk.
+  const repainted = Buffer.concat([original.subarray(0, -12), pngChunk('tEXt', Buffer.from('Comment\0build input control')), original.subarray(-12)]);
+  const originalPixels = decodePngBytes(original, 'original source');
+  const repaintedPixels = decodePngBytes(repainted, 're-encoded source');
+  writeFileSync(painting, repainted);
+  const after = buildRunRecord(recordInput);
+  const beforeInputs = 'inputs' in before ? before.inputs : undefined;
+  const afterInputs = 'inputs' in after ? after.inputs : undefined;
+  const beforeSha = createHash('sha256').update(original).digest('hex');
+  const afterSha = sha256File(painting);
+  const pixelsMatch = originalPixels.width === repaintedPixels.width && originalPixels.height === repaintedPixels.height &&
+    Buffer.from(originalPixels.data).equals(Buffer.from(repaintedPixels.data));
+  const expectedAfter = { ...before, inputs: [
+    { role: 'source', path: recordedSourcePath, sha256: afterSha },
+    { role: 'full', path: '../full/layers.json', sha256: sha256File(manifest) },
+  ] };
+  const { inputs: _oldInputs, ...legacy } = { ...before, inputs: beforeInputs };
+  const { inputs: _newInputs, ...legacyAfter } = { ...after, inputs: afterInputs };
+  const legacyBytesEqual = JSON.stringify({ ...legacy, spec: 'rig-run/2' }) === JSON.stringify({ ...legacyAfter, spec: 'rig-run/2' });
+  say('BU1556D_SAME_PIXELS_AND_FIXED_PRODUCTS_CHANGE_ONLY_THE_SOURCE_INPUT_HASH',
+    beforeSha !== afterSha && pixelsMatch && before.outputs.length > 0 && legacyBytesEqual &&
+    JSON.stringify(beforeInputs) === JSON.stringify([
+      { ...expectedAfter.inputs[0], sha256: beforeSha }, expectedAfter.inputs[1],
+    ]) && JSON.stringify(after) === JSON.stringify(expectedAfter) && JSON.stringify(before) !== JSON.stringify(after),
+    `decoded pixels equal ${pixelsMatch}; hashes ${beforeSha} -> ${afterSha}; outputs ${before.outputs.length}; legacy records equal ${legacyBytesEqual}; only the source hash changed ${JSON.stringify(after) === JSON.stringify(expectedAfter)}`,
+    'issue #1556: identical decoded pixels and products still bind distinct source bytes; the planted legacy shape stays identical and misses the repaint');
+
+  const environment = join(root, 'environment.json');
+  const windBand = join(root, 'wind-band.json');
+  writeFileSync(environment, JSON.stringify({ spec: 'rigc-environment/1', steps: [{ t: 0, wind: [1, 0] }] }));
+  writeFileSync(windBand, JSON.stringify({ spec: 'rig-parts-wind-band/1', min: 0, max: 2, step: 2,
+    fps: 12, max_gap: 500, max_ghost: 500, pairs: ['topwear:bottomwear'] }));
+  const withOptions = buildRunRecord({ ...recordInput, inputs: {
+    source: painting, full: manifest, head, requirements, environment, windBand,
+    alts: [{ source: painting, full: manifest }, { source: join(dir, 'painting.png'), full: join(dir, 'full'), head }],
+  } });
+  const optionInputs = 'inputs' in withOptions ? withOptions.inputs : undefined;
+  const wantOptions = [
+    ...expectedAfter.inputs,
+    { role: 'head', path: '../head/layers.json', sha256: sha256File(head) },
+    { role: 'requirements', path: '../input-record-1556/requirements.json', sha256: sha256File(requirements) },
+    { role: 'environment', path: '../input-record-1556/environment.json', sha256: sha256File(environment) },
+    { role: 'wind-band', path: '../input-record-1556/wind-band.json', sha256: sha256File(windBand) },
+    { ...expectedAfter.inputs[0], role: 'alt[0].source' },
+    { ...expectedAfter.inputs[1], role: 'alt[0].full' },
+    { role: 'alt[1].source', path: '../painting.png', sha256: beforeSha },
+    { ...expectedAfter.inputs[1], role: 'alt[1].full' },
+    { role: 'alt[1].head', path: '../head/layers.json', sha256: sha256File(head) },
+  ];
+  say('BU1556E_OPTIONAL_FILES_AND_ALT_TUPLES_FOLLOW_ROLE_ORDER_AND_OMIT_ABSENT_ALT_HEAD',
+    JSON.stringify(optionInputs) === JSON.stringify(wantOptions),
+    `inputs ${JSON.stringify(optionInputs ?? null)}; expected roles ${wantOptions.map((entry) => entry.role).join(', ')}`,
+    'issue #1556: the optional file roles come before the CLI alternate tuples, which retain their indices even when a head is absent');
 }
 
 /**

@@ -29060,14 +29060,14 @@ function runBuildSuite(): number {
         sameOutputFiles(artifacts, expectedArtifacts) &&
         stageOrder.every((at, i) => at > 0 && (i === 0 || at > stageOrder[i - 1])) &&
         partsSame && idleReceipt?.spec === 'rigc-run/2' && idleReceipt.command === 'render' &&
-        buildReceipt?.spec === 'rig-run/2' && listedRenderReceipts === 0 && listedIdleFrames,
+        buildReceipt?.spec === 'rig-run/3' && listedRenderReceipts === 0 && listedIdleFrames,
       `exit ${green.status}; --out holds [${tree.join(', ')}]; last lines: ${tail.map((l) => l.trim()).join(' | ')}; stage prefixes at ${stageOrder.join(', ')}; parts.json equals the fixture's hand-derived one: ${partsSame}; ` +
         `check/idle_frames/${RIGC_RENDER_RUN_FILE} on disk: ${idleReceipt?.spec ?? 'absent'} (${idleReceipt?.command ?? 'no command'}); ` +
         `${BUILD_RUN_FILE} ${buildReceipt?.spec ?? 'absent'} outputs: ${listedRenderReceipts} render receipts, idle frames.json listed ${listedIdleFrames}`,
       "issue #2: the packed page is the artifact and the loose parts an intermediate, so the lines a reader stops at are the pack line and the three files; the parts.json equality is what shows build called the assemble stage rather than something like it",
     );
 
-    // Issue #1541: the rig-run/2 records check and build write, on this green build, replayed from beside its --out.
+    // Issues #1541, #1556: check and build run records, replayed from beside this green build's --out.
     runRunRecordPureChecks(say);
     runRunRecordCliChecks(dir, out, say);
 
@@ -29947,6 +29947,14 @@ function runBuildSuite(): number {
       `no --head: exit ${single.status}, ${single.out.split('\n').find((l) => l.startsWith('build: ')) ?? 'no build line'}; without the face: exit ${faceless.status}, ${facelessFail.map((l) => l.trim().slice(0, 140)).join(' | ')}, --out holds [${entries(join(facelessDir, 'out')).join(', ')}]`,
       'issue #359: the card\'s own test — an artist-style PSD with a separated face builds green as one run, and the refusal when the face is missing names the rule before anything is written',
     );
+    const psdInputs = readJsonFile(join(artDir, 'out', BUILD_RUN_FILE))?.inputs;
+    const expectedPsdInputs = ([['source', 'painting.png'], ['full', 'art.psd']] as const).map(([role, file]) => ({
+      role, path: `../${file}`, sha256: createHash('sha256').update(readFileSync(join(artDir, file))).digest('hex'),
+    }));
+    say('BU1556F_SINGLE_RUN_BUILD_HASHES_THE_PSD_DIRECTLY_AND_OMITS_HEAD',
+      single.status === 0 && JSON.stringify(psdInputs) === JSON.stringify(expectedPsdInputs),
+      `build exit ${single.status}; recorded inputs ${JSON.stringify(psdInputs ?? null)}`,
+      'issue #1556: the single-run build hashes the PSD file itself and emits only the two supplied input roles');
 
     // BU168 — issue #366: a portrait single-run build. The artist fixture's 75x128 PSD and painting, no --head: padded
     // to the 128 square under [assemble], green through rig and check, its parts.json carrying the pad. The same file
@@ -29994,7 +30002,9 @@ function runBuildSuite(): number {
     ];
     writeAssembleFixture(altDir, altCfg);
     const altOut = join(altDir, 'out');
-    const altRun = runBuildCli([...buildArgs(altDir, altOut), '--alt', `body_side=${join(altDir, 'painting.png')}:${join(altDir, 'full')}:${join(altDir, 'head')}`]);
+    const altRun = runBuildCli([...buildArgs(altDir, altOut), '--alt',
+      `body_side=${join(altDir, 'painting.png')}:${join(altDir, 'full')}:${join(altDir, 'head')}`,
+      '--alt', `head_side=${join(dir, 'painting.png')}:${join(altDir, 'full', 'layers.json')}:${join(altDir, 'head')}`]);
     const altSetsPath = join(altOut, 'rig', 'sets.json');
     const altSets = existsSync(altSetsPath) ? readJsonFile(altSetsPath) : null;
     const altAtlas = existsSync(join(altOut, 'check', 'build', 'skeleton.atlas')) ? readFileSync(join(altOut, 'check', 'build', 'skeleton.atlas'), 'utf8') : '';
@@ -30021,6 +30031,17 @@ function runBuildSuite(): number {
       `alt build exit ${altRun.status}, sets.json ${JSON.stringify(altSets?.sets ?? null)}, plain build has sets.json: ${existsSync(join(out, 'rig', 'sets.json'))}; missing input exit ${missingAlt.status}; wrong canvas exit ${canvasAlt.status}`,
       'issue #454: a subset alternate set cuts only its declared parts and records its hides, a full alternate set cuts every plan slot, both pack into the single atlas and write sets.json, a build with no alternates is untouched, and missing inputs or mismatched canvas sizes fail before anything is written',
     );
+    const altInputs = readJsonFile(join(altOut, BUILD_RUN_FILE))?.inputs;
+    const altPaths = ['../painting.png', '../full/layers.json', '../head/layers.json', '../../painting.png', '../full/layers.json', '../head/layers.json'];
+    const altRoles = ['source', 'full', 'head'];
+    const expectedAltInputs = altPaths.map((path, i) => ({
+      role: `alt[${Math.floor(i / altRoles.length)}].${altRoles[i % altRoles.length]}`,
+      path, sha256: createHash('sha256').update(readFileSync(join(altOut, path))).digest('hex'),
+    }));
+    say('BU1556G_BUILD_CLI_RECORDS_REPEATED_ALT_TUPLES_IN_CLI_ORDER',
+      altRun.status === 0 && Array.isArray(altInputs) && JSON.stringify(altInputs.slice(3)) === JSON.stringify(expectedAltInputs),
+      `build exit ${altRun.status}; recorded alternate inputs ${Array.isArray(altInputs) ? JSON.stringify(altInputs.slice(3)) : 'absent'}`,
+      'issue #1556: the CLI gives body_side first and head_side second, while assembly emits configured head_side first');
 
     // BU170 — issue #465: an alternate painted in a pose carries drawn rest angles (from drawn or skeleton) in
     // parts.json and sets.json, and its <set>_* region and mesh attachments are emitted in the bone-local frame of

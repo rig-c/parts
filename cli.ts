@@ -973,9 +973,9 @@ usage:
                     [--idle-keys ctl|direct] [--lead-in <periods>] [--seam-pairs] [--keep-stills] [--no-extremes]
                     [--alt <name>=<source>:<full>[:<head>]] [--set <name> | --all-sets]
                     [--environment <schedule.json>] [--wind-band <spec.json>]
-      build-run.json (rig-run/2, as check-run.json for check) records a run whose
-      check completed, with argv starting "build": these arguments reproduce the
-      check with the same package version, run from the --out directory.
+      build-run.json (rig-run/3, STABILITY) records a run whose check completed,
+      with input paths and SHA-256 digests. Its argv reproduces the check with
+      the same package version, run from the --out directory.
       assemble, then rig, then check, in one process, each stage's own lines
       printed under [assemble], [rig] and [check]; the first stage that refuses
       stops the build with its own FAIL lines. The config must already carry
@@ -2511,6 +2511,9 @@ function cmdBuild(args: string[]): number {
   }
   const [config, source, full, out] = ['--config', '--source', '--full', '--out'].map((f) => flags.get(f) as string);
   const head = flags.get('--head') ?? null;
+  const requirements = flags.get('--requirements');
+  const environment = flags.get('--environment');
+  const windBand = flags.get('--wind-band');
   let bin: string;
   let fixedClock: string | undefined;
   let pkg: { name: string; version: string };
@@ -2526,7 +2529,7 @@ function cmdBuild(args: string[]): number {
   const scratch = mkdtempSync(join(tmpdir(), 'rig-parts-build-'));
   try {
     const r = build(
-      { config, source, full, head, out, ...(seam === undefined ? {} : { seam: seam as SeamRule }), ...(project === undefined ? {} : { project: project as ProjectRule }), loop, pageEdges: edges, packShape: shape, ...(size === undefined ? {} : { pageSize: size }), ...(flags.has('--requirements') ? { requirements: flags.get('--requirements') as string } : {}), idleKeys: keys, ...(leadText === undefined ? {} : { leadIn: Number(leadText) }), seamPairs: on.has('--seam-pairs'), keepStills: on.has('--keep-stills'), noExtremes: on.has('--no-extremes'), ...(alts.length === 0 ? {} : { alts }), ...(flags.has('--set') ? { set: flags.get('--set') as string } : {}), allSets: on.has('--all-sets'), ...(flags.has('--environment') ? { environment: flags.get('--environment') as string } : {}), ...(flags.has('--wind-band') ? { windBand: flags.get('--wind-band') as string } : {}) },
+      { config, source, full, head, out, ...(seam === undefined ? {} : { seam: seam as SeamRule }), ...(project === undefined ? {} : { project: project as ProjectRule }), loop, pageEdges: edges, packShape: shape, ...(size === undefined ? {} : { pageSize: size }), ...(requirements === undefined ? {} : { requirements }), idleKeys: keys, ...(leadText === undefined ? {} : { leadIn: Number(leadText) }), seamPairs: on.has('--seam-pairs'), keepStills: on.has('--keep-stills'), noExtremes: on.has('--no-extremes'), ...(alts.length === 0 ? {} : { alts }), ...(flags.has('--set') ? { set: flags.get('--set') as string } : {}), allSets: on.has('--all-sets'), ...(environment === undefined ? {} : { environment }), ...(windBand === undefined ? {} : { windBand }) },
       { rig: rigcRunner(bin), check: rigcRunner(bin), checkBin: bin, scratch: join(scratch, 'rig-gate'), stages: {
         assemble: (input, outputs) => runBuildProcess({ stage: 'assemble', bin, input, outputs }, join(scratch, 'workers')),
         rig: (input, _rigc, gateScratch) => runBuildProcess({ stage: 'rig', bin, input, scratch: gateScratch }, join(scratch, 'workers')),
@@ -2536,8 +2539,10 @@ function cmdBuild(args: string[]): number {
     );
     // Issue #1541: written whenever this build's check completed its report, green or not.
     if (r.check !== null) {
+      const cwd = process.cwd();
       writeRunRecord({ pkg, command: 'build', startedAt, finishedAt: fixedClock ?? new Date().toISOString(), outDir: out, configPath: config,
-        outputs: [...BUILD_OWNS, ...BUILD_OWNS_FILES], argv: recordArgv('build', args, BUILD_ARGV, out, process.cwd()) });
+        inputs: { cwd, source, full, head, requirements, environment, windBand, alts },
+        outputs: [...BUILD_OWNS, ...BUILD_OWNS_FILES], argv: recordArgv('build', args, BUILD_ARGV, out, cwd) });
     }
     return r.stoppedAt === null ? EXIT_OK : EXIT_REFUSED;
   } finally {

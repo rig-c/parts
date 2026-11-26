@@ -1437,8 +1437,9 @@ the spec. A key added, removed or redefined is a new spec version.
 
 ### Run record (`check-run.json` and `build-run.json`, spec `rig-run/2`)
 
-`check` writes `<out>/check-run.json` and `build` writes `<out>/build-run.json`
-(issue #1541) whenever the run completed its check report, green or not. The names
+`check` writes `<out>/check-run.json` whenever the run completed its check report,
+green or not (issue #1541). `build` originally wrote `<out>/build-run.json` in this
+format. Its current contract is [the build run record](#build-run-record-build-runjson-spec-rig-run3). The names
 cannot be a `run.json`: `rig` and `assemble` write `rig-run/1` as `run.json`, and
 rigc writes its own `run.json` in a packed build directory (`check/build/`). Neither
 file is in `check.json`, and no byte comparison this package makes reads them.
@@ -1487,7 +1488,109 @@ version that changed it would replay differently; that is why the version is in
 the check; a run killed while writing it can leave a partial record, and no other
 file.
 
-`rig-run/2` is stable on the same terms as `rig-run/1`.
+`rig-run/2` is stable on the same terms as `rig-run/1`. The `check` record retains
+the same format and bytes for the same files, invocation, version and times.
+
+### Build run record (`build-run.json`, spec `rig-run/3`)
+
+`build` writes `<out>/build-run.json` when its check report completes, including a
+report with failing bars. Issue #1556 advances `spec` to `rig-run/3` and adds
+`inputs` between `config` and `outputs`. The fixed key order is `spec`, `package`,
+`command`, `started_at`, `finished_at`, `config`, `inputs`, `outputs`, `argv`.
+The other fields and the write timing follow the `rig-run/2` build contract above.
+
+This example shows a build with full and head layer directories and one alternate tuple.
+The version and digests are illustrative, and the output list is abbreviated.
+
+```json
+{
+  "spec": "rig-run/3",
+  "package": { "name": "@rig-c/parts", "version": "2.57.0" },
+  "command": "build",
+  "started_at": "2026-11-25T00:00:00.000Z",
+  "finished_at": "2026-11-25T00:00:01.000Z",
+  "config": {
+    "path": "../config.json",
+    "sha256": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+  },
+  "inputs": [
+    {
+      "role": "source",
+      "path": "../painting.png",
+      "sha256": "112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00"
+    },
+    {
+      "role": "full",
+      "path": "../layers/full/layers.json",
+      "sha256": "2233445566778899aabbccddeeff00112233445566778899aabbccddeeff0011"
+    },
+    {
+      "role": "head",
+      "path": "../layers/head/layers.json",
+      "sha256": "33445566778899aabbccddeeff00112233445566778899aabbccddeeff001122"
+    },
+    {
+      "role": "alt[0].source",
+      "path": "../side/painting.png",
+      "sha256": "445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233"
+    },
+    {
+      "role": "alt[0].full",
+      "path": "../side/full/layers.json",
+      "sha256": "5566778899aabbccddeeff00112233445566778899aabbccddeeff0011223344"
+    },
+    {
+      "role": "alt[0].head",
+      "path": "../side/head/layers.json",
+      "sha256": "66778899aabbccddeeff00112233445566778899aabbccddeeff001122334455"
+    }
+  ],
+  "outputs": [
+    {
+      "path": "check/check.json",
+      "sha256": "778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566"
+    }
+  ],
+  "argv": [
+    "build", "--config", "../config.json", "--source", "../painting.png",
+    "--full", "../layers/full", "--head", "../layers/head", "--out", ".",
+    "--alt", "side=../side/painting.png:../side/full:../side/head"
+  ]
+}
+```
+
+Each entry has keys `role`, `path`, `sha256` in that order. The array follows this
+order regardless of where each flag appears in `argv`.
+
+| Order | Role | CLI input | File hashed |
+| --- | --- | --- | --- |
+| 1 | `source` | `--source` | Painting PNG |
+| 2 | `full` | `--full` | `<dir>/layers.json` for a directory, or the supplied manifest or PSD |
+| 3 | `head` | `--head` | `<dir>/layers.json` for a directory, or the supplied manifest or PSD |
+| 4 | `requirements` | `--requirements` | Requirements JSON |
+| 5 | `environment` | `--environment` | Environment schedule JSON |
+| 6 | `wind-band` | `--wind-band` | Wind-band spec JSON |
+| For each `--alt` in CLI order, first | `alt[i].source` | Tuple source | Alternate painting PNG |
+| For each `--alt` in CLI order, second | `alt[i].full` | Tuple full | `<dir>/layers.json` for a directory, or the supplied manifest or PSD |
+| For each `--alt` in CLI order, third | `alt[i].head` | Tuple head | `<dir>/layers.json` for a directory, or the supplied manifest or PSD |
+
+`i` is zero-based and counts the `--alt` occurrences. Entries for optional flags
+or tuple members appear only when supplied. The array inventories CLI file
+inputs. References declared only inside the config and files referenced by a
+layer manifest are outside this inventory. `config` binds `--config` separately,
+and `--out` is the output root.
+
+The run-record writer reads and hashes the raw bytes on disk of the file named by
+`path` after the check report completes. Keep input files and link targets unchanged
+from the start of the build until it exits so these digests describe the bytes the
+stages read.
+
+Each path uses the shared `--out` link rule. On POSIX the output directory and
+the file's parent directory resolve through links, and the final filename is kept,
+including when that filename is a link. On Windows the path is rebased as spelled. Relative
+paths use `/` separators. A file on another Windows drive is recorded by its
+file path as given, with `layers.json` appended when the argument names a directory.
+The paths are relative to the build's `--out` root.
 
 ## Environment
 
