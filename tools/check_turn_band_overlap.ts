@@ -13,8 +13,14 @@ type Say = (name: string, ok: boolean, detail: string) => void;
 type Animation = { deform?: Array<{ slot: string; keys: Array<{ vertices?: number[] }> }> };
 const SIN15 = Math.sin(Math.PI / 12);
 
-function build(v: BandOverlapVariant): { b?: RigOutput; problems: readonly Problem[] } {
+function useLinearCollar(raw: Record<string, unknown>): void {
+  const { regions } = (raw.meshes as { topwear: { contour: { regions: Array<{ falloff?: 'linear' }> } } }).topwear.contour;
+  regions[0].falloff = 'linear';
+}
+
+function build(v: BandOverlapVariant, mutate?: (raw: Record<string, unknown>) => void): { b?: RigOutput; problems: readonly Problem[] } {
   const f = bandOverlapTurnFixture(v);
+  mutate?.(f.config);
   try { return { b: buildRig(parseConfig(f.config), f.parts, f.images), problems: [] }; }
   catch (e) { if (e instanceof PartsError) return { problems: e.problems }; throw e; }
 }
@@ -88,7 +94,7 @@ const torsoDeform = (b: RigOutput) => JSON.stringify(['turn', 'tilt', 'body_turn
 
 export function runTurnBandOverlapChecks(say: Say): void {
   const TOL = 0.00002; // float32 offsets: the worst reading on every variant is 7.9e-6 px
-  const single = build('single'), banded = build('band-depth');
+  const single = build('single'), banded = build('band-depth', useLinearCollar);
   const singleErr = single.b === undefined ? undefined : travelError(single.b, false);
   say('BV01_SINGLE_GROUP_TORSO_UNDER_COVERS_BUILDS_WITH_ITS_OWN_FIELD',
     singleErr !== undefined && singleErr.open < TOL && singleErr.covered < TOL && singleErr.openN > 0 && singleErr.coveredN > 0 && folds(single.b!) === 0,
@@ -101,7 +107,7 @@ export function runTurnBandOverlapChecks(say: Say): void {
   // Covers over the band itself: the band keeps its blended field, so the torso's deform is band-depth's, byte for byte.
   const reference = banded.b === undefined ? '' : torsoDeform(banded.b);
   for (const [id, variant] of [['BV03', 'scarf-behind'], ['BV04', 'scarf-front']] as const) {
-    const { b, problems } = build(variant);
+    const { b, problems } = build(variant, useLinearCollar);
     say(`${id}_${variant.toUpperCase().replace('-', '_')}_BAND_UNDER_A_COVER_KEEPS_ITS_BLENDED_FIELD`,
       b !== undefined && reference !== '' && torsoDeform(b) === reference && folds(b) === 0,
       b === undefined ? `refused: ${JSON.stringify(tally(problems))}` : `torso deform equals band-depth's: ${torsoDeform(b) === reference}; folds ${folds(b)}`);
@@ -137,8 +143,8 @@ function buildCover(opts?: Parameters<typeof bandCoverTurnFixture>[0], mutate?: 
 function runBandCoverChecks(say: Say): void {
   const TOL = 0.00002;
   const { chin, band: width, headCoverDepth, headOwnOvershootDepth, bodyDepth, headPivot, headZRef } = BAND_COVER_FIXTURE;
-  const covered = buildCover({ cover: 'face' });
-  const uncovered = buildCover();
+  const covered = buildCover({ cover: 'face' }, useLinearCollar);
+  const uncovered = buildCover(undefined, useLinearCollar);
 
   // Face mean travel at ±15° from its 5x5 grid over padded [22-4..42+4] x [4-4..28+4], computed from definition.
   const fFix = bandCoverTurnFixture({ cover: 'face' });
@@ -298,7 +304,10 @@ function runBandCoverBindingChecks(say: Say, covered?: RigOutput, uncovered?: Ri
     stoppedCover.problems.map(p => p.detail).join(' | ') || 'built');
 
   // SHA-256 of the whole serialized buildRig result on the pre-#1559 tree.
-  const stoppedAbsent = buildCover({ regionBone: 'collar0' }, stopCollar);
+  const stoppedAbsent = buildCover({ regionBone: 'collar0' }, raw => {
+    stopCollar(raw);
+    useLinearCollar(raw);
+  });
   const stoppedSha = sha(stoppedAbsent.b);
   const att = stoppedAbsent.b?.rig.skins.default.topwear.topwear;
   const drawn = att !== undefined && 'type' in att && att.weights.some(row => row.some(w => w.bone === 'collar0_d' && w.weight > 0));
@@ -306,7 +315,10 @@ function runBandCoverBindingChecks(say: Say, covered?: RigOutput, uncovered?: Ri
     drawn && stoppedSha === 'de8a697815569131f9e43335562bc4c42aa9ed68c580ac6923d5eb67c6a7142a',
     `positive collar0_d influence=${drawn}; build sha256=${stoppedSha}`);
 
-  const chainCover = buildCover({ cover: 'face', regionBone: 'collar0' }, collarChain);
+  const chainCover = buildCover({ cover: 'face', regionBone: 'collar0' }, raw => {
+    collarChain(raw);
+    useLinearCollar(raw);
+  });
   const chainSha = sha(chainCover.b), coveredSha = sha(covered), uncoveredSha = sha(uncovered);
   say('BV17_UNSTOPPED_BANDS_KEEP_BUILD_BYTES',
     chainSha === '257486a84c1a7e31f7014fc6c623aed72567b572cf29a183276d126ab9d115af'
