@@ -105,6 +105,10 @@ function cropPadding(raw: string | undefined): [left: number, top: number, right
   return [left, top, right, bottom];
 }
 
+function unpaddedExtent(extent: number, before: number, after: number): number {
+  return extent - before - after;
+}
+
 const magnitude = (value: bigint): bigint => value < 0n ? -value : value;
 
 /** A finite binary64 value is an integer multiple of the smallest subnormal (2^-1074). */
@@ -142,7 +146,7 @@ export function modelArrayMap(bytes: Uint8Array, image: { width: number; height:
     `found ${JSON.stringify(kind)}; required depth or normals`);
   const [left, top, right, bottom] = cropPadding(padding);
   const array = readArray(bytes, kind, at);
-  const retainedWidth = array.width - left - right, retainedHeight = array.height - top - bottom;
+  const retainedWidth = unpaddedExtent(array.width, left, right), retainedHeight = unpaddedExtent(array.height, top, bottom);
   if (retainedWidth <= 0 || retainedHeight <= 0) return fail('DEPTH_ARRAY_PADDING', at,
     `padding ${left},${top},${right},${bottom} leaves ${retainedWidth}x${retainedHeight} of raw ${array.width}x${array.height}; required a nonempty crop`);
   const { width, height } = image;
