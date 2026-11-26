@@ -6,6 +6,29 @@
 
 * **`depth-apply` now refuses previously accepted clipped recipes as `DEPTH_APPLY_CLIPPED` before writing outputs.** The refusal names each affected part and its clip fraction, the minimum group `zScale` for upper clipping, and the required median rise for lower clipping. Prepare the revised recipe again before applying. The report keys are unchanged. See [Apply the maps as depth sheets](docs/DEPTH.md#4-apply-the-maps-as-depth-sheets).
 
+## 2.59.0 (2026-11-26)
+
+A new `depth-map` command turns a depth model's raw NumPy output into the map the depth workflow reads, `depth-apply` refuses a recipe that would clip before it writes anything, an explicit body unit depth now moves its part during the body turn, and Parts takes `@rig-c/core` 3.9.2.
+
+**Read before upgrading:**
+
+* **`depth-apply` refuses a recipe that clips.** A part whose mapped depth reaches `0` or `zScale` over its alpha >= 128 support is refused as `DEPTH_APPLY_CLIPPED` before any output is written. The refusal names each part and its clip fraction, the smallest `zScale` above the group's highest depth for upper clipping, and the median rise needed for lower clipping. A recipe that applied with clipping before is refused now; apply the printed remedy and run `depth-prepare` again.
+* **An explicit `turn.body.unitDepths` value now moves its part.** It is read as the world depth `z` and projected once, as `-(pivot + z - zRef) * sin(a)` with the body's primary surface reference `zRef`. Before, a unit bound to a torso root rode `bodyshift` and ignored the value, and a unit directly under the carrier read it as an already-projected depth. A body unit that cannot be moved at its declared depth, or two units sharing a carrier at different depths, is refused as `RIG_TURN_BODY_UNIT_CARRIER`. The public examples keep their bytes.
+* **A neck draft writes the neck's world median** to `turn.body.unitDepths`, and its note reports the projected depth. For a config drafted before this release, copy the neck world median from the original draft note, or draft again from the same source.
+* **`@rig-c/core` is pinned to 3.9.2.** Under `SOURCE_DATE_EPOCH`, rigc's render receipt (`render-run.json`) stamps its times with the epoch, as `build-run.json` already did. Every file build writes is byte-identical to 3.9.1's.
+* **`rig-parts --version` and the `package.version` field in run stamps and run records now read `2.59.0`.** The version bump changes those receipt bytes. The receipt fields and output hashes keep their meaning.
+
+### Features
+
+* **depth:** `depth-map` converts a C-order little-endian NumPy float32 or float64 depth or normal array into a `rig-parts-map/1` file at the prepared input's size, cropping only the declared `--padding` and mean-pooling by whole integer factors; anything else is refused as `DEPTH_ARRAY_*` (`#1573`, `#1576`, `bfb5044`).
+* **depth:** refuse clipped depth sheets before emission, as `DEPTH_APPLY_CLIPPED` (`#1571`, `#1574`, `d9ab5c9`).
+
+### Bug Fixes
+
+* **rig:** apply authored body unit depths through the slot's movable carrier, and refuse unmovable or conflicting carriers as `RIG_TURN_BODY_UNIT_CARRIER` (`#1575`, `#1577`, `fd96326`).
+* **rig:** resolve stop aliases in the legacy head-turn setup, so a legacy turn with `stops` builds instead of failing on a parent order error (`#1565`, `#1569`, `0908767`).
+* **deps:** take `@rig-c/core` 3.9.2 (`#1579`, `10135c2`).
+
 ## 2.58.0 (2026-11-26)
 
 `build` records the inputs it read in a `rig-run/3` run record, Parts takes `@rig-c/core` 3.9.1 so a check replayed through a linked `--out` matches byte for byte, and two turn-surface paths that threw or skipped silently now build or refuse by name.
