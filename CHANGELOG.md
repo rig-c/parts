@@ -1,11 +1,24 @@
 # Changelog
 
-## Unreleased
+## 2.61.0 (2026-11-26)
+
+Generated turn dials are now gated in combination, not only one dial at a time, and an eased contour band shared by the head and body dials is adjusted where a declared combination would fold.
 
 **Read before upgrading:**
 
-* **Core 3.10.0 adds A53 to the winding gate.** The assertion total increases by one. A rig with no `invariants.deformSliderCombinations` declaration gains one SKIP. Parts declares four endpoint pairs for generated head yaw and pitch. When it also generates body yaw, it declares twenty poses (eight endpoint triples and twelve endpoint pairs with the third dial at neutral `0`). A rig that built on Parts 2.60.0 can now be refused before rig emission by `A53_DECLARED_SLIDER_COMBINATIONS_KEEP_WINDING`. See [the combined turn winding reference](docs/AUTHORING.md#combined-turn-winding).
-* **The combined gate (#1581) and band fix (#1582) ship in one Parts release.** An eased, declared contour band shared by the head and body dials can get new turn deform bytes when a declared tuple would fold, even after an edit elsewhere in the rig. An explicit `falloff: "linear"` opts out and retains its existing bytes. The mesh report names the triggering tuples and Core still gates the result. [#1581](https://github.com/rig-c/parts/issues/1581), [#1582](https://github.com/rig-c/parts/issues/1582).
+* **`@rig-c/core` is pinned to 3.10.0, which adds A53 to the winding gate.** Build reports and gate text count one more assertion, with an `A53_DECLARED_SLIDER_COMBINATIONS_KEEP_WINDING` row; a rig with no `invariants.deformSliderCombinations` declaration gains one SKIP. In the public examples only `gate_spine-html.txt` changes, in all five examples; every rig file is byte-identical.
+* **Generated turn dials are gated in combination.** Parts declares four endpoint pairs for generated head yaw and pitch. When it also generates body yaw, it declares twenty poses (eight endpoint triples and twelve endpoint pairs with the third dial at neutral `0`). Core poses each declared tuple through the mandatory build gate, so a rig that built on Parts 2.60.0 can now be refused at a combined pose, before rig emission, by `A53_DECLARED_SLIDER_COMBINATIONS_KEEP_WINDING`. A rig that generates fewer than two dials declares nothing and reports A53 SKIP. See [the combined turn winding reference](docs/AUTHORING.md#combined-turn-winding).
+* **A shared band's turn weights can be adjusted where a declared combination would fold.** For an eased, explicitly declared contour band shared by the head and body dials, Parts adjusts the effective blend shares in the turn deform keys at that band's vertices, only when the generated fields would reverse a triangle at a declared tuple. The authored skin weights and band geometry are unchanged, and an explicit `falloff: "linear"` opts out. An edit elsewhere in the rig can tip a tuple into folding and change those deform bytes. The rig stage reports each adjustment as `RIG_TURN_COUPLED_BAND`, with the adjusted vertex count, the largest share change and the triggering tuples, and the contour mesh row of `mesh_report.json` records it under `coupled_turn_bands`. The adjustment is conditional and bounded: when the solve cannot keep the required signed area, Parts keeps the original deform fields, reports `fallback` on the same line, and Core's gate still decides whether the rig is written.
+* **The 2.60.0 note that the winding gate samples turn dials individually is superseded.** From this release A39 still checks each dial alone and A53 checks the declared combinations.
+* **`rig-parts --version` and the `package.version` field in run stamps and run records now read `2.61.0`.** The version bump changes those receipt bytes. The receipt fields and output hashes keep their meaning.
+
+### Features
+
+* **turn:** declare the generated turn-dial combinations as `invariants.deformSliderCombinations` and gate them through Core 3.10.0's A53 (`#1581`, `#1586`, `340ef60`).
+
+### Bug Fixes
+
+* **turn:** preserve a shared contour band's winding across declared dial tuples with a bounded effective-share solve, reported in `coupled_turn_bands` and as `RIG_TURN_COUPLED_BAND` (`#1582`, `#1587`, `bf0ef16`).
 
 ## 2.60.0 (2026-11-26)
 
