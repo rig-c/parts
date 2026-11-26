@@ -2509,7 +2509,8 @@ By default, a region listed in `contour.regions` uses `4g²(1 − g)` for
 `0 < g < 0.5` and uses `g` everywhere else (issue #1578). The cubic starts at
 the outer edge with zero slope and meets the inner half with matching value
 and slope. Set `falloff: "linear"` on a declared contour region to use `g`
-throughout the band and recover its old weights. Other explicit values are
+throughout the band, retain its existing bytes, and opt out of the
+[coupled turn-band solve](#combined-turn-winding). Other explicit values are
 `CONFIG_FIELD_TYPE`. Regions derived from `contour.bust` and automatic mesh
 regions keep their linear weighting. Zero-width bands still use a hard edge.
 
@@ -10395,8 +10396,8 @@ and total triangle counts. The gate refuses the candidate before rig emission.
 A39 also checks individual dials. A53 reports measured and unmeasured tuple
 counts for rigs that declare combinations.
 
-For an explicitly declared contour band shared by the head and body turn
-fields (#1582), Parts tries a bounded solve only when the generated fields
+For an eased, explicitly declared contour band shared by the head and body
+turn fields (#1582), Parts tries a bounded solve only when the generated fields
 would reverse a triangle at a declared tuple. It adjusts the effective blend
 shares in the turn deform keys. The authored skin weights and band geometry
 stay fixed. Even an edit elsewhere in the rig can tip a tuple into folding

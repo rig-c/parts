@@ -2205,7 +2205,7 @@ export function buildWaistPairSource(
       const shares = writtenShares(li, limits.floor);
       if (li.region >= 0 && shares.some((s) => s.bone === regions[li.region].bone && s.weight > 0)) {
         weighted[li.region]++;
-        if (li.region < explicitRegions) bandVertices[vi] = li.region;
+        if (li.region < explicitRegions && regions[li.region].falloff !== 'linear') bandVertices[vi] = li.region;
       }
       const ent: WeightEntry[] = shares.map(({ bone, weight }) => {
         const [x, y] = toBoneLocal(world.get(bone) as BoneTransform, spineX(wx), spineY(wy));
@@ -2225,6 +2225,8 @@ export function buildWaistPairSource(
     const bones = new Set(segs.map((s) => s.bone));
     for (const rg of regions) bones.add(rg.bone);
     if (explicitRegions > 0) {
+      // Keep an empty map entry for all-linear contours so the solver uses
+      // the authored opt-out instead of inferring regions from bone names.
       contourBandVertices.set(p.name, bandVertices);
       contourRegionSummaries.set(
         p.name,
