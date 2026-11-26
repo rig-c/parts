@@ -10067,13 +10067,20 @@ by `rig`, so their output requires no alternate compiler or dependency pin.
 | --- | --- | --- |
 | <a id="DEPTH_RECIPE"></a>`DEPTH_RECIPE` | unknown, absent or wrongly typed recipe field, group, source or frame | use the documented explicit recipe schema; no guessed field |
 | <a id="DEPTH_RECIPE_NUMBER"></a>`DEPTH_RECIPE_NUMBER` | missing/nonfinite median, relief, near-scale pivot or prepare number; invalid range/integer | declare every numeric field in its documented units and range |
-| <a id="DEPTH_INPUT_PRESENT"></a>`DEPTH_INPUT_PRESENT` | declared JSON input missing or not a file | restore the named file |
+| <a id="DEPTH_INPUT_PRESENT"></a>`DEPTH_INPUT_PRESENT` | declared input missing or not a file, or `depth-map` input unreadable or prepared PNG undecodable | restore the named readable input file in its expected format |
 | <a id="DEPTH_INPUT_JSON"></a>`DEPTH_INPUT_JSON` | malformed numeric or configuration JSON | write valid finite JSON |
 | <a id="DEPTH_PART_RESOLVES"></a>`DEPTH_PART_RESOLVES` | selected or cleared name absent from parts.json | use the assembled part name |
-| <a id="DEPTH_OUTPUT_EMPTY"></a>`DEPTH_OUTPUT_EMPTY` | nonempty output or output containing an input | choose a separate absent or empty directory |
-| <a id="DEPTH_MAP_BINDING"></a>`DEPTH_MAP_BINDING` | malformed present map receipt, wrong part, map hash or inference-input hash | re-run depth for these inputs, then `rig-parts depth-bind --map <numeric-map.json> --input <prepared.png> --part <name>` |
+| <a id="DEPTH_OUTPUT_EMPTY"></a>`DEPTH_OUTPUT_EMPTY` | nonempty output directory or output containing an input, or `depth-map` cannot create its output exclusively | choose a separate absent or empty output directory, or for `depth-map` an absent output file in a writable directory |
+| <a id="DEPTH_MAP_BINDING"></a>`DEPTH_MAP_BINDING` | invalid part name for `depth-map` or `depth-bind`, or malformed present map receipt, wrong part, map hash or inference-input hash | use a nonempty plain part filename for the command, or re-run depth for the affected receipt and call `rig-parts depth-bind --map <numeric-map.json> --input <prepared.png> --part <name>` |
 | <a id="DEPTH_MAP_BINDING_ABSENT"></a>`DEPTH_MAP_BINDING_ABSENT` | WARN only: no receipt, compatibility policy dated 2026-11-16 | re-run depth for these inputs, then `rig-parts depth-bind --map <numeric-map.json> --input <prepared.png> --part <name>` |
 | <a id="DEPTH_INPUT_BINDING"></a>`DEPTH_INPUT_BINDING` | changed recipe, art, part record, crop, padding or inference PNG | prepare again for these exact inputs |
+| <a id="DEPTH_ARRAY_FORMAT"></a>`DEPTH_ARRAY_FORMAT` | unsupported NumPy version, malformed header, wrong dtype or order, or payload byte count does not match the header | export `.npy` v1.0, v2.0 or v3.0 as little-endian float32 or float64 in C order |
+| <a id="DEPTH_ARRAY_KIND"></a>`DEPTH_ARRAY_KIND` | unknown `depth-map --kind` | declare `depth` or `normals` |
+| <a id="DEPTH_ARRAY_SHAPE"></a>`DEPTH_ARRAY_SHAPE` | rank, dimension or channel count does not match the declared kind | export `(H,W)` or `(H,W,1)` for depth and `(H,W,3)` for normals, with positive safe integer dimensions |
+| <a id="DEPTH_ARRAY_PADDING"></a>`DEPTH_ARRAY_PADDING` | malformed padding or padding removes the entire extent on either axis | declare four nonnegative safe integers in left, top, right, bottom order that leave a nonempty crop |
+| <a id="DEPTH_ARRAY_SIZE"></a>`DEPTH_ARRAY_SIZE` | cropped dimensions are not positive integer multiples of the prepared PNG dimensions on both axes | check the input PNG and declare the raw array's actual padding, or re-export at a supported size |
+| <a id="DEPTH_ARRAY_NONFINITE"></a>`DEPTH_ARRAY_NONFINITE` | retained raw depth pixel contains `NaN` or an infinity | export finite depth values at the named raw pixel |
+| <a id="DEPTH_ARRAY_NORMAL"></a>`DEPTH_ARRAY_NORMAL` | retained raw normal is zero or nonfinite, or a pooled normal cancels to zero | export finite nonzero signed XYZ normals in image axes and inspect the named raw or output pixel |
 | <a id="DEPTH_MAP_FORMAT"></a>`DEPTH_MAP_FORMAT` | wrong numeric schema, channels, shape, count, unknown field or nonfinite element | provide the declared float JSON map, not a preview |
 | <a id="DEPTH_MAP_SIZE"></a>`DEPTH_MAP_SIZE` | map dimensions differ from its explicit frame | use the registered part, enlarged art or padded input grid |
 | <a id="DEPTH_MAP_SUPPORT"></a>`DEPTH_MAP_SUPPORT` | no alpha>=128 support | provide a supported part |

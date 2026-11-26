@@ -278,6 +278,7 @@ Command details and config saving are in the [command reference](docs/AUTHORING.
 | `diff-components` | [List every place the stacked parts differ from the painting](docs/AUTHORING.md#whole-figure-difference-inventory) |
 | `diff-drafts` | [Compare two assemble outputs](docs/AUTHORING.md#command-reference) |
 | `depth-prepare` | [Write one depth-model input image per part](docs/DEPTH.md#1-prepare-one-inference-image-per-part) |
+| `depth-map` | [Convert a NumPy array to a depth or normals map](docs/DEPTH.md#convert-a-numpy-array) |
 | `depth-bind` | [Bind a depth map to its prepared input](docs/DEPTH.md#3-bind-every-map-to-its-prepared-input) |
 | `depth-apply` | [Apply depth maps to the parts as depth sheets](docs/DEPTH.md#4-apply-the-maps-as-depth-sheets) |
 | `edited-part` | [Record an edited part receipt](docs/AUTHORING.md#edited-rig-space-parts-assembleedited_parts-issue-1278) |

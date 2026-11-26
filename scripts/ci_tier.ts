@@ -88,7 +88,7 @@ export const PATH_TO_SUITE_MAP: readonly MapRule[] = [
   { pattern: 'scripts/strip_old_config.ts', suites: ['config', 'tree'], why: 'config helper script' },
 
   // 3. cli.ts and selftest.ts
-  { pattern: 'cli.ts', suites: ['cli', 'tree'], why: 'CLI dispatcher and flag tables tested by cli and TY13/TY15/TY16/TY40 in tree' },
+  { pattern: 'cli.ts', suites: ['cli', 'depth-maps', 'tree'], why: 'CLI dispatcher and flags tested by cli and TY13/TY15/TY16/TY40 in tree; depth-map conversion exercised by depth-maps' },
   { pattern: 'selftest.ts', suites: ['tree'], why: 'scanned by TY01/TY04/TY08/TY09/RT14; diff hunks in selftest.ts select the edited suite functions (or full if outside suite functions)' },
 
   // 4. src/ modules -> direct owning suite(s) + cross-stage rows approved in Phase B
@@ -207,6 +207,7 @@ export const PATH_TO_SUITE_MAP: readonly MapRule[] = [
   { pattern: 'src/turnoverlap.ts', suites: ['rig', 'build', 'tree'], why: 'turn overlap solver owned by rig and build' },
   { pattern: 'src/boundarydepth.ts', suites: ['rig', 'build', 'tree'], why: 'boundary depth solver owned by rig and build' },
   { pattern: 'src/depthmaps.ts', suites: ['depth-maps', 'rig', 'tree'], why: 'depth map reader owned by depth-maps and rig' },
+  { pattern: 'src/modelarray.ts', suites: ['depth-maps', 'tree'], why: 'depth-map NumPy decoder and pooling owned by depth-maps' },
   { pattern: 'src/depthsheets.ts', suites: ['depth-maps', 'layers-wrapper', 'rig', 'comfy', 'tree'], why: 'depth contact sheet generator owned by depth-maps, layers-wrapper, rig, comfy' },
   { pattern: 'src/depthworkflow.ts', suites: ['depth-maps', 'rig', 'tree'], why: 'depth-init / depth-apply workflow owned by depth-maps and rig' },
   { pattern: 'src/setfocus.ts', suites: ['alternate-tips', 'rig', 'config', 'parts', 'tree'], why: 'set focus metadata owned by alternate-tips' },

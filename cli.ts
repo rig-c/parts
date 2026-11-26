@@ -4,6 +4,8 @@ import { diffComponentsCommand } from './src/diffcomponents.ts';
 import { DIFF_DRAFTS_SPEC, diffDraftsCommand } from './src/diffdrafts.ts';
 import { applyTakenLayers } from './src/takelayers.ts';
 import { applyDepth, bindDepthMap, prepareDepth } from './src/depthworkflow.ts';
+import { depthMapFail } from './src/depthmaps.ts';
+import { modelArrayMap, serializeModelArrayMap } from './src/modelarray.ts';
 import { externalReceipt } from './src/externalreceipt.ts';
 import { BUST_LANDMARKS_ACT_SCHEMA, BUST_LANDMARKS_COMMENT_ACT_SCHEMA, BUST_LANDMARKS_PROVENANCE_SPEC, BUST_LANDMARKS_PROVENANCE_SUFFIX, BUST_POINT_SHAPE_FIELDS, bustShapeClause, type BustSidecar, effectiveBustShape, planBustLandmarks, readBustSidecar, stageBustLandmarks, stageReplacements, type StagedBustLandmarks } from './src/bustlandmarks.ts';
 import { writeEditedPart } from './tools/edited-part-cli.ts';
@@ -21,7 +23,7 @@ import { writeEditedPart } from './tools/edited-part-cli.ts';
  */
 import { spawnSync } from 'node:child_process';
 import { runBuildProcess, processRigcRunner as rigcRunner } from './tools/build-process.ts';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { DEFAULT_PROJECT_RULE, DEFAULT_SEAM_RULE, headGarmentOverlaps, headGarmentWarning, HOLES_LISTED, PROJECT_RULES, type ProjectRule, proposeFields, proposePlan, proposeSinglePlan, SEAM_RULES, type SeamRule } from './src/assemble.ts';
@@ -51,7 +53,7 @@ import { chainsLeftBehind, clothConfigEdits, editPaths, plainCount, previousCoun
 import { INPUT_CHECK_FILE, INPUT_CHECK_SPEC, PROVENANCE_FILE, REMESH_SPEC, remeshStage } from './src/remesh.ts';
 import { RETUNE_FILE, RETUNE_SPEC, retuneStage } from './src/retune.ts';
 import { checkPainting, DEFAULT_PAINTING_FORM, isPaintingForm, PAINTING_FORMS, paintingFormOf } from './src/paintcheck.ts';
-import { readPng, writePng } from './src/raster/png.ts';
+import { decodePngBytes, readPng, writePng } from './src/raster/png.ts';
 import { REQUIREMENTS_SENTENCE } from './src/requirements.ts';
 import { composeStage, IMAGE_SEP, PLATE, PROVENANCES, SCENE_REPORT_FILE, SCENE_REPORT_SPEC, SCENE_SPEC } from './src/scene.ts';
 import { buildSheet, defaultCaption, type Tile, tilesFrom } from './src/sheet.ts';
@@ -99,6 +101,12 @@ usage:
   rig-parts depth-prepare --parts <assembled-dir> --config <depth-recipe.json> --out <empty-dir>
       Write per-part inference PNGs on neutral gray, upscaled and padded as
       declared, plus a source-hashed manifest. No model is bundled or called.
+
+  rig-parts depth-map --array <file.npy> --input <prepared.png> --kind <depth|normals>
+                      --part <name> --out <map.json> [--padding LEFT,TOP,RIGHT,BOTTOM]
+      Convert little-endian float32/float64 C-order NumPy values to rig-parts-map/1.
+      Crop declared array padding before integer box pooling to the prepared PNG
+      size. Normalize signed XYZ normals after pooling. Print the depth-bind command.
 
   rig-parts depth-bind --map <numeric-map.json> --input <prepared.png> --part <name>
       Write <map>.binding.json with both file hashes; never overwrite a receipt.
@@ -1260,6 +1268,7 @@ const TAKES = {
   'bust-landmarks': { valued: ['--from-act', '--parts', '--config', '--out'], switches: ['--write-config', '--help'] },
   'diff-components': { valued: ['--stack', '--painting', '--parts', '--figure', '--floor', '--threshold', '--out', '--verify'], switches: ['--owners', '--help'] },
   'diff-drafts': { valued: ['--left', '--right', '--out'], switches: ['--help'] },
+  'depth-map': { valued: ['--array', '--input', '--kind', '--part', '--out', '--padding'], switches: ['--help'] },
   'depth-bind': { valued: ['--map', '--input', '--part'], switches: ['--help'] },
   'depth-prepare': { valued: ['--parts', '--config', '--out'], switches: ['--help'] },
   'depth-apply': { valued: ['--parts', '--manifest', '--config', '--rig-config', '--out', '--groups'], switches: ['--help'] },
@@ -2950,6 +2959,60 @@ function cmdBustLandmarks(args: string[]): number {
   } catch (error) { return printRefusal(error); }
 }
 
+function readDepthMapInput(file: string): Uint8Array {
+  try {
+    if (!statSync(file).isFile()) throw new Error('found a nonregular file');
+    return readFileSync(file);
+  } catch (error) {
+    return depthMapFail('DEPTH_INPUT_PRESENT', JSON.stringify(file),
+      `read failed (${JSON.stringify(error instanceof Error ? error.message : String(error))}); required a readable regular file`);
+  }
+}
+
+function writeDepthMapFile(out: string, contents: string): void {
+  try {
+    const stage = mkdtempSync(join(realpathSync(dirname(out)), '.depth-map-'));
+    try {
+      const candidate = join(stage, 'map.json');
+      writeFileSync(candidate, contents, { flag: 'wx' });
+      // Publish complete bytes exclusively, including when two writers race for --out.
+      linkSync(candidate, out);
+    } finally {
+      rmSync(stage, { recursive: true, force: true });
+    }
+  } catch (error) {
+    const code = error !== null && typeof error === 'object' && 'code' in error ? String(error.code) : 'unknown error';
+    return depthMapFail('DEPTH_OUTPUT_EMPTY', JSON.stringify(out),
+      `map write failed (${code}); required an absent output file in a writable directory`);
+  }
+}
+
+function cmdDepthMap(args: string[]): number {
+  const f = flags(args, 'depth-map', ['--array', '--input', '--kind', '--part', '--out']);
+  if (typeof f === 'string') return usage(f);
+  const array = f.get('--array')!, input = f.get('--input')!, part = f.get('--part')!, out = f.get('--out')!;
+  try {
+    // Match depth-bind's accepted part names so the printed command can use the same name.
+    if (!part || part.startsWith('.') || /[\\/]/.test(part) || part.includes('\0')) {
+      return depthMapFail('DEPTH_MAP_BINDING', 'depth-map --part',
+        `found ${JSON.stringify(part)}; required a nonempty plain part filename accepted by depth-bind`);
+    }
+    const raw = readDepthMapInput(array), png = readDepthMapInput(input);
+    let image: ReturnType<typeof decodePngBytes>;
+    try { image = decodePngBytes(png, JSON.stringify(input)); }
+    catch (error) {
+      return depthMapFail('DEPTH_INPUT_PRESENT', JSON.stringify(input),
+        `decode failed (${JSON.stringify(error instanceof Error ? error.message : String(error))}); required a decodable prepared PNG`);
+    }
+    const map = modelArrayMap(raw, image, f.get('--kind')!, f.get('--padding'), JSON.stringify(array));
+    writeDepthMapFile(out, serializeModelArrayMap(map));
+    const quote = (value: string): string => "'" + value.replaceAll("'", "'\"'\"'") + "'";
+    console.log(`depth-map: wrote ${JSON.stringify(out)} (${map.width}x${map.height}, ${map.channels} channel(s))`);
+    console.log(`rig-parts depth-bind --map ${quote(out)} --input ${quote(input)} --part ${quote(part)}`);
+    return EXIT_OK;
+  } catch (error) { return printRefusal(error); }
+}
+
 function cmdDepthBind(args: string[]): number {
   const f = flags(args, 'depth-bind', ['--map', '--input', '--part']);
   if (typeof f === 'string') return usage(f);
@@ -2991,6 +3054,7 @@ function main(argv: string[]): number | Promise<number> {
   if (command === 'diff-drafts') return cmdDiffDrafts(rest);
   if (command === 'layers') return cmdLayers(rest);
   if (command === 'depth-prepare') return cmdDepthPrepare(rest);
+  if (command === 'depth-map') return cmdDepthMap(rest);
   if (command === 'edited-part') return cmdEditedPart(rest);
   if (command === 'external-receipt') return cmdExternalReceipt(rest);
   if (command === 'bust-landmarks') return cmdBustLandmarks(rest);

@@ -579,6 +579,7 @@ and do not certify visibility. See the
 | `diff-components` | `--stack`, `--painting`, `--parts`, `--floor`; optional `--threshold`, `--figure`, `--owners`, `--help` (`-h`); exactly one of `--out`, `--verify` (issues #1005, #1291; exhaustive native error inventory, `rig-parts-diff-components/1` by default and `rig-parts-diff-components/2` with `--owners`, and byte-bound reader for both) |
 | `diff-drafts` | `--left`, `--right`, `--out`; optional `--help` (`-h`) (issue #1369; draft-to-draft assemble comparison, `rig-parts-draft-diff/1`) |
 | `depth-prepare` | `--parts`, `--config`, `--out`; optional `--help` (`-h`) (issue #897; separate numeric-depth recipe) |
+| `depth-map` | `--array`, `--input`, `--kind` (`depth` or `normals`), `--part`, `--out`; optional `--padding` (`LEFT,TOP,RIGHT,BOTTOM`), `--help` (`-h`) (issue #1573; NumPy array to input-frame numeric map) |
 | `depth-bind` | `--map`, `--input`, `--part`; optional `--help` (`-h`) (issue #1284; exclusive receipt creation from current file bytes) |
 | `depth-apply` | `--parts`, `--manifest`, `--config`, `--rig-config`, `--out`; optional `--groups` (a comma-separated list of the recipe's groups to apply, issue #1449), `--help` (`-h`) (issue #897; original character config is read-only) |
 | `layers` | one positional path: a wrapper directory, a `layers.json` or a `.psd` (a file literally named `-h` is reached as `./-h`); with it, optional `--export` (a directory to write the wrapper form into, issue #359); or `--template` with `--canvas` and no path; or a positional head run with `--full`, `--source`, `--config` together for `PLAN_HEAD_GARMENT_OVERLAP` (issue #826); or `--help` (`-h`) |
@@ -2266,6 +2267,20 @@ the calibration. A median adjustment may require recomputing the group scale.
 `rig-parts-depth-report/1` keeps its existing keys. Each successful row names
 the part, declared relief, group `zScale` and a zero `clipFraction` over the
 original alpha >= 128 support. Shape quality is assessed separately.
+
+`depth-map` (issue #1573) is an additive minor-version command. It accepts
+C-order NumPy `.npy` 1.0, 2.0, and 3.0 arrays with little-endian `float32` or
+`float64` data. Depth accepts `(H, W)` or `(H, W, 1)`. Normals accept
+`(H, W, 3)` with signed XYZ components in image axes (X right, Y down).
+Declared array-edge padding is cropped before mean pooling with independent
+positive integral X and Y factors derived from the prepared PNG dimensions.
+Pooled normals are normalized to unit length. The command refuses retained
+nonfinite samples, retained zero normals, and pooled zero normals by pixel.
+`--out` must name a new file in an existing writable directory. The command
+writes only the `rig-parts-map/1` JSON at the PNG dimensions and prints the
+next `depth-bind` command with its arguments quoted for a POSIX shell.
+Hand-authored `rig-parts-map/1` maps continue through
+the same bind and apply stages. See [Convert a NumPy array](DEPTH.md#convert-a-numpy-array).
 
 The requirements file's `fps` becomes optional when no declared measurement
 reads that rate (issue #965, additive for readers). Measurements in

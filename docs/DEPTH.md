@@ -136,14 +136,16 @@ belong to these parts and nothing moved in between.
 
 ### 2. Run your depth model
 
-This is your step, with your model, on your machine or wherever you run it.
-Read `inference/<part>.png`, write one numeric map per part as JSON
-(`rig-parts-map/1`: width, height, channels, and the raw floating-point values
-row by row), the same size as the image you read. `"frame": "input"` in the
-recipe is what says so, and the manifest binds it, so choose it before you
-prepare. Scalar depth is one channel; the face's normals are three signed
-channels in image axes. Save the model's actual numbers — a greyscale preview
-has already thrown away the normalisation the next stage needs.
+Run your model on `inference/<part>.png` and save its numeric output. The
+recipe above declares `"frame": "input"`, so each JSON map must match the
+size of the prepared PNG, including its grey margin. Choose the frame before
+preparing because the manifest binds the recipe.
+
+You can write the JSON directly as before. Use `rig-parts-map/1` with `width`,
+`height`, `channels`, and a flat `data` array of finite floating-point values
+in row order. Scalar depth has one channel and normals have three signed XYZ
+channels in image axes (X right, Y down). A greyscale or RGB preview loses
+the numeric values needed by the next stage.
 
 What we used: Depth Anything for the parts (V2 Large, and Depth Anything 3's
 monocular model), and Lotus's normal model for the face. Any model that
@@ -151,6 +153,35 @@ returns a dense relative depth will do; the stage after this does not know
 which one you ran. Model licences are the model's own and are not this
 package's to restate — the site's [licensing page](https://rig-c.org/docs/licensing/)
 says where each kind of term sits.
+
+#### Convert a NumPy array
+
+If the model exports a NumPy array, convert it to an input-frame map at the
+recipe's map path. Use the same prepared PNG you supplied to the model:
+
+```sh
+rig-parts depth-map --array face.npy --input inference/face.png --kind normals --part face --out face.json
+```
+
+The array must be a C-order `.npy` file (format 1.0, 2.0, or 3.0) with
+little-endian `float32` or `float64` values. Use `--kind depth` for `(H, W)`
+or `(H, W, 1)` and `--kind normals` for `(H, W, 3)` signed XYZ in image axes.
+
+If the model added padding to its output array, pass
+`--padding LEFT,TOP,RIGHT,BOTTOM` in array pixels. The values are nonnegative
+integers and default to zero. Keep the prepared PNG's own grey margin in the
+map. After cropping the declared padding, each array dimension must be a
+positive integer multiple of the corresponding PNG dimension. Each output
+pixel is the mean of its corresponding rectangular block, with independent
+horizontal and vertical factors. For normals, average each component and
+normalize the resulting vector to unit length. A retained nonfinite sample,
+a retained zero normal, or a pooled zero normal is refused with its pixel
+coordinates.
+
+`--out` must name a new file in an existing writable directory. `depth-map`
+writes only the `rig-parts-map/1` JSON and prints the next `depth-bind`
+command with the map path, prepared PNG path and part name quoted for a POSIX
+shell.
 
 ### 3. Bind every map to its prepared input
 
