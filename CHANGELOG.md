@@ -4,7 +4,6 @@
 
 **Read before upgrading:**
 
-* **`depth-apply` now refuses previously accepted clipped recipes as `DEPTH_APPLY_CLIPPED` before writing outputs.** The refusal names each affected part and its clip fraction, the minimum group `zScale` for upper clipping, and the required median rise for lower clipping. Prepare the revised recipe again before applying. The report keys are unchanged. See [Apply the maps as depth sheets](docs/DEPTH.md#4-apply-the-maps-as-depth-sheets).
 * **The new falloff for `contour.regions` can change rig and downstream build bytes.** Add `falloff: "linear"` to a declared region to preserve its prior weights. Regions derived from `contour.bust`, zero-width bands and automatic meshes keep their prior weighting. The winding gate checks declared contour bands per dial. A combined head and body turn can still reverse a triangle even when each dial passes individually. With easing, setting both dials to −15° reversed one triangle (signed area −0.326 px²). See [the #1578 measurement](https://github.com/rig-c/parts/issues/1578#issuecomment-7183742406), [the combined winding gate in #1581](https://github.com/rig-c/parts/issues/1581), [the combined-turn fix in #1582](https://github.com/rig-c/parts/issues/1582), and [A contour mesh](docs/AUTHORING.md#a-contour-mesh-meshespartcontour-issue-84).
 
 ### Bug Fixes
