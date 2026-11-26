@@ -1,4 +1,4 @@
-/** Stop aliases on weighted and generated grid turn surfaces. */
+/** Stop aliases on legacy, weighted and generated grid turn surfaces. */
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -15,9 +15,74 @@ import { writePng } from '../src/raster/png.ts';
 
 type Say = (name: string, ok: boolean, detail: string) => void;
 type Animation = { deform?: Array<{ slot: string; keys: Array<{ vertices?: number[] }> }> };
+type Skeleton = {
+  bones: Array<{ name: string; parent?: string }>;
+  animations: Record<string, { attachments?: Record<string, Record<string, Record<string, { deform?: Array<{ vertices?: number[] }> }>>> }>;
+};
 const mesh = (b: RigOutput, part: string): MeshAttachment => b.rig.skins.default[part][part] as MeshAttachment;
 const fields = (b: RigOutput) => ['turn', 'tilt', 'body_turn'].map(name => (b.motion.animations[name] as Animation).deform);
 const hash = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
+
+const legacyTurn = { turn: { duration: 1, tracks: [{ bone: 'head', property: 'translatex', keys: [
+  { t: 0, derive: { kind: 'yaw', degrees: -15, depth: 25 } }, { t: 1, v: [0] },
+] }] } };
+
+function legacySurface(part: 'hair_front' | 'face' | 'topwear', stops = false): RigOutput {
+  const f = weightedSurfaceEarFixture();
+  if (part === 'hair_front') {
+    delete (f.config.meshes as Record<string, unknown>).hair_front;
+    (f.config.regions as Record<string, unknown>).hair_front = 'head';
+  }
+  const pivot = 20;
+  f.config.turn = {
+    pivot,
+    depths: { hair_back: pivot, hair_front: part === 'hair_front' ? pivot : 5, face: part === 'face' ? pivot : 5 },
+    body: { pivot, grid: [5, 5], roles: { [part]: 'surface' } },
+  };
+  if (stops) {
+    const declarations = stoppedSurfaceFixture().config.stops as Array<{ chain: string }>;
+    // Leave the earlier left chain unbound by stops so putting aliases first
+    // would permute each mixed binding row and its corresponding deform pairs.
+    f.config.stops = declarations.filter(s => s.chain !== 'back_l');
+  }
+  return buildRig(parseConfig(f.config), f.parts, f.images);
+}
+
+function compileSurface(out: string, built: RigOutput, files: ReturnType<typeof rigOutputTexts>) {
+  mkdirSync(join(out, 'images'), { recursive: true });
+  for (const [name, text] of files) writeFileSync(join(out, name), text);
+  for (const [name, image] of built.images) writePng(join(out, 'images', name), image);
+  const gate = spawnSync(process.execPath, [fileURLToPath(import.meta.resolve('@rig-c/core/cli')), 'build', '--rig', join(out, 'rig.json'), '--motion', join(out, 'motion.json'), '--out', join(out, 'built'), '--profile', 'rig-play'], { encoding: 'utf8', maxBuffer: 1 << 26 });
+  writeFileSync(join(out, 'gate.log'), gate.stdout + gate.stderr);
+  const skeleton = gate.status === 0 ? JSON.parse(readFileSync(join(out, 'built/skeleton.json'), 'utf8')) as Skeleton : null;
+  return { gate, skeleton };
+}
+
+export function runLegacyTurnStopChecks(dir: string, say: Say): void {
+  const plain = legacySurface('topwear');
+  const stopped = legacySurface('topwear', true);
+  const plainFiles = rigOutputTexts(plain, legacyTurn);
+  let files: ReturnType<typeof rigOutputTexts>;
+  try {
+    files = rigOutputTexts(stopped, legacyTurn);
+  } catch (error) {
+    say('STS09_LEGACY_DEFORM_RESOLVES_STOPPED_HAIR_IN_CORE_BONE_ORDER', false, String(error));
+    return;
+  }
+  const { gate, skeleton } = compileSurface(join(dir, 'legacy-stops'), stopped, files);
+  const coreOrder = new Map(skeleton?.bones.map((b, i) => [b.name, i]));
+  const rows = mesh(stopped, 'hair_back').weights;
+  const mixedRows = rows.filter(row => row.some(w => w.bone === 'back_l0') && row.some(w => w.bone === 'back_r0_d'));
+  const sorted = rows.every(row => row.every((w, i) => i === 0 || (coreOrder.get(row[i - 1].bone) ?? Infinity) < (coreOrder.get(w.bone) ?? -1)));
+  const sameMotion = files.find(([name]) => name === 'motion.json')?.[1] === plainFiles.find(([name]) => name === 'motion.json')?.[1];
+  const coreKeys = skeleton?.animations.turn.attachments?.default?.hair_back?.hair_back?.deform;
+  say('STS09_LEGACY_DEFORM_RESOLVES_STOPPED_HAIR_IN_CORE_BONE_ORDER',
+    gate.status === 0 && mixedRows.length > 0 && sorted && sameMotion &&
+      skeleton?.bones.some(b => b.name === 'back_r1' && b.parent === 'back_r0_d') === true &&
+      skeleton.bones.some(b => b.name === 'turn_hair_front_bang0_d' && b.parent === 'bang0_d') &&
+      coreKeys?.some(k => k.vertices?.some(v => v !== 0)) === true,
+    `Core exit ${gate.status}; ${mixedRows.length} mixed rows, in emitted order: ${sorted}; motion bytes match the unstopped setup: ${sameMotion}${gate.status === 0 ? '' : `; ${gate.stderr}`}`);
+}
 
 export function runTurnSurfaceStopChecks(dir: string, say: Say): void {
   const grid = stoppedSurfaceFixture();
@@ -37,31 +102,14 @@ export function runTurnSurfaceStopChecks(dir: string, say: Say): void {
       `generator ${att.generator?.kind}; weights present: ${Object.hasOwn(att, 'weights')}; slot bone ${slot?.bone}; ${stopLinks.length} stopped links`);
   }
 
-  const legacy = (part: 'hair_front' | 'face') => {
-    const f = weightedSurfaceEarFixture();
-    if (part === 'hair_front') {
-      delete (f.config.meshes as Record<string, unknown>).hair_front;
-      (f.config.regions as Record<string, unknown>).hair_front = 'head';
-    }
-    const pivot = 20;
-    f.config.turn = {
-      pivot,
-      depths: { hair_back: pivot, hair_front: part === 'hair_front' ? pivot : 5, face: part === 'face' ? pivot : 5 },
-      body: { pivot, grid: [5, 5], roles: { [part]: 'surface' } },
-    };
-    return buildRig(parseConfig(f.config), f.parts, f.images);
-  };
-  const legacyTurn = { turn: { duration: 1, tracks: [{ bone: 'head', property: 'translatex', keys: [
-    { t: 0, derive: { kind: 'yaw', degrees: -15, depth: 25 } }, { t: 1, v: [0] },
-  ] }] } };
-  const legacyHair = legacy('hair_front');
+  const legacyHair = legacySurface('hair_front');
   const motionText = rigOutputTexts(legacyHair, legacyTurn).find(([name]) => name === 'motion.json')?.[1];
   const legacyDeforms = (JSON.parse(motionText ?? '{}') as { animations?: { turn?: Animation } }).animations?.turn?.deform;
   say('STS07_LEGACY_HEAD_TURN_SKIPS_UNWEIGHTED_HAIR_GRID',
     !Object.hasOwn(mesh(legacyHair, 'hair_front'), 'weights') && legacyDeforms?.some(d => d.slot === 'face') === true &&
       legacyDeforms.every(d => d.slot !== 'hair_front'),
     'the legacy head turn emits its face deform and leaves the generated hair grid to the body turn');
-  const legacyFace = legacy('face');
+  const legacyFace = legacySurface('face');
   let missingFrame: PartsError | undefined;
   try {
     rigOutputTexts(legacyFace, legacyTurn);
@@ -70,6 +118,7 @@ export function runTurnSurfaceStopChecks(dir: string, say: Say): void {
   say('STS08_LEGACY_HEAD_TURN_REFUSES_UNWEIGHTED_FACE_FRAME',
     faceProblem?.object === 'skins.default.face.face' && faceProblem.detail.includes('use config.turn.roles'),
     faceProblem === undefined ? 'missing named refusal' : `${faceProblem.code}: ${faceProblem.object} — ${faceProblem.detail}`);
+  runLegacyTurnStopChecks(dir, say);
 
   const original = weightedSurfaceFixture(), plain = buildRig(parseConfig(original.config), original.parts, original.images);
   let complete: RigOutput | undefined;
@@ -131,12 +180,7 @@ export function runTurnSurfaceStopChecks(dir: string, say: Say): void {
   } catch (e) { if (e instanceof PartsError) carrier = e; else throw e; }
   say('STS03_STOP_ALIAS_DOES_NOT_HIDE_SHARED_TURN_CARRIER', carrier?.problems.some(p => p.code === 'RIG_TURN_SURFACE_MESH_BINDINGS' && p.detail.includes('through turn carrier "faceshift"')) === true, 'resolved setup ancestry still refuses a frame moved by a different role');
 
-  const out = join(dir, 'stopped-surface'); mkdirSync(join(out, 'images'), { recursive: true });
-  for (const [name, text] of rigOutputTexts(built, null)) writeFileSync(join(out, name), text);
-  for (const [name, image] of built.images) writePng(join(out, 'images', name), image);
-  const gate = spawnSync(process.execPath, [fileURLToPath(import.meta.resolve('@rig-c/core/cli')), 'build', '--rig', join(out, 'rig.json'), '--motion', join(out, 'motion.json'), '--out', join(out, 'built'), '--profile', 'rig-play'], { encoding: 'utf8', maxBuffer: 1 << 26 });
-  writeFileSync(join(out, 'gate.log'), gate.stdout + gate.stderr);
-  const skeleton = gate.status === 0 ? JSON.parse(readFileSync(join(out, 'built/skeleton.json'), 'utf8')) as { bones: Array<{ name: string }>; animations: Record<string, { attachments?: Record<string, Record<string, Record<string, { deform?: Array<{ vertices?: number[] }> }>>> }> } : null;
+  const { gate, skeleton } = compileSurface(join(dir, 'stopped-surface'), built, rigOutputTexts(built, null));
   const aliases = built.rig.stops!.flatMap(s => s.links.map(link => `${link}_d`));
   const coreKeys = skeleton?.animations.turn.attachments?.default?.hair_back?.hair_back?.deform;
   say('STS04_CORE_GATE_EMITS_STOP_BONES_AND_NONZERO_DEPTH_DEFORM', gate.status === 0 && aliases.every(a => skeleton?.bones.some(b => b.name === a)) && coreKeys?.some(k => k.vertices?.some(v => v !== 0)) === true,
