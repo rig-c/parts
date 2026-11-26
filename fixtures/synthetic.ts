@@ -196,7 +196,11 @@ export function writeTurnWindingFixture(dir: string, variant: 'shared' | 'separa
     const art = block(p.w, p.h);
     const scalar = newRaster(p.w, p.h);
     for (let y = 0; y < p.h; y++) for (let x = 0; x < p.w; x++) {
-      const level = shared && p.name === 'topwear' ? Math.round(255 * (p.w - 1 - x) / (p.w - 1)) : 0;
+      // Every generated surface needs real relief. Only the planted shared
+      // body surface has the steep ramp that compresses the boundary cell.
+      const level = shared && p.name === 'topwear'
+        ? Math.round(255 * (p.w - 1 - x) / (p.w - 1))
+        : Math.round(8 * x / (p.w - 1)) + 4;
       scalar.data.set([level, level, level, 255], 4 * (y * p.w + x));
     }
     const bytes = encodePngBytes(scalar);
