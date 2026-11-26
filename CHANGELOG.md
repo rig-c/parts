@@ -1,5 +1,28 @@
 # Changelog
 
+## 2.58.0 (2026-11-26)
+
+`build` records the inputs it read in a `rig-run/3` run record, Parts takes `@rig-c/core` 3.9.1 so a check replayed through a linked `--out` matches byte for byte, and two turn-surface paths that threw or skipped silently now build or refuse by name.
+
+**Read before upgrading:**
+
+* **`build-run.json` is now spec `rig-run/3`.** It adds `inputs` between `config` and `outputs`, so the keys in order are `spec`, `package`, `command`, `started_at`, `finished_at`, `config`, `inputs`, `outputs`, `argv`. Each `inputs` entry is `{role, path, sha256}`, with `path` relative to `--out` by the same rule as `config.path`. The roles are `source`, `full` and `head`; then `requirements`, `environment` and `wind-band` when given; then `alt[i].source`, `alt[i].full` and `alt[i].head` for each `--alt`, in the order given. A See-through directory is recorded as its `layers.json`, the file its `sha256` hashes. A reader that accepts only `rig-run/2` refuses this record. Upgrade rig-c/create to the release that reads `rig-run/3` before you upgrade Parts. Create releases before it refuse the record as `RUN_RECORD_SPEC_UNKNOWN`. `check-run.json` stays `rig-run/2`, byte for byte.
+* **`@rig-c/core` is pinned to 3.9.1.** Check now also writes rigc's render receipt `check/idle_frames/render-run.json` (`rigc-run/2`). Like every `-run.json`, it is left out of the `outputs` of `check-run.json` and `build-run.json`. A `check` replayed from an `--out` given through a link now writes the same `build/skeleton.json`, `build/skeleton.model.json` and `check.json` as the first run, because core 3.9.1 writes the skeleton's paths through the links. The records match except for their times, and the 2.57.0 caveat about those three files is removed from STABILITY.
+* **`build` with a relative `--out` through a Windows junction no longer fails with `EINVAL`.** On Windows only, the pre-build cleanup removes the previous outputs through an absolute path that keeps the junction. POSIX is unchanged, and so are both hosts' recorded-path rules.
+* **A declared contour band `cover` is never skipped silently.** A cover on a stopped chain link is refused as `CONFIG_TURN_BAND_COVER`, naming the region, the cover, the stopped link and the drawn binding. `RIG_TURN_BAND_COVER_SUPPORT` also refuses a region that supplies no positive mesh influence, and a part with no blended attachment to carry the other-group deform. Builds without `cover` keep their bytes.
+* **Generated turn-surface grids build with `config.stops`.** They used to throw a `TypeError` before any rig was written. On the legacy head-turn path, hair sorting skips generated grids. A generated face reference frame is refused as `RIG_TURN_LEGACY_FACE_WEIGHTS`, because legacy face calibration needs weight rows. Weighted stop builds keep their bytes.
+* **`rig-parts --version` and the `package.version` field in run stamps and run records now read `2.58.0`.** The version bump changes those receipt bytes. The receipt fields and output hashes keep their meaning.
+
+### Features
+
+* **build:** record the hashes of the inputs `build` read in `build-run.json`, spec `rig-run/3` (`#1556`, `#1563`, `d3ed974`).
+
+### Bug Fixes
+
+* **check:** pin `@rig-c/core` 3.9.1 and hold a check replayed through a linked `--out` to the whole record, with no output digest set aside (`#1547`, `#1566`, `4d5c256`).
+* **turn:** refuse a band cover with no usable binding, as `CONFIG_TURN_BAND_COVER` or `RIG_TURN_BAND_COVER_SUPPORT` (`#1559`, `#1562`, `b426cd1`).
+* **rig:** build generated turn grids with stops, and refuse a generated legacy face frame as `RIG_TURN_LEGACY_FACE_WEIGHTS` (`#1561`, `#1564`, `733b5ce`).
+
 ## 2.57.0 (2026-11-26)
 
 `check` and `build` write a replayable `rig-run/2` run record, run records state their paths relative to `--out`, and a declared contour band on a 2.5D turn surface builds under overlapping parts and can follow its cover's depth.
