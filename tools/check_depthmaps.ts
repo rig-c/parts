@@ -5,7 +5,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symli
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { RECEIPT_AUTHOR_FILE, writeEditorReceiptFixture } from '../fixtures/editor_receipts.ts';
 import { rigParts } from '../fixtures/rig.ts';
-import { PartsError } from '../src/errors.ts';
+import { failLine, PartsError } from '../src/errors.ts';
 import { configFileReferences } from '../src/config.ts';
 import { alphaSupport, floatBox, integrateNormals, mapToSheet, readNumericMap, type NumericMap } from '../src/depthmaps.ts';
 import { applyDepth, bindDepthMap, parseDepthRecipe, prepareDepth } from '../src/depthworkflow.ts';
@@ -674,6 +674,94 @@ export function runDepthBindingChecks(dir: string, say: Say): void {
   rmSync(receipt1284);
 }
 
+function runDepthApplyCli(input: Parameters<typeof applyDepth>[0]) {
+  const { parts, manifest, config, rigConfig, out, groups } = input;
+  const run = spawnSync(process.execPath, [join(import.meta.dir, '../cli.ts'), 'depth-apply', '--parts', parts,
+    '--manifest', manifest, '--config', config, '--rig-config', rigConfig, '--out', out,
+    ...(groups === undefined ? [] : ['--groups', groups.join(',')])], { encoding: 'utf8' });
+  const stdout = run.stdout ?? '', outputExists = existsSync(out);
+  return {
+    status: run.status, outputExists,
+    failures: stdout.split(/\r?\n/).filter(line => line.startsWith('  FAIL  ')),
+    evidence: JSON.stringify({ exit: run.status, outputExists, stdout: stdout.trim(), stderr: run.stderr?.trim(), error: run.error?.message }),
+  };
+}
+
+function clippedLine(part: string, detail: string): string {
+  return failLine({ code: 'DEPTH_APPLY_CLIPPED', object: `part "${part}"`, detail });
+}
+
+function refusedDepthApply(run: ReturnType<typeof runDepthApplyCli>, expected: string[]): boolean {
+  return run.status === 1 && !run.outputExists && JSON.stringify(run.failures) === JSON.stringify(expected);
+}
+
+function depthClipRows(out: string): [unknown, unknown][] {
+  const path = join(out, 'depth-report.json');
+  if (!existsSync(path)) return [];
+  const { parts } = JSON.parse(readFileSync(path, 'utf8')) as { parts: Obj[] };
+  return parts.map(row => [row.part, row.clipFraction]);
+}
+
+/** #1571: independent open-interval boundaries at the actual depth-apply CLI. */
+function runDepthClippingChecks(dir: string, say: Say): void {
+  const source = join(dir, 'source'); mkdirSync(join(source, 'parts'), { recursive: true });
+  const art = newRaster(3, 1);
+  art.data.set([200, 120, 80, 128, 200, 120, 80, 255, 200, 120, 80, 127]);
+  const pf = rigParts(); pf.rig_size = [100, 100];
+  const face = { ...pf.parts[0], name: 'face', from: 'full:face', x: 10, y: 10, w: 3, h: 1, opaque_px: 3 };
+  pf.parts = [face, { ...face, name: 'badge', from: 'full:headwear', y: 12 }];
+  writeParts(join(source, 'parts.json'), pf);
+  for (const part of pf.parts) writePng(join(source, 'parts', `${part.name}.png`), art);
+  const rigConfig = join(dir, 'rig-config.json');
+  json(rigConfig, { key: 'fixture', assemble: { rig_scale: .5, plan: [['face', 'full', 'face'], ['badge', 'full', 'headwear']] },
+    bones: [{ name: 'head', parent: 'root', at: [40, 40] }], meshes: {}, regions: { face: 'head', badge: 'head' },
+    motion: { duration: 1, tracks: [] }, turn: { pivot: 30, roles: { face: 'surface', badge: 'unit' } } });
+  // Alpha 127 excludes the outlier. Raw 0 and 10 have median 5 and p5..p95
+  // spread 9, so relief 9 places the supported samples at median +/- 5.
+  json(join(dir, 'raw.json'), { spec: 'rig-parts-map/1', width: 3, height: 1, channels: 1, data: [0, 10, 1000] });
+  const part = { map: 'raw.json', source: 'depth', frame: 'part', group: 'head', relief: 9 };
+  const run = (name: string, zScale: number, parts: Record<string, typeof part & { median: number }>) => {
+    const config = join(dir, `${name}.json`), prepared = join(dir, `${name}-prepared`), out = join(dir, name);
+    json(config, { spec: 'rig-parts-depth/1', prepare: { longSide: 3, paddingFraction: 0, padding: 0 },
+      groups: { head: { near: 'white', zScale, pivot: 30 } }, parts, clear: [] });
+    prepareDepth({ parts: source, config, out: prepared });
+    return { ...runDepthApplyCli({ parts: source, manifest: join(prepared, 'manifest.json'), config, rigConfig, out }), out };
+  };
+  const twoParts = { face: { ...part, median: 10 }, badge: { ...part, median: 12 } };
+  // The two maxima are 15 and 17. The next binary64 value above 17 is 17 + 2^-48.
+  const requiredScale = 17.000000000000004;
+  const highDetail = `clip=0.5 in group "head"; required zScale=${requiredScale} (group max z=17)`;
+  const high = run('high', 14, twoParts);
+  say('DMP38_HIGH_CLIPPED_PARTS_SHARE_THE_GROUP_MAXIMUM',
+    refusedDepthApply(high, [clippedLine('face', highDetail), clippedLine('badge', highDetail)]), high.evidence);
+  const equal = run('high-equal', 17, twoParts);
+  say('DMP39_HIGH_EQUALITY_COUNTS_AS_CLIPPED', refusedDepthApply(equal, [clippedLine('badge', highDetail)]), equal.evidence);
+  const repairedHigh = run('high-repaired', requiredScale, twoParts), highRows = depthClipRows(repairedHigh.out);
+  say('DMP40_NEXT_ZSCALE_ABOVE_GROUP_MAXIMUM_CLEARS_CLIPPING',
+    repairedHigh.status === 0 && JSON.stringify(highRows) === '[["face",0],["badge",0]]',
+    `${repairedHigh.evidence}; report part/clip=${JSON.stringify(highRows)}`);
+
+  // For Z = 0 and 10, the first median above 5 is 5 + 2^-50.
+  const requiredMedian = 5.000000000000001;
+  const lowDetail = `clip=0.5 in group "head"; required median=${requiredMedian} (rise 8.881784197001252e-16 rig px)`;
+  const low = run('low', 20, { face: { ...part, median: 5 } });
+  const repairedLow = run('low-repaired', 20, { face: { ...part, median: requiredMedian } });
+  const lowRows = depthClipRows(repairedLow.out);
+  say('DMP41_ZERO_COUNTS_AS_CLIPPED_AND_NEXT_MEDIAN_CLEARS_IT',
+    refusedDepthApply(low, [clippedLine('face', lowDetail)]) &&
+    repairedLow.status === 0 && JSON.stringify(lowRows) === '[["face",0]]',
+    `${low.evidence}; repaired=${repairedLow.evidence}; report part/clip=${JSON.stringify(lowRows)}`);
+  // Median 4 puts the samples at -1 and 9, outside the interval (0, 8).
+  const both = run('both', 8, { face: { ...part, median: 4 } });
+  const bothDetail = 'clip=1 in group "head"; required zScale=9.000000000000002 (group max z=9); ' +
+    `required median=${requiredMedian} (rise 1.0000000000000009 rig px)`;
+  say('DMP42_ONE_PART_REPORTS_BOTH_CLIPPING_DIRECTIONS',
+    refusedDepthApply(both, [clippedLine('face', bothDetail)]), both.evidence);
+  const overflow = run('max-float', Number.MAX_VALUE, { face: { ...part, median: Number.MAX_VALUE, relief: 0 } });
+  say('DMP43_NO_FINITE_ZSCALE_EXCEEDS_MAX_FLOAT', refusedDepthApply(overflow, [clippedLine('face',
+    'clip=1 in group "head"; no finite zScale exceeds group max z=1.7976931348623157e+308; revise median or relief')]), overflow.evidence);
+}
+
 export function runDepthMapChecks(dir: string, say: Say): void {
   mkdirSync(join(dir, 'source/parts'), { recursive: true });
   const art = newRaster(65, 65), data: number[] = [], normals: number[] = [];
@@ -848,6 +936,7 @@ export function runDepthMapChecks(dir: string, say: Say): void {
   say('DMP37_ABSOLUTE_REQUIREMENTS_REBASE_TO_THE_SAME_FILE', readRigInputs(join(absoluteOut, 'config.json'), absoluteOut).cfg.requirements !== undefined && readFileSync(join(absoluteOut, (JSON.parse(readFileSync(join(absoluteOut, 'config.json'), 'utf8')) as { requirements: string }).requirements)).equals(readFileSync(requirementsPath)), 'positive absolute input reuses the same real requirements reader and bytes');
   runDepthRelocationChecks(join(dir, 'relocation'), say);
   runDepthGroupSelectionChecks(join(dir, 'group-selection'), say);
+  runDepthClippingChecks(join(dir, 'clipping'), say);
 }
 
 /** #1449: `depth-apply --groups` applies a recorded subset of one prepared recipe's groups. */
@@ -972,6 +1061,31 @@ export function runDepthGroupSelectionChecks(dir: string, say: Say): void {
     green.status === 0 && green.stdout.includes('depth-apply: applied groups head; left out torso, without a depth sheet') &&
     JSON.stringify(files(join(dir, 'cli-head'))) === JSON.stringify(files(headOut)) && refused.status === 1 && `${refused.stdout}${refused.stderr}`.includes('DEPTH_GROUP_SELECTION') && !existsSync(join(dir, 'cli-empty')),
     `head exit ${green.status}; empty exit ${refused.status}; ${(refused.stdout + refused.stderr).split('\n').find(l => l.includes('DEPTH_GROUP_SELECTION')) ?? 'no refusal line'}`]);
+
+  // These surface regions have disjoint turn roles. Zero relief makes every
+  // supported Z equal to its part's declared median.
+  const clippingRecipe = structuredClone(recipe);
+  clippingRecipe.parts.face = { ...clippingRecipe.parts.face, median: 110, relief: 0 };
+  clippingRecipe.parts.torso = { ...clippingRecipe.parts.torso, median: 45, relief: 0 };
+  const clippingPath = join(dir, 'depth-clipped.json'), clippingPrepared = join(dir, 'prepared-clipped');
+  json(clippingPath, clippingRecipe); prepareDepth({ parts: source, config: clippingPath, out: clippingPrepared });
+  const clippingArgs = { ...args, config: clippingPath, manifest: join(clippingPrepared, 'manifest.json') };
+  const clipped = runDepthApplyCli({ ...clippingArgs, rigConfig: bodyConfig, out: join(dir, 'cli-clipped') });
+  say('DGS13_CLIPPED_GROUPS_REPORT_INDEPENDENT_ZSCALES', refusedDepthApply(clipped, [
+    clippedLine('face', 'clip=1 in group "head"; required zScale=110.00000000000001 (group max z=110)'),
+    clippedLine('torso', 'clip=1 in group "body"; required zScale=45.00000000000001 (group max z=45)'),
+  ]), clipped.evidence);
+
+  clippingRecipe.groups.body.zScale = 45.00000000000001;
+  const repairedPath = join(dir, 'depth-body-repaired.json'), repairedPrepared = join(dir, 'prepared-body-repaired');
+  json(repairedPath, clippingRecipe); prepareDepth({ parts: source, config: repairedPath, out: repairedPrepared });
+  const repairedOut = join(dir, 'cli-body-repaired');
+  const repaired = runDepthApplyCli({ ...args, config: repairedPath, manifest: join(repairedPrepared, 'manifest.json'),
+    rigConfig: bodyOnlyConfig, out: repairedOut, groups: ['body'] });
+  const rows = depthClipRows(repairedOut);
+  say('DGS14_LEFT_OUT_CLIPPED_GROUP_CANNOT_BLOCK_REPAIRED_SELECTION',
+    repaired.status === 0 && JSON.stringify(rows) === '[["torso",0]]' && !existsSync(join(repairedOut, 'parts/face_depth.png')),
+    `${repaired.evidence}; report part/clip=${JSON.stringify(rows)}`);
 }
 
 if (import.meta.main) {
