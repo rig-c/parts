@@ -296,7 +296,8 @@ export function runTurnOverlapChecks(say: Say): void {
   const zeroExplicit = (zeroField.config.meshes as Record<string, { explicit: Pick<ExplicitMeshIslandSpec, 'weights' | 'uvs'> }>).neck.explicit;
   zeroExplicit.weights = positions.map(([x, y]) => [{ bone: 'torso', x: x - 32, y: 50 - y, weight: 0.6 }, { bone: 'crown', x: x - 32, y: 24 - y, weight: 0.4 }]);
   zeroExplicit.uvs = positions.flatMap(([x, y]) => [(x - 16) / 40, (y - 16) / 40]);
-  (zeroField.config.turn as { body: { unitDepths?: Record<string, number> } }).body.unitDepths = { topwear: 0 };
+  // Flat level 120 at zScale 40 gives a rounded zRef of 18.8235.
+  (zeroField.config.turn as { body: { unitDepths?: Record<string, number> } }).body.unitDepths = { topwear: 18.8235 - 24 };
   const zeroResult = buildRig(parseConfig(zeroField.config), zeroField.parts, zeroField.images);
   say('BO19_TRUE_ZERO_NEIGHBOUR_FIELD_OMITS_INACTIVE_TARGETS', ['turn', 'tilt', 'body_turn'].every(n => !(zeroResult.motion.animations[n] as Animation).deform?.some(d => d.slot === 'neck')), 'fully covered target copies actual zero carrier field; no own-depth fallback and no all-zero timeline overwrite');
   for (const role of ['unit', 'rear'] as const) {

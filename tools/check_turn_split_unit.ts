@@ -11,7 +11,7 @@ import { pyRound } from '../src/round.ts';
 type Say = (name: string, ok: boolean, detail: string) => void;
 type Animation = { deform?: Array<{ slot: string; keys: Array<{ vertices?: number[] }> }> };
 
-/** Independent rigid scalar depths: cap9, plate24; outside retains #796. */
+/** Independent authored scalar depths: cap9, plate24; outside retains #796. */
 export function splitUnitFieldError(b: RigOutput, upperDepth = 9, lowerDepth = 24) {
   const world = computeWorldTransforms(b.rig.bones), att = b.rig.skins.default.neck.neck as MeshAttachment;
   const rows = [20.5, 30.5, 40.5, 43.5, 45.5, 46.5, 47.5, 50.5];
@@ -25,12 +25,13 @@ export function splitUnitFieldError(b: RigOutput, upperDepth = 9, lowerDepth = 2
         const y = rows[vi < rows.length ? vi : 2 * rows.length - 1 - vi];
         const covered = y >= 40 && (y < 46 || y >= 47), top = y < 46;
         const z = 120 * 40 / 255, own = (name === 'body_turn' ? 24 : 16) + z - pyRound(z, 4);
-        const expected = -(covered ? name === 'body_turn' ? top ? upperDepth : lowerDepth : 0
+        const projected = 24 + (top ? upperDepth : lowerDepth) - pyRound(z, 4);
+        const expected = -(covered ? name === 'body_turn' ? projected : 0
           : (name === 'body_turn' ? w.bone === 'torso' : w.bone === 'crown') ? own : 0) * Math.sin(angle * Math.PI / 180);
         const actualX = frame.a * dx + frame.b * dy, actualY = frame.c * dx + frame.d * dy;
         const residual = Math.max(Math.abs(actualX - (axis === 'x' ? expected : 0)), Math.abs(actualY - (axis === 'y' ? expected : 0)));
         if (!covered) outside = Math.max(outside, residual);
-        else if (top) { upper = Math.max(upper, residual); if (name === 'body_turn') lowerOnlyPlant = Math.max(lowerOnlyPlant, Math.abs(actualX + lowerDepth * Math.sin(angle * Math.PI / 180))); }
+        else if (top) { upper = Math.max(upper, residual); if (name === 'body_turn') lowerOnlyPlant = Math.max(lowerOnlyPlant, Math.abs(actualX + (24 + lowerDepth - pyRound(z, 4)) * Math.sin(angle * Math.PI / 180))); }
         else lower = Math.max(lower, residual);
         pairs++;
       }

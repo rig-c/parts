@@ -1758,7 +1758,8 @@ function buildDepth25DTurnGroup(
     }
     if (problems.length > startProblems) return;
   }
-      // Collect unit bones that sit directly under carrierBone and resolve one scalar depth per unit bone.
+  // Key one scalar depth per direct carrier child. A region can bind a
+  // descendant of that child or a generated carrier instead of its authored bone.
   const carrierChildren = new Set(rig.bones.filter((b) => b.parent === group.carrierBone).map((b) => b.name));
   const unitDepthMap: Record<string, number> = {};
   const unitBones: string[] = [];
@@ -1767,31 +1768,79 @@ function buildDepth25DTurnGroup(
     if (!unitBones.includes(bone)) unitBones.push(bone);
     unitDepthMap[bone] = pyRound(depth, 4);
   };
+  const isBody = group.fieldPrefix === 'config.turn.body';
+  const bodySetup = isBody ? surfaceSetupGraph(rig) : undefined;
+  const bodyParents = new Map(bodySetup?.bones.map(b => [b.name, b.parent]));
+  const directCarrierChild = (bone: string): string | undefined => {
+    let current: string | undefined = bodySetup?.resolve(bone);
+    const seen = new Set<string>();
+    while (current !== undefined && !seen.has(current)) {
+      if (carrierChildren.has(current)) return current;
+      seen.add(current);
+      current = bodyParents.get(current);
+    }
+    return undefined;
+  };
+  const bodyUnitOwners = new Map<string, { part: string; depth: number; explicit: boolean }>();
+  const refuseCarrier = (part: string, bone: string, reason: string): void => {
+    problems.push({
+      code: 'RIG_TURN_BODY_UNIT_CARRIER',
+      object: `${group.fieldPrefix}.roles.${part}`,
+      detail: `declares depth for unit part "${part}" (bone "${bone}"); ${reason}`,
+    });
+  };
 
   for (const [part, role] of Object.entries(roles)) {
     if (role !== 'unit') continue;
     const regSpec = opts.regions[part];
     let baseBone: string | undefined;
-    let candidateBones: string[] = [];
+    const candidateBones: Array<{ bone: string; carrier: string }> = [];
+    const explicitPartDepth = group.unitDepths?.[part];
     if (regSpec !== undefined) {
       baseBone = typeof regSpec === 'string' ? regSpec : regSpec.bone;
       const stillBone = opts.stills[part]?.bone;
-      candidateBones = [baseBone, ...(stillBone === undefined ? [] : [stillBone])].filter((b) => carrierChildren.has(b));
+      const pieces = [{ bone: baseBone, slot: part }];
+      if (stillBone !== undefined) pieces.push({ bone: stillBone, slot: `${part}_still` });
+      for (const { bone, slot } of pieces) {
+        if (isBody && (explicitPartDepth !== undefined || group.unitDepths?.[bone] !== undefined)) {
+          const binding = rig.slots.find(s => s.name === slot)?.bone;
+          const carrier = binding === undefined ? undefined : directCarrierChild(binding);
+          if (carrier === undefined) {
+            refuseCarrier(part, bone, binding === undefined
+              ? `slot "${slot}" has no emitted bone binding`
+              : `slot "${slot}" binds "${binding}", which has no movable ancestor directly under "${group.carrierBone}"`);
+          } else {
+            candidateBones.push({ bone, carrier });
+          }
+        } else if (carrierChildren.has(bone)) {
+          candidateBones.push({ bone, carrier: bone });
+        }
+      }
     } else {
       const uBone = turnUnitBone(part);
-      if (carrierChildren.has(uBone)) candidateBones = [uBone];
+      if (carrierChildren.has(uBone)) {
+        const explicit = isBody && (explicitPartDepth !== undefined || group.unitDepths?.[uBone] !== undefined);
+        const outside = explicit ? opts.neighbourMeshes?.filter(m => m.part === part)
+          .flatMap(m => m.weights).flat().find(w => w.weight > 0 && directCarrierChild(w.bone) !== uBone) : undefined;
+        if (outside !== undefined) refuseCarrier(part, outside.bone, `its weighted binding is outside the dedicated carrier "${uBone}" under "${group.carrierBone}"`);
+        else candidateBones.push({ bone: uBone, carrier: uBone });
+      } else if (isBody && (explicitPartDepth !== undefined || group.unitDepths?.[uBone] !== undefined)) {
+        refuseCarrier(part, uBone, `the rig has no dedicated unit carrier "${uBone}" under "${group.carrierBone}"`);
+      }
     }
-    if (candidateBones.length === 0) continue;
 
-    for (const bName of candidateBones) {
-      const explicitPartDepth = group.unitDepths?.[part];
+    for (const { bone: bName, carrier } of candidateBones) {
       const explicitBoneDepth = group.unitDepths?.[bName];
       let resolved: number | null = null;
       if (typeof explicitPartDepth === 'number' && Number.isFinite(explicitPartDepth)) {
         resolved = explicitPartDepth;
       } else if (typeof explicitBoneDepth === 'number' && Number.isFinite(explicitBoneDepth)) {
         resolved = explicitBoneDepth;
-      } else if (primarySurface !== undefined) {
+      }
+      const explicitBodyDepth = isBody && resolved !== null;
+      if (explicitBodyDepth && resolved !== null && primarySurface !== undefined) {
+        resolved = pivot + (resolved - primarySurface.zRef);
+      } else if (resolved === null && primarySurface !== undefined) {
         let pt: readonly [number, number] | undefined =
           opts.boneLandmarks.get(bName) ??
           (baseBone === undefined ? undefined : opts.boneLandmarks.get(baseBone));
@@ -1874,7 +1923,16 @@ function buildDepth25DTurnGroup(
           }
         }
       }
-      addUnitBone(bName, resolved);
+      if (isBody) {
+        const depth = pyRound(resolved, 4);
+        const owner = bodyUnitOwners.get(carrier);
+        if (owner !== undefined && (owner.explicit || explicitBodyDepth) && owner.depth !== depth) {
+          refuseCarrier(part, bName, `carrier "${carrier}" is shared with part "${owner.part}" at effective depth ${owner.depth}, and cannot also move at effective depth ${depth}`);
+          continue;
+        }
+        bodyUnitOwners.set(carrier, { part, depth, explicit: explicitBodyDepth || owner?.explicit === true });
+      }
+      addUnitBone(carrier, resolved);
     }
   }
   if (problems.length > startProblems) return;

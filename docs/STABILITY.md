@@ -790,7 +790,7 @@ part name, `[i]` an entry of a list):
 - **turn.unitDepths.&lt;part&gt;** — a calibrated world depth in rig pixels (issue #763)
 - **turn.body**, when an object — required: `roles`, `pivot` (when `turn.pivot` is absent); optional: `bone`, `slider`, `counter`, `grid`, `unitDepths`, `boundaryDepths` (issue #787)
 - **turn.body.roles.&lt;part&gt;** — `"surface"`, `"unit"` or `"rear"` (issue #787)
-- **turn.body.unitDepths.&lt;part&gt;** — a calibrated world depth in rig pixels (issue #787)
+- **turn.body.unitDepths.&lt;part&gt;** — a calibrated world depth in rig pixels; body yaw uses `-(pivot + z - zRef) * sin(a)` ([Unit depth precedence](AUTHORING.md#unit-depth-precedence))
 - **turn.deform.&lt;key&gt;** — a per-degree fraction or coupling share (FACE_DEFORM_FRACTIONS, issue #436)
 - **turn.band**, when an object — optional: `yaw`, `pitch` (issue #472)
 - **turn.surface**, when an object — optional: `radius` (issue #479)
