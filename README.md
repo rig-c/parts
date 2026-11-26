@@ -303,6 +303,7 @@ Command details and config saving are in the [command reference](docs/AUTHORING.
 
 [docs/DEPTH.md](docs/DEPTH.md) is the feature page for a person: what a depth-driven turn gives you, the two stages that make the sheets, how to pick a painting and how to judge the result.
 See the [depth-driven rigging reference](docs/AUTHORING.md#depth-driven-rigging) for sampled head and body turns and unit-depth precedence.
+The mandatory Core gate checks winding at [declared combinations of generated turn inputs](docs/AUTHORING.md#combined-turn-winding).
 
 ### Per-layer depth input
 

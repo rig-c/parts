@@ -10363,6 +10363,31 @@ recorded unit sheet does not by itself promise different turn geometry.
 See the [authoring contract](AUTHORING.md#per-layer-depth-sheets-773)
 and the [getting-started guide](https://github.com/rig-c/getting-started).
 
+#### Combined turn winding
+
+Parts writes the generated turn inputs to `rig.json` as
+`invariants.deformSliderCombinations` when it generates at least two dials.
+Head 2.5D roles generate yaw and pitch. Body roles generate body yaw. Each
+tuple names every applicable slider and gives its exact endpoint input
+(`-maxDeg` or `+maxDeg` for that dial), or explicit neutral `0` for the dial held
+at neutral.
+If Parts reuses an authored slider and rewrites its dial mapping, the
+declaration uses that slider's retained name.
+
+| Generated dials | Declared poses |
+| --- | --- |
+| Head yaw and pitch | All four endpoint pairs |
+| Head yaw, pitch and body yaw | All eight endpoint triples, plus twelve endpoint pairs with the third dial at neutral (four for each choice of neutral dial), for twenty poses |
+| Fewer than two, including body-only yaw | Declaration omitted. Core reports A53 SKIP. |
+
+Legacy authored sliders alone do not create declarations. Core 3.10.0's
+`A53_DECLARED_SLIDER_COMBINATIONS_KEEP_WINDING` poses each declared tuple
+together through the mandatory build gate. A reversal names the slider inputs,
+their mapped times and deform keys, the slot and attachment, and the reversed
+and total triangle counts. The gate refuses the candidate before rig emission.
+A39 also checks individual dials. A53 reports measured and unmeasured tuple
+counts for rigs that declare combinations.
+
 ### Per-layer depth input
 
 `config.depth` explicitly enables scalar input. Without it, `depth_filename`

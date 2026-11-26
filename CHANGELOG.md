@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+**Read before upgrading:**
+
+* **Core 3.10.0 adds A53 to the winding gate.** The assertion total increases by one. A rig with no `invariants.deformSliderCombinations` declaration gains one SKIP. Parts declares four endpoint pairs for generated head yaw and pitch. When it also generates body yaw, it declares twenty poses (eight endpoint triples and twelve endpoint pairs with the third dial at neutral `0`). A rig that built on Parts 2.60.0 can now be refused before rig emission by `A53_DECLARED_SLIDER_COMBINATIONS_KEEP_WINDING`. See [the combined turn winding reference](docs/AUTHORING.md#combined-turn-winding).
+* **The combined gate (#1581) and band fix (#1582) ship in one Parts release.** After #1581 lands, the gate can refuse a contour band shared by the head and body dials at combined corners until #1582 fixes the band under the summed deform. [#1581](https://github.com/rig-c/parts/issues/1581), [#1582](https://github.com/rig-c/parts/issues/1582).
+
 ## 2.60.0 (2026-11-26)
 
 A new `depth-place` command places body parts from one whole-painting depth map, and a declared contour band now eases its outer half by default so a turn is less likely to fold at the band's limit.
@@ -7,7 +14,7 @@ A new `depth-place` command places body parts from one whole-painting depth map,
 **Read before upgrading:**
 
 * **A build with a declared contour band can change bytes.** The outer half of an explicitly declared `contour.regions` band now eases with `4g²(1−g)` instead of the linear ramp; the inner half is unchanged. Add `falloff: "linear"` to a declared region to keep its old weights and bytes. Zero-width bands, automatic meshes and regions derived from `contour.bust` keep their prior weighting. In the public examples, only `reference-sample`'s `rig.json`, `mesh_report.json` and `check.json` change.
-* **A band is gated per dial only.** rig-c's winding gate checks each turn dial on its own; a pose with two turn dials together (head and body) is not checked yet. With easing, both dials at −15° reversed one triangle (signed area −0.326 px²) in the measured case. The combined gate is tracked in [#1581](https://github.com/rig-c/parts/issues/1581) and the fold fix in [#1582](https://github.com/rig-c/parts/issues/1582); see [the #1578 measurement](https://github.com/rig-c/parts/issues/1578#issuecomment-7183742406).
+* **In Parts 2.60.0, the winding gate sampled turn dials individually.** With easing, both head and body dials at −15° reversed one triangle (signed area −0.326 px²) in the measured case. [#1578 measurement](https://github.com/rig-c/parts/issues/1578#issuecomment-7183742406), [combined turn winding reference](docs/AUTHORING.md#combined-turn-winding).
 * **`depth-place` requires declarations.** A recipe's `place` block must declare a finite positive `scale` (rig px per map unit) and `place.near` (`black` or `white`, as in `groups.*.near`); a missing or invalid value is refused as `DEPTH_PLACE_SCALE` or `DEPTH_PLACE_NEAR` before any file is written. The anchor must be the body turn's first surface. Relief stays authored.
 * **`rig-parts --version` and the `package.version` field in run stamps and run records now read `2.60.0`.** The version bump changes those receipt bytes. The receipt fields and output hashes keep their meaning.
 

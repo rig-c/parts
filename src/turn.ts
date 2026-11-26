@@ -40,6 +40,7 @@ import { PartsError } from './errors.ts';
 import { f32 } from '@rig-c/core/compile';
 import { warnUncoveredBodyTurn } from './turncoverage.ts';
 import { evaluateDeformTransform } from '@rig-c/core/deformgen';
+import type { RigInvariants } from '@rig-c/core/rig';
 
 /**
  * The layers that ride on the face (issue #271): See-through makes no depth
@@ -1570,6 +1571,20 @@ interface Depth25DTurnRig {
   slots: Array<{ name: string; bone: string; attachment: string | null }>;
   constraints?: Array<Record<string, unknown>>;
   stops?: ReadonlyArray<{ links: readonly string[] }>;
+  invariants?: Pick<RigInvariants, 'deformSliderCombinations'>;
+}
+
+type GeneratedTurnDial = { slider: string; maxDeg: number };
+
+/** All endpoint tuples, plus each endpoint pair with the third dial at neutral. */
+function turnDialCombinations(dials: readonly GeneratedTurnDial[]): NonNullable<RigInvariants['deformSliderCombinations']> {
+  if (dials.length < 2) return [];
+  const tuples = dials.reduce<Array<Array<{ slider: string; value: number }>>>(
+    (combinations, { slider, maxDeg }) => combinations.flatMap(inputs =>
+      [-maxDeg, 0, maxDeg].map(value => [...inputs, { slider, value }])),
+    [[]],
+  );
+  return tuples.filter(inputs => inputs.filter(({ value }) => value !== 0).length >= 2).map(inputs => ({ inputs }));
 }
 
 interface TurnBandCover {
@@ -1602,7 +1617,7 @@ function buildDepth25DTurnGroup(
   group: Depth25DGroupSpec,
   bandCovers: readonly TurnBandCover[],
   problems: Problem[],
-): void {
+): GeneratedTurnDial[] {
   const { roles } = group;
   const partMap = new Map(opts.parts.map((p) => [p.name, p]));
   const startProblems = problems.length;
@@ -1667,7 +1682,7 @@ function buildDepth25DTurnGroup(
     }
     surfaceSheets.set(part, { rec: rec as { name: string; x: number; y: number; w: number; h: number; depth: PartDepthReference }, ext, zRef });
   }
-  if (problems.length > startProblems) return;
+  if (problems.length > startProblems) return [];
 
   const primarySurface = (group.useEyeLandmarksForZRef ? surfaceSheets.get('face') : undefined) ?? [...surfaceSheets.values()][0];
   // Units already use this anchor. Surfaces must share it too: subtracting
@@ -1678,7 +1693,7 @@ function buildDepth25DTurnGroup(
   // Resolve on original sheets AFTER choosing the original shared anchor.
   const boundary = boundaryDepthSamplers(group.boundaryDepths, opts.parts, opts.images, group.roles, group.fieldPrefix);
   problems.push(...boundary.problems);
-  if (problems.length > startProblems) return;
+  if (problems.length > startProblems) return [];
   const boundarySamples = boundary.samplers;
   const pivot = pyRound(group.pivot, 4);
   const counter = group.counter;
@@ -1756,7 +1771,7 @@ function buildDepth25DTurnGroup(
       }
       boneDepths.set(reg.bone, pivot + zCover - cZRef);
     }
-    if (problems.length > startProblems) return;
+    if (problems.length > startProblems) return [];
   }
   // Key one scalar depth per direct carrier child. A region can bind a
   // descendant of that child or a generated carrier instead of its authored bone.
@@ -1935,7 +1950,7 @@ function buildDepth25DTurnGroup(
       addUnitBone(carrier, resolved);
     }
   }
-  if (problems.length > startProblems) return;
+  if (problems.length > startProblems) return [];
 
   // Order unitBones in rig.bones declaration order for determinism.
   const boneIndex = new Map(rig.bones.map((b, i) => [b.name, i]));
@@ -2243,7 +2258,7 @@ function buildDepth25DTurnGroup(
   };
 
   rig.constraints ??= [];
-  const upsertSlider = (name: string, animName: string, dialBone: string, maxDeg: number): void => {
+  const upsertSlider = (name: string, animName: string, dialBone: string, maxDeg: number): string | undefined => {
     const colliding = rig.constraints?.find((c) => c.type === 'slider' && c.name === name && c.animation !== animName);
     if (colliding !== undefined) {
       problems.push({
@@ -2254,7 +2269,7 @@ function buildDepth25DTurnGroup(
       return;
     }
     const existing = rig.constraints?.find((c) => c.type === 'slider' && c.animation === animName);
-    if (existing !== undefined) {
+    if (existing !== undefined && typeof existing.name === 'string') {
       existing.bone = dialBone;
       existing.property = 'rotate';
       existing.from = -maxDeg;
@@ -2264,6 +2279,7 @@ function buildDepth25DTurnGroup(
       existing.local = true;
       existing.additive = true;
       existing.mix = 1;
+      return existing.name;
     } else {
       rig.constraints?.push({
         name,
@@ -2279,13 +2295,17 @@ function buildDepth25DTurnGroup(
         additive: true,
         mix: 1,
       });
+      return name;
     }
   };
 
+  const dials: GeneratedTurnDial[] = [];
   for (const axis of group.axes) {
     buildAxisAnim(axis.kind, axis.animName, axis.maxDeg);
-    upsertSlider(axis.sliderName, axis.animName, axis.dialBone, axis.maxDeg);
+    const slider = upsertSlider(axis.sliderName, axis.animName, axis.dialBone, axis.maxDeg);
+    if (slider !== undefined) dials.push({ slider, maxDeg: axis.maxDeg });
   }
+  return dials;
 }
 
 /**
@@ -2532,8 +2552,9 @@ export function buildDepth25DTurn(
     } };
   }
 
+  const dials: GeneratedTurnDial[] = [];
   if (opts.turn.roles !== undefined) {
-    buildDepth25DTurnGroup(
+    dials.push(...buildDepth25DTurnGroup(
       rig,
       motion,
       opts,
@@ -2556,13 +2577,13 @@ export function buildDepth25DTurn(
       },
       bandCovers,
       problems,
-    );
+    ));
   }
 
   if (opts.turn.body !== undefined) {
     const body = opts.turn.body;
     const bodySlider = typeof body.slider === 'string' && body.slider.trim().length > 0 ? body.slider : BODY_YAW_DIAL_BONE;
-    buildDepth25DTurnGroup(
+    dials.push(...buildDepth25DTurnGroup(
       rig,
       motion,
       opts,
@@ -2584,9 +2605,11 @@ export function buildDepth25DTurn(
       },
       bandCovers,
       problems,
-    );
+    ));
   }
 
   refuseIfAny(problems);
+  const combinations = turnDialCombinations(dials);
+  if (combinations.length > 0) rig.invariants = { ...rig.invariants, deformSliderCombinations: combinations };
   if (opts.warnings !== undefined) warnUncoveredBodyTurn(rig, motion, opts);
 }

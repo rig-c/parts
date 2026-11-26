@@ -12,11 +12,15 @@
  * The selftest reaches them only through `--corpus <dir>`, which reads and
  * never writes.
  */
+import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { initializeCanvas, writePsd } from 'ag-psd';
+import { depthReading } from '../src/depthsheets.ts';
+import { depthImageReference, partImageReference, writeParts } from '../src/parts.ts';
 import { encodePngBytes } from '../src/raster/png.ts';
 import { newRaster, type Raster } from '../src/raster/types.ts';
+import { block, rigParts } from './rig.ts';
 
 export interface FixtureLayer {
   name: string;
@@ -167,4 +171,70 @@ export function minimalConfig(): Record<string, unknown> {
     },
     rig_note: 'an annotation, which the loader must accept and ignore',
   };
+}
+
+/**
+ * A 32x80 contour cell at crop (16,10), sampled at spacing 400.
+ * Its top-left collar share is 1 - 8/40 = 0.8. The top-right distance
+ * is sqrt(28² + 8²), in the eased half of the band. Both lower corners
+ * lie outside the band. A left-to-right scalar ramp makes the two yaw
+ * deforms compress the same upper edge.
+ */
+export function writeTurnWindingFixture(dir: string, variant: 'shared' | 'separate' | 'head-only'): { config: string; parts: string } {
+  const shared = variant === 'shared';
+  const manifest = rigParts();
+  const template = manifest.parts[0];
+  manifest.rig_size = [64, 96];
+  manifest.scale_rig_per_source = 1;
+  manifest.parts = [
+    { ...template, name: 'topwear', from: 'full:topwear', x: 16, y: 10, w: 32, h: 80, opaque_px: 32 * 80 },
+    { ...template, name: 'face', from: 'head:face', x: 22, y: 4, w: 20, h: 26, opaque_px: 20 * 26 },
+  ];
+  const parts = join(dir, 'parts-in');
+  mkdirSync(join(parts, 'parts'), { recursive: true });
+  for (const p of manifest.parts) {
+    const art = block(p.w, p.h);
+    const scalar = newRaster(p.w, p.h);
+    for (let y = 0; y < p.h; y++) for (let x = 0; x < p.w; x++) {
+      const level = shared && p.name === 'topwear' ? Math.round(255 * (p.w - 1 - x) / (p.w - 1)) : 0;
+      scalar.data.set([level, level, level, 255], 4 * (y * p.w + x));
+    }
+    const bytes = encodePngBytes(scalar);
+    p.depth = {
+      image: `${p.name}_depth.png`, near: 'white', zScale: 110,
+      sources: [{
+        from: p.from, image: `${p.name}_scalar.png`, sha256: createHash('sha256').update(bytes).digest('hex'),
+        crop: [p.x, p.y, p.x + p.w, p.y + p.h], reading: depthReading(scalar, art, null),
+      }],
+    };
+    writeFileSync(join(parts, partImageReference(p).path), encodePngBytes(art));
+    writeFileSync(join(parts, depthImageReference(p.depth).path), bytes);
+  }
+  writeParts(join(parts, 'parts.json'), manifest);
+
+  const spacing = 400;
+  const collar = { name: 'collar', shape: 'polygon', points: [[0, 0], [20, 0], [20, 2], [0, 2]], bone: 'collar', spacing, band: 40 };
+  const body = variant === 'head-only' ? {} : { body: { pivot: 16, roles: { topwear: 'surface' } } };
+  const config = join(dir, 'config.json');
+  writeFileSync(config, JSON.stringify({
+    key: 'turn_winding',
+    assemble: { rig_scale: 1, plan: manifest.parts.map(p => [p.name, ...p.from.split(':')]) },
+    bones: [
+      { name: 'chest', parent: 'root', at: [32, 90] },
+      { name: 'torso', parent: 'chest', at: [32, 90] },
+      { name: 'head', parent: 'chest', at: [32, 30] },
+      { name: 'crown', parent: 'head', at: [32, 30] },
+      { name: 'collar', parent: 'head', at: [32, 30], inherit: 'onlyTranslation' },
+    ],
+    regions: { face: 'crown' },
+    meshes: {
+      topwear: {
+        segments: [['torso', [32, 90], [32, 34]]], r: 4,
+        contour: { tolerance: 0, margin: 0, spacing, ...(shared ? { regions: [collar] } : {}) },
+      },
+    },
+    motion: { duration: 2, tracks: [{ bone: 'chest', prop: 'rotate', amp: 2, period: 2, phase: 0 }] },
+    turn: { pivot: 16, grid: [5, 5], roles: { face: 'surface' }, ...body },
+  }));
+  return { config, parts };
 }
