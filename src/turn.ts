@@ -35,6 +35,7 @@ import { type Problem, refuseIfAny } from './errors.ts';
 import type { Raster } from './raster/index.ts';
 import { pyRound } from './round.ts';
 import { turnOverlapOwners } from './turnoverlap.ts';
+import { coupleTurnBand, type CoupledTurnBandReport, type TurnBandDial } from './turnband.ts';
 import { sampleTurnTriangleField, turnTriangleCoordinates } from './turnfield.ts';
 import { PartsError } from './errors.ts';
 import { f32 } from '@rig-c/core/compile';
@@ -1505,6 +1506,7 @@ export function sampleUnitPartDepth(scalar: Raster, art: Raster, ref: PartDepthR
 export interface Depth25DTurnOptions {
   /** Report-only diagnostics; never serialized into the rig or motion. */
   warnings?: Problem[];
+  coupledTurnBands?: Map<string, CoupledTurnBandReport[]>;
   turn: TurnSpec;
   parts: ReadonlyArray<{ name: string; x: number; y: number; w: number; h: number; depth?: PartDepthReference }>;
   images: ReadonlyMap<string, Raster>;
@@ -1529,6 +1531,8 @@ export interface Depth25DTurnOptions {
     overlapOwners?: ReadonlyArray<{ group: 'head' | 'body'; neighbours: readonly string[] } | undefined>;
     /** Every attachment of a part containing a blended mesh carries its own group mask. */
     groups?: ReadonlyMap<string, 'head' | 'body'>;
+    /** The declared region index that supplied each contour vertex's band. */
+    contourBandVertices?: ReadonlyArray<number | undefined>;
     /** Declared contour regions on this part, to refuse an other-group band that weights no vertex (#1543, #1548). */
     contourRegions?: ReadonlyArray<{
       index: number;
@@ -1574,10 +1578,10 @@ interface Depth25DTurnRig {
   invariants?: Pick<RigInvariants, 'deformSliderCombinations'>;
 }
 
-type GeneratedTurnDial = { slider: string; maxDeg: number };
+type GeneratedTurnDial = TurnBandDial & { dialBone: string; animatedBones: readonly string[] };
 
 /** All endpoint tuples, plus each endpoint pair with the third dial at neutral. */
-function turnDialCombinations(dials: readonly GeneratedTurnDial[]): NonNullable<RigInvariants['deformSliderCombinations']> {
+function turnDialCombinations(dials: readonly GeneratedTurnDial[]) {
   if (dials.length < 2) return [];
   const tuples = dials.reduce<Array<Array<{ slider: string; value: number }>>>(
     (combinations, { slider, maxDeg }) => combinations.flatMap(inputs =>
@@ -1605,6 +1609,61 @@ function surfaceSetupGraph(rig: Pick<Depth25DTurnRig, 'bones' | 'stops'>) {
   // Like flattenRig: resolve parents as well as weights, without changing the rig.
   const bones = rig.bones.map(b => b.parent === undefined ? b : { ...b, parent: resolve(b.parent) });
   return { bones, resolve };
+}
+
+function repairSharedTurnBands(
+  rig: Depth25DTurnRig,
+  opts: Depth25DTurnOptions,
+  authored: TurnSpec,
+  dials: readonly GeneratedTurnDial[],
+  combinations: ReturnType<typeof turnDialCombinations>,
+): void {
+  if (dials.length !== 3 || new Set(dials.map(dial => dial.dialBone)).size !== 3) return;
+  const supported = new Set(dials.map(dial => dial.slider));
+  for (const constraint of rig.constraints ?? []) {
+    // Other sliders can apply arbitrary motion during the combination pose.
+    if (constraint.type === 'slider' &&
+        (typeof constraint.name !== 'string' || !supported.has(constraint.name) || constraint.loop === true || constraint.skin === true)) return;
+  }
+  const setup = surfaceSetupGraph(rig);
+  const parents = new Map(setup.bones.map(b => [b.name, b.parent]));
+  const shown = new Map(rig.slots.map(slot => [slot.name, slot.attachment]));
+  const moving = new Set(dials.flatMap(dial => [dial.dialBone, ...dial.animatedBones]).map(setup.resolve));
+  for (const stop of rig.stops ?? []) for (const link of stop.links) moving.add(link);
+  for (const constraint of rig.constraints ?? []) {
+    // The Core combination survey poses with physics reset.
+    if (constraint.type === 'physics' || constraint.type === 'slider') continue;
+    if (Array.isArray(constraint.bones)) for (const bone of constraint.bones) {
+      if (typeof bone === 'string') moving.add(setup.resolve(bone));
+    }
+  }
+  let world: ReturnType<typeof computeWorldTransforms> | undefined;
+  for (const mesh of opts.surfaceMeshes ?? []) {
+    const bands = opts.contourBands?.[mesh.part] ?? mesh.contourRegions;
+    if (!bands?.length || mesh.groups === undefined || new Set(mesh.groups.values()).size !== 2 ||
+        shown.get(mesh.slot) !== mesh.attachment) continue;
+    const headOwns = authored.roles?.[mesh.part] === 'surface';
+    const bodyOwns = authored.body?.roles[mesh.part] === 'surface';
+    if (headOwns === bodyOwns) continue;
+    const frames = new Map<string, BoneTransform>();
+    world ??= computeWorldTransforms(setup.bones);
+    for (const { bone } of mesh.weights.flat()) {
+      if (frames.has(bone)) continue;
+      const resolved = setup.resolve(bone);
+      const frame = world.get(resolved);
+      if (frame === undefined) break;
+      let ancestor: string | undefined = resolved;
+      while (ancestor !== undefined && !moving.has(ancestor)) ancestor = parents.get(ancestor);
+      if (ancestor !== undefined) break;
+      frames.set(bone, frame);
+    }
+    const reports = coupleTurnBand(mesh, bands, headOwns ? 'body' : 'head', mesh.groups, frames, dials, combinations);
+    if (reports.length > 0 && opts.coupledTurnBands !== undefined) {
+      const part = opts.coupledTurnBands.get(mesh.part) ?? [];
+      part.push(...reports);
+      opts.coupledTurnBands.set(mesh.part, part);
+    }
+  }
 }
 
 function buildDepth25DTurnGroup(
@@ -1963,7 +2022,7 @@ function buildDepth25DTurnGroup(
     motion.groups[group.unitGroupName] = unitBones;
   }
 
-  const buildAxisAnim = (kind: 'yaw' | 'pitch', animName: string, maxDeg: number): void => {
+  const buildAxisAnim = (kind: 'yaw' | 'pitch', animName: string, maxDeg: number) => {
     const prop = kind === 'yaw' ? 'translatex' : 'translatey';
     const duration = pyRound(2 * maxDeg * TURN_DIAL_SCALE, 6);
     const step = maxDeg / 2;
@@ -2255,6 +2314,8 @@ function buildDepth25DTurnGroup(
       tracks,
       ...(deform.length > 0 ? { deform } : {}),
     };
+    const animatedBones = tracks.flatMap(track => track.bone === undefined ? motion.groups?.[track.group!] ?? [] : [track.bone]);
+    return { deform, animatedBones };
   };
 
   rig.constraints ??= [];
@@ -2301,9 +2362,12 @@ function buildDepth25DTurnGroup(
 
   const dials: GeneratedTurnDial[] = [];
   for (const axis of group.axes) {
-    buildAxisAnim(axis.kind, axis.animName, axis.maxDeg);
+    const { deform, animatedBones } = buildAxisAnim(axis.kind, axis.animName, axis.maxDeg);
     const slider = upsertSlider(axis.sliderName, axis.animName, axis.dialBone, axis.maxDeg);
-    if (slider !== undefined) dials.push({ slider, maxDeg: axis.maxDeg });
+    if (slider !== undefined) dials.push({
+      slider, maxDeg: axis.maxDeg, scale: TURN_DIAL_SCALE, dialBone: axis.dialBone, deform, animatedBones,
+      group: group.fieldPrefix === 'config.turn' ? 'head' : 'body',
+    });
   }
   return dials;
 }
@@ -2322,6 +2386,7 @@ export function buildDepth25DTurn(
   opts: Depth25DTurnOptions,
 ): void {
   const problems: Problem[] = [];
+  const authored = opts.turn;
   const { yaw: yawMax, pitch: pitchMax } = resolveTurnBands(opts.turn);
   // Ownership is derived here, never accepted as an authored producer switch.
   opts = { ...opts, surfaceMeshes: opts.surfaceMeshes?.map(({ overlapOwners: _owners, groups: _groups, ...mesh }) => mesh) };
@@ -2611,5 +2676,6 @@ export function buildDepth25DTurn(
   refuseIfAny(problems);
   const combinations = turnDialCombinations(dials);
   if (combinations.length > 0) rig.invariants = { ...rig.invariants, deformSliderCombinations: combinations };
+  if (blended.size > 0) repairSharedTurnBands(rig, opts, authored, dials, combinations);
   if (opts.warnings !== undefined) warnUncoveredBodyTurn(rig, motion, opts);
 }

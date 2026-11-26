@@ -202,6 +202,7 @@ export const PATH_TO_SUITE_MAP: readonly MapRule[] = [
   { pattern: 'src/autoreplay.ts', suites: ['auto-motion', 'tree'], why: 'auto-motion replay cache owned by auto-motion' },
   { pattern: 'src/motion.ts', suites: ['rig', 'auto-motion', 'structure', 'scene', 'waist', 'chain-inherit', 'front-slot', 'tree'], why: 'motion track generator' },
   { pattern: 'src/turn.ts', suites: ['rig', 'build', 'config', 'propose', 'tree'], why: '2.5D turn deformation compiler' },
+  { pattern: 'src/turnband.ts', suites: ['rig', 'build', 'tree'], why: 'coupled turn-band deformation and report' },
   { pattern: 'src/turncoverage.ts', suites: ['rig', 'build', 'tree'], why: 'turn surface coverage owned by rig and build' },
   { pattern: 'src/turnfield.ts', suites: ['rig', 'build', 'tree'], why: 'turn displacement field owned by rig and build' },
   { pattern: 'src/turnoverlap.ts', suites: ['rig', 'build', 'tree'], why: 'turn overlap solver owned by rig and build' },
