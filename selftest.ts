@@ -8718,6 +8718,12 @@ function runTurnWindingRigCases(say: FixtureCaseReporter): void {
           const collarShares = mesh?.weights.map(row => row.find(influence => influence.bone === 'collar')?.weight ?? 0);
           const problem = error?.problems[0];
           const fallbackLog = log.find(line => line.includes('topwear') && line.includes('collar') && /fallback|fall back|fell back/i.test(line));
+          // The fallback line must carry its triggering tuples, so it explains Core's A53 line beside it.
+          const tupleLines = (band?.triggering_tuples ?? []).map(tuple => `    mesh triggering tuple: ${tuple.map(({ slider, value }) => `${slider}=${value}`).join(', ')}`);
+          const fallbackAt = fallbackLog === undefined ? -1 : log.indexOf(fallbackLog);
+          const fallbackTuples = fallbackAt < 0 ? [] : log.slice(fallbackAt + 1, fallbackAt + 1 + tupleLines.length);
+          const tuplesNamed = tupleLines.length > 0 && JSON.stringify(fallbackTuples) === JSON.stringify(tupleLines) &&
+            tupleLines.includes('    mesh triggering tuple: yaw=-15, pitch=0, body_yaw_dial=-15');
           say(
             `RG1582_${supplier}_STRONGER_SHARED_CELL_FALLS_BACK_AND_REFUSES_BEFORE_EMISSION`,
             correctSupplier && gate.status === 1 && stagedMembership && single !== undefined && combined !== undefined &&
@@ -8725,9 +8731,9 @@ function runTurnWindingRigCases(say: FixtureCaseReporter): void {
               JSON.stringify(collarShares) === '[0.8,0.21543,0,0]' &&
               error?.problems.length === 1 && problem?.code === 'RIG_RIGC_GREEN' &&
               problem.detail.includes(single) && problem.detail.includes(combined) &&
-              namedBand && band?.outcome === 'fallback' && fallbackLog !== undefined && !existsSync(out),
+              namedBand && band?.outcome === 'fallback' && fallbackLog !== undefined && tuplesNamed && !existsSync(out),
             `exit ${gate?.status}; collar shares ${collarShares}; output exists ${existsSync(out)}; staged band ${JSON.stringify(bands)}; ` +
-              `fallback log ${fallbackLog ?? 'absent'}; ${single ?? 'no named A39 witness'}; ${combined ?? 'no named A53 witness'}`,
+              `fallback log ${fallbackLog ?? 'absent'}; fallback tuples ${JSON.stringify(fallbackTuples)}; ${single ?? 'no named A39 witness'}; ${combined ?? 'no named A53 witness'}`,
             'Both scalar placements rise from zScale 110 to 165. The restored collar shares still fold under individual and combined deforms, so the stock gate refuses before emission.',
           );
           continue;
