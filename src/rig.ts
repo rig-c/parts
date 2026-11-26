@@ -190,6 +190,7 @@ import { pyRound } from './round.ts';
 import { boneHeat, type HeatDust, heatInfluences, HEAT_LIMITS, heatRow, type HeatRow, latticeSilhouette, tracedSilhouette } from './heat.ts';
 import type { PosePoints } from './skeleton.ts';
 import { applyFaceSurfaceDeform, BODY_REAR_SHIFT_BONE, BODY_YAW_DIAL_BONE, BODYSHIFT_BONE, buildDepth25DTurn, type Depth25DTurnOptions, FACE_RATED_BAND, FACESHIFT_BONE, PITCH_DIAL_BONE, REAR_SHIFT_BONE, resolveTurnGrid, TURN_BONE, TURN_CARRIER_TAG, TURN_GRID_MAX_TRIANGLES_PER_SLOT, TURN_GRID_MAX_TRIANGLES_TOTAL, TURN_PLACES, TURN_RIDER_APART, TURN_RIDER_TAGS, turnRiderDepth, type TurnRole, type TurnSpec, turnConstraintName, turnFractions, turnNearest, turnSurfaceBone, turnTwin, turnUnitBone, YAW_DIAL_BONE } from './turn.ts';
+import type { CoupledTurnBandReport } from './turnband.ts';
 import { DISTANCE_EXPONENT, type FloorForm, type Influence, influences, type InfluenceLimits, type MeshInfluences, meshLimits, type Segment } from './weights.ts';
 import { turnContourBands } from './turnoverlap.ts';
 
@@ -850,7 +851,9 @@ export function meshBoundBones(att: Pick<MeshAttachment, 'weights'>): string[] {
 }
 
 /** One row of `mesh_report.json`: a lattice mesh's row is as it always was; a contour mesh's says so. */
-export type MeshReport = LatticeMeshReport | ContourMeshReport | AutoMeshReport | InfluenceMeshReport | ExplicitMeshReport;
+export type MeshReport = (LatticeMeshReport | ContourMeshReport | AutoMeshReport | InfluenceMeshReport | ExplicitMeshReport) & {
+  coupled_turn_bands?: CoupledTurnBandReport[];
+};
 
 /**
  * An influence mesh's row (issue #378): the lattice's counts and coverage as every row has them, the block as declared,
@@ -1231,6 +1234,13 @@ export interface RigOutput {
   turn: TurnRow[] | null;
   /** `sets.json` (issue #454), present only when `parts.alternates` is non-empty. */
   sets?: AttachmentSetsFile;
+}
+
+const RIG_MOTION_REBIND = new WeakMap<MotionSpec, (output: RigOutput) => void>();
+
+/** Rebind the generated turn and the animation merge hook to a settled replay's rig. */
+export function rebindRigMotion(output: RigOutput): void {
+  RIG_MOTION_REBIND.get(output.motion)?.(output);
 }
 
 /**
@@ -2012,6 +2022,7 @@ export function buildWaistPairSource(
   const skin: RigSpec['skins']['default'] = {};
   const meshReport: MeshReport[] = [];
   const contourRegionSummaries = new Map<string, NonNullable<NonNullable<Depth25DTurnOptions['surfaceMeshes']>[number]['contourRegions']>>();
+  const contourBandVertices = new Map<string, Array<number | undefined>>();
   const outImages: Array<[string, Raster]> = [];
   const depthReferences: NonNullable<RigOutput['depthReferences']> = [];
   const emitDepth = (part: string, reference: PartDepthReference, scalar: Raster): void => {
@@ -2144,6 +2155,7 @@ export function buildWaistPairSource(
     const reached = regions.map(() => 0);
     const whole = regions.map(() => 0);
     const weighted = regions.map(() => 0);
+    const bandVertices: Array<number | undefined> = [];
     let infl = 0;
     let maxInfl = 0;
     let overlapped = false;
@@ -2193,6 +2205,7 @@ export function buildWaistPairSource(
       const shares = writtenShares(li, limits.floor);
       if (li.region >= 0 && shares.some((s) => s.bone === regions[li.region].bone && s.weight > 0)) {
         weighted[li.region]++;
+        if (li.region < explicitRegions) bandVertices[vi] = li.region;
       }
       const ent: WeightEntry[] = shares.map(({ bone, weight }) => {
         const [x, y] = toBoneLocal(world.get(bone) as BoneTransform, spineX(wx), spineY(wy));
@@ -2212,6 +2225,7 @@ export function buildWaistPairSource(
     const bones = new Set(segs.map((s) => s.bone));
     for (const rg of regions) bones.add(rg.bone);
     if (explicitRegions > 0) {
+      contourBandVertices.set(p.name, bandVertices);
       contourRegionSummaries.set(
         p.name,
         regions.slice(0, explicitRegions).map((rg, index) => ({
@@ -3851,9 +3865,14 @@ export function buildWaistPairSource(
       detail: `setup eye-line roll ${pyRound(line.degrees, 6)} degrees (Spine, counter-clockwise), absolute ${pyRound(Math.abs(line.degrees), 6)} exceeds limit ${pyRound(HEAD_TURN_ROLL_LIMIT, 6)} degrees; read through authored ${EYE_BONES.join(' and ')} origins on ${line.parts.map(n => `"${n}"`).join(' and ')} (an eye-origin proxy, not painting detection); the declared head turn uses upright yaw/pitch axes on an already rolled head; inspect the neck at both turn extremes; warning only, no pose or output changed`,
     });
   }
-  if (cfg.turn?.roles !== undefined || cfg.turn?.body !== undefined) {
-    buildDepth25DTurn(rig, motion, {
-      warnings: turnWarnings,
+  const hasDepthTurn = cfg.turn?.roles !== undefined || cfg.turn?.body !== undefined;
+  const generateTurn = (target: RigSpec, targetMotion: MotionSpec, report: MeshReport[], warnings?: Problem[]): void => {
+    if (!hasDepthTurn || cfg.turn === undefined) return;
+    const coupledTurnBands = new Map<string, CoupledTurnBandReport[]>();
+    const emitted = new Map(outImages);
+    buildDepth25DTurn(target, targetMotion, {
+      warnings,
+      coupledTurnBands,
       turn: cfg.turn,
       parts: parts.parts,
       images,
@@ -3862,31 +3881,25 @@ export function buildWaistPairSource(
       stills,
       boneLandmarks,
       hasAlternateFaceSet,
-      surfaceMeshes: turnSurfaceMeshes(cfg, rig, parts.rig_size, contourRegionSummaries),
-      neighbourMeshes: turnNeighbourMeshes(cfg, rig, parts, new Map(outImages)),
-      coverageMeshes: cfg.turn.body === undefined ? undefined : turnNeighbourMeshes(cfg, rig, parts, new Map(outImages), true),
+      surfaceMeshes: turnSurfaceMeshes(cfg, target, parts.rig_size, contourRegionSummaries, contourBandVertices),
+      neighbourMeshes: turnNeighbourMeshes(cfg, target, parts, emitted),
+      coverageMeshes: warnings === undefined || cfg.turn.body === undefined ? undefined : turnNeighbourMeshes(cfg, target, parts, emitted, true),
     });
-  }
-  bindFaceSurfaceDeform(motion, (merged) => {
+    for (const [i, row] of report.entries()) {
+      const bands = coupledTurnBands.get(row.part);
+      if (bands === undefined && row.coupled_turn_bands === undefined) continue;
+      const { coupled_turn_bands: _previous, ...rest } = row;
+      report[i] = bands === undefined ? rest : { ...rest, coupled_turn_bands: bands };
+    }
+  };
+  const bindMotion = (target: RigSpec, targetMotion: MotionSpec, report: MeshReport[]): void => bindFaceSurfaceDeform(targetMotion, (merged) => {
     if (cfg.waist !== undefined) refuseSharedWaistMotion(merged, cfg.waist.top, cfg.waist.bone);
     remapWaistDeforms(merged, waistTargets, waistRegionTargets, waistBindingsBeforeRebind);
-    expandSetAttachmentKeys(rig, sets, merged);
-    if (cfg.turn?.roles !== undefined || cfg.turn?.body !== undefined) {
-      buildDepth25DTurn(rig, merged, {
-        turn: cfg.turn,
-        parts: parts.parts,
-        images,
-        contourBands: turnContourBands(cfg.meshes),
-        regions: cfg.regions,
-        stills,
-        boneLandmarks,
-        hasAlternateFaceSet,
-        surfaceMeshes: turnSurfaceMeshes(cfg, rig, parts.rig_size, contourRegionSummaries),
-        neighbourMeshes: turnNeighbourMeshes(cfg, rig, parts, new Map(outImages)),
-      });
-    }
+    expandSetAttachmentKeys(target, sets, merged);
+    // Generated 2.5D axes keep their precedence over same-named imports.
+    generateTurn(target, merged, report);
     if (cfg.turn?.roles === undefined && (cfg.turn === undefined || cfg.turn.body === undefined || cfg.turn.depths !== undefined)) {
-      applyFaceSurfaceDeform(rig, merged, {
+      applyFaceSurfaceDeform(target, merged, {
         imageWidth: faceImg?.width,
         imageHeight: faceImg?.height,
         opaqueWidth: facePart?.w,
@@ -3906,6 +3919,17 @@ export function buildWaistPairSource(
       }
     }
   });
+  generateTurn(rig, motion, meshReport, turnWarnings);
+  bindMotion(rig, motion, meshReport);
+  if (hasDepthTurn) {
+    RIG_MOTION_REBIND.set(motion, (output) => {
+      const { rig: target, motion: source, meshReport: report } = output;
+      const reboundMotion = { ...source, groups: { ...source.groups }, animations: { ...source.animations } };
+      generateTurn(target, reboundMotion, report);
+      bindMotion(target, reboundMotion, report);
+      output.motion = reboundMotion;
+    });
+  }
   return {
     rig,
     motion,
@@ -4388,6 +4412,7 @@ function turnSurfaceMeshes(
   rig: RigSpec,
   canvas: readonly [number, number],
   contourRegions?: ReadonlyMap<string, NonNullable<NonNullable<Depth25DTurnOptions['surfaceMeshes']>[number]['contourRegions']>>,
+  contourBandVertices?: ReadonlyMap<string, ReadonlyArray<number | undefined>>,
 ) {
   const meshes = [];
   for (const part of Object.keys(cfg.meshes)) {
@@ -4403,6 +4428,7 @@ function turnSurfaceMeshes(
           throw new PartsError([{ code: 'RIG_TURN_SURFACE_MESH_ATTACHMENT', object: `surface mesh "${slot.name}/${attachment}"`, detail: `requires the base drawing "${part}"; alternate drawings need their own registered depth sampling frame` }]);
         }
         const regionsForPart = firstForPart ? contourRegions?.get(part) : undefined;
+        const bandVertices = part === slot.name && part === attachment ? contourBandVertices?.get(part) : undefined;
         firstForPart = false;
         meshes.push({
           part,
@@ -4412,6 +4438,7 @@ function turnSurfaceMeshes(
           triangles: att.triangles,
           canvas,
           ...(regionsForPart === undefined ? {} : { contourRegions: regionsForPart }),
+          ...(bandVertices === undefined ? {} : { contourBandVertices: bandVertices }),
         });
       }
     }

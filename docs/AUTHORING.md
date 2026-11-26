@@ -2546,6 +2546,13 @@ not: there the islands `source.stray` leaves out are cleared from every reader's
 `source.stray` below). A lattice mesh's row is
 unchanged.
 
+When the [coupled turn-band solve](#combined-turn-winding) runs, the mesh
+row's `coupled_turn_bands` entries name the part and band region, the number
+of vertices adjusted, the largest change in effective share, the declared
+slider tuples that triggered the solve, and the outcome. The rig stage also
+reports a fallback in its diagnostics, which are available even when Core
+refuses the candidate before `mesh_report.json` is written.
+
 **Refusals** — every one names the part, the value found and the value required, and every
 contour refusal in a run is listed together; nothing falls back to the lattice:
 
@@ -10387,6 +10394,17 @@ their mapped times and deform keys, the slot and attachment, and the reversed
 and total triangle counts. The gate refuses the candidate before rig emission.
 A39 also checks individual dials. A53 reports measured and unmeasured tuple
 counts for rigs that declare combinations.
+
+For an explicitly declared contour band shared by the head and body turn
+fields (#1582), Parts tries a bounded solve only when the generated fields
+would reverse a triangle at a declared tuple. It adjusts the effective blend
+shares in the turn deform keys. The authored skin weights and band geometry
+stay fixed. Even an edit elsewhere in the rig can tip a tuple into folding
+and trigger the solve, changing the emitted deform bytes at those band
+vertices. The contour mesh's `coupled_turn_bands` report names the triggering
+tuples. If the solve cannot keep the required signed area, Parts keeps the
+original deform fields and reports the fallback. Core's mandatory gate still
+decides whether the rig is written.
 
 ### Per-layer depth input
 

@@ -8600,7 +8600,7 @@ function runContourFalloffTurnRigCases(say: FixtureCaseReporter): void {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
-/** Issue #1581: generated tuples and their verdict through the Parts rig stage. */
+/** Issues #1581 and #1582: generated tuples and coupled-band verdicts through the Parts rig stage. */
 function runTurnWindingRigCases(say: FixtureCaseReporter): void {
   const dir = temp('turn-winding');
   try {
@@ -8609,8 +8609,23 @@ function runTurnWindingRigCases(say: FixtureCaseReporter): void {
       ['ROUND_TRIP', rigcRunnerAt(suiteRigc(), spawnRigc), 'validate (spine-core round trip +'],
       ['MODEL', rigcRunnerAt(modelCli, (bin, args) => spawnRigc(process.execPath, [bin, ...args])), 'validate (the model side over the document +'],
     ] as const;
-    const variants = ['shared', 'separate', 'head-only'] as const;
-    const fixtures = variants.map(variant => writeTurnWindingFixture(join(dir, variant), variant));
+    const fixtures = {
+      shared: writeTurnWindingFixture(join(dir, 'shared'), 'shared'),
+      stronger: writeTurnWindingFixture(join(dir, 'stronger'), 'shared'),
+      separate: writeTurnWindingFixture(join(dir, 'separate'), 'separate'),
+      'head-only': writeTurnWindingFixture(join(dir, 'head-only'), 'head-only'),
+    };
+    const strongerManifestPath = join(fixtures.stronger.parts, 'parts.json');
+    const strongerManifest = readParts(strongerManifestPath);
+    const exact = (got: string[], expected: string[]) => JSON.stringify([...got].sort()) === JSON.stringify([...expected].sort());
+    if (!exact(strongerManifest.parts.map(p => p.name), ['topwear', 'face']) ||
+      strongerManifest.parts.some(p => p.depth?.zScale !== 110)) {
+      throw new Error('The stronger winding control requires topwear and face with zScale 110');
+    }
+    writeParts(strongerManifestPath, {
+      ...strongerManifest,
+      parts: strongerManifest.parts.map(p => ({ ...p, depth: { ...p.depth!, zScale: 165 } })),
+    });
     const a39 = 'A39_DEFORM_KEEPS_TRIANGLE_WINDING';
     const a53 = 'A53_DECLARED_SLIDER_COMBINATIONS_KEEP_WINDING';
     const headDials = ['yaw', 'pitch'];
@@ -8624,29 +8639,44 @@ function runTurnWindingRigCases(say: FixtureCaseReporter): void {
       '-15,0,-15', '-15,0,15', '15,0,-15', '15,0,15',
       '0,-12,-15', '0,-12,15', '0,12,-15', '0,12,15',
     ];
-    const tupleValues = (rig: RigSpec, dials: string[]) => (rig.invariants?.deformSliderCombinations ?? []).map(({ inputs }) => {
+    type TurnInput = { slider: string; value: number };
+    type BandDiagnostic = {
+      region: string;
+      vertices_adjusted: number;
+      largest_share_change: number;
+      triggering_tuples: TurnInput[][];
+      outcome: 'adjusted' | 'fallback';
+    };
+    type ReportRow = { part: string; coupled_turn_bands?: BandDiagnostic[] };
+    const reportFile = 'mesh_report.json';
+    const readReport = (path: string): ReportRow[] => existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) as ReportRow[] : [];
+    const diagnosticRows = (rows: ReportRow[]) => rows.filter(row => Object.hasOwn(row, 'coupled_turn_bands'));
+    const tupleValue = (inputs: readonly TurnInput[], dials: string[]) => {
       const values = new Map(inputs.map(({ slider, value }) => [slider, value]));
       return inputs.length === dials.length && dials.every(dial => values.has(dial))
         ? dials.map(dial => values.get(dial)).join(',') : JSON.stringify(inputs);
-    }).sort();
-    const exact = (got: string[], expected: string[]) => JSON.stringify(got) === JSON.stringify([...expected].sort());
+    };
+    const tupleValues = (rig: RigSpec, dials: string[]) => (rig.invariants?.deformSliderCombinations ?? [])
+      .map(({ inputs }) => tupleValue(inputs, dials));
     const readDeformTargets = (motion: MotionSpec, animation: string) => {
       const anim = motion.animations[animation] as { deform?: Array<{ slot: string; attachment: string }> } | undefined;
       return anim?.deform?.map(({ slot, attachment }) => `${slot}/${attachment}`) ?? [];
     };
 
     for (const [supplier, core, heading] of suppliers) {
-      for (const [index, variant] of variants.entries()) {
+      for (const variant of ['shared', 'stronger', 'separate', 'head-only'] as const) {
         const label = `${supplier}-${variant}`;
         const scratch = join(dir, `${label}-scratch`), out = join(dir, label);
-        const calls: Array<{ status: number; out: string; rig: RigSpec; motion: MotionSpec }> = [];
-        const error = refusals(() => rigStage({ ...fixtures[index], out }, args => {
+        const calls: Array<{ status: number; out: string; rig: RigSpec; motion: MotionSpec; report: ReportRow[] }> = [];
+        const log: string[] = [];
+        const error = refusals(() => rigStage({ ...fixtures[variant], out }, args => {
           const rig = JSON.parse(readFileSync(join(scratch, 'rig.json'), 'utf8')) as RigSpec;
           const motion = JSON.parse(readFileSync(join(scratch, 'motion.json'), 'utf8')) as MotionSpec;
+          const report = readReport(join(scratch, reportFile));
           const call = core(args);
-          calls.push({ ...call, rig, motion });
+          calls.push({ ...call, rig, motion, report });
           return call;
-        }, scratch, () => {}));
+        }, scratch, line => log.push(line)));
         const gate = calls[0];
         const lines = gate?.out.split('\n') ?? [];
         const measured = lines.flatMap(line => {
@@ -8654,52 +8684,80 @@ function runTurnWindingRigCases(say: FixtureCaseReporter): void {
           return counts === null ? [] : [`${counts[1]}/${counts[2]}`];
         });
         const rigFile = join(out, 'rig.json'), motionFile = join(out, 'motion.json');
-        const a39Green = lines.includes(`  PASS  ${a39}`);
+        const a39Green = lines.filter(line => line === `  PASS  ${a39}`).length === 2;
+        const a53Green = lines.filter(line => line === `  PASS  ${a53}`).length === 2;
         const correctSupplier = calls.length === 1 && gate.out.includes(heading);
-        if (variant === 'shared') {
-          const failures = lines.filter(line => line.startsWith('  FAIL  '));
-          const witness = failures.find(line => line.startsWith(`  FAIL  ${a53}:`) &&
+        const stagedRows = diagnosticRows(gate?.report ?? []);
+        const bands = stagedRows[0]?.coupled_turn_bands;
+        const band = bands?.[0];
+        const triggers = band?.triggering_tuples?.map(inputs => tupleValue(inputs, bodyDials)) ?? [];
+        const namedBand = stagedRows.length === 1 && stagedRows[0].part === 'topwear' && bands?.length === 1 &&
+          band?.region === 'collar' && triggers.length > 0 && triggers.every(value => bodyTuples.includes(value)) &&
+          Number.isInteger(band.vertices_adjusted) && band.vertices_adjusted >= 0 &&
+          Number.isFinite(band.largest_share_change) && band.largest_share_change >= 0 && band.largest_share_change <= 1;
+        const headOnly = variant === 'head-only';
+        const expected = headOnly ? headPairs : bodyTuples;
+        const dials = headOnly ? headDials : bodyDials;
+        const head = gate === undefined ? [] : readDeformTargets(gate.motion, 'turn');
+        const pitch = gate === undefined ? [] : readDeformTargets(gate.motion, 'tilt');
+        const body = gate === undefined ? [] : readDeformTargets(gate.motion, 'body_turn');
+        const headTargets = variant === 'shared' || variant === 'stronger' ? ['face/face', 'topwear/topwear'] : ['face/face'];
+        const stagedMembership = gate !== undefined && exact(tupleValues(gate.rig, dials), expected) &&
+          exact(head, headTargets) && exact(pitch, headTargets) && exact(body, headOnly ? [] : ['topwear/topwear']);
+
+        if (variant === 'stronger') {
+          const failures = lines.filter(line => line.startsWith('  FAIL  ')).map(line => line.trim());
+          const single = failures.find(line => line.startsWith(`FAIL  ${a39}:`) &&
+            line.includes('deform topwear/topwear key ') && line.includes('reverse winding'));
+          const combined = failures.find(line => line.startsWith(`FAIL  ${a53}:`) &&
             line.includes('"yaw"=-15 ("turn", t=0.000000s, key 0 at 0.000000s)') &&
             line.includes('"body_yaw_dial"=-15 ("body_turn", t=0.000000s, key 0 at 0.000000s)') &&
             line.includes('"pitch"=0 ("tilt", t=0.750000s, key 2 at 0.750000s)') &&
-            /topwear\/topwear: 1 of 2 triangle\(s\) reverse winding — triangle 0 \[0,3,1\] [1-9]\d*\.\d{3} -> -[1-9]\d*\.\d{3}px²/.test(line));
+            /topwear\/topwear: [12] of 2 triangle\(s\) reverse winding/.test(line));
           const mesh = gate?.rig.skins.default.topwear.topwear as MeshAttachment | undefined;
           const collarShares = mesh?.weights.map(row => row.find(influence => influence.bone === 'collar')?.weight ?? 0);
           const problem = error?.problems[0];
+          const fallbackLog = log.find(line => line.includes('topwear') && line.includes('collar') && /fallback|fall back|fell back/i.test(line));
           say(
-            `RG1581_${supplier}_SHARED_EASED_CELL_REFUSED_BEFORE_EMISSION`,
-            correctSupplier && gate.status === 1 && a39Green && witness !== undefined &&
-              failures.every(line => line.startsWith(`  FAIL  ${a53}:`)) &&
-              exact(tupleValues(gate.rig, bodyDials), bodyTuples) &&
+            `RG1582_${supplier}_STRONGER_SHARED_CELL_FALLS_BACK_AND_REFUSES_BEFORE_EMISSION`,
+            correctSupplier && gate.status === 1 && stagedMembership && single !== undefined && combined !== undefined &&
+              failures.every(line => line.startsWith(`FAIL  ${a39}:`) || line.startsWith(`FAIL  ${a53}:`)) &&
               JSON.stringify(collarShares) === '[0.8,0.21543,0,0]' &&
-              error?.problems.length === 1 && problem?.code === 'RIG_RIGC_GREEN' && problem.detail.includes(witness.trim()) &&
-              !existsSync(out),
-            `exit ${gate?.status}; A39 PASS ${a39Green}; collar shares ${collarShares}; output exists ${existsSync(out)}; ` +
-              (witness ?? (failures.join(' | ') || error?.problems.map(p => p.detail).join(' | ') || 'no A53 witness')),
-            'The generated spacing-400 weighted torso cell folds at head and body yaw −15 while neutral pitch reads its own mapped key.',
+              error?.problems.length === 1 && problem?.code === 'RIG_RIGC_GREEN' &&
+              problem.detail.includes(single) && problem.detail.includes(combined) &&
+              namedBand && band?.outcome === 'fallback' && fallbackLog !== undefined && !existsSync(out),
+            `exit ${gate?.status}; collar shares ${collarShares}; output exists ${existsSync(out)}; staged band ${JSON.stringify(bands)}; ` +
+              `fallback log ${fallbackLog ?? 'absent'}; ${single ?? 'no named A39 witness'}; ${combined ?? 'no named A53 witness'}`,
+            'Both scalar placements rise from zScale 110 to 165. The restored collar shares still fold under individual and combined deforms, so the stock gate refuses before emission.',
           );
           continue;
         }
 
-        const headOnly = variant === 'head-only';
-        const expected = headOnly ? headPairs : bodyTuples;
-        const dials = headOnly ? headDials : bodyDials;
         const writtenRig = existsSync(rigFile) ? JSON.parse(readFileSync(rigFile, 'utf8')) as RigSpec : null;
         const tuples = writtenRig === null ? [] : tupleValues(writtenRig, dials);
-        const head = gate === undefined ? [] : readDeformTargets(gate.motion, 'turn');
-        const pitch = gate === undefined ? [] : readDeformTargets(gate.motion, 'tilt');
-        const body = gate === undefined ? [] : readDeformTargets(gate.motion, 'body_turn');
+        const report = readReport(join(out, reportFile));
+        const emittedRows = diagnosticRows(report);
+        const green = correctSupplier && gate.status === 0 && error === null && a39Green && a53Green &&
+          measured.length === 2 && measured.every(count => count === `${expected.length}/0`) &&
+          stagedMembership && exact(tuples, expected) && existsSync(motionFile) && report.some(row => row.part === 'topwear');
+        const detail = `exit ${gate?.status}; A39 PASS twice ${a39Green}; A53 PASS twice ${a53Green}; measured/unmeasured ${measured.join(' and ')}; ` +
+          `draw targets ${head}/${pitch}/${body}; tuples [${tuples.join('; ')}]` +
+          (error === null ? '' : `; ${error.problems.map(p => p.detail).join(' | ')}`);
+        if (variant === 'shared') {
+          say(
+            `RG1582_${supplier}_SHARED_EASED_CELL_ADJUSTED_AND_MEASURED`,
+            green && namedBand && band?.outcome === 'adjusted' && band.vertices_adjusted > 0 && band.largest_share_change > 0 &&
+              triggers.includes('-15,0,-15') && isDeepStrictEqual(stagedRows, emittedRows),
+            `${detail}; staged band ${JSON.stringify(bands)}; emitted band ${JSON.stringify(emittedRows[0]?.coupled_turn_bands)}`,
+            'The generated spacing-400 torso cell shares both yaw deforms. The collar adjustment records the yaw −15 pair at neutral pitch, and Core measures the exact tuple set before and after packing.',
+          );
+          continue;
+        }
         say(
           `RG1581_${supplier}_${headOnly ? 'HEAD_ONLY_PAIRS' : 'SEPARATE_HEAD_BODY_TUPLES'}_MEASURED`,
-          correctSupplier && gate.status === 0 && error === null && a39Green &&
-            lines.filter(line => line === `  PASS  ${a53}`).length === 2 &&
-            measured.length === 2 && measured.every(count => count === `${expected.length}/0`) &&
-            exact(tuples, expected) && exact(tupleValues(gate.rig, dials), expected) && existsSync(motionFile) &&
-            exact(head, ['face/face']) && exact(pitch, ['face/face']) && exact(body, headOnly ? [] : ['topwear/topwear']),
-          `exit ${gate?.status}; A39 PASS ${a39Green}; measured/unmeasured ${measured.join(' and ')}; ` +
-            `draw targets ${head}/${pitch}/${body}; tuples [${tuples.join('; ')}]` +
-            (error === null ? '' : `; ${error.problems.map(p => p.detail).join(' | ')}`),
-          'Each expected tuple is present in the generated and emitted spec and measured before and after packing. Head and body target disjoint meshes.',
+          green && gate.report.some(row => row.part === 'topwear') && stagedRows.length === 0 && emittedRows.length === 0,
+          `${detail}; coupled-band report rows staged/emitted ${stagedRows.length}/${emittedRows.length}`,
+          'Each expected tuple is present in the generated and emitted spec and measured before and after packing. With no shared targets, the coupled-band diagnostic field is absent.',
         );
       }
     }

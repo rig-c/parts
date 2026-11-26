@@ -5,7 +5,7 @@
 **Read before upgrading:**
 
 * **Core 3.10.0 adds A53 to the winding gate.** The assertion total increases by one. A rig with no `invariants.deformSliderCombinations` declaration gains one SKIP. Parts declares four endpoint pairs for generated head yaw and pitch. When it also generates body yaw, it declares twenty poses (eight endpoint triples and twelve endpoint pairs with the third dial at neutral `0`). A rig that built on Parts 2.60.0 can now be refused before rig emission by `A53_DECLARED_SLIDER_COMBINATIONS_KEEP_WINDING`. See [the combined turn winding reference](docs/AUTHORING.md#combined-turn-winding).
-* **The combined gate (#1581) and band fix (#1582) ship in one Parts release.** After #1581 lands, the gate can refuse a contour band shared by the head and body dials at combined corners until #1582 fixes the band under the summed deform. [#1581](https://github.com/rig-c/parts/issues/1581), [#1582](https://github.com/rig-c/parts/issues/1582).
+* **The combined gate (#1581) and band fix (#1582) ship in one Parts release.** A declared contour band shared by the head and body dials can get new turn deform bytes when a declared tuple would fold, even after an edit elsewhere in the rig. The mesh report names the triggering tuples and Core still gates the result. [#1581](https://github.com/rig-c/parts/issues/1581), [#1582](https://github.com/rig-c/parts/issues/1582).
 
 ## 2.60.0 (2026-11-26)
 

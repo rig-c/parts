@@ -121,7 +121,7 @@ import { type OtherLimbs, splitLines, capOwnershipLines, type SplitCount } from 
 import type { BoneEntry } from './config.ts';
 import { OPAQUE_ALPHA_ABOVE } from './layers.ts';
 import { pinholesRequired, readRequirements, type RequirementLine, summaryText } from './requirements.ts';
-import { type AutoMeshReport, buildRig, DEFAULT_IDLE_KEYS, type FaceAxis, type IdleKeys, type MeshReport, type RigCommand, rigJsonText, type RigOutput, type RigSpec, SETS_FILE, type StrayCleared, type TurnRow } from './rig.ts';
+import { type AutoMeshReport, buildRig, DEFAULT_IDLE_KEYS, type FaceAxis, type IdleKeys, type MeshReport, rebindRigMotion, type RigCommand, rigJsonText, type RigOutput, type RigSpec, SETS_FILE, type StrayCleared, type TurnRow } from './rig.ts';
 import { KEYPOINT_NAMES, type KeypointName, type PosePoints } from './skeleton.ts';
 import { AUTHOR_NO_ROLE, isAuthorTag } from './tags.ts';
 import { BODY_TURN_ANIM, TURN_BONE } from './turn.ts';
@@ -2016,6 +2016,11 @@ export function rigStage(input: RigStageInput, rigc: RigcRunner, scratch: string
     const swapped = JSON.parse(rigJsonText(first.rig)) as RigSpec;
     for (const k of chosen) swapped.skins.default[k.part] = { ...swapped.skins.default[k.part], [k.part]: k.candidate.attachment };
     rig = { ...first, rig: swapped, meshReport: first.meshReport.map((m) => chosen.find((k) => k.part === m.part)?.candidate.row ?? m) };
+    // The staged contour rows survive an automatic-mesh replacement. Rebind
+    // only when the first gate actually received adjusted shared-band keys.
+    if (first.meshReport.some(row => row.coupled_turn_bands?.some(band => band.outcome === 'adjusted'))) {
+      rebindRigMotion(rig);
+    }
     texts = textsOf(rig);
     let model: string | null = null;
     finalGate = gateThroughRigc(pngs, texts, rigc, scratch, mode, (dir) => (model = modelAt(dir)));
@@ -2075,6 +2080,11 @@ export function rigStage(input: RigStageInput, rigc: RigcRunner, scratch: string
       // issue #303: only beside a declared stray, so a lattice line without one reads as it always did.
       const stray = m.stray_cleared === undefined ? '' : ` stray ${m.stray} left out ${m.stray_cleared.islands} island(s), ${m.stray_cleared.pixels} of ${m.stray_cleared.art_pixels} art px`;
       log(`${head}grid=${m.grid} ${infl} loop passes ${rig.loopPasses[m.part]}${stray}`);
+    }
+    for (const band of m.coupled_turn_bands ?? []) {
+      const target = `${band.slot ?? m.part}/${band.attachment ?? m.part}`;
+      log(`  RIG_TURN_COUPLED_BAND: "${target}" region "${band.region}" ${band.outcome}, ${band.vertices_adjusted} adjusted vertices, largest share change ${band.largest_share_change}`);
+      for (const tuple of band.triggering_tuples) log(`    mesh triggering tuple: ${tuple.map(({ slider, value }) => `${slider}=${value}`).join(', ')}`);
     }
   }
   const regions = rig.rig.slots.length - rig.meshReport.length;
