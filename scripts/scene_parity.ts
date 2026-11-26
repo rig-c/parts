@@ -18,13 +18,15 @@ export function compareSceneBytes(before: ReadonlyMap<string, Uint8Array>, after
     if (left !== undefined && right !== undefined && Buffer.from(left).equals(Buffer.from(right))) continue;
     let clockOnly = false;
     let fields: string[] = [];
-    // sceneOutputFiles uses the host separator; only this exact relative receipt is approved.
+    // sceneOutputFiles uses the host separator; only the receipts at these exact paths have clocks.
     const relativePath = path.replaceAll('\\', '/');
-    if (relativePath === 'check/build/run.json' && left !== undefined && right !== undefined) {
+    const buildReceipt = relativePath === 'check/build/run.json';
+    const idleReceipt = relativePath === 'check/idle_frames/render-run.json';
+    if ((buildReceipt || idleReceipt) && left !== undefined && right !== undefined) {
       try {
         const a: unknown = JSON.parse(new TextDecoder().decode(left));
         const b: unknown = JSON.parse(new TextDecoder().decode(right));
-        if (record(a) && record(b)) {
+        if (record(a) && record(b) && (buildReceipt || (a.spec === 'rigc-run/2' && b.spec === 'rigc-run/2'))) {
           fields = [...new Set([...Object.keys(a), ...Object.keys(b)])].sort().filter(k => JSON.stringify(a[k]) !== JSON.stringify(b[k]));
           const clocks = ['started_at', 'finished_at'];
           const validClocks = [a, b].every(o => clocks.every(k => typeof o[k] === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(o[k]) && Number.isFinite(Date.parse(o[k]))));

@@ -303,19 +303,14 @@ function runLinkedOutReplay(dir: string, out: string, say: Say): void {
   const wantRig = windows ? rig : `../${rig}`;
   const replay = rec === null ? { status: -1, out: 'no record' } : cli(rec.argv, given);
   const again = readRecord(join(given, CHECK_RUN_FILE));
-  // rigc writes skeleton.images relative to the --out it was handed, by plain arithmetic: the first run hands it the
-  // linked spelling and the replay the real one, so build/skeleton.json, the model that hashes it and check.json's
-  // model_sha256 may differ (rig-c core's own spelling, outside this record). Every other key and digest is the same.
-  // rig-c/core#1773 tightens this: once core spells images through links, `spelled` goes and the records match whole.
-  const spelled = new Set(['build/skeleton.json', 'build/skeleton.model.json', 'check.json']);
   const differ = (a: RunRecord | null, b: RunRecord | null): string[] => a === null || b === null ? ['absent']
     : [...new Set([...a.outputs, ...b.outputs].map((o) => o.path))].filter((p) =>
       JSON.stringify(a.outputs.find((o) => o.path === p)) !== JSON.stringify(b.outputs.find((o) => o.path === p)));
-  const aside = (r: RunRecord | null): string => r === null ? 'absent' : timeless({ ...r, outputs: r.outputs.map((o) => spelled.has(o.path) ? { ...o, sha256: '<spelled by rigc>' } : o) });
   const moved = differ(rec, again);
+  const sameRecord = timeless(again) === timeless(rec);
   say('BU1544A_ARGV_RECORDED_THROUGH_A_LINKED_OUT_REPLAYS_FROM_OUT_AS_THE_SAME_CHECK',
-    first.status === 0 && rec !== null && recordedRig === wantRig && replay.status === 0 && aside(again) === aside(rec) && moved.every((p) => spelled.has(p)),
-    `check exit ${first.status}; --rig given ${JSON.stringify(rig)} from the real working directory, recorded ${JSON.stringify(recordedRig)} (want ${JSON.stringify(wantRig)}, ${windows ? 'Windows: as spelled' : 'POSIX: through the link'}); replay from --out exit ${replay.status}; records equal but for the times and rigc's spelled files ${aside(again) === aside(rec)}; digests that moved ${JSON.stringify(moved)}${replay.status === 0 ? '' : `; ${replay.out.trim().split('\n').slice(-2).join(' | ')}`}`,
+    first.status === 0 && rec !== null && recordedRig === wantRig && replay.status === 0 && sameRecord,
+    `check exit ${first.status}; --rig given ${JSON.stringify(rig)} from the real working directory, recorded ${JSON.stringify(recordedRig)} (want ${JSON.stringify(wantRig)}, ${windows ? 'Windows: as spelled' : 'POSIX: through the link'}); replay from --out exit ${replay.status}; records equal but for the times ${sameRecord}; digests that moved ${JSON.stringify(moved)}${replay.status === 0 ? '' : `; ${replay.out.trim().split('\n').slice(-2).join(' | ')}`}`,
     'issues #1544, #1551: on POSIX --out and each path\'s directory are resolved through their links before the path is rebased, so the replay climbs the real tree (one level more, by hand); on Windows the path is rebased as spelled, as Windows resolves `..` from the spelling (the same climb, by hand)');
 
   // The plant: the same arguments recorded by the other platform's rule, replayed the same way. On POSIX that is plain
