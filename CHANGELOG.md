@@ -1,14 +1,23 @@
 # Changelog
 
-## Unreleased
+## 2.60.0 (2026-11-26)
+
+A new `depth-place` command places body parts from one whole-painting depth map, and a declared contour band now eases its outer half by default so a turn is less likely to fold at the band's limit.
 
 **Read before upgrading:**
 
-* **The new falloff for `contour.regions` can change rig and downstream build bytes.** Add `falloff: "linear"` to a declared region to preserve its prior weights. Regions derived from `contour.bust`, zero-width bands and automatic meshes keep their prior weighting. The winding gate checks declared contour bands per dial. A combined head and body turn can still reverse a triangle even when each dial passes individually. With easing, setting both dials to −15° reversed one triangle (signed area −0.326 px²). See [the #1578 measurement](https://github.com/rig-c/parts/issues/1578#issuecomment-7183742406), [the combined winding gate in #1581](https://github.com/rig-c/parts/issues/1581), [the combined-turn fix in #1582](https://github.com/rig-c/parts/issues/1582), and [A contour mesh](docs/AUTHORING.md#a-contour-mesh-meshespartcontour-issue-84).
+* **A build with a declared contour band can change bytes.** The outer half of an explicitly declared `contour.regions` band now eases with `4g²(1−g)` instead of the linear ramp; the inner half is unchanged. Add `falloff: "linear"` to a declared region to keep its old weights and bytes. Zero-width bands, automatic meshes and regions derived from `contour.bust` keep their prior weighting. In the public examples, only `reference-sample`'s `rig.json`, `mesh_report.json` and `check.json` change.
+* **A band is gated per dial only.** rig-c's winding gate checks each turn dial on its own; a pose with two turn dials together (head and body) is not checked yet. With easing, both dials at −15° reversed one triangle (signed area −0.326 px²) in the measured case. The combined gate is tracked in [#1581](https://github.com/rig-c/parts/issues/1581) and the fold fix in [#1582](https://github.com/rig-c/parts/issues/1582); see [the #1578 measurement](https://github.com/rig-c/parts/issues/1578#issuecomment-7183742406).
+* **`depth-place` requires declarations.** A recipe's `place` block must declare a finite positive `scale` (rig px per map unit) and `place.near` (`black` or `white`, as in `groups.*.near`); a missing or invalid value is refused as `DEPTH_PLACE_SCALE` or `DEPTH_PLACE_NEAR` before any file is written. The anchor must be the body turn's first surface. Relief stays authored.
+* **`rig-parts --version` and the `package.version` field in run stamps and run records now read `2.60.0`.** The version bump changes those receipt bytes. The receipt fields and output hashes keep their meaning.
+
+### Features
+
+* **depth:** `depth-place` reads visible medians from one whole-painting depth map and places body surfaces and units by a declared polarity, scale and anchor, writing a relocated recipe, a rig config and a placement report; `--check-turn` records the rig gate's verdict (`#1570`, `#1584`, `185dce0`).
 
 ### Bug Fixes
 
-* **turn** — ease the outer half of explicitly declared contour bands by default to reduce abrupt weight changes that can reverse triangles during a turn. Overlap is checked on the original support, and rig-c's winding gate still decides whether the rig can be written (`#1578`).
+* **turn:** ease the outer half of explicitly declared contour bands by default; overlap is checked on the original support, and rig-c's winding gate still decides whether the rig can be written (`#1578`, `#1583`, `64794d5`).
 
 ## 2.59.0 (2026-11-26)
 
