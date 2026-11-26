@@ -277,6 +277,7 @@ Command details and config saving are in the [command reference](docs/AUTHORING.
 | `check-parts` | [Check assembled parts' integrity and write a report](docs/AUTHORING.md#check-parts) |
 | `diff-components` | [List every place the stacked parts differ from the painting](docs/AUTHORING.md#whole-figure-difference-inventory) |
 | `diff-drafts` | [Compare two assemble outputs](docs/AUTHORING.md#command-reference) |
+| `depth-place` | [Place body parts from a whole-painting depth map](docs/DEPTH.md#optional-place-body-parts-from-a-whole-painting-map) |
 | `depth-prepare` | [Write one depth-model input image per part](docs/DEPTH.md#1-prepare-one-inference-image-per-part) |
 | `depth-map` | [Convert a NumPy array to a depth or normals map](docs/DEPTH.md#convert-a-numpy-array) |
 | `depth-bind` | [Bind a depth map to its prepared input](docs/DEPTH.md#3-bind-every-map-to-its-prepared-input) |

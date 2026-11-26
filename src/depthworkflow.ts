@@ -4,16 +4,16 @@
  */
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { refuseStaleAssembly } from './assembly-reading.ts';
 import { PartsError, type Problem } from './errors.ts';
 import { loadConfigAndAnimations, parseConfig } from './config.ts';
 import { relocateConfigReferences } from './configrelocation.ts';
 import { depthReading, readSourceDepth } from './depthsheets.ts';
 import { readEditorReceipts } from './editreceipt.ts';
-import { alphaSupport, depthMapFail as fail, floatBox, integrateNormals, mapToSheet, readNumericMap, type NumericMap } from './depthmaps.ts';
+import { alphaSupport, depthMapFail as fail, floatBox, integrateNormals, mapQuantile, mapToSheet, readNumericMap, type NumericMap } from './depthmaps.ts';
 import { depthImageReference, partImageReference, readParts } from './parts.ts';
-import { readPartSet } from './propose.ts';
+import { readPartSet, type PartSet } from './propose.ts';
 import { decodePngBytes, encodePngBytes } from './raster/png.ts';
 import { resize } from './raster/resize.ts';
 import { connectedComponents } from './raster/components.ts';
@@ -23,7 +23,8 @@ type Obj = Record<string, unknown>;
 interface PrepareOptions { longSide: number; paddingFraction: number; padding: number }
 interface Group { median?: never; near: 'black' | 'white'; zScale: number; pivot: number; unitDepths?: Record<string, number> }
 interface PartMap { map: string; source: 'depth' | 'normals'; frame: 'part' | 'upscaled' | 'input'; group: string; median: number; relief: number }
-export interface DepthRecipe { spec: 'rig-parts-depth/1'; prepare: PrepareOptions; groups: Record<string, Group>; parts: Record<string, PartMap>; clear: string[] }
+interface Placement { map: string; near: Group['near']; scale: number; anchor: string; pivot?: 'anchor' | number; round?: string[] }
+export interface DepthRecipe { spec: 'rig-parts-depth/1'; prepare: PrepareOptions; groups: Record<string, Group>; parts: Record<string, PartMap>; clear: string[]; place?: Placement }
 interface PreparedPart { part: string; crop: number[]; sourceSha256: string; input: string; inputSha256: string; size: number[]; upscaled: number[]; upscale: number; padding: number; inputSize: number[] }
 interface Prepared { spec: 'rig-parts-depth-inputs/1'; partsSha256: string; recipeSha256: string; background: number; alpha: number; parts: PreparedPart[] }
 const hash = (bytes: Uint8Array | string): string => createHash('sha256').update(bytes).digest('hex');
@@ -57,7 +58,14 @@ function plain(name: string, at: string): void {
   if (!name || name.startsWith('.') || /[\\/]/.test(name) || name.includes('\0')) fail('DEPTH_RECIPE', at, `name "${name}" is not a plain part filename`);
 }
 export function parseDepthRecipe(raw: unknown): DepthRecipe {
-  const o = object(raw, 'depth recipe'); keys(o, ['spec', 'prepare', 'groups', 'parts', 'clear'], 'depth recipe');
+  const { recipe, place } = readDepthRecipe(raw);
+  if (place === undefined) return recipe;
+  const { scale } = place;
+  if (!isPlacementScale(scale)) throw new PartsError([placementScaleProblem(scale)]);
+  return { ...recipe, place: { ...place, scale } };
+}
+function readDepthRecipe(raw: unknown): { recipe: DepthRecipe; place?: Omit<Placement, 'scale'> & { scale: unknown } } {
+  const o = object(raw, 'depth recipe'); keys(o, ['spec', 'prepare', 'groups', 'parts', 'clear', 'place'], 'depth recipe');
   if (o.spec !== 'rig-parts-depth/1') fail('DEPTH_RECIPE', 'spec', 'requires rig-parts-depth/1');
   const p = object(o.prepare, 'prepare'); keys(p, ['longSide', 'paddingFraction', 'padding'], 'prepare');
   const prepare = { longSide: number(p.longSide, 'prepare.longSide', 1), paddingFraction: number(p.paddingFraction, 'prepare.paddingFraction', 0), padding: number(p.padding, 'prepare.padding', 0) };
@@ -83,7 +91,27 @@ export function parseDepthRecipe(raw: unknown): DepthRecipe {
   if (!Object.keys(parts).length) fail('DEPTH_RECIPE', 'parts', 'requires at least one named part');
   if (!Array.isArray(o.clear) || !o.clear.every(n => typeof n === 'string') || new Set(o.clear).size !== o.clear.length) fail('DEPTH_RECIPE', 'clear', 'requires an explicit array of unique part names, [] when none; no sheet is dropped implicitly');
   for (const name of o.clear as string[]) { plain(name, 'clear'); if (Object.hasOwn(parts, name)) fail('DEPTH_RECIPE', `clear.${name}`, 'also has a new map; choose clear or apply'); }
-  return { spec: 'rig-parts-depth/1', prepare, groups, parts, clear: o.clear as string[] };
+  const recipe: DepthRecipe = { spec: 'rig-parts-depth/1', prepare, groups, parts, clear: o.clear as string[] };
+  if (o.place === undefined) return { recipe };
+  const at = 'place', place = object(o.place, at);
+  keys(place, ['map', 'near', 'scale', 'anchor', 'pivot', 'round'], at);
+  if (typeof place.map !== 'string' || !place.map.trim()) return fail('DEPTH_RECIPE', 'place.map', 'requires a numeric JSON map in the painting frame');
+  if (place.near !== 'black' && place.near !== 'white') return fail('DEPTH_PLACE_NEAR', 'place.near', `is ${bindingFound(place.near)}; declare black or white for the painting map`);
+  if (typeof place.anchor !== 'string' || !place.anchor) return fail('DEPTH_PLACE_ANCHOR', 'place.anchor', 'requires the name of the body turn\'s first surface');
+  plain(place.anchor, 'place.anchor');
+  const pivot = place.pivot === undefined || place.pivot === 'anchor' ? place.pivot : number(place.pivot, 'place.pivot', -Infinity);
+  const round = place.round;
+  if (round !== undefined && (!Array.isArray(round) || !round.every(n => typeof n === 'string') || new Set(round).size !== round.length)) {
+    return fail('DEPTH_PLACE_ROUND', 'place.round', 'requires an array of unique recipe part names');
+  }
+  return { recipe, place: { map: place.map, near: place.near, scale: place.scale, anchor: place.anchor,
+    ...(pivot === undefined ? {} : { pivot }), ...(round === undefined ? {} : { round }) } };
+}
+function isPlacementScale(raw: unknown): raw is number {
+  return typeof raw === 'number' && Number.isFinite(raw) && raw > 0;
+}
+function placementScaleProblem(raw: unknown): Problem {
+  return { code: 'DEPTH_PLACE_SCALE', object: 'place.scale', detail: `is ${bindingFound(raw)}; declare a finite number > 0 (rig px per map unit)` };
 }
 function emptyOutput(out: string, inputs: readonly string[]): void {
   const canonical = (p: string): string => existsSync(p) ? realpathSync(p) : resolve(canonical(dirname(resolve(p))), basename(p));
@@ -122,6 +150,264 @@ export function prepareDepth(input: { parts: string; config: string; out: string
   writeFileSync(join(input.out, 'manifest.json'), text(manifest));
   return manifest;
 }
+
+type RoundPlacement = {
+  sections: number;
+  invertedSections: number;
+  scale: number | null;
+  iqr: [number, number] | null;
+};
+interface PlacementSample {
+  part: string;
+  group: 'body';
+  visibleCount: number;
+  visibleFraction: number;
+  rawMedian: number;
+  rawP5: number;
+  rawP95: number;
+  reliefRatio: number | null;
+  round?: RoundPlacement;
+}
+export type DepthPlacementTurnCheck = { status: 'built' } | {
+  status: 'refused';
+  stage: 'prepare' | 'apply' | 'rig';
+  problems: readonly Problem[];
+  winding: readonly {
+    rule: string; animation: string; part: string; attachment: string; key: number;
+    endKey?: number; reversedTriangles: number; triangles: number; frame?: string;
+  }[];
+};
+export interface DepthPlacementReport {
+  spec: 'rig-parts-depth-place-report/1';
+  near: Placement['near'];
+  scale: number;
+  anchor: string;
+  pivot: number;
+  parts: Array<PlacementSample & { rigMedian: number; impliedRelief: number | null }>;
+  turnCheck?: DepthPlacementTurnCheck;
+}
+type DepthPlacementInput = { parts: string; config: string; rigConfig: string; out: string };
+
+/** The projection uses the full silhouette for its axis and section widths,
+ * and only pixels owned by this part for its regression ordinates. */
+function roundPlacement(support: readonly number[], artWidth: number, valueAt: (i: number) => number | undefined, near: Placement['near']): RoundPlacement {
+  let sx = 0, sy = 0;
+  for (const i of support) { sx += i % artWidth; sy += Math.floor(i / artWidth); }
+  const cx = sx / support.length, cy = sy / support.length;
+  let xx = 0, xy = 0, yy = 0;
+  for (const i of support) {
+    const x = i % artWidth - cx, y = Math.floor(i / artWidth) - cy;
+    xx += x * x; xy += x * y; yy += y * y;
+  }
+  if (xx === yy && xy === 0) return { sections: 0, invertedSections: 0, scale: null, iqr: null };
+  const angle = Math.atan2(2 * xy, xx - yy) / 2;
+  const [c, s] = xy === 0 ? (xx > yy ? [1, 0] : [0, 1]) : [Math.cos(angle), Math.sin(angle)];
+  const points = support.map(i => {
+    const x = i % artWidth - cx, y = Math.floor(i / artWidth) - cy;
+    return { i, along: x * c + y * s, across: -x * s + y * c };
+  });
+  const start = points.reduce((min, p) => Math.min(min, p.along), Infinity);
+  const bands = new Map<number, { lo: number; hi: number; visible: Array<{ across: number; value: number }> }>();
+  for (const { i, along, across } of points) {
+    const k = Math.floor((along - start) / 4);
+    let band = bands.get(k);
+    if (band === undefined) { band = { lo: across, hi: across, visible: [] }; bands.set(k, band); }
+    band.lo = Math.min(band.lo, across);
+    band.hi = Math.max(band.hi, across);
+    const value = valueAt(i);
+    if (value !== undefined) band.visible.push({ across, value: near === 'black' ? value : -value });
+  }
+  const scales: number[] = [];
+  let invertedSections = 0;
+  for (const { lo, hi, visible } of bands.values()) {
+    const r = (hi - lo) / 2, center = (hi + lo) / 2;
+    if (r === 0) continue;
+    const samples = visible.flatMap(({ across, value }) => {
+      const v = Math.abs(across - center);
+      if (v > 0.8 * r) return [];
+      // Rationalized r - sqrt(r*r - v*v) keeps shallow sagitta samples distinct.
+      return [{ g: v * v / (r + Math.sqrt(r * r - v * v)), value }];
+    });
+    if (samples.length < 2 || samples.every(({ g }) => g === samples[0].g)) continue;
+    const baseline = samples[0].value;
+    let sumG = 0, sumZ = 0;
+    for (const { g, value } of samples) { sumG += g; sumZ += value - baseline; }
+    const meanG = sumG / samples.length, meanZ = sumZ / samples.length;
+    let variance = 0, covariance = 0;
+    for (const { g, value } of samples) {
+      variance += (g - meanG) ** 2;
+      covariance += (g - meanG) * (value - baseline - meanZ);
+    }
+    if (variance === 0) continue;
+    const slope = covariance / variance, scale = 1 / slope;
+    if (!Number.isFinite(slope) || (slope > 0 && !Number.isFinite(scale))) {
+      return fail('DEPTH_MAP_FORMAT', 'place.map', 'round-section regression overflows; provide representable raw depths');
+    }
+    if (slope <= 0) invertedSections++;
+    else scales.push(scale);
+  }
+  scales.sort((a, b) => a - b);
+  return { sections: scales.length + invertedSections, invertedSections,
+    scale: scales.length === 0 ? null : mapQuantile(scales, 0.5),
+    iqr: scales.length === 0 ? null : [mapQuantile(scales, 0.25), mapQuantile(scales, 0.75)] };
+}
+
+function placementSamples(set: PartSet, map: NumericMap, reliefs: ReadonlyMap<string, number>, place: Omit<Placement, 'scale'>, selected: ReadonlySet<string>): PlacementSample[] {
+  const roundNames = new Set(place.round);
+  // Iterate front-to-back so a pixel can be claimed only once, including by
+  // layers not selected for placement. Scan the stored crop, in rig pixels.
+  const claimed = new Uint8Array(map.data.length);
+  const rows: PlacementSample[] = [], problems: Problem[] = [];
+  for (const p of [...set.recs].reverse()) {
+    const art = set.images.get(p.name)!;
+    const support = alphaSupport(art), values: number[] = [], roundSupport: number[] = [];
+    const roundValues = roundNames.has(p.name) ? new Map<number, number>() : undefined;
+    const measure = selected.has(p.name);
+    let supportCount = 0;
+    for (let y = 0; y < p.h; y++) for (let x = 0; x < p.w; x++) {
+      const local = y * p.w + x;
+      if (!support[local]) continue;
+      if (roundValues !== undefined) roundSupport.push(local);
+      if (measure) supportCount++;
+      const pixel = (p.y + y) * map.width + p.x + x;
+      if (claimed[pixel]) continue;
+      claimed[pixel] = 1;
+      if (measure) values.push(map.data[pixel]);
+      roundValues?.set(local, map.data[pixel]);
+    }
+    if (!measure) continue;
+    if (values.length === 0) {
+      problems.push({ code: 'DEPTH_PLACE_OCCLUDED', object: `part "${p.name}"`,
+        detail: `has no visible pixels (0 of ${supportCount} with alpha>=128); at least one topmost pixel is required for a median` });
+      continue;
+    }
+    values.sort((a, b) => a - b);
+    const constant = values[0] === values[values.length - 1] ? values[0] : undefined;
+    const rawMedian = constant ?? mapQuantile(values, 0.5);
+    const rawP5 = constant ?? mapQuantile(values, 0.05), rawP95 = constant ?? mapQuantile(values, 0.95);
+    const span = rawP95 - rawP5, relief = reliefs.get(p.name);
+    const ratio = relief === undefined || span <= 0 ? null : relief / span;
+    if (!Number.isFinite(span)) return fail('DEPTH_MAP_FORMAT', `part "${p.name}"`, 'visible p5-p95 span overflows; provide representable raw depths');
+    rows.push({ part: p.name, group: 'body', visibleCount: values.length,
+      visibleFraction: values.length / supportCount, rawMedian, rawP5, rawP95, reliefRatio: Number.isFinite(ratio) ? ratio : null,
+      ...(roundValues === undefined ? {} : { round: roundPlacement(roundSupport, p.w, i => roundValues.get(i), place.near) }) });
+  }
+  if (problems.length) throw new PartsError(problems);
+  return rows.reverse();
+}
+
+function checkPlacementScale(scale: unknown, samples: readonly PlacementSample[], reliefs: ReadonlyMap<string, number>): number {
+  const problems: Problem[] = [];
+  const validScale = isPlacementScale(scale) ? scale : undefined;
+  if (validScale === undefined) {
+    problems.push(placementScaleProblem(scale));
+    for (const { part, reliefRatio, rawP5, rawP95, round } of samples) {
+      const relief = !reliefs.has(part) ? 'unavailable (no body recipe relief)'
+        : reliefRatio === null ? `unavailable (p5=${rawP5}, p95=${rawP95})` : String(reliefRatio);
+      const fit = round === undefined ? '' : `; implied round scale for "${part}" = ${round.scale ?? 'unavailable'}, IQR=${round.iqr?.join('..') ?? 'unavailable'}, sections=${round.sections}`;
+      problems.push({ code: 'DEPTH_PLACE_SCALE', object: 'place.scale', detail: `implied relief ratio for "${part}" = ${relief}${fit}` });
+    }
+  }
+  for (const { part, round } of samples) {
+    if (round === undefined) continue;
+    if (round.sections === 0) problems.push({ code: 'DEPTH_PLACE_ROUND', object: `part "${part}"`, detail: 'has 0 measurable round sections; visible samples at distinct sagittae are required on a resolved principal axis' });
+    else if (round.invertedSections > 0) problems.push({ code: 'DEPTH_PLACE_ROUND', object: `part "${part}"`,
+      detail: `${round.invertedSections} of ${round.sections} fitted sections (fraction ${round.invertedSections / round.sections}) have a non-positive slope; required edges farther than the centre under place.near` });
+  }
+  if (validScale === undefined || problems.length) throw new PartsError(problems);
+  return validScale;
+}
+
+/** Validate once, then write paths relative to each chosen destination. */
+export function stageDepthPlacement(input: DepthPlacementInput): {
+  report: DepthPlacementReport;
+  write(out: string, turnCheck?: DepthPlacementTurnCheck): { recipe: string; config: string };
+} {
+  const recipeDir = dirname(resolve(input.config)), configDir = dirname(resolve(input.rigConfig));
+  const { recipe, place } = readDepthRecipe(readJson(input.config));
+  if (place === undefined) return fail('DEPTH_RECIPE', 'place', 'is absent; declare the painting map, near, scale and anchor');
+  const mapFile = resolve(recipeDir, place.map);
+  const maps = Object.values(recipe.parts).flatMap(p => { const file = resolve(recipeDir, p.map); return [file, file + '.binding.json']; });
+  const sources = [resolve(input.parts), resolve(input.config), resolve(input.rigConfig), mapFile, ...maps];
+  emptyOutput(input.out, sources);
+  const set = readPartSet(input.parts), names = new Set(set.recs.map(p => p.name));
+  const missing = [...Object.keys(recipe.parts), ...recipe.clear].filter(name => !names.has(name));
+  if (missing.length) throw new PartsError(missing.map(name => ({ code: 'DEPTH_PART_RESOLVES', object: name, detail: 'names no assembled part; use exact parts.json names' })));
+  const map = readNumericMap(readJson(mapFile), 'place.map');
+  if (map.channels !== 1) return fail('DEPTH_MAP_FORMAT', 'place.map', 'requires a single scalar depth channel');
+  if (map.width !== set.W || map.height !== set.H) {
+    return fail('DEPTH_MAP_SIZE', 'place.map', `is ${map.width}x${map.height}; painting frame (parts.json rig_size) requires ${set.W}x${set.H}`);
+  }
+  const raw = object(readJson(input.rigConfig), 'rig config');
+  const config = parseConfig(raw), body = config.turn?.body;
+  if (body === undefined || !Object.hasOwn(recipe.groups, 'body')) {
+    return fail('DEPTH_PLACE_GROUP', 'config.turn.body', 'requires a declared 2.5D body turn and a body depth recipe group');
+  }
+  const firstSurface = Object.entries(body.roles).find(([, role]) => role === 'surface')?.[0];
+  if (firstSurface !== place.anchor || !Object.hasOwn(recipe.parts, place.anchor) || recipe.parts[place.anchor].group !== 'body') {
+    return fail('DEPTH_PLACE_ANCHOR', 'place.anchor', `names "${place.anchor}"; required the first body surface (${JSON.stringify(firstSurface)}) declared in recipe.parts for the body group`);
+  }
+  const reliefs = new Map(Object.entries(recipe.parts).filter(([, p]) => p.group === 'body').map(([name, p]) => [name, p.relief]));
+  const selected = new Set(reliefs.keys());
+  const groupProblems = [...selected].filter(part => !Object.hasOwn(body.roles, part)).map(part => ({
+    code: 'DEPTH_GROUP_BINDING', object: part, detail: 'declares the body group; register the part in config.turn.body.roles',
+  }));
+  for (const [part, role] of Object.entries(body.roles)) if (role === 'unit') {
+    selected.add(part);
+    if (!names.has(part)) groupProblems.push({
+      code: 'DEPTH_PART_RESOLVES', object: part, detail: 'is declared as a body turn unit but names no assembled part; use exact parts.json names',
+    });
+  }
+  for (const part of place.round ?? []) if (!selected.has(part)) groupProblems.push({
+    code: 'DEPTH_PLACE_ROUND', object: `place.round, part ${JSON.stringify(part)}`, detail: 'must resolve to a body recipe part or a body turn unit',
+  });
+  if (groupProblems.length) throw new PartsError(groupProblems);
+  const samples = placementSamples(set, map, reliefs, place, selected);
+  const scale = checkPlacementScale(place.scale, samples, reliefs);
+  const anchorMedian = samples.find(p => p.part === place.anchor)!.rawMedian;
+  const anchorZ = recipe.parts[place.anchor].median, sign = place.near === 'white' ? 1 : -1;
+  const pivot = typeof place.pivot === 'number' ? place.pivot : 0;
+  const parts = samples.map(({ rawMedian, rawP5, rawP95, ...sample }) => {
+    const rigMedian = sample.part === place.anchor ? anchorZ : anchorZ + sign * ((rawMedian - anchorMedian) * scale);
+    const impliedRelief = reliefs.has(sample.part) ? (rawP95 - rawP5) * scale : null;
+    if (!Number.isFinite(rigMedian) || (impliedRelief !== null && !Number.isFinite(impliedRelief))) return fail('DEPTH_PLACE_SCALE', `part "${sample.part}"`, 'placed median or implied relief overflows; declare a representable scale and anchor median');
+    return { ...sample, rawMedian, rawP5, rawP95, rigMedian, impliedRelief };
+  });
+  const bodyGroup = recipe.groups.body;
+  const unitRows = parts.filter(({ part }) => body.roles[part] === 'unit');
+  const turn = object(raw.turn, 'config.turn'), rawBody = object(turn.body, 'config.turn.body');
+  rawBody.pivot = pivot;
+  bodyGroup.pivot = pivot;
+  if (unitRows.length) {
+    // The body producer projects these world depths against the first surface.
+    const unitDepths = { ...(body.unitDepths ?? config.turn?.unitDepths), ...bodyGroup.unitDepths,
+      ...Object.fromEntries(unitRows.map(({ part, rigMedian }) => [part, rigMedian])) };
+    rawBody.unitDepths = unitDepths;
+    // depth-apply applies a recipe's authored override after reading the rig config.
+    if (bodyGroup.unitDepths !== undefined) bodyGroup.unitDepths = unitDepths;
+  }
+  for (const { part, rigMedian } of parts) if (reliefs.has(part)) recipe.parts[part].median = rigMedian;
+  recipe.place = { ...place, scale };
+  parseConfig(raw);
+  const report: DepthPlacementReport = { spec: 'rig-parts-depth-place-report/1', near: place.near, scale, anchor: place.anchor, pivot, parts };
+  return { report, write(out, turnCheck) {
+    const dir = resolve(out);
+    emptyOutput(dir, sources);
+    const relocated = structuredClone(raw), placedRecipe = structuredClone(recipe);
+    relocateConfigReferences(relocated, configDir, dir, 'relative');
+    const mapAt = (path: string): string => isAbsolute(path) ? path : relative(dir, resolve(recipeDir, path));
+    for (const p of Object.values(placedRecipe.parts)) p.map = mapAt(p.map);
+    placedRecipe.place!.map = mapAt(place.map);
+    const paths = { recipe: join(dir, 'recipe.json'), config: join(dir, 'config.json') };
+    const reportJson = text(turnCheck === undefined ? report : { ...report, turnCheck });
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(paths.recipe, text(placedRecipe), { flag: 'wx' });
+    writeFileSync(paths.config, text(relocated), { flag: 'wx' });
+    writeFileSync(join(dir, 'depth-place-report.json'), reportJson, { flag: 'wx' });
+    return paths;
+  } };
+}
+
 function registeredMap(map: NumericMap, p: PreparedPart, frame: PartMap['frame'], at: string): NumericMap {
   const [w, h] = frame === 'part' ? p.size : frame === 'input' ? p.inputSize : p.upscaled;
   if (map.width !== w || map.height !== h) return fail('DEPTH_MAP_SIZE', at, `is ${map.width}x${map.height}; declared ${frame} frame is ${w}x${h}`);

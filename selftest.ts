@@ -6090,7 +6090,7 @@ function usageDrift(run: (args: string[]) => { status: number; out: string }, su
  */
 const CL26_COMMAND_SETS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['A', ['assemble', 'build', 'bust-landmarks', 'check', 'check-parts', 'compare', 'compose']],
-  ['B', ['comfy', 'depth-apply', 'depth-bind', 'depth-map', 'depth-prepare']],
+  ['B', ['comfy', 'depth-apply', 'depth-bind', 'depth-map', 'depth-place', 'depth-prepare']],
   ['C', ['diff-components', 'diff-drafts', 'edited-part', 'external-receipt', 'head-crop-preflight', 'inputs', 'layers', 'loop']],
   ['D', ['mesh-draft', 'mesh-stats', 'painting', 'propose', 'remesh', 'retune', 'rig', 'sheet']],
 ];

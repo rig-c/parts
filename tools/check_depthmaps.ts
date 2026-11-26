@@ -1,17 +1,19 @@
 /** Independent analytic controls for #897; no private art or measured expectations. */
+import { compile } from '@rig-c/core/compile';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { RECEIPT_AUTHOR_FILE, writeEditorReceiptFixture } from '../fixtures/editor_receipts.ts';
-import { rigParts } from '../fixtures/rig.ts';
+import { writeContourTurnFixture } from '../fixtures/contour-turn.ts';
+import { block, rigParts } from '../fixtures/rig.ts';
 import { failLine, PartsError } from '../src/errors.ts';
 import { configFileReferences } from '../src/config.ts';
 import { alphaSupport, floatBox, integrateNormals, mapToSheet, readNumericMap, type NumericMap } from '../src/depthmaps.ts';
-import { applyDepth, bindDepthMap, parseDepthRecipe, prepareDepth } from '../src/depthworkflow.ts';
+import { applyDepth, bindDepthMap, parseDepthRecipe, prepareDepth, type DepthPlacementReport } from '../src/depthworkflow.ts';
 import { depthImageReference, readParts, writeParts } from '../src/parts.ts';
 import { assemblyConfigChanges, assemblyConfigReading } from '../src/assembly-reading.ts';
-import { assembleStage, readRigInputs } from '../src/build.ts';
+import { assembleStage, readRigInputs, rigOutputTexts } from '../src/build.ts';
 import { buildRig } from '../src/rig.ts';
 import { depthReading } from '../src/depthsheets.ts';
 import { type EditedPartReceipt } from '../src/editedparts.ts';
@@ -762,6 +764,284 @@ function runDepthClippingChecks(dir: string, say: Say): void {
     'clip=1 in group "head"; no finite zScale exceeds group max z=1.7976931348623157e+308; revise median or relief')]), overflow.evidence);
 }
 
+function checkDepthPlacementCase(say: Say, name: string, check: () => [boolean, string]): void {
+  try {
+    const [ok, detail] = check();
+    say(name, ok, detail);
+  } catch (error) {
+    say(name, false, error instanceof PartsError ? error.problems.map(failLine).join(' | ') : String(error));
+  }
+}
+
+function placementFixture(dir: string, variant: 'layers' | 'occluded' | 'round' = 'layers') {
+  const source = join(dir, 'assembled'), rigConfig = join(dir, 'rig-config.json');
+  mkdirSync(join(source, 'parts'), { recursive: true });
+  const pf = rigParts();
+  pf.rig_size = [64, 64];
+  pf.scale_rig_per_source = 1;
+  const round = variant === 'round';
+  const torso = { ...pf.parts[0], name: 'torso', x: round ? 24 : 30, y: 10,
+    w: round ? 17 : 4, h: round ? 40 : 16, opaque_px: round ? 17 * 40 : 4 * 16 };
+  const badge = { ...torso, name: 'badge', from: 'full:headwear', y: variant === 'occluded' ? 10 : 18,
+    opaque_px: variant === 'layers' ? 3 * torso.h : torso.opaque_px };
+  pf.parts = round ? [torso] : [torso, badge];
+  const roles = round ? { torso: 'surface' } : { torso: 'surface', badge: 'unit' };
+  json(rigConfig, {
+    key: 'fixture', seethrough: { resolution: 64, steps: 1, seed: 0, offload: false },
+    assemble: { rig_scale: 1, plan: pf.parts.map(part => [part.name, ...part.from.split(':')]) },
+    bones: [{ name: 'chest', parent: 'root', at: [32, 36] }, { name: 'badge_mount', parent: 'chest', at: [32, 26] }],
+    meshes: {}, regions: round ? { torso: 'chest' } : { torso: 'chest', badge: 'badge_mount' },
+    motion: { duration: 1, tracks: [] }, turn: { body: { pivot: 17, roles } },
+  });
+  pf.assembly_config = assemblyConfigReading(rigConfig, pf);
+  writeParts(join(source, 'parts.json'), pf);
+  for (const part of pf.parts) {
+    const art = block(part.w, part.h);
+    if (part === badge && variant === 'layers') {
+      const alpha = [127, 128, 255, 0];
+      for (let i = 0; i < part.w * part.h; i++) art.data[i * 4 + 3] = alpha[i % part.w];
+    }
+    writePng(join(source, 'parts', `${part.name}.png`), art);
+    json(join(dir, `${part.name}.json`), { spec: 'rig-parts-map/1', width: part.w, height: part.h,
+      channels: 1, data: Array.from({ length: part.w * part.h }, (_, i) => i % part.w) });
+  }
+  // Recipe order differs from assembled draw order. The declared pivot and
+  // badge median are sentinels so copying either input through is detectable.
+  const part = { source: 'depth', frame: 'part', group: 'body' };
+  const recipe = {
+    spec: 'rig-parts-depth/1', prepare: { longSide: 16, paddingFraction: 0, padding: 0 },
+    groups: { body: { near: 'white', zScale: 255, pivot: 17 } },
+    parts: {
+      ...(round ? {} : { badge: { ...part, map: 'badge.json', median: 80, relief: 6 } }),
+      torso: { ...part, map: 'torso.json', median: 30, relief: 12 },
+    },
+    clear: [], place: { map: 'whole.json', near: 'white', anchor: 'torso', scale: 1 },
+  };
+  const whole = (depth: (x: number, y: number) => number): void => {
+    json(join(dir, 'whole.json'), { spec: 'rig-parts-map/1', width: 64, height: 64, channels: 1,
+      data: Array.from({ length: 64 * 64 }, (_, i) => depth(i % 64, Math.floor(i / 64))) });
+  };
+  whole((x, y) => (y < 18 ? [0, 2, 4, 6] : y < 26 ? [0, 8, 12, 6] : [0, 16, 20, 6])[x - 30] ?? 0);
+  return { source, rigConfig, recipe, whole, dir };
+}
+
+function runDepthPlaceCli(dir: string, name: string, parts: string, rigConfig: string, recipe: Obj, checkTurn = false) {
+  const config = join(dir, `${name}.json`), out = join(dir, name);
+  json(config, recipe);
+  const configBefore = readFileSync(config), rigBefore = readFileSync(rigConfig);
+  mkdirSync(out);
+  const result = spawnSync(process.execPath, [join(import.meta.dir, '../cli.ts'), 'depth-place', '--parts', parts,
+    '--config', config, '--rig-config', rigConfig, '--out', out, ...(checkTurn ? ['--check-turn'] : [])], { encoding: 'utf8' });
+  const stdout = result.stdout ?? '', names = readdirSync(out).sort();
+  return {
+    out, names, status: result.status, stdout,
+    inputsUnchanged: configBefore.equals(readFileSync(config)) && rigBefore.equals(readFileSync(rigConfig)),
+    evidence: JSON.stringify({ exit: result.status, names, stdout: stdout.trim(), stderr: result.stderr?.trim(), error: result.error?.message }),
+  };
+}
+
+type PlacementRun = ReturnType<typeof runDepthPlaceCli>;
+const placedFiles = ['config.json', 'depth-place-report.json', 'recipe.json'];
+const placedOk = (run: PlacementRun): boolean => run.status === 0 && run.inputsUnchanged && run.names.join() === placedFiles.join();
+function namedPlacementRefusal(run: PlacementRun, subject: RegExp): string | undefined {
+  if (run.status !== 1 || run.names.length !== 0 || !run.inputsUnchanged) return undefined;
+  return run.stdout.split(/\r?\n/).find(line => /^\s*FAIL\s+DEPTH_PLACE_[A-Z_]+:/.test(line) && subject.test(line));
+}
+
+function readDepthPlacement(run: PlacementRun) {
+  const recipe = parseDepthRecipe(JSON.parse(readFileSync(join(run.out, 'recipe.json'), 'utf8')));
+  const config = JSON.parse(readFileSync(join(run.out, 'config.json'), 'utf8')) as {
+    turn: { body: { pivot: number; unitDepths: Record<string, number> } };
+  };
+  const report = JSON.parse(readFileSync(join(run.out, 'depth-place-report.json'), 'utf8')) as DepthPlacementReport;
+  return { recipe, body: config.turn.body, report };
+}
+
+function compiledPlacementTravel(source: string, placed: PlacementRun, dir: string) {
+  const config = join(placed.out, 'recipe.json'), rigConfig = join(placed.out, 'config.json');
+  const prepared = join(dir, 'prepared'), applied = join(dir, 'applied'), rig = join(dir, 'rig');
+  prepareDepth({ parts: source, config, out: prepared });
+  applyDepth({ parts: source, config, rigConfig, manifest: join(prepared, 'manifest.json'), out: applied }, () => {});
+  const input = readRigInputs(join(applied, 'config.json'), applied);
+  const built = buildRig(input.cfg, input.parts, input.images);
+  mkdirSync(join(rig, 'images'), { recursive: true });
+  for (const [name, image] of built.images) writePng(join(rig, 'images', name), image);
+  for (const [name, output] of rigOutputTexts(built, null)) writeFileSync(join(rig, name), output);
+  const { skeleton } = compile({ rigPath: join(rig, 'rig.json'), motionPath: join(rig, 'motion.json'), outDir: join(rig, 'compiled') });
+  const turn = skeleton.animations.body_turn;
+  const deform = turn?.attachments?.default?.torso?.torso?.deform;
+  const unit = turn?.bones?.badge_mount?.translatex;
+  const torsoBone = skeleton.slots.find(slot => slot.name === 'torso')?.bone;
+  if (deform?.length !== 5 || unit?.length !== 5 || torsoBone === undefined) throw new Error('expected five emitted body turn keys on torso and badge');
+  const inheritedShift = (bone: string, time: number): number => {
+    let dx = 0;
+    for (let name: string | undefined = bone; name !== undefined;) {
+      const key = turn.bones?.[name]?.translatex?.find(k => (k.time ?? 0) === time);
+      dx += Number(key?.value ?? 0);
+      name = skeleton.bones.find(b => b.name === name)?.parent;
+    }
+    return dx;
+  };
+  // The flat generated grid translates uniformly. Both roots are unrotated;
+  // add the first vertex's emitted x deform to its inherited x translation.
+  return [0, 4].map(i => {
+    const time = Number(deform[i].time ?? 0);
+    const vertices = deform[i].vertices;
+    if (!Array.isArray(vertices) || typeof vertices[0] !== 'number' || (unit[i].time ?? 0) !== time) {
+      throw new Error('expected a compiled deform vertex and unit key at the same turn extreme');
+    }
+    const torso = inheritedShift(torsoBone, time) + vertices[0];
+    const badge = inheritedShift('badge_mount', time);
+    return { time, torso, badge };
+  });
+}
+
+/** #1570: independent hand readings through the public placement CLI. */
+function runDepthPlacementChecks(dir: string, say: Say): void {
+  const f = placementFixture(join(dir, 'layers'));
+  const original = files(f.source);
+  const run = (name: string, place: Obj, checkTurn = false, recipe: Obj = f.recipe) =>
+    runDepthPlaceCli(f.dir, name, f.source, f.rigConfig, { ...recipe, place }, checkTurn);
+  const omitted = run('omitted-pivot', f.recipe.place);
+  const anchor = run('anchor-pivot', { ...f.recipe.place, pivot: 'anchor' });
+  checkDepthPlacementCase(say, 'DPL01_VISIBLE_MEDIANS_USE_OPAQUE_DRAW_ORDER', () => {
+    if (!placedOk(omitted)) return [false, omitted.evidence];
+    const { recipe, body, report } = readDepthPlacement(omitted);
+    // Torso owns 16 each of 0 and 6 and 8 each of 2 and 4 (median 3).
+    // Badge owns 8 each of 8, 12, 16, 20 (median 14). The 127-alpha fringe
+    // leaves the torso visible and the 128-alpha column belongs to the badge.
+    const rows = report.parts.map(p => [p.part, p.visibleCount, p.visibleFraction, p.rawMedian, p.rigMedian, p.reliefRatio]);
+    const expected = [['torso', 48, 0.75, 3, 30, 2], ['badge', 32, 1, 14, 41, 0.5]];
+    return [recipe.parts.torso.median === 30 && recipe.parts.badge.median === 41 &&
+      body.unitDepths?.badge === 41 && recipe.parts.torso.relief === 12 && recipe.parts.badge.relief === 6 &&
+      recipe.groups.body.near === 'white' && recipe.groups.body.zScale === 255 && report.turnCheck === undefined &&
+      report.spec === 'rig-parts-depth-place-report/1' && JSON.stringify(rows) === JSON.stringify(expected),
+    JSON.stringify({ expected, rows, medians: [recipe.parts.torso.median, recipe.parts.badge.median], unitDepths: body.unitDepths })];
+  });
+  // Both parts are centred at x=32. A pivot above the 11 px depth gap
+  // keeps both parts on one side of the axis, so the absolute travel order can flip.
+  const pivot = 20.5;
+  const flat = { ...f.recipe, parts: { torso: { ...f.recipe.parts.torso, relief: 0 },
+    badge: { ...f.recipe.parts.badge!, relief: 0 } } };
+  const white = run('white', { ...f.recipe.place, pivot }, true, flat);
+  const black = run('black', { ...f.recipe.place, near: 'black', pivot }, false, flat);
+  checkDepthPlacementCase(say, 'DPL02_OMITTED_ANCHOR_AND_NUMERIC_PIVOTS', () => {
+    if (![omitted, anchor, white].every(placedOk)) return [false, [omitted, anchor, white].map(r => r.evidence).join(' | ')];
+    const values = [omitted, anchor, white].map(result => {
+      const { recipe, body, report } = readDepthPlacement(result);
+      return [recipe.groups.body.pivot, body.pivot, report.pivot];
+    });
+    return [values.every((row, i) => row.every(value => value === (i === 2 ? pivot : 0))), JSON.stringify(values)];
+  });
+  checkDepthPlacementCase(say, 'DPL03_POLARITY_REVERSES_WORLD_DEPTH_AND_COMPILED_TRAVEL', () => {
+    if (![white, black].every(placedOk)) return [false, `${white.evidence} | ${black.evidence}`];
+    const [w, b] = [white, black].map(readDepthPlacement);
+    const whiteTravel = compiledPlacementTravel(f.source, white, join(dir, 'white-travel'));
+    const blackTravel = compiledPlacementTravel(f.source, black, join(dir, 'black-travel'));
+    const ranks = (travel: typeof whiteTravel, near: 'torso' | 'badge', far: 'torso' | 'badge') =>
+      travel.every(({ [near]: n, [far]: d }, i) => (i === 0 ? n > 0 && d > 0 : n < 0 && d < 0) && Math.abs(n) > Math.abs(d) + 1);
+    return [w.recipe.parts.torso.median === 30 && b.recipe.parts.torso.median === 30 &&
+      w.recipe.parts.badge.median === 41 && b.recipe.parts.badge.median === 19 &&
+      w.body.unitDepths?.badge === 41 && b.body.unitDepths?.badge === 19 &&
+      ranks(whiteTravel, 'badge', 'torso') && ranks(blackTravel, 'torso', 'badge'),
+    JSON.stringify({ white: { depth: w.body.unitDepths, travel: whiteTravel }, black: { depth: b.body.unitDepths, travel: blackTravel } })];
+  });
+  checkDepthPlacementCase(say, 'DPL04_CHECK_TURN_BUILT_AND_INPUT_ASSEMBLY_BYTES_UNCHANGED', () => {
+    if (!placedOk(white)) return [false, white.evidence];
+    const { report } = readDepthPlacement(white);
+    return [report.turnCheck?.status === 'built' && JSON.stringify(files(f.source)) === JSON.stringify(original),
+      JSON.stringify({ turnCheck: report.turnCheck, inputFiles: Object.keys(original), outputs: white.names })];
+  });
+  const { badge: _mappedBadge, ...surfaceMaps } = flat.parts;
+  const unitOnly = run('unit-without-map', { ...f.recipe.place, pivot }, true, {
+    ...flat,
+    groups: { body: { ...flat.groups.body, unitDepths: { badge: 80 } } },
+    parts: surfaceMaps,
+  });
+  checkDepthPlacementCase(say, 'DPL10_BODY_UNIT_WITHOUT_MAP_SURVIVES_RECIPE_OVERRIDE', () => {
+    if (!placedOk(unitOnly)) return [false, unitOnly.evidence];
+    const { recipe, body, report } = readDepthPlacement(unitOnly);
+    const badge = report.parts.find(p => p.part === 'badge');
+    return [!Object.hasOwn(recipe.parts, 'badge') && recipe.groups.body.unitDepths?.badge === 41 &&
+      body.unitDepths?.badge === 41 && badge?.rigMedian === 41 && badge.reliefRatio === null && badge.impliedRelief === null &&
+      report.turnCheck?.status === 'built', JSON.stringify({ badge, unitDepths: body.unitDepths, turnCheck: report.turnCheck })];
+  });
+
+  json(join(f.dir, 'wrong-size.json'), { spec: 'rig-parts-map/1', width: 1, height: 1, channels: 1, data: [0] });
+  const sizeMismatch = run('size-mismatch', { ...f.recipe.place, map: 'wrong-size.json' });
+  const missingPart = run('missing-part', f.recipe.place, false, {
+    ...f.recipe, parts: { ...f.recipe.parts, missing_part: f.recipe.parts.torso },
+  });
+  say('DPL11_WRONG_MAP_FRAME_AND_MISSING_PART_REFUSE_BEFORE_OUTPUT',
+    [sizeMismatch, missingPart].every(r => r.status === 1 && r.names.length === 0 && r.inputsUnchanged) &&
+    /FAIL\s+DEPTH_MAP_SIZE: place\.map.*1x1.*64x64/.test(sizeMismatch.stdout) &&
+    /FAIL\s+DEPTH_PART_RESOLVES: missing_part\b/.test(missingPart.stdout), `${sizeMismatch.evidence} | ${missingPart.evidence}`);
+
+  const occluded = placementFixture(join(dir, 'occluded'), 'occluded');
+  const covered = runDepthPlaceCli(occluded.dir, 'covered', occluded.source, occluded.rigConfig, occluded.recipe);
+  say('DPL05_FULL_OCCLUSION_REFUSES_THE_HIDDEN_PART',
+    Boolean(namedPlacementRefusal(covered, /\btorso\b.*\bvisible\b.*\b0 of 64\b/i)), covered.evidence);
+
+  const { near: _near, ...withoutNear } = f.recipe.place;
+  const missingNear = run('missing-near', withoutNear);
+  say('DPL06_MISSING_POLARITY_IS_NAMED', Boolean(namedPlacementRefusal(missingNear, /place\.near.*black.*white/i)), missingNear.evidence);
+
+  const round = placementFixture(join(dir, 'round'), 'round');
+  const sweep = (sign: number): void => round.whole(x => {
+    if (x < 24 || x > 40) return 0;
+    // The material is long on y, with the same circular cross-section at each y.
+    const v = x - 32, r = 8;
+    return sign * (r - Math.sqrt(r ** 2 - v ** 2)) / 2;
+  });
+  const roundPlace = { ...round.recipe.place, near: 'black', round: ['torso'] };
+  const checkRound = (name: string, place: Obj) => runDepthPlaceCli(round.dir, name, round.source, round.rigConfig, { ...round.recipe, place });
+  sweep(1);
+  const fitted = checkRound('fitted', roundPlace);
+  const { scale: _scale, ...withoutScale } = roundPlace;
+  const missingScale = checkRound('missing-scale', withoutScale);
+  sweep(-1);
+  const inverted = checkRound('inverted', roundPlace);
+  checkDepthPlacementCase(say, 'DPL07_ROUND_PROFILE_FITS_AND_INVERTED_PROFILE_REFUSES', () => {
+    if (!placedOk(fitted)) return [false, fitted.evidence];
+    const section = readDepthPlacement(fitted).report.parts.find(p => p.part === 'torso')?.round;
+    const invertedLine = namedPlacementRefusal(inverted, /\btorso\b.*\bnon-positive slope\b/i);
+    return [section?.sections === 10 && section.invertedSections === 0 &&
+      section.scale !== null && Math.abs(section.scale - 2) < 1e-10 &&
+      section.iqr?.length === 2 && section.iqr.every(value => Math.abs(value - 2) < 1e-10) &&
+      invertedLine?.includes('10 of 10') === true,
+    JSON.stringify({ section, invertedLine, invertedExit: inverted.status })];
+  });
+  // The centre and edge each occupy more than 5%, so p5=0 and p95=4.
+  // The authored relief is 12, giving the distinct relief implied scale 3.
+  const scaleLine = namedPlacementRefusal(missingScale, /place\.scale.*is absent.*declare a finite number/i);
+  const implied = namedPlacementRefusal(missingScale, /place\.scale.*implied relief ratio for "torso" = 3;/i);
+  const values = /round scale for "torso" = ([^,]+), IQR=([^,]+?)\.\.([^,]+), sections=(\d+)/.exec(implied ?? '');
+  say('DPL08_MISSING_SCALE_REFUSES_WITH_ROUND_AND_RELIEF_EVIDENCE', Boolean(scaleLine) && values?.[4] === '10' &&
+    values.slice(1, 4).every(v => Math.abs(Number(v) - 2) < 1e-10), missingScale.evidence);
+
+  checkDepthPlacementCase(say, 'DPL09_CHECK_TURN_REPORTS_A_REAL_WINDING_REFUSAL_WITH_PLACED_OUTPUT', () => {
+    const fixtureRoot = join(dir, 'winding'), fixture = writeContourTurnFixture(fixtureRoot);
+    const originalRecipe = JSON.parse(readFileSync(join(fixtureRoot, 'recipe.json'), 'utf8')) as Obj;
+    const [width, height] = readParts(join(fixture.parts, 'parts.json')).rig_size;
+    json(join(fixtureRoot, 'whole.json'), { spec: 'rig-parts-map/1', width, height, channels: 1,
+      data: Array.from({ length: width * height }, (_, i) => i % width) });
+    // With only the anchor placed, median 800, relief 464 and pivot 40 are
+    // the same authored input as the existing #1306 A39 plant.
+    const winding = runDepthPlaceCli(fixtureRoot, 'winding-place', fixture.parts, fixture.config, {
+      ...originalRecipe, place: { map: 'whole.json', near: 'white', anchor: 'bodice', scale: 1, pivot: 40 },
+    }, true);
+    if (!placedOk(winding)) return [false, winding.evidence];
+    const { recipe, report } = readDepthPlacement(winding), check = report.turnCheck;
+    const row = check?.status === 'refused' ? check.winding.find(row => row.rule === 'A39_DEFORM_KEEPS_TRIANGLE_WINDING' &&
+      row.animation === 'body_turn' && row.part === 'bodice' && row.attachment === 'bodice' && row.key === 4) : undefined;
+    const problems = check?.status === 'refused' ? check.problems.map(p => p.code) : [];
+    return [recipe.parts.bodice.median === 800 && recipe.parts.bodice.relief === 464 && check?.status === 'refused' &&
+      check.stage === 'rig' && problems.includes('RIG_RIGC_GREEN') && row?.reversedTriangles === 1 && row.triangles === 148,
+    JSON.stringify({ status: check?.status, stage: check?.status === 'refused' ? check.stage : undefined,
+      problems, winding: check?.status === 'refused' ? check.winding : undefined, outputs: winding.names })];
+  });
+}
+
 export function runDepthMapChecks(dir: string, say: Say): void {
   mkdirSync(join(dir, 'source/parts'), { recursive: true });
   const art = newRaster(65, 65), data: number[] = [], normals: number[] = [];
@@ -937,6 +1217,7 @@ export function runDepthMapChecks(dir: string, say: Say): void {
   runDepthRelocationChecks(join(dir, 'relocation'), say);
   runDepthGroupSelectionChecks(join(dir, 'group-selection'), say);
   runDepthClippingChecks(join(dir, 'clipping'), say);
+  runDepthPlacementChecks(join(dir, 'placement'), say);
 }
 
 /** #1449: `depth-apply --groups` applies a recorded subset of one prepared recipe's groups. */
