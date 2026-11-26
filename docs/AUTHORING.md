@@ -9972,20 +9972,36 @@ re-run depth for these inputs, then call
 `rig-parts depth-bind --map <numeric-map.json> --input <prepared.png> --part <name>`. Malformed
 present receipts also refuse. Symlinked receipts, including dangling links, are
 refused; a regular file is required. Preparing again never rebinds a map.
-Under the compatibility policy dated **2026-11-16**, a missing receipt preserves
-legacy output bytes and exits, with one `DEPTH_MAP_BINDING_ABSENT` WARN per
-selected map on stderr. This is unverified inference-input identity, not a
+Under the compatibility policy dated **2026-11-16**, an otherwise valid recipe
+can use a map with a missing receipt. This adds one `DEPTH_MAP_BINDING_ABSENT`
+WARN per selected map on stderr. This is unverified inference-input identity, not a
 binding pass. The provider flow calls the writer when producing a map. The writer binds these
 files at invocation; it cannot prove the map was inferred from that input.
 Parts does not run inference or invent provenance.
 
-Apply computes `u=(raw-median(raw))/(p95-p5)` inside original alpha >=128,
-using linear percentiles, then `Z=median+relief*u`. A flat map requires explicit
-relief 0. Encode `Z/zScale` for near white, `1-Z/zScale` for near black, clip to
-[0,1], and round to the nearest 8-bit level with even ties. Extend every
-non-support pixel with the Euclidean nearest support value, with row-major ties.
+Apply computes `u=(raw-median(raw))/(p95-p5)` on original part pixels with
+alpha >= 128, using linear percentiles, then `z=median+relief*u`. A flat map
+requires explicit relief 0 and uses a zero relief offset. Every supported pixel
+must satisfy `0 < z < zScale` before encoding. `DEPTH_APPLY_CLIPPED` refuses
+any nonzero clip fraction before writing outputs. The fraction counts supported
+pixels with `z <= 0` or `z >= zScale` divided by all supported pixels.
+
+For upper clipping, the refusal gives the smallest binary64 group `zScale`
+strictly above the maximum original supported depth in the group. For each part
+with lower clipping, it gives the minimum authored `median`, the next binary64
+value above the maximum of `-(relief*u)` across that part's supported pixels.
+It also gives the difference between that target and the previous authored
+median in rig pixels. Both remedies are reported when both boundaries clip.
+If no finite scale clears the upper boundary, revise the median or relief.
+If no finite median clears the lower boundary, reduce the relief.
+Recompute the group scale if changing medians changes the maximum supported
+depth, then prepare the revised recipe again.
+
+Encode `z/zScale` for near white or `1-z/zScale` for near black and round to
+the nearest 8-bit level with even ties. Extend every non-support pixel with the
+Euclidean nearest support value, with row-major ties.
 The resulting opaque gray sheet carries no background cliff. The report names
-levels, clip fraction (Z <=0 or >=zScale on support), declared relief in rig
+levels, clip fraction (zero on success), declared relief in rig
 pixels, group pivot, sign, raw median/p5/p95 and source/input/map/sheet hashes.
 It reports measurements, not a depth-quality pass mark. `rig` still runs Core's
 gate; apply writes parts and configuration, never a skeleton or a gate verdict.
@@ -10033,10 +10049,9 @@ same medians, group pivot and `zScale`; only the declared relief changes.
 Read each named report row's `relief`, `zScale` and `clipFraction` before
 judging its render. The clipping denominator is every original part pixel
 with alpha >=128, including boundary support, never the padded input area.
-A low clipped fraction does not establish shape quality. Inspect setup,
-both yaw endpoints and their difference at native scale, then enlarge the
-same pixels with nearest-neighbour sampling. Neither clipping nor agreement
-with a reference map substitutes for that inspection.
+Use those readings to confirm the calibration. To judge shape quality, inspect
+setup, both yaw endpoints and their difference at native scale, then enlarge
+the same pixels with nearest-neighbour sampling.
 
 The owner's preference for per-part volume is subjective provenance, not an
 automated quality conclusion. Model licence posture remains the owner's choice.
@@ -10057,12 +10072,13 @@ by `rig`, so their output requires no alternate compiler or dependency pin.
 | <a id="DEPTH_PART_RESOLVES"></a>`DEPTH_PART_RESOLVES` | selected or cleared name absent from parts.json | use the assembled part name |
 | <a id="DEPTH_OUTPUT_EMPTY"></a>`DEPTH_OUTPUT_EMPTY` | nonempty output or output containing an input | choose a separate absent or empty directory |
 | <a id="DEPTH_MAP_BINDING"></a>`DEPTH_MAP_BINDING` | malformed present map receipt, wrong part, map hash or inference-input hash | re-run depth for these inputs, then `rig-parts depth-bind --map <numeric-map.json> --input <prepared.png> --part <name>` |
-| <a id="DEPTH_MAP_BINDING_ABSENT"></a>`DEPTH_MAP_BINDING_ABSENT` | WARN only: no receipt, compatibility policy dated 2026-11-16 | legacy behavior is retained; re-run depth for these inputs, then `rig-parts depth-bind --map <numeric-map.json> --input <prepared.png> --part <name>` |
+| <a id="DEPTH_MAP_BINDING_ABSENT"></a>`DEPTH_MAP_BINDING_ABSENT` | WARN only: no receipt, compatibility policy dated 2026-11-16 | re-run depth for these inputs, then `rig-parts depth-bind --map <numeric-map.json> --input <prepared.png> --part <name>` |
 | <a id="DEPTH_INPUT_BINDING"></a>`DEPTH_INPUT_BINDING` | changed recipe, art, part record, crop, padding or inference PNG | prepare again for these exact inputs |
 | <a id="DEPTH_MAP_FORMAT"></a>`DEPTH_MAP_FORMAT` | wrong numeric schema, channels, shape, count, unknown field or nonfinite element | provide the declared float JSON map, not a preview |
 | <a id="DEPTH_MAP_SIZE"></a>`DEPTH_MAP_SIZE` | map dimensions differ from its explicit frame | use the registered part, enlarged art or padded input grid |
 | <a id="DEPTH_MAP_SUPPORT"></a>`DEPTH_MAP_SUPPORT` | no alpha>=128 support | provide a supported part |
 | <a id="DEPTH_MAP_SPREAD"></a>`DEPTH_MAP_SPREAD` | p5=p95 with nonzero relief | supply a nonflat map or declare relief 0 |
+| <a id="DEPTH_APPLY_CLIPPED"></a>`DEPTH_APPLY_CLIPPED` | a pixel with original alpha >= 128 has pre-encoding depth `z <= 0` or `z >= zScale` | use the reported minimum median for each low-clipped part and the reported minimum group scale for upper clipping. Recompute the group scale after median edits if the maximum changes, then prepare again. |
 | <a id="DEPTH_NORMAL_ISLANDS"></a>`DEPTH_NORMAL_ISLANDS` | zero/multiple connected components at native or integration resolution | scalar source, or a larger registered normal input that preserves one island |
 | <a id="DEPTH_NORMAL_VECTOR"></a>`DEPTH_NORMAL_VECTOR` | a sampled support normal is zero | provide nonzero signed XYZ normals |
 | <a id="DEPTH_NORMAL_CONVEXITY"></a>`DEPTH_NORMAL_CONVEXITY` | core/rim or its convexity sign is unresolved | larger closed convex mask or scalar source |

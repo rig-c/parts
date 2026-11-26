@@ -149,7 +149,9 @@ export function integrateNormals(map: NumericMap, art: Raster, at: string): Norm
 }
 
 export interface MapSheetReading { levels: number; clipFraction: number; reliefRigPixels: number; rawMedian: number; rawP5: number; rawP95: number }
-export function mapToSheet(data: ArrayLike<number>, art: Raster, median: number, relief: number, near: 'black' | 'white', zScale: number, at: string): { sheet: Raster; reading: MapSheetReading } {
+export function mapToSheet(data: ArrayLike<number>, art: Raster, median: number, relief: number, near: 'black' | 'white', zScale: number, at: string): {
+  sheet: Raster; reading: MapSheetReading; maxZ: number; minOffset: number; clipsLow: boolean;
+} {
   const support = alphaSupport(art), values: number[] = [];
   for (let i = 0; i < support.length; i++) if (support[i]) values.push(data[i]);
   if (!values.length) return depthMapFail('DEPTH_MAP_SUPPORT', at, 'has no alpha>=128 pixels; a part with declared support is required');
@@ -158,13 +160,21 @@ export function mapToSheet(data: ArrayLike<number>, art: Raster, median: number,
   if (![med, lo, hi, spread].every(Number.isFinite)) return depthMapFail('DEPTH_MAP_FORMAT', at, 'normalization overflows finite arithmetic; provide finite representable median and percentile spread');
   if (spread === 0 && relief !== 0) return depthMapFail('DEPTH_MAP_SPREAD', at, `p5=p95=${lo} but relief=${relief}; a nonflat map or explicit relief 0 is required`);
   const sheet = newRaster(art.width, art.height), seeds = newRaster(art.width, art.height), levels = new Set<number>(); let clipped = 0;
+  let maxZ = -Infinity, minOffset = Infinity, clipsLow = false;
   for (let i = 0; i < support.length; i++) {
-    const z = median + relief * (spread === 0 ? 0 : (data[i] - med) / spread), unit = Math.max(0, Math.min(1, near === 'white' ? z / zScale : 1 - z / zScale));
+    const offset = relief * (spread === 0 ? 0 : (data[i] - med) / spread);
+    const z = median + offset, unit = Math.max(0, Math.min(1, near === 'white' ? z / zScale : 1 - z / zScale));
     if (!Number.isFinite(z) && support[i]) return depthMapFail('DEPTH_MAP_FORMAT', at, `world depth at support pixel ${i} overflows; declare representable median/relief and raw numbers`);
     // Uint8ClampedArray implements ties-to-even, as numpy.round does.
     sheet.data[i * 4] = unit * 255; sheet.data[i * 4 + 1] = sheet.data[i * 4 + 2] = sheet.data[i * 4]; sheet.data[i * 4 + 3] = 255;
     seeds.data[i * 4 + 3] = support[i] ? 255 : 0;
-    if (support[i]) { levels.add(sheet.data[i * 4]); if (z <= 0 || z >= zScale) clipped++; }
+    if (support[i]) {
+      levels.add(sheet.data[i * 4]);
+      maxZ = Math.max(maxZ, z);
+      minOffset = Math.min(minOffset, offset);
+      if (z <= 0) clipsLow = true;
+      if (z <= 0 || z >= zScale) clipped++;
+    }
   }
-  return { sheet: extendDepthSilhouette(sheet, seeds), reading: { levels: levels.size, clipFraction: clipped / values.length, reliefRigPixels: relief, rawMedian: med, rawP5: lo, rawP95: hi } };
+  return { sheet: extendDepthSilhouette(sheet, seeds), reading: { levels: levels.size, clipFraction: clipped / values.length, reliefRigPixels: relief, rawMedian: med, rawP5: lo, rawP95: hi }, maxZ, minOffset, clipsLow };
 }

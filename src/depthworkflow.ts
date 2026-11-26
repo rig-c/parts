@@ -28,6 +28,14 @@ interface PreparedPart { part: string; crop: number[]; sourceSha256: string; inp
 interface Prepared { spec: 'rig-parts-depth-inputs/1'; partsSha256: string; recipeSha256: string; background: number; alpha: number; parts: PreparedPart[] }
 const hash = (bytes: Uint8Array | string): string => createHash('sha256').update(bytes).digest('hex');
 const text = (raw: unknown): string => JSON.stringify(raw, null, 2) + '\n';
+/** The next binary64 value above a finite, nonnegative depth bound. */
+function aboveDepthBound(bound: number): number {
+  if (bound === 0) return Number.MIN_VALUE;
+  const bits = new DataView(new ArrayBuffer(8));
+  bits.setFloat64(0, bound);
+  bits.setBigUint64(0, bits.getBigUint64(0) + 1n);
+  return bits.getFloat64(0);
+}
 function object(raw: unknown, at: string): Obj {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return fail('DEPTH_RECIPE', at, 'requires an object with the documented fields');
   return raw as Obj;
@@ -272,6 +280,8 @@ export function applyDepth(input: { parts: string; manifest: string; config: str
   refuseStaleAssembly(outConfig, file, relocatedConfig);
   const warnings: string[] = [];
   const writes = new Map<string, Uint8Array>(), rows: Obj[] = [], recs = rawParts.parts as Obj[];
+  const groupMaxZ = new Map<string, number>();
+  const clipped: { name: string; group: string; fraction: number; clipsHigh: boolean; median: number; minMedian?: number }[] = [];
   // Retain auxiliary art (including alternate sets) and diagnostics byte-for-byte.
   // Symlink inputs would obscure ownership and can escape this assembled directory.
   const retained = new Map<string, Uint8Array>();
@@ -314,13 +324,32 @@ export function applyDepth(input: { parts: string; manifest: string; config: str
       if (map.channels !== 1) fail('DEPTH_MAP_FORMAT', name, 'depth requires one floating-point channel');
       values = floatBox(map.data, map.width, map.height, art.width, art.height);
     }
-    const { sheet, reading } = mapToSheet(values, art, declaration.median, declaration.relief, g.near, g.zScale, name), image = `${name}_depth.png`, sheetBytes = encodePngBytes(sheet);
+    const { sheet, reading, maxZ, minOffset, clipsLow } = mapToSheet(values, art, declaration.median, declaration.relief, g.near, g.zScale, name);
+    groupMaxZ.set(declaration.group, Math.max(groupMaxZ.get(declaration.group) ?? -Infinity, maxZ));
+    if (reading.clipFraction > 0) {
+      clipped.push({ name, group: declaration.group, fraction: reading.clipFraction, clipsHigh: maxZ >= g.zScale, median: declaration.median,
+        ...(clipsLow ? { minMedian: aboveDepthBound(-minOffset) } : {}) });
+      continue;
+    }
+    const image = `${name}_depth.png`, sheetBytes = encodePngBytes(sheet);
     if (file.parts.some(p => `${p.name}.png` === image)) fail('DEPTH_GROUP_BINDING', name, `sheet filename ${image} collides with artwork; use noncolliding part names`);
     writes.set(image, sheetBytes);
     if (p.depth !== undefined) retained.delete(depthImageReference(p.depth).path);
     rec.depth = { image, near: g.near, zScale: g.zScale, sources: [{ from: p.from, image: basename(declaration.map), sha256: hash(mapBytes), crop: [0, 0, art.width, art.height], reading: depthReading(sheet, art, null) }] };
     rows.push({ part: name, group: declaration.group, source: declaration.source, frame: declaration.frame, sourceSha256: prepared.sourceSha256, mapSha256: hash(mapBytes), inputSha256: prepared.inputSha256, sheetSha256: hash(sheetBytes), median: declaration.median, relief: declaration.relief, near: g.near, zScale: g.zScale, pivot: g.pivot, ...reading, sign: normal?.sign ?? 1, ...(normal === undefined ? {} : { integration: { stride: 2, iterations: normal.iterations, residual: normal.residual, coreMinusRim: normal.coreMinusRim, maxIterations: 3000, atol: 1e-6, btol: 1e-6 } }) });
   }
+  if (clipped.length) throw new PartsError(clipped.map(({ name, group, fraction, clipsHigh, median, minMedian }) => {
+    const details = [`clip=${fraction} in group "${group}"`];
+    if (clipsHigh) {
+      const maxZ = groupMaxZ.get(group)!;
+      const required = aboveDepthBound(maxZ);
+      details.push(Number.isFinite(required) ? `required zScale=${required} (group max z=${maxZ})` : `no finite zScale exceeds group max z=${maxZ}; revise median or relief`);
+    }
+    if (minMedian !== undefined) {
+      details.push(Number.isFinite(minMedian) ? `required median=${minMedian} (rise ${minMedian - median} rig px)` : 'no finite median clears z<=0; reduce relief');
+    }
+    return { code: 'DEPTH_APPLY_CLIPPED', object: `part "${name}"`, detail: details.join('; ') };
+  }));
   // A replacement must share near/zScale with every retained part in its actual group.
   for (const [name, g] of Object.entries(recipe.groups)) {
     if (!applied(name)) continue;

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+**Read before upgrading:**
+
+* **`depth-apply` now refuses previously accepted clipped recipes as `DEPTH_APPLY_CLIPPED` before writing outputs.** The refusal names each affected part and its clip fraction, the minimum group `zScale` for upper clipping, and the required median rise for lower clipping. Prepare the revised recipe again before applying. The report keys are unchanged. See [Apply the maps as depth sheets](docs/DEPTH.md#4-apply-the-maps-as-depth-sheets).
+
 ## 2.58.0 (2026-11-26)
 
 `build` records the inputs it read in a `rig-run/3` run record, Parts takes `@rig-c/core` 3.9.1 so a check replayed through a linked `--out` matches byte for byte, and two turn-surface paths that threw or skipped silently now build or refuse by name.

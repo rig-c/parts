@@ -2246,9 +2246,26 @@ field is absent without the flag, so those reports keep their bytes, and
 `relief` is an explicit rig-pixel value, not an implicit width multiplier.
 Part-width and head-referenced calibrations are authored recipe choices;
 changing a calibration requires preparing its recipe again. Compare the same
-provider maps and preserve their provenance. Each report row names the part,
-declared relief, group `zScale` and clipping over original alpha>=128 support;
-it remains a measurement rather than a shape-quality gate.
+provider maps and preserve their provenance. The additive `DEPTH_APPLY_CLIPPED`
+refusal applies before any output write, including for previously accepted
+clipped recipes, regardless of map binding receipt presence. Every original
+part pixel with alpha >= 128 must satisfy
+`0 < z < zScale` before encoding. The clip fraction divides the number of
+supported pixels at or beyond either boundary by the total supported pixel
+count.
+
+For upper clipping the refusal gives the smallest binary64 group `zScale`
+strictly above the maximum original supported depth in the group. For each
+part with lower clipping it gives the minimum authored median (the next
+binary64 value above the maximum negated relief offset over that part's
+support) and its difference from the previous authored median. When both
+boundaries clip, the refusal includes both remedies. If a required value has
+no finite binary64 representation, the refusal directs the author to revise
+the calibration. A median adjustment may require recomputing the group scale.
+
+`rig-parts-depth-report/1` keeps its existing keys. Each successful row names
+the part, declared relief, group `zScale` and a zero `clipFraction` over the
+original alpha >= 128 support. Shape quality is assessed separately.
 
 The requirements file's `fps` becomes optional when no declared measurement
 reads that rate (issue #965, additive for readers). Measurements in

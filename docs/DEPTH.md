@@ -169,8 +169,8 @@ it does not prove the model inferred one from the other. Use each recipe map
 path and its matching prepared image, retain the receipts with the maps, then
 apply them. Existing receipts are never overwritten. If a map changes, retain
 the old map and receipt and bind the new map at a new path; update the recipe
-and prepare again so its manifest binds that recipe. `depth-apply` refuses
-missing, stale or mismatched bindings before emission.
+and prepare again so its manifest binds that recipe. `depth-apply` warns when
+a binding is absent and refuses stale or mismatched bindings before emission.
 
 ### 4. Apply the maps as depth sheets
 
@@ -189,12 +189,34 @@ depth-apply: face levels=30 clip=0 reliefRigPixels=10 sign=1
 depth-apply: wrote registered parts, config.json and depth-report.json; run rig for the core gate
 ```
 
-`levels` is how many distinct grey levels the sheet uses, `clip` the share of
-pixels that fell outside the group's scale (keep it at or near zero), and
-`sign` the convexity sign the face integration chose. `mapped/` is a complete
-assembled directory: the art unchanged, a `<part>_depth.png` beside each mapped
-part, `parts.json` pointing at them, a copy of your config with the group
-pivots written in, and `depth-report.json` with every number and hash. Nothing
+`levels` is how many distinct grey levels the sheet uses, and `sign` is the
+convexity sign the face integration chose. `clip` (`clipFraction` in
+`depth-report.json`) is the share of original part pixels with alpha >= 128
+whose depth is at or beyond either boundary before encoding. Every supported
+depth must satisfy `0 < z < zScale`. A nonzero fraction triggers
+`DEPTH_APPLY_CLIPPED` before any output is written.
+
+For clipping at the upper boundary, the refusal gives the smallest binary64
+group `zScale` strictly greater than the largest original supported depth in
+the group. For each part that clips at the lower boundary, it gives the
+minimum authored `median` and how far it is above the previous median in rig
+pixels. The minimum is the next binary64 value above the greatest negated
+relief offset among that part's supported pixels. A group that clips at both
+boundaries gets both remedies across its affected parts. If a required value
+has no finite binary64 representation, revise the calibration as directed by
+the refusal. A median rise can increase the group's maximum depth, so
+recompute the required group scale after changing the median. After
+editing the recipe, run `depth-prepare` again to bind the revised recipe, then
+rerun `depth-apply` with the matching manifest.
+
+The bound covers the newly mapped parts in each applied recipe group. At the
+rig stage, each turn group checks its member sheets for one scale and polarity.
+A surface shared by both turn groups must satisfy both groups' checks.
+
+On success, `mapped/` is a complete assembled directory with the original
+art, a `<part>_depth.png` beside each mapped part, `parts.json` pointing at
+the sheets, a copy of your config with the group pivots written in, and
+`depth-report.json` with every number and hash. Nothing
 in `work/rig` or your original config is touched. Any mismatch — a recipe edited
 after prepare, a part that moved, a map of the wrong size, a part your
 `turn.roles` does not name — is refused by name before a byte is written.
@@ -272,14 +294,13 @@ judge from a sweep or from the `turn` animation played straight through. Put
 the build in a page where the pointer drives both dials; the adapters' look
 example shows [how to bind a pointer to declared sliders](https://github.com/rig-c/adapters/blob/main/examples/look/README.md).
 Separately, render the setup pose and both yaw endpoints and look at their
-difference at native scale: that is where a tear, a clipped sheet or a feature
-sliding off the face shows, and it is a check for defects, not for volume.
+difference at native scale to find tears or features sliding off the face.
 
 **Read the report before you read the render.** `depth-report.json` names each
-part's relief, scale and clip fraction. A high clip fraction means the declared
-numbers do not fit the group's scale; fix the recipe, not the render. Small
-units — eyes, mouth, brows, ears — usually look best following the face surface
-rather than carrying a sheet of their own: list them under `clear`, or give
+part's relief, scale and clip fraction. A zero clip fraction confirms the
+supported depths fit the declared range. Inspect the render for shape quality.
+Small units — eyes, mouth, brows, ears — usually look best following the face
+surface rather than carrying a sheet of their own: list them under `clear`, or give
 them an explicit depth under the group's `unitDepths`. Which depth a unit ends
 up using is spelled out in
 [Unit depth precedence](AUTHORING.md#unit-depth-precedence).
