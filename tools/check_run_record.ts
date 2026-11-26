@@ -341,10 +341,17 @@ function runBuildInputRecordChecks(dir: string, out: string, say: Say): void {
   const link = join(root, 'link');
   symlinkSync(target, link, 'junction');
   const linkedOut = join(link, 'out');
+  // Leave parts/ absent, as in the Windows failure. Rig writes its own files without clearing unrelated entries.
+  const staleRig = join(target, 'out', 'rig');
+  mkdirSync(staleRig, { recursive: true });
+  const staleFile = join(staleRig, 'stale-output.txt');
+  writeFileSync(staleFile, 'from an earlier build');
   const runner = join(root, 'runner');
   mkdirSync(runner);
   const configPath = join(dir, 'config.json');
-  const painting = join(root, 'painting.png');
+  // The wrong Windows climb reaches dir, which already holds the byte-identical original painting.png.
+  const paintingName = 'painting-linked-1556.png';
+  const painting = join(root, paintingName);
   cpSync(join(dir, 'painting.png'), painting);
   const manifest = join(dir, 'full', 'layers.json');
   const head = join(dir, 'head', 'layers.json');
@@ -352,7 +359,8 @@ function runBuildInputRecordChecks(dir: string, out: string, say: Say): void {
   symlinkSync(join(realpathSync(dir), 'full'), fullLink, 'junction');
   const requirements = join(root, 'requirements.json');
   writeFileSync(requirements, JSON.stringify({ spec: 'spine-parts-requirements/1', fps: 12, requirements: [] }));
-  const given = ['build', '--requirements', '../requirements.json', '--config', '../../config.json', '--source', '../painting.png',
+  const givenSource = `../${paintingName}`;
+  const given = ['build', '--requirements', '../requirements.json', '--config', '../../config.json', '--source', givenSource,
     '--full', '../full-link', '--head', '../../head/layers.json', '--out', '../link/out', '--no-extremes'];
   const linkedBuild = cli(given, runner);
   const recorded = readRecord(join(linkedOut, BUILD_RUN_FILE));
@@ -360,7 +368,7 @@ function runBuildInputRecordChecks(dir: string, out: string, say: Say): void {
   const windows = sep === '\\';
   const climb = windows ? '../..' : '../../..';
   const wantLinked = [
-    { role: 'source', path: `${climb}/painting.png`, sha256: sha256File(painting) },
+    { role: 'source', path: `${climb}/${paintingName}`, sha256: sha256File(painting) },
     { role: 'full', path: windows ? '../../full-link/layers.json' : '../../../../full/layers.json', sha256: sha256File(manifest) },
     { role: 'head', path: `${climb}/../head/layers.json`, sha256: sha256File(head) },
     { role: 'requirements', path: `${climb}/requirements.json`, sha256: sha256File(requirements) },
@@ -370,15 +378,21 @@ function runBuildInputRecordChecks(dir: string, out: string, say: Say): void {
     const absolute = resolve(fromOut, path);
     return existsSync(absolute) && statSync(absolute).isFile() && sha256File(absolute) === sha256;
   });
-  const wrongLinkRule = windows ? '../../../painting.png' : '../../painting.png';
-  const plantsMiss = [wrongLinkRule, '../painting.png'].every((path) => !existsSync(resolve(fromOut, path)));
+  const wrongLinkRule = `${windows ? '../../..' : '../..'}/${paintingName}`;
+  const wrongLinkMiss = !existsSync(resolve(fromOut, wrongLinkRule));
+  const cwdSpellingMiss = !existsSync(resolve(fromOut, givenSource));
+  const staleCleared = !existsSync(staleFile);
   say('BU1556C_LINKED_BUILD_OUT_REBASES_INPUTS_BY_THE_HOST_RULE',
-    linkedBuild.status === 0 && JSON.stringify(linkedInputs) === JSON.stringify(wantLinked) && namedFilesMatch && plantsMiss,
-    `build exit ${linkedBuild.status}; inputs ${JSON.stringify(linkedInputs ?? null)}; expected files resolve with matching hashes ${namedFilesMatch}; planted paths miss ${plantsMiss}${linkedBuild.status === 0 ? '' : `; ${linkedBuild.out.trim().split('\n').slice(-3).join(' | ')}`}`,
-    'issue #1556: follow the #1555 link rule on the first build from a non-parent cwd; both the old cwd spelling and the other platform rule miss the painting');
+    linkedBuild.status === 0 && JSON.stringify(linkedInputs) === JSON.stringify(wantLinked) && namedFilesMatch &&
+      wrongLinkMiss && cwdSpellingMiss && staleCleared,
+    `build exit ${linkedBuild.status}; inputs ${JSON.stringify(linkedInputs ?? null)}; expected files resolve with matching hashes ${namedFilesMatch}; ` +
+      `planted ${wrongLinkRule} misses ${wrongLinkMiss}; planted ${givenSource} misses ${cwdSpellingMiss}; stale rig file cleared ${staleCleared}` +
+      (linkedBuild.status === 0 ? '' : `; ${linkedBuild.out.trim().split('\n').slice(-3).join(' | ')}`),
+    'issue #1556: build through a relative junction clears stale outputs and follows the #1555 host link rule from a non-parent cwd; the cwd spelling and the other host rule both miss the painting');
 
   // Reuse the build's products. A full repaint build also updates source_cover.json's painting hash.
-  const argv = ['build', '--source', '../input-record-1556/painting.png', '--full', '../full', '--out', '.'];
+  const recordedSourcePath = `../input-record-1556/${paintingName}`;
+  const argv = ['build', '--source', recordedSourcePath, '--full', '../full', '--out', '.'];
   const recordInput = {
     command: 'build' as const, pkg: { name: '@rig-c/parts', version: '0.0.0' },
     startedAt: FIXED_TIME, finishedAt: FIXED_TIME, outDir: out, configPath, outputs: ['parts.json', 'rig/'], argv,
@@ -399,7 +413,7 @@ function runBuildInputRecordChecks(dir: string, out: string, say: Say): void {
   const pixelsMatch = originalPixels.width === repaintedPixels.width && originalPixels.height === repaintedPixels.height &&
     Buffer.from(originalPixels.data).equals(Buffer.from(repaintedPixels.data));
   const expectedAfter = { ...before, inputs: [
-    { role: 'source', path: '../input-record-1556/painting.png', sha256: afterSha },
+    { role: 'source', path: recordedSourcePath, sha256: afterSha },
     { role: 'full', path: '../full/layers.json', sha256: sha256File(manifest) },
   ] };
   const { inputs: _oldInputs, ...legacy } = { ...before, inputs: beforeInputs };

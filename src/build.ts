@@ -2961,8 +2961,11 @@ export const BUILD_OWNS_FILES: readonly string[] = [CUT_MATERIAL_SOURCES, EDGE_R
 
 function resetBuildOutput(out: string): void {
   makeOutDir(out);
-  for (const p of BUILD_OWNS) rmSync(join(out, p), { recursive: true, force: true });
-  for (const p of BUILD_OWNS_FILES) rmSync(join(out, p), { force: true });
+  // Bun on Windows returned EINVAL removing a relative path through a junction (BU1556C).
+  // Resolve the spelling against cwd so the path is absolute and keeps the junction.
+  const cleanupOut = sep === '\\' ? resolve(out) : out;
+  for (const p of BUILD_OWNS) rmSync(join(cleanupOut, p), { recursive: true, force: true });
+  for (const p of BUILD_OWNS_FILES) rmSync(join(cleanupOut, p), { force: true });
 }
 
 /** Only selects when cleanup occurs; the real config loader still decides validity. */
