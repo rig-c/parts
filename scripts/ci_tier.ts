@@ -437,7 +437,7 @@ export const PATH_TO_SUITE_MAP: readonly MapRule[] = [
   { pattern: 'fixtures/assemble_fixture.ts', suites: ['assemble', 'assemble-examples', 'ground-examples', 'layers-wrapper', 'layers-psd', 'subset-cover', 'foot-ownership', 'hybrid-limb', 'take-layers', 'plausibility', 'tree'], why: 'synthetic assemble fixture builder' },
   { pattern: 'fixtures/rig.ts', suites: ['rig', 'waist', 'chain-inherit', 'front-slot', 'limb-slots', 'limb-layout', 'arm-split-upgrade', 'mesh-draft', 'mesh-stats', 'influence', 'remesh', 'retune', 'tree'], why: 'synthetic rig fixture builder' },
   { pattern: 'fixtures/structure.ts', suites: ['structure', 'keypoints', 'painting', 'plausibility', 'fetch-examples', 'prompt', 'tree'], why: 'synthetic structure fixture builder' },
-  { pattern: 'fixtures/synthetic.ts', suites: ['layers-wrapper', 'layers-psd', 'inputs', 'plausibility', 'tree'], why: 'flat colour block synthetic fixture generator' },
+  { pattern: 'fixtures/synthetic.ts', suites: ['layers-wrapper', 'layers-psd', 'inputs', 'plausibility', 'rig', 'tree'], why: 'flat colour block synthetic fixtures and rig turn winding cell' },
   { pattern: 'fixtures/{oracle_assemble,project_band_controls,underpieces}.ts', suites: ['assemble', 'tree'], why: 'assemble fixture helpers' },
   { pattern: 'fixtures/reference-demo-auto-turn-1.79.1.config.json', suites: ['config', 'rig', 'tree'], why: 'reference-demo auto-turn config fixture' },
 ];

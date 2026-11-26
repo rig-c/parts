@@ -143,7 +143,7 @@ import { type BoneTransform, computeExactFrameTransforms, computeWorldTransforms
 import { foldName, type Problem, refuseIfAny, PartsError } from './errors.ts';
 import { recordedFocusProblems } from './setfocus.ts';
 import { eyeLineDegrees } from './headframe.ts';
-import type { RigBoneInherit, RigStop } from '@rig-c/core/rig';
+import type { RigBoneInherit, RigInvariants, RigStop } from '@rig-c/core/rig';
 import { f32 } from '@rig-c/core/compile';
 import type { MeshCounts, MeshQualityReport, MeshReductionInput, MotionAmplitude, ReducedMesh, Termination } from '@rig-c/core/mesh';
 import { bindWeightedVertices, buildGridMesh, buildSegmentsLattice, type EntrySegment, influenceShares, segmentDistance as rigcSegmentDistance, type SegmentsLattice, type SegmentsLatticeReport } from '@rig-c/core/mesh';
@@ -562,6 +562,7 @@ export interface RigSpec {
     idleDrivesMeshes?: { why: string };
     detached?: DetachedRule[];
     deformMayFold?: Array<{ slot: string; why: string }>;
+    deformSliderCombinations?: RigInvariants['deformSliderCombinations'];
     axes?: RigAxis[];
     meshSlots?: number;
     meshTriangles?: number;

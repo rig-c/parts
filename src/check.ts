@@ -1207,15 +1207,29 @@ export interface LoopPhysics {
 /**
  * A throwaway copy of `rig` whose accompanying `motion` replaces `animations`
  * with a synthetic set (`still`, `blink_shut`, `stress ...`, `sweep ...`) omits
- * any `slider` constraint whose target animation is not in that set.
+ * any `slider` constraint whose target animation is not in that set and the
+ * tuples that refer to those removed sliders.
  */
 function withoutSliders(rig: Record<string, unknown>, animations: Record<string, unknown>): Record<string, unknown> {
   if (!Array.isArray(rig.constraints)) return rig;
-  const kept = rig.constraints.filter((c) => !(isRecord(c) && c.type === 'slider' && typeof c.animation === 'string' && !(c.animation in animations)));
+  const removed = new Set<string>();
+  const kept = rig.constraints.filter((c) => {
+    if (!isRecord(c) || c.type !== 'slider' || typeof c.animation !== 'string' || c.animation in animations) return true;
+    if (typeof c.name === 'string') removed.add(c.name);
+    return false;
+  });
   if (kept.length === rig.constraints.length) return rig;
   const out: Record<string, unknown> = { ...rig };
   if (kept.length > 0) out.constraints = kept;
   else delete out.constraints;
+  if (isRecord(rig.invariants) && Array.isArray(rig.invariants.deformSliderCombinations)) {
+    const { deformSliderCombinations, ...invariants } = rig.invariants;
+    const retained = deformSliderCombinations.filter(tuple => !isRecord(tuple) || !Array.isArray(tuple.inputs) ||
+      !tuple.inputs.some(input => isRecord(input) && typeof input.slider === 'string' && removed.has(input.slider)));
+    if (retained.length > 0) out.invariants = { ...invariants, deformSliderCombinations: retained };
+    else if (Object.keys(invariants).length > 0) out.invariants = invariants;
+    else delete out.invariants;
+  }
   return out;
 }
 

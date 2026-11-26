@@ -1606,7 +1606,7 @@ in the package.
 
 ## rig-c
 
-`dependencies` takes `@rig-c/core` `3.0.0` exactly. Bun 1.4 or later
+`dependencies` takes `@rig-c/core` `3.10.0` exactly. Bun 1.4 or later
 is the declared floor (`engines.bun` `>=1.4.0`; older 1.4 releases are not tested in
 CI, which runs `latest`, and compatibility with an older 1.4 release is handled when
 reported as an issue). What this package relies on in rig-c, every import
@@ -1635,6 +1635,24 @@ A rig-c release that moves any of these breaks this package by name, and the
 install smoke is where that shows first. No Spine runtime is a dependency: an
 install is gated by rigc's own validator, and `@esotericsoftware/spine-core` is a
 development dependency of this repository only.
+
+### Generated turn winding
+
+Core 3.10.0 adds `A53_DECLARED_SLIDER_COMBINATIONS_KEEP_WINDING` to both
+validators. Parts emits `invariants.deformSliderCombinations` from generated
+turn mappings, using each slider's actual name, including any retained name
+when Parts rewrites a reused slider's mapping. Head 2.5D roles generate yaw
+and pitch and declare all four endpoint pairs. With body yaw also generated,
+the declaration contains all eight endpoint triples and twelve endpoint pairs
+with the third dial at explicit neutral `0`, for twenty tuples. Every tuple
+includes all applicable names and values. With fewer than two generated dials,
+including body yaw alone, Parts omits the invariant and A53 reports SKIP.
+Legacy authored sliders alone do not create this invariant.
+
+The mandatory Core gate can refuse a previously accepted rig before emission.
+Core's assertion total increases by one, and a rig with no combination
+declaration gains one skipped assertion. The existing A39 checks still cover
+individual dials.
 
 ## What is not stable
 

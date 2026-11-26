@@ -290,7 +290,12 @@ function runBandCoverBindingChecks(say: Say, covered?: RigOutput, uncovered?: Ri
     collarChain(raw);
     raw.stops = [{ chain: 'collar', against: 'head', at: [4, 0], inward: -30, outward: 30 }];
   };
-  const sha = (b?: RigOutput) => b === undefined ? 'refused' : createHash('sha256').update(JSON.stringify(b)).digest('hex');
+  const sha = (b?: RigOutput): string => {
+    if (b === undefined) return 'refused';
+    const { deformSliderCombinations: _combinations, ...invariants } = b.rig.invariants ?? {};
+    const rig = { ...b.rig, invariants: Object.keys(invariants).length > 0 ? invariants : undefined };
+    return createHash('sha256').update(JSON.stringify({ ...b, rig })).digest('hex');
+  };
   const coverRefusal = (result: ReturnType<typeof buildCover>, code: string, index: number, ...detail: string[]) => {
     const [problem] = result.problems;
     return result.b === undefined && result.problems.length === 1 && problem.code === code
@@ -303,7 +308,7 @@ function runBandCoverBindingChecks(say: Say, covered?: RigOutput, uncovered?: Ri
     coverRefusal(stoppedCover, 'CONFIG_TURN_BAND_COVER', 0, 'region "collar"', 'cover "face"', 'stopped link "collar0"', '"collar0_d"'),
     stoppedCover.problems.map(p => p.detail).join(' | ') || 'built');
 
-  // SHA-256 of the whole serialized buildRig result on the pre-#1559 tree.
+  // Pre-#1559 buildRig hashes, projected without #1581's winding declaration.
   const stoppedAbsent = buildCover({ regionBone: 'collar0' }, raw => {
     stopCollar(raw);
     useLinearCollar(raw);
@@ -313,7 +318,7 @@ function runBandCoverBindingChecks(say: Say, covered?: RigOutput, uncovered?: Ri
   const drawn = att !== undefined && 'type' in att && att.weights.some(row => row.some(w => w.bone === 'collar0_d' && w.weight > 0));
   say('BV16_STOPPED_BAND_WITHOUT_COVER_KEEPS_BUILD_BYTES',
     drawn && stoppedSha === 'de8a697815569131f9e43335562bc4c42aa9ed68c580ac6923d5eb67c6a7142a',
-    `positive collar0_d influence=${drawn}; build sha256=${stoppedSha}`);
+    `positive collar0_d influence=${drawn}; projected build sha256=${stoppedSha}`);
 
   const chainCover = buildCover({ cover: 'face', regionBone: 'collar0' }, raw => {
     collarChain(raw);
@@ -324,7 +329,7 @@ function runBandCoverBindingChecks(say: Say, covered?: RigOutput, uncovered?: Ri
     chainSha === '257486a84c1a7e31f7014fc6c623aed72567b572cf29a183276d126ab9d115af'
       && coveredSha === 'a7211212d83a03ed6e024e6ddf12f084c1a323f8af4668ae7ba58e3a3df38634'
       && uncoveredSha === 'daf0e125f47831fd59f389fb31b2572ea58798f09d4ab4678bb5bb515e0be09b',
-    `build sha256 chain=${chainSha}, covered=${coveredSha}, absent=${uncoveredSha}`);
+    `projected build sha256 chain=${chainSha}, covered=${coveredSha}, absent=${uncoveredSha}`);
 
   const outside = buildCover({ cover: 'face' }, raw => {
     // The active collar shares its bone and cover with the second region.

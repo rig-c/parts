@@ -19,6 +19,7 @@
  *   (its name and every bone or slot it names), `stops` entry (its `chain`,
  *   its `links` and its `against`; issue #431), `invariants.detached` bone,
  *   `invariants.axes` entry (its name, its `through` and its `bones`; issue #239),
+ *   `invariants.deformSliderCombinations` slider constraint reference,
  *   track (its `bone`, `group` or `physics` constraint target; issue #1485),
  *   group and easing of character `<id>` is renamed `<id>:<name>`
  *   ({@link prefixed}); `root` is the one shared root. A name resolves to
@@ -104,7 +105,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import type { RigStop } from '@rig-c/core/rig';
+import { deformSliderCombinationProblem, type RigStop } from '@rig-c/core/rig';
 import { checkStage, gateThroughRigc, type Log } from './build.ts';
 import { ACCEPTABLE_BARS, barsNotMet, CHECK_SPEC, type CheckReport, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, type PackMode, parsePageSize, requirementsNotPass, type RigcRunner } from './check.ts';
 import { CONSTRAINT_BONE_FIELDS, editorReceiptProblems, ROOT_BONE } from './config.ts';
@@ -513,7 +514,7 @@ const ATTACHMENT_KEYS = ['type', 'path', 'image', 'width', 'height', 'uvs', 'tri
 const RIG_KEYS = ['spec', 'name', 'images', 'skeleton', 'bones', 'slots', 'skins', 'constraints', 'stops', 'invariants'];
 const STOP_KEYS = ['chain', 'links', 'against', 'at', 'inward', 'outward', 'lower'];
 const STOP_LOWER_KEYS = ['inward', 'outward'];
-const INVARIANT_KEYS = ['idleDrivesMeshes', 'detached', 'axes', 'meshSlots', 'meshTriangles', 'deformMayFold'];
+const INVARIANT_KEYS = ['idleDrivesMeshes', 'detached', 'axes', 'meshSlots', 'meshTriangles', 'deformMayFold', 'deformSliderCombinations'];
 const MOTION_KEYS = ['spec', 'archetype', 'cut', 'easings', 'groups', 'animations'];
 const IDLE_KEYS = ['duration', 'loop', 'note', 'tracks', 'deform'];
 const TRACK_KEYS = ['bone', 'group', 'physics', 'property', 'keys'];
@@ -730,6 +731,10 @@ export function readCharacterBuild(c: SceneCharacter, problems: Problem[], accep
         if ('deformMayFold' in r.invariants) {
           if (!Array.isArray(r.invariants.deformMayFold)) unknown('rig.json invariants.deformMayFold', r.invariants.deformMayFold, []);
           else r.invariants.deformMayFold.forEach((entry, i) => unknown(`rig.json invariants.deformMayFold[${i}]`, entry, ['slot', 'why']));
+        }
+        const combinationProblem = deformSliderCombinationProblem(r.invariants.deformSliderCombinations, 'rig.json invariants.deformSliderCombinations');
+        if (combinationProblem !== undefined) {
+          problems.push({ code: 'SCENE_BUILD_FIELD_KNOWN', object: who, detail: combinationProblem });
         }
       }
       const skins = isRecord(r.skins) ? r.skins : {};
@@ -1063,13 +1068,18 @@ export function scaledConstraint(con: Record<string, unknown>, s: number): Recor
       out.limit = scaledBy(typeof con.limit === 'number' ? con.limit : SPINE_PHYSICS_LIMIT_DEFAULT, s);
       break;
     case 'slider':
-      if (typeof con.bone === 'string' && typeof con.property === 'string' && lengthProperty(con.property)) {
+      if (sliderInputIsLength(con)) {
         len('from');
         out.scale = scaledBy(typeof con.scale === 'number' ? con.scale : SPINE_SLIDER_SCALE_DEFAULT, 1 / s);
       }
       break;
   }
   return out;
+}
+
+/** A bone-driven slider's input may be a length, just like its mapping's `from`. */
+function sliderInputIsLength(con: Record<string, unknown> | undefined): boolean {
+  return typeof con?.bone === 'string' && typeof con.property === 'string' && lengthProperty(con.property);
 }
 
 /** A stop of a character at scale `s` (issue #431): its `at` offset in `against`'s local frame scaled by `s`, its degree bounds unchanged; `s` 1 returns `stop` as given. */
@@ -1520,6 +1530,13 @@ export function composeScene(
     for (const [i, entry] of (b.rig.invariants?.deformMayFold ?? []).entries()) {
       if (!(slotsOf.get(b.id) ?? []).includes(entry.slot)) missing(`rig.json invariants.deformMayFold[${i}].slot`, `names ${show(entry.slot)}, which this character does not declare`);
     }
+    for (const [i, combination] of (b.rig.invariants?.deformSliderCombinations ?? []).entries()) {
+      for (const [j, { slider }] of combination.inputs.entries()) {
+        if (!(b.rig.constraints ?? []).some(con => con.type === 'slider' && con.name === slider)) {
+          missing(`rig.json invariants.deformSliderCombinations[${i}].inputs[${j}].slider`, `names ${show(slider)}; this character must declare a slider constraint with that name`);
+        }
+      }
+    }
     for (const [i, con] of (b.rig.constraints ?? []).entries()) if (con.type === 'slider') {
       if (typeof con.animation !== 'string' || !(con.animation in anims)) missing(`rig.json constraints[${i}].animation`, `names ${show(con.animation)}, which this character's motion does not declare; an animation of its own is required`);
     }
@@ -1603,6 +1620,7 @@ export function composeScene(
   const stops: RigStop[] = [];
   const detached: NonNullable<NonNullable<RigSpec['invariants']>['detached']> = [];
   const axes: NonNullable<NonNullable<RigSpec['invariants']>['axes']> = [];
+  const combinations: NonNullable<NonNullable<RigSpec['invariants']>['deformSliderCombinations']> = [];
   scene.characters.forEach((c) => {
     const b = byId.get(c.id) as CharacterBuild;
     const id = c.id;
@@ -1693,6 +1711,12 @@ export function composeScene(
     for (const d of b.rig.invariants?.detached ?? []) detached.push({ ...d, bone: P(id, d.bone), notUnder: P(id, d.notUnder) });
     // An axis entry's name is unique within one rig, and two characters each carry a "face": the name is prefixed too.
     for (const ax of b.rig.invariants?.axes ?? []) axes.push({ name: prefixed(id, ax.name), through: [P(id, ax.through[0]), P(id, ax.through[1])], bones: ax.bones.map((n) => P(id, n)), tolerance: ax.tolerance });
+    for (const { inputs } of b.rig.invariants?.deformSliderCombinations ?? []) {
+      combinations.push({ inputs: inputs.map(({ slider, value }) => {
+        const constraint = b.rig.constraints?.find(con => con.type === 'slider' && con.name === slider);
+        return { slider: prefixed(id, slider), value: sliderInputIsLength(constraint) ? scaledBy(value, s) : value };
+      }) });
+    }
   });
   const slots: RigSpec['slots'] = [];
   if (scene.plate !== null && plate !== null) slots.push({ name: PLATE, bone: PLATE, attachment: PLATE });
@@ -1708,6 +1732,7 @@ export function composeScene(
   if (axes.length > 0) invariants.axes = axes;
   const mayFold = ready.flatMap(b => (b.rig.invariants?.deformMayFold ?? []).map(e => ({ ...e, slot: prefixed(b.id, e.slot) })));
   if (mayFold.length > 0) invariants.deformMayFold = mayFold;
+  if (combinations.length > 0) invariants.deformSliderCombinations = combinations;
   const meshCounts = (b: CharacterBuild): { meshSlots: number; meshTriangles: number } => {
     let meshSlots = 0, meshTriangles = 0;
     for (const atts of Object.values(b.rig.skins.default)) {
@@ -1886,7 +1911,8 @@ export function requirementPrefixProblems(file: RequirementsFile, builds: readon
  */
 export function unprefixedNames(rig: RigSpec, motion: MotionSpec, ids: readonly string[], plate: boolean, plates: readonly string[] = [], sceneAnimations: readonly string[] = []): string[] {
   const bad: string[] = [];
-  const ok = (n: string, allowPlate: boolean): boolean => n === ROOT_BONE || (allowPlate && ((plate && n === PLATE) || plates.includes(n))) || ids.some((id) => n.startsWith(`${id}${PREFIX_SEP}`) && n.length > id.length + 1);
+  const hasPrefix = (n: unknown): boolean => typeof n === 'string' && ids.some((id) => n.startsWith(`${id}${PREFIX_SEP}`) && n.length > id.length + 1);
+  const ok = (n: string, allowPlate: boolean): boolean => n === ROOT_BONE || (allowPlate && ((plate && n === PLATE) || plates.includes(n))) || hasPrefix(n);
   const name = (where: string, n: unknown, allowPlate = true): void => {
     if (typeof n !== 'string' || !ok(n, allowPlate)) bad.push(`${where} ${show(n)}`);
   };
@@ -1931,6 +1957,9 @@ export function unprefixedNames(rig: RigSpec, motion: MotionSpec, ids: readonly 
     name(`stop ${s.chain} against`, s.against, false);
   }
   for (const entry of rig.invariants?.deformMayFold ?? []) name('invariants.deformMayFold slot', entry.slot, false);
+  for (const { inputs } of rig.invariants?.deformSliderCombinations ?? []) {
+    for (const { slider } of inputs) if (!hasPrefix(slider)) bad.push(`invariants.deformSliderCombinations slider ${show(slider)}`);
+  }
   for (const d of rig.invariants?.detached ?? []) {
     name('invariants.detached bone', d.bone, false);
     name('invariants.detached notUnder', d.notUnder, false);

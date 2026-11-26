@@ -323,7 +323,7 @@ import { BARE_CROWN_PARTS, CUT_BASE_PARTS, CUT_PARTS, eyeParts, FACELESS_PARTS, 
 // The runtime's own posing, for the one control that measures where a mesh's pixels go (PR14): a second opinion about a weighted vertex is what a measurement must not carry.
 import { type BoneSnapshot, type Frame, loadPosable, type Mesh, sampleAnimation, sampleSetupPose } from '@rig-c/core/render';
 import { loadCandidate as loadRootCandidate, throughPoser as throughRootPoser, sampleAnimation as sampleRootAnimation } from '@rig-c/core/render-shared';
-import { CANVAS, flatName, layerRaster, minimalConfig, WRAPPER_LAYERS, writePsdFixture as originalWritePsdFixture, writeWrapperFixture as originalWriteWrapperFixture } from './fixtures/synthetic.ts';
+import { CANVAS, flatName, layerRaster, minimalConfig, WRAPPER_LAYERS, writePsdFixture as originalWritePsdFixture, writeTurnWindingFixture, writeWrapperFixture as originalWriteWrapperFixture } from './fixtures/synthetic.ts';
 import { MANNEQUIN_BLOCKS, MANNEQUIN_FIGURE_PX, MANNEQUIN_KEYPOINTS, MANNEQUIN_PARTS, MANNEQUIN_PLAN, MANNEQUIN_SIDE, writeMannequinFixture } from './fixtures/mannequin.ts';
 import { ARTIST_PATCH, ARTIST_PLAN, ARTIST_PORTRAIT_SHIFT, ARTIST_PORTRAIT_W, ARTIST_SIDE, artistCanvas, artistConfig, artistLayers, EYE as ARTIST_EYE, writeArtistFixture } from './fixtures/artist.ts';
 import { arm, armRig, base, baseRenamed, baseWith, roleRig } from './fixtures/structure.ts';
@@ -8483,7 +8483,9 @@ export function runBoundaryDepthChecks(dir: string, say: (name: string, ok: bool
     const home = join(dir, label);
     const gate = spawnSync(process.execPath, [fileURLToPath(import.meta.resolve('@rig-c/core/cli')), 'build', '--rig', join(home, 'rig.json'), '--motion', join(home, 'motion.json'), '--out', join(home, 'built'), '--profile', 'rig-play'], { encoding: 'utf8', maxBuffer: 1 << 24 });
     writeFileSync(join(home, 'gate.log'), gate.stdout + gate.stderr);
-    say(`BD20_${label.toUpperCase().replaceAll('-', '_')}_EXISTING_GATE`, gate.status === 0, `exit ${gate.status}; ${(gate.stdout + gate.stderr).replace(/\s+/g, ' ').trim()}`);
+    const singleDialSkip = built.rig.invariants?.deformSliderCombinations === undefined &&
+      gate.stdout.includes('SKIP  A53_DECLARED_SLIDER_COMBINATIONS_KEEP_WINDING: rig declares no invariants.deformSliderCombinations');
+    say(`BD20_${label.toUpperCase().replaceAll('-', '_')}_EXISTING_GATE`, gate.status === 0 && singleDialSkip, `exit ${gate.status}; ${(gate.stdout + gate.stderr).replace(/\s+/g, ' ').trim()}`);
   }
 }
 
@@ -8598,12 +8600,119 @@ function runContourFalloffTurnRigCases(say: FixtureCaseReporter): void {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
+/** Issue #1581: generated tuples and their verdict through the Parts rig stage. */
+function runTurnWindingRigCases(say: FixtureCaseReporter): void {
+  const dir = temp('turn-winding');
+  try {
+    const modelCli = join(dirname(fileURLToPath(import.meta.resolve('@rig-c/core/package.json'))), 'cli_core.ts');
+    const suppliers = [
+      ['ROUND_TRIP', rigcRunnerAt(suiteRigc(), spawnRigc), 'validate (spine-core round trip +'],
+      ['MODEL', rigcRunnerAt(modelCli, (bin, args) => spawnRigc(process.execPath, [bin, ...args])), 'validate (the model side over the document +'],
+    ] as const;
+    const variants = ['shared', 'separate', 'head-only'] as const;
+    const fixtures = variants.map(variant => writeTurnWindingFixture(join(dir, variant), variant));
+    const a39 = 'A39_DEFORM_KEEPS_TRIANGLE_WINDING';
+    const a53 = 'A53_DECLARED_SLIDER_COMBINATIONS_KEEP_WINDING';
+    const headDials = ['yaw', 'pitch'];
+    const bodyDials = [...headDials, 'body_yaw_dial'];
+    const headPairs = ['-15,-12', '-15,12', '15,-12', '15,12'];
+    // Columns are head yaw, pitch, body yaw. The neutral axis stays in each pair.
+    const bodyTuples = [
+      '-15,-12,-15', '-15,-12,15', '-15,12,-15', '-15,12,15',
+      '15,-12,-15', '15,-12,15', '15,12,-15', '15,12,15',
+      '-15,-12,0', '-15,12,0', '15,-12,0', '15,12,0',
+      '-15,0,-15', '-15,0,15', '15,0,-15', '15,0,15',
+      '0,-12,-15', '0,-12,15', '0,12,-15', '0,12,15',
+    ];
+    const tupleValues = (rig: RigSpec, dials: string[]) => (rig.invariants?.deformSliderCombinations ?? []).map(({ inputs }) => {
+      const values = new Map(inputs.map(({ slider, value }) => [slider, value]));
+      return inputs.length === dials.length && dials.every(dial => values.has(dial))
+        ? dials.map(dial => values.get(dial)).join(',') : JSON.stringify(inputs);
+    }).sort();
+    const exact = (got: string[], expected: string[]) => JSON.stringify(got) === JSON.stringify([...expected].sort());
+    const readDeformTargets = (motion: MotionSpec, animation: string) => {
+      const anim = motion.animations[animation] as { deform?: Array<{ slot: string; attachment: string }> } | undefined;
+      return anim?.deform?.map(({ slot, attachment }) => `${slot}/${attachment}`) ?? [];
+    };
+
+    for (const [supplier, core, heading] of suppliers) {
+      for (const [index, variant] of variants.entries()) {
+        const label = `${supplier}-${variant}`;
+        const scratch = join(dir, `${label}-scratch`), out = join(dir, label);
+        const calls: Array<{ status: number; out: string; rig: RigSpec; motion: MotionSpec }> = [];
+        const error = refusals(() => rigStage({ ...fixtures[index], out }, args => {
+          const rig = JSON.parse(readFileSync(join(scratch, 'rig.json'), 'utf8')) as RigSpec;
+          const motion = JSON.parse(readFileSync(join(scratch, 'motion.json'), 'utf8')) as MotionSpec;
+          const call = core(args);
+          calls.push({ ...call, rig, motion });
+          return call;
+        }, scratch, () => {}));
+        const gate = calls[0];
+        const lines = gate?.out.split('\n') ?? [];
+        const measured = lines.flatMap(line => {
+          const counts = line.match(/\bdeformSliderCombinationsMeasured=(\d+)\b.*\bdeformSliderCombinationsUnmeasured=(\d+)\b/);
+          return counts === null ? [] : [`${counts[1]}/${counts[2]}`];
+        });
+        const rigFile = join(out, 'rig.json'), motionFile = join(out, 'motion.json');
+        const a39Green = lines.includes(`  PASS  ${a39}`);
+        const correctSupplier = calls.length === 1 && gate.out.includes(heading);
+        if (variant === 'shared') {
+          const failures = lines.filter(line => line.startsWith('  FAIL  '));
+          const witness = failures.find(line => line.startsWith(`  FAIL  ${a53}:`) &&
+            line.includes('"yaw"=-15 ("turn", t=0.000000s, key 0 at 0.000000s)') &&
+            line.includes('"body_yaw_dial"=-15 ("body_turn", t=0.000000s, key 0 at 0.000000s)') &&
+            line.includes('"pitch"=0 ("tilt", t=0.750000s, key 2 at 0.750000s)') &&
+            /topwear\/topwear: 1 of 2 triangle\(s\) reverse winding — triangle 0 \[0,3,1\] [1-9]\d*\.\d{3} -> -[1-9]\d*\.\d{3}px²/.test(line));
+          const mesh = gate?.rig.skins.default.topwear.topwear as MeshAttachment | undefined;
+          const collarShares = mesh?.weights.map(row => row.find(influence => influence.bone === 'collar')?.weight ?? 0);
+          const problem = error?.problems[0];
+          say(
+            `RG1581_${supplier}_SHARED_EASED_CELL_REFUSED_BEFORE_EMISSION`,
+            correctSupplier && gate.status === 1 && a39Green && witness !== undefined &&
+              failures.every(line => line.startsWith(`  FAIL  ${a53}:`)) &&
+              exact(tupleValues(gate.rig, bodyDials), bodyTuples) &&
+              JSON.stringify(collarShares) === '[0.8,0.21543,0,0]' &&
+              error?.problems.length === 1 && problem?.code === 'RIG_RIGC_GREEN' && problem.detail.includes(witness.trim()) &&
+              !existsSync(out),
+            `exit ${gate?.status}; A39 PASS ${a39Green}; collar shares ${collarShares}; output exists ${existsSync(out)}; ` +
+              (witness ?? (failures.join(' | ') || error?.problems.map(p => p.detail).join(' | ') || 'no A53 witness')),
+            'The generated spacing-400 weighted torso cell folds at head and body yaw −15 while neutral pitch reads its own mapped key.',
+          );
+          continue;
+        }
+
+        const headOnly = variant === 'head-only';
+        const expected = headOnly ? headPairs : bodyTuples;
+        const dials = headOnly ? headDials : bodyDials;
+        const writtenRig = existsSync(rigFile) ? JSON.parse(readFileSync(rigFile, 'utf8')) as RigSpec : null;
+        const tuples = writtenRig === null ? [] : tupleValues(writtenRig, dials);
+        const head = gate === undefined ? [] : readDeformTargets(gate.motion, 'turn');
+        const pitch = gate === undefined ? [] : readDeformTargets(gate.motion, 'tilt');
+        const body = gate === undefined ? [] : readDeformTargets(gate.motion, 'body_turn');
+        say(
+          `RG1581_${supplier}_${headOnly ? 'HEAD_ONLY_PAIRS' : 'SEPARATE_HEAD_BODY_TUPLES'}_MEASURED`,
+          correctSupplier && gate.status === 0 && error === null && a39Green &&
+            lines.filter(line => line === `  PASS  ${a53}`).length === 2 &&
+            measured.length === 2 && measured.every(count => count === `${expected.length}/0`) &&
+            exact(tuples, expected) && exact(tupleValues(gate.rig, dials), expected) && existsSync(motionFile) &&
+            exact(head, ['face/face']) && exact(pitch, ['face/face']) && exact(body, headOnly ? [] : ['topwear/topwear']),
+          `exit ${gate?.status}; A39 PASS ${a39Green}; measured/unmeasured ${measured.join(' and ')}; ` +
+            `draw targets ${head}/${pitch}/${body}; tuples [${tuples.join('; ')}]` +
+            (error === null ? '' : `; ${error.problems.map(p => p.detail).join(' | ')}`),
+          'Each expected tuple is present in the generated and emitted spec and measured before and after packing. Head and body target disjoint meshes.',
+        );
+      }
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
 function runRigSuite(): number {
   section('rig: bones, lattice meshes, weights, regions and the idle');
   const { say, bad } = counter();
   { const dir = temp('boundary-depth'); try { runBoundaryDepthChecks(dir, (name, ok, detail) => say(name, ok, detail, 'synthetic declared band projection; unchanged existing gates')); } finally { rmSync(dir, { recursive: true, force: true }); } }
   runContourBodyTurnRigCases(say);
   runContourFalloffTurnRigCases(say);
+  runTurnWindingRigCases(say);
   runTurnRollChecks((name, ok, detail) => say(name, ok, detail, 'report-only head roll; fixed public separation limit and analytic planted angles'));
   { const dir = temp('neck-draft-render'); try { runNeckDraftRenderChecks(dir, (name, ok, detail) => say(name, ok, detail, 'public source-first neck, mandatory Core gate and rendered extreme ROI')); } finally { rmSync(dir, { recursive: true, force: true }); } }
   runTurnUnitPrecedenceChecks((name, ok, detail) => say(name, ok, detail, 'public unit-depth precedence controls; no forced own-sheet fallback'));
@@ -51425,11 +51534,18 @@ function runSceneSuite(): number {
       const a = motion?.animations['a:turn'], b = motion?.animations['b:turn'];
       const leftovers = C === null ? ['not composed'] : unprefixedNames(C.rig, C.motion, ['a', 'b'], false);
       const gate = readJsonFile(join(out, 'check', 'check.json'));
+      const turnRig = JSON.parse(readFileSync(join(turn, 'rig', 'rig.json'), 'utf8')) as RigSpec;
+      const sourceCombinations = turnRig.invariants?.deformSliderCombinations ?? [];
+      const expectedCombinations = ['a', 'b'].flatMap(id => sourceCombinations.map(({ inputs }) => ({
+        inputs: inputs.map(({ slider, value }) => ({ slider: `${id}:${slider}`, value })),
+      })));
+      const sceneCombinations = C?.rig.invariants?.deformSliderCombinations;
       say('SC53_TWO_TURN_CHARACTERS_GATE_WITH_PREFIXED_NESTED_REFERENCES',
         run.status === 0 && gate?.PASS === true && C !== null && leftovers.length === 0 &&
-          (C.rig.constraints ?? []).filter(c => c.type === 'slider').every(c => String(c.animation).startsWith(String(c.name).startsWith('a:') ? 'a:' : 'b:')) && a?.deform?.[0].skin === 'default',
-        `exit ${run.status}; gate ${String(gate?.gate_spine_html_green)}; entry ${JSON.stringify(gate?.rigc_entry)}; unprefixed ${leftovers.join('; ') || 'none'}; shared skin ${a?.deform?.[0].skin}`,
-        'issue #1344: turn references stay inside each character; default is the shared skin');
+          (C.rig.constraints ?? []).filter(c => c.type === 'slider').every(c => String(c.animation).startsWith(String(c.name).startsWith('a:') ? 'a:' : 'b:')) && a?.deform?.[0].skin === 'default' &&
+          sourceCombinations.length > 0 && JSON.stringify(sceneCombinations) === JSON.stringify(expectedCombinations),
+        `exit ${run.status}; gate ${String(gate?.gate_spine_html_green)}; entry ${JSON.stringify(gate?.rigc_entry)}; unprefixed ${leftovers.join('; ') || 'none'}; shared skin ${a?.deform?.[0].skin}; ${sourceCombinations.length} source tuples, ${sceneCombinations?.length ?? 0} scene tuples`,
+        'Turn references stay inside each character, including the slider combinations and their original input angles.');
       const da = a?.tracks.find(t => t.group === 'a:turn_units')?.keys.find(k => k.derive)?.derive;
       const db = b?.tracks.find(t => t.group === 'b:turn_units')?.keys.find(k => k.derive)?.derive;
       const va = a?.deform?.find(d => d.slot === 'a:hair_back')?.keys.find(k => k.vertices)?.vertices;
@@ -51473,14 +51589,18 @@ function runSceneSuite(): number {
         codes(missing.err), 'issue #1344: animations, slots, attachments and the shared default skin resolve before emit');
       const mutant = C === null ? null : structuredClone(C);
       if (mutant !== null) {
+        const comboInput = mutant.rig.invariants?.deformSliderCombinations?.[0]?.inputs[0];
+        if (comboInput !== undefined) comboInput.slider = comboInput.slider.slice('a:'.length);
         (mutant.rig.constraints ?? []).find(c => c.type === 'slider')!.animation = 'turn';
         const ma = (mutant.motion.animations as unknown as Record<string, { deform: Array<{ slot: string; attachment: string }>; tracks: Array<{ keys: Array<{ derive?: { depth: unknown } }> }> }> )['a:turn'];
         ma.deform[0].attachment = 'hair_back';
         const d = ma.tracks.flatMap(t => t.keys).find(k => k.derive !== undefined && typeof k.derive.depth === 'object')!.derive!; (d.depth as Record<string, number>).ear_r = 1;
       }
       const caught = mutant === null ? [] : unprefixedNames(mutant.rig, mutant.motion, ['a', 'b'], false);
-      say('SC58_PREFIX_TOTALITY_DETECTS_BARE_SLIDER_DEFORM_AND_MEMBER_REFERENCES', caught.some(x => x.includes('animation')) && caught.some(x => x.includes('deform attachment')) && caught.some(x => x.includes('key member')),
-        caught.join('; '), 'issue #1344: a totality check must see names nested below a track');
+      say('SC58_PREFIX_TOTALITY_DETECTS_BARE_SLIDER_DEFORM_AND_MEMBER_REFERENCES',
+        caught.some(x => x.includes('animation')) && caught.some(x => x.includes('deform attachment')) && caught.some(x => x.includes('key member')) &&
+          caught.some(x => x.startsWith('invariants.deformSliderCombinations slider ')),
+        caught.join('; '), 'The prefix check reads references inside tracks and slider combinations.');
       const mismatch = compose(planted('turn-wrong-member', { motion: m => {
         const a = (m.animations as Record<string, { tracks: Array<{ keys: Array<{ derive?: { depth: unknown } }> }> }>).turn;
         const d = a.tracks.flatMap(t => t.keys).find(k => k.derive !== undefined && typeof k.derive.depth === 'object')!.derive!; (d.depth as Record<string, number>).head = 1;
