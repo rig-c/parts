@@ -4045,14 +4045,18 @@ assemble/config step; this bounded draft names that refusal. Reassembly uses the
 CLI defaults `seam=near-white` and `project=core`, explicitly stated in its note
 because `parts.json` does not record the source command's selected rules.
 
-The `note:` line derives `turn.body.unitDepths.<part>` as
-`round4(bodyPivot + neckWorldMedian - firstBodySurfaceWorldMedian)`, using the
-existing scalar sheet, declared `near` polarity and `zScale`. If the new source
+The draft writes the neck's world median to `turn.body.unitDepths.<part>`,
+using the existing scalar sheet, declared `near` polarity and `zScale`.
+The note also reports the projected depth the rig stage computes as
+`round4(bodyPivot + neckWorldMedian - firstBodySurfaceWorldMedian)`.
+If the new source
 has no sheet, only new opaque art overlapping the previous registered neck
 sheet is sampled. An absent sheet, empty overlap, missing body reference or
 missing pivot is refused by name; legacy `depth_median` is never converted to
 world units. Other proposal modes (`--keypoints`, `--compare`, `--grid-rule`,
 `--only-missing`) must run separately and are refused in this mode.
+For a config drafted before #1575, copy the neck world median from the original
+draft note into its body unit depth, or draft again from the same source.
 
 **The chest on such a config (issue #1436).** With `--bust-landmarks <file>` or
 `--no-bust "<reason>"` and without `--full` and `--head`, `propose --write-config`

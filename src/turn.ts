@@ -1786,7 +1786,7 @@ function buildDepth25DTurnGroup(
     problems.push({
       code: 'RIG_TURN_BODY_UNIT_CARRIER',
       object: `${group.fieldPrefix}.roles.${part}`,
-      detail: `declares depth for unit part "${part}" (bone "${bone}"); ${reason}`,
+      detail: `cannot resolve a movable carrier for unit part "${part}" (bone "${bone}"); ${reason}`,
     });
   };
 

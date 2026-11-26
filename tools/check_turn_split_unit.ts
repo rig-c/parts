@@ -115,4 +115,15 @@ export function runTurnSplitUnitChecks(say: Say): void {
     const c = buildRig(parseConfig(v.config), v.parts, v.images), e = splitUnitFieldError(c, reference === 'part' ? 7 : 4, reference === 'part' ? 7 : 11);
     say(`BLS09_${reference.toUpperCase()}_UNIT_DEPTH_REFERENCE_USES_RESOLVED_FIELD`, e.upper <= 1.1e-6 && e.lower <= 1.1e-6 && e.outside <= 1.1e-6, JSON.stringify(e));
   }
+  const shared = splitUnitNeighbourTurnFixture();
+  (shared.config.bones as Array<{ name: string; parent?: string }>).find(b => b.name === 'cap')!.parent = 'plate';
+  let conflict: string | undefined;
+  try {
+    buildRig(parseConfig(shared.config), shared.parts, shared.images);
+  } catch (error) {
+    if (!(error instanceof PartsError)) throw error;
+    conflict = error.problems.find(p => p.code === 'RIG_TURN_BODY_UNIT_CARRIER' && p.object === 'config.turn.body.roles.topwear')?.detail;
+  }
+  say('BLS11_SHARED_CARRIER_REFUSES_DIFFERENT_AUTHORED_DEPTHS', conflict?.includes('bone "cap"') === true && conflict.includes('carrier "plate" is shared'),
+    conflict ?? 'missing shared carrier refusal');
 }

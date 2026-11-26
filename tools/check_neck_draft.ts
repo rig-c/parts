@@ -39,7 +39,7 @@ export function runNeckDraftChecks(dir: string, say: Say): void {
   const previous = readRigInputs(files.configPath, out), runs = readRuns(files.fullDir, files.headDir);
   const input = { config: loadConfig(files.configPath), source: readPng(files.source), ...runs, base: resolve(dir, 'actual'), previous };
   const drafted = draftIndependentNeck(input), cfg = parseConfig(drafted.config), depth = cfg.turn!.body!.unitDepths!.throat;
-  say('ND09_DERIVED_UNIT_DEPTH', depth === 2 && drafted.notes.some(n => n.includes('round4(body pivot 10 + neck world median 4 - first body surface "shirt" world median 12)')), drafted.notes.join('; '));
+  say('ND09_DERIVED_UNIT_DEPTH', depth === 4 && drafted.notes.some(n => n.includes('projected depth 2 = round4(body pivot 10 + neck world median 4 - first body surface "shirt" world median 12)')), drafted.notes.join('; '));
   say('ND10_RIGID_SIBLING', cfg.turn!.body!.roles.throat === 'unit' && cfg.turn!.roles!.throat === undefined && cfg.bones.some(b => 'name' in b && b.name === 'throat_part' && b.parent === 'chest') && cfg.meshes.throat.segments.length === 1, 'one rigid influence, sibling of anatomical neck under chest');
   const refuse = (mutate: (x: typeof input) => void, code: string) => { const x = structuredClone(input); mutate(x); try { draftIndependentNeck(x); return false; } catch (e) { return e instanceof PartsError && e.problems.some(p => p.code === code); } };
   say('ND11_MISSING_SOURCE_NAMED', refuse(x => { x.full.layers = x.full.layers.filter(l => l.name !== 'neck'); }, 'PROPOSE_NECK_FULL_SOURCE'), 'supply a clean full neck');
@@ -50,7 +50,7 @@ export function runNeckDraftChecks(dir: string, say: Say): void {
   say('ND18_MISSING_SCALAR_NAMED', refuse(x => { noSheet(x); delete x.previous.parts.parts.find(p => p.name === 'throat')!.depth; }, 'PROPOSE_NECK_DEPTH_INPUT'), 'missing full and previous registered sheets name the required scalar input');
   const fallback = structuredClone(input); noSheet(fallback);
   const fallbackDraft = draftIndependentNeck(fallback);
-  say('ND19_PREVIOUS_REGISTERED_OVERLAP', fallbackDraft.config.turn!.body!.unitDepths!.throat === 2 && fallbackDraft.notes.some(n => n.includes('overlapping previous registered neck sheet')), 'only new opaque art overlapping the previous sheet contributes; same analytic median4');
+  say('ND19_PREVIOUS_REGISTERED_OVERLAP', fallbackDraft.config.turn!.body!.unitDepths!.throat === 4 && fallbackDraft.notes.some(n => n.includes('overlapping previous registered neck sheet')), 'only new opaque art overlapping the previous sheet contributes; same analytic median 4');
   const underlap = structuredClone(input);
   for (let x = 28; x < 36; x++) underlap.full.layers.find(l => l.name === 'neck')!.pixels.data.set([220, 160, 100, 255], (38 * 64 + x) * 4);
   say('ND20_FULL_RUN_UNDERLAP_ALLOWED', draftIndependentNeck(underlap).config.turn!.body!.roles.throat === 'unit', 'normal full-run seam overlap is not a head-crop contamination classifier');
@@ -74,6 +74,10 @@ export function runNeckDraftChecks(dir: string, say: Say): void {
   const after = JSON.parse(readFileSync(files.configPath, 'utf8')), loaded = readRigInputs(files.configPath, join(dest, 'rig'));
   say('ND13_REAL_CONFIG_AND_ART', after.assemble.plan.find((r: string[]) => r[0] === 'throat')[1] === 'full' && loaded.parts.parts.find(p => p.name === 'throat')?.from === 'full:neck' && loaded.images.get('throat')!.data.every((v, i) => i % 4 === 3 || v !== 30), 'actual configwrite, parts.json and source pixels; source strip ink absent');
   say('ND14_AUTHORED_TURN_PRESERVED', after.turn.body.pivot === before.turn.body.pivot && after.turn.body.counter === before.turn.body.counter && JSON.stringify(after.turn.body.grid) === JSON.stringify(before.turn.body.grid) && JSON.stringify(after.motion) === JSON.stringify(before.motion), 'whole-section config replacement retains authored body data and motion');
+  const motion = buildRig(loaded.cfg, loaded.parts, loaded.images).motion;
+  const bodyTurn = motion.animations.body_turn as { tracks: Array<{ group?: string; keys: Array<{ derive?: { depth: Record<string, number> } }> }> };
+  const projected = bodyTurn.tracks.find(t => t.group === 'body_turn_units')?.keys[0].derive?.depth.throat_unit;
+  say('ND42_NECK_DEPTH_PROJECTED_ONCE', projected === 2, `the written world median 4 projects at pivot 10 and reference 12 to ${projected}`);
   const cli = spawnSync(process.execPath, [resolve('cli.ts'), 'layers', files.headDir, '--full', files.fullDir, '--source', files.source, '--config', files.configPath], { encoding: 'utf8' });
   let repeated = false;
   try { proposeNeck(readConfigWriteTarget(files.configPath), { source: files.source, full: files.fullDir, head: files.headDir, parts: out, out: dest }); } catch (e) { repeated = e instanceof PartsError && e.problems.some(p => p.code === 'PROPOSE_NECK_OUT_FRESH'); }
@@ -112,7 +116,7 @@ export function runNeckDraftChecks(dir: string, say: Say): void {
   edgeConfig.seethrough!.head_box = [1, 1, 48, 48];
   try { edgeDraft = draftIndependentNeck({ config: edgeConfig, source: readPng(edgeFiles.source), ...edgeRuns, base: dirname(edgeFiles.configPath) }); }
   catch (e) { if (!(e instanceof PartsError)) throw e; edgeError = e.message; }
-  say('ND40_REGISTERED_CROP_EDGE_DRAFT', edgeDraft !== undefined && edgeDraft.config.turn!.body!.unitDepths!.throat === 2, edgeDraft === undefined ? edgeError : edgeDraft.notes.join('; '));
+  say('ND40_REGISTERED_CROP_EDGE_DRAFT', edgeDraft !== undefined && edgeDraft.config.turn!.body!.unitDepths!.throat === 4, edgeDraft === undefined ? edgeError : edgeDraft.notes.join('; '));
   const clamp = edgeDraft?.assembled.depthClamps?.find(r => r.part === 'portrait');
   // Bilinear art support is rig x18..30, y7..18. Only column x18 maps
   // outside the scalar crop: one column of twelve visible samples.
@@ -165,11 +169,11 @@ export function runNeckDraftReviewChecks(dir: string, say: Say): void {
   };
   const fallback = draftDepths(), fallbackMap = fallback.cfg.turn!.body!.unitDepths!;
   say('ND36_BODY_FALLBACK_UNIT_DEPTH', JSON.stringify(fallbackMap.pin) === JSON.stringify(fallback.effective.pin) && fallbackMap.pin === -7.25, `other body unit pin: before=${fallback.effective.pin}, after=${fallbackMap.pin}`);
-  say('ND37_EFFECTIVE_MAP_SNAPSHOT', fallbackMap.portrait === 6.5 && fallbackMap.throat === 2 && fallback.cfg.turn!.unitDepths!.throat === undefined && fallback.inputUnchanged, `previous effective entries retained, legacy neck removed only on clone; body=${JSON.stringify(fallbackMap)}`);
+  say('ND37_EFFECTIVE_MAP_SNAPSHOT', fallbackMap.portrait === 6.5 && fallbackMap.throat === 4 && fallback.cfg.turn!.unitDepths!.throat === undefined && fallback.inputUnchanged, `previous effective entries retained, legacy neck removed only on clone; body=${JSON.stringify(fallbackMap)}`);
   const explicit = draftDepths({ pin: 3.25 }), explicitMap = explicit.cfg.turn!.body!.unitDepths!;
-  say('ND38_BODY_WHOLE_MAP_OVERRIDE', explicitMap.pin === 3.25 && !Object.hasOwn(explicitMap, 'portrait') && explicitMap.throat === 2 && explicit.inputUnchanged, JSON.stringify(explicitMap));
+  say('ND38_BODY_WHOLE_MAP_OVERRIDE', explicitMap.pin === 3.25 && !Object.hasOwn(explicitMap, 'portrait') && explicitMap.throat === 4 && explicit.inputUnchanged, JSON.stringify(explicitMap));
   const empty = draftDepths({}), emptyMap = empty.cfg.turn!.body!.unitDepths!;
-  say('ND39_EMPTY_BODY_MAP_OVERRIDE', Object.keys(emptyMap).length === 1 && emptyMap.throat === 2 && empty.inputUnchanged, 'authored empty body map suppresses every fallback entry, only newly derived neck is added');
+  say('ND39_EMPTY_BODY_MAP_OVERRIDE', Object.keys(emptyMap).length === 1 && emptyMap.throat === 4 && empty.inputUnchanged, 'authored empty body map suppresses every fallback entry, only newly derived neck is added');
 }
 
 import { mkdirSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
