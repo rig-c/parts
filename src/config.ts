@@ -628,13 +628,14 @@ export function contourRegionsOf(spec: ContourSpec): ContourRegionSpec[] {
 /**
  * A local deformation region: a shape in rig px, a control bone, the spacing
  * the mesh is refined at inside it and its band, and the band the bone's
- * weight falls across ({@link import('./localweights.ts').regionWeight}).
- * Every coordinate and length is a multiple of 1/256 px: the weight's 0 and 1
- * are decided exactly on that grid.
+ * weight falls across. `falloff: 'linear'` keeps the nominal linear share
+ * throughout the band. By default contour weighting eases its outer half.
+ * Every coordinate and length is a multiple of 1/256 px: the nominal share's
+ * 0 and 1 are decided exactly on that grid.
  */
 export type ContourRegionSpec =
-  | { name: string; shape: 'circle'; cx: number; cy: number; r: number; spacing: number; band: number; bone: string; cover?: string }
-  | { name: string; shape: 'polygon'; points: Point[]; spacing: number; band: number; bone: string; cover?: string };
+  | { name: string; shape: 'circle'; cx: number; cy: number; r: number; spacing: number; band: number; bone: string; cover?: string; falloff?: 'linear' }
+  | { name: string; shape: 'polygon'; points: Point[]; spacing: number; band: number; bone: string; cover?: string; falloff?: 'linear' };
 
 /**
  * One mesh in the automatic mode (issue #126, item 2): the contour mesh over
@@ -795,8 +796,8 @@ export interface ArtFitBoundsSpec {
  * A region of the automatic mode, in one of two forms (issue #155).
  *
  * - **Weight and density** ({@link AutoWeightRegionSpec}): a shape and a
- *   control bone as a contour region has them, the bone's weight `band` (the
- *   same falloff, `src/localweights.ts`), and the density rig-c holds the
+ *   control bone as a contour region has them, the bone's linear weight
+ *   `band` (`src/localweights.ts`), and the density rig-c holds the
  *   mesh to (§5 of its contract): every edge meeting the region at most
  *   `maxEdgeLength` px (L0), relaxing as `L0 + grade·d` across `transition` px
  *   outside it, and the region's art sample floor (P9).
@@ -3875,7 +3876,7 @@ function checkContour(c: Check, at: string, v: Json, bones: Set<string>): void {
       const rat = `${at}.regions[${i}]`;
       const shape = typeof rv === 'object' && rv !== null && !Array.isArray(rv) ? (rv as Record<string, Json>).shape : undefined;
       const own = shape === 'circle' ? ['cx', 'cy', 'r'] : shape === 'polygon' ? ['points'] : [];
-      const r = c.object(rat, rv, ['name', 'shape', 'bone', 'spacing', 'band', ...own], ['cover']);
+      const r = c.object(rat, rv, ['name', 'shape', 'bone', 'spacing', 'band', ...own], ['cover', 'falloff']);
       if (r === null) return;
       if ('shape' in r && own.length === 0) c.fail('CONFIG_FIELD_TYPE', `${rat}.shape`, `is ${show(r.shape)}; "circle" (with cx, cy, r) or "polygon" (with points) is required`);
       if ('name' in r && c.string(`${rat}.name`, r.name)) {
@@ -3887,6 +3888,9 @@ function checkContour(c: Check, at: string, v: Json, bones: Set<string>): void {
       }
       if ('cover' in r && (typeof r.cover !== 'string' || r.cover.length === 0)) {
         c.fail('CONFIG_FIELD_TYPE', `${rat}.cover`, `is ${show(r.cover)}; a non-empty part name is required`);
+      }
+      if ('falloff' in r && r.falloff !== 'linear') {
+        c.fail('CONFIG_FIELD_TYPE', `${rat}.falloff`, `is ${show(r.falloff)}; "linear" is required for the legacy ramp, or leave falloff out to ease the outer half of the band`);
       }
       if ('spacing' in r) c.number(`${rat}.spacing`, r.spacing, 'positive');
       if ('band' in r) onGrid(`${rat}.band`, r.band, 'non-negative');

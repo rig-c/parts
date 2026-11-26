@@ -12,12 +12,14 @@
  * rigc 3.7.0 / spine-core 4.3.13 on Linux. The no-turn and lattice hashes
  * below seal the emitted rig, motion and six PNGs, not visual correctness.
  */
+import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { depthReading } from '../src/depthsheets.ts';
 import { applyDepth, bindDepthMap, prepareDepth } from '../src/depthworkflow.ts';
 import { readParts, writeParts } from '../src/parts.ts';
 import { propose, readPartSet } from '../src/propose.ts';
-import { encodePngBytes } from '../src/raster/png.ts';
+import { encodePngBytes, readPng } from '../src/raster/png.ts';
 import { newRaster } from '../src/raster/types.ts';
 import { PROPOSE_PARTS, type ProposeFixturePart, writeProposeFixture } from './propose.ts';
 
@@ -108,6 +110,92 @@ export function writeContourTurnFixture(dir: string): ContourTurnFixture {
   meshes.bodice = { grid: contour.contour.spacing, r: contour.r, segments: contour.segments };
   writeJson(lattice, withLattice);
   return { parts: applied, config, noTurn, lattice };
+}
+
+/**
+ * A flat square with an authored scalar ramp, blended to a head bone only at
+ * its left edge. The contour at x=20 has nominal share 1/4 and eased share
+ * 3/16. Both the edge and the next boundary column sample the same depth
+ * plateau. The face's median matches that plateau and the body median is its
+ * far plane. The resulting body relief at the edge is the authored ramp
+ * height plus the head–body model depth separation times the placement scale.
+ * The separate tab takes its own model depth through the body unit carrier.
+ */
+export function writeContourFalloffTurnFixture(dir: string, depthScale: 250 | 400, stronger = false) {
+  const modelDepth = { body: 0.04, head: 0.08, tab: 0.12 };
+  const bodyDepth = modelDepth.body * depthScale;
+  const plateauDepth = modelDepth.head * depthScale + (stronger ? 123 : 63);
+  const unitDepth = modelDepth.tab * depthScale;
+  const zScale = 250; // The 8-bit depth step is below one rig pixel and resolves the authored relief.
+  const spacing = 24;
+  const partsDir = join(dir, 'assembled');
+  writeProposeFixture(partsDir, [
+    { name: 'topwear', from: 'full:topwear', x: 20, y: 26, w: 96, h: 34, colour: [60, 80, 100] },
+    { name: 'face', from: 'head:face', x: 24, y: 12, w: 16, h: 14, colour: [200, 180, 160] },
+    { name: 'tab', from: 'full:bottomwear', x: 132, y: 52, w: 8, h: 8, colour: [120, 80, 60] },
+  ], { w: 152, h: 80 });
+  const manifest = join(partsDir, 'parts.json');
+  const parts = readParts(manifest);
+  for (const p of parts.parts) {
+    if (p.name === 'tab') continue;
+    const art = readPng(join(partsDir, 'parts', `${p.name}.png`));
+    const scalar = newRaster(p.w, p.h);
+    for (let y = 0; y < p.h; y++) for (let x = 0; x < p.w; x++) {
+      const ramp = Math.max(0, 1 - Math.max(0, x - 8) / 36);
+      const depth = p.name === 'face' ? plateauDepth : bodyDepth + (plateauDepth - bodyDepth) * ramp;
+      const value = Math.round(depth * 255 / zScale);
+      scalar.data.set([value, value, value, 255], 4 * (y * p.w + x));
+    }
+    const image = `${p.name}_depth.png`;
+    const bytes = encodePngBytes(scalar);
+    writeFileSync(join(partsDir, 'parts', image), bytes);
+    p.depth = {
+      image, near: 'white', zScale,
+      sources: [{
+        from: p.from, image: 'scalar.png', sha256: createHash('sha256').update(bytes).digest('hex'),
+        crop: [p.x, p.y, p.x + p.w, p.y + p.h], reading: depthReading(scalar, art, null),
+      }],
+    };
+  }
+  writeParts(manifest, parts);
+  const config = (mode: 'default' | 'linear' | 'doubled'): string => {
+    const path = join(dir, `contour-depth-${depthScale}-${mode}.json`);
+    writeJson(path, {
+      key: 'synthetic-falloff-turn',
+      assemble: { rig_scale: 1, plan: parts.parts.map(p => [p.name, ...p.from.split(':')]) },
+      bones: [
+        { name: 'chest', parent: 'root', at: [32, 50] },
+        { name: 'torso', parent: 'chest', at: [32, 50] },
+        { name: 'head', parent: 'chest', at: [32, 26] },
+        { name: 'crown', parent: 'head', at: [32, 20] },
+        { name: 'tab_bone', parent: 'chest', at: [136, 56] },
+      ],
+      regions: { face: 'crown', tab: 'tab_bone' },
+      meshes: {
+        topwear: {
+          r: 8, segments: [['torso', [32, 58], [32, 30]]],
+          contour: {
+            tolerance: 0, margin: 0, spacing, maxEdge: 4,
+            regions: [
+              {
+                name: 'collar', shape: 'polygon', points: [[0, 10], [8, 10], [8, 70], [0, 70]],
+                bone: 'crown', cover: 'face', band: mode === 'doubled' ? 32 : 16, spacing,
+                ...(mode === 'linear' ? { falloff: 'linear' } : {}),
+              },
+              { name: 'seam', shape: 'circle', cx: 32, cy: 26, r: 1, bone: 'torso', band: 0, spacing },
+            ],
+          },
+        },
+      },
+      motion: { duration: 2, tracks: [{ bone: 'chest', prop: 'rotate', amp: 2, period: 2, phase: 0 }] },
+      turn: {
+        pivot: 0, grid: [5, 5], roles: { face: 'surface' },
+        body: { pivot: 0, roles: { topwear: 'surface', tab: 'unit' }, unitDepths: { tab: unitDepth } },
+      },
+    });
+    return path;
+  };
+  return { parts: partsDir, config };
 }
 
 function writeJson(path: string, value: unknown): void {
