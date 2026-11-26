@@ -672,6 +672,7 @@ export function applyFaceSurfaceDeform(
     skins: { default: Record<string, Record<string, DeformMeshAttachment | DeformRegionAttachment>> };
     constraints?: Array<Record<string, unknown>>;
     invariants?: Record<string, unknown>;
+    stops?: Depth25DTurnRig['stops'];
   },
   motion: {
     groups?: Record<string, string[]>;
@@ -890,20 +891,28 @@ export function applyFaceSurfaceDeform(
       ? opts.surfaceRadius
       : turnSurfaceRadius(opts.turn, W);
 
-  const boneOrder = new Map<string, number>(rig.bones.map((b, i) => [b.name, i]));
+  const setup = surfaceSetupGraph(rig);
+  // Core splices each drawn link after its source. Keep these emitted names
+  // and their order in the weight rows that the deform pairs are indexed by.
+  const boneOrder = new Map(rig.bones.map((b, i) => [b.name, 2 * i]));
+  const orderOf = (bone: string): number => {
+    const source = setup.resolve(bone);
+    return (boneOrder.get(source) ?? 0) + (source === bone ? 0 : 1);
+  };
   for (const slotName of ['hair_front', 'hair_back', 'hairpin']) {
     const slotObj = rig.skins.default[slotName];
     const att = slotObj?.[slotName];
     if (hasDeformWeights(att)) {
       for (const infls of att.weights) {
-        infls.sort((a, b) => (boneOrder.get(a.bone) ?? 0) - (boneOrder.get(b.bone) ?? 0));
+        infls.sort((a, b) => orderOf(a.bone) - orderOf(b.bone));
       }
     }
   }
 
-  const tf = computeWorldTransforms(rig.bones);
+  const tf = computeWorldTransforms(setup.bones);
   const headTf = tf.get('head') as BoneTransform | undefined;
   if (headTf === undefined) return;
+  const influenceFrame = (bone: string): BoneTransform => tf.get(setup.resolve(bone)) as BoneTransform;
 
   interface VertexSetup {
     hx: number;
@@ -918,11 +927,12 @@ export function applyFaceSurfaceDeform(
       let wy = 0;
       const boneWeights: Record<string, number> = {};
       for (const inf of infls) {
-        const m = tf.get(inf.bone) as BoneTransform;
+        const bone = setup.resolve(inf.bone);
+        const m = influenceFrame(inf.bone);
         const [x, y] = toWorld(m, inf.x, inf.y);
         wx += x * inf.weight;
         wy += y * inf.weight;
-        boneWeights[inf.bone] = (boneWeights[inf.bone] ?? 0) + inf.weight;
+        boneWeights[bone] = (boneWeights[bone] ?? 0) + inf.weight;
       }
       return { hx: wx - headTf.worldX, hy: wy - headTf.worldY, boneWeights, infls };
     });
@@ -932,7 +942,7 @@ export function applyFaceSurfaceDeform(
     for (const v of verts) {
       const [dx, dy] = evalVertex(v);
       for (const inf of v.infls) {
-        const m = tf.get(inf.bone) as BoneTransform;
+        const m = influenceFrame(inf.bone);
         const [bx, by] = toBoneLocalVector(m, dx, dy);
         out.push(pyRound(bx, 4), pyRound(by, 4));
       }
@@ -940,7 +950,7 @@ export function applyFaceSurfaceDeform(
     return out;
   };
 
-  const boneMap = new Map(rig.bones.map((b) => [b.name, b]));
+  const boneMap = new Map(setup.bones.map((b) => [b.name, b]));
   const referencedGroups = new Set<string>();
   for (const anim of [tiltAnim, turnAnim]) {
     for (const tr of anim?.tracks ?? []) {
@@ -1556,7 +1566,7 @@ interface Depth25DGroupSpec {
 }
 
 interface Depth25DTurnRig {
-  bones: Array<{ name: string; parent?: string; x: number; y: number; rotation?: number; length?: number }>;
+  bones: Array<{ name: string; parent?: string; x: number; y: number; rotation?: number; length?: number; inherit?: string }>;
   slots: Array<{ name: string; bone: string; attachment: string | null }>;
   constraints?: Array<Record<string, unknown>>;
   stops?: ReadonlyArray<{ links: readonly string[] }>;
@@ -1573,7 +1583,7 @@ interface TurnBandCover {
 }
 
 /** Stop draw bones share their link's setup frame; Core emits them later. */
-function surfaceSetupGraph(rig: Depth25DTurnRig) {
+function surfaceSetupGraph(rig: Pick<Depth25DTurnRig, 'bones' | 'stops'>) {
   const aliases = new Map<string, string>();
   for (const stop of rig.stops ?? []) for (const link of stop.links) aliases.set(`${link}_d`, link);
   const resolve = (name: string): string => aliases.get(name) ?? name;
