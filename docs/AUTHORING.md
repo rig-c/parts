@@ -4045,14 +4045,18 @@ assemble/config step; this bounded draft names that refusal. Reassembly uses the
 CLI defaults `seam=near-white` and `project=core`, explicitly stated in its note
 because `parts.json` does not record the source command's selected rules.
 
-The `note:` line derives `turn.body.unitDepths.<part>` as
-`round4(bodyPivot + neckWorldMedian - firstBodySurfaceWorldMedian)`, using the
-existing scalar sheet, declared `near` polarity and `zScale`. If the new source
+The draft writes the neck's world median to `turn.body.unitDepths.<part>`,
+using the existing scalar sheet, declared `near` polarity and `zScale`.
+The note also reports the projected depth the rig stage computes as
+`round4(bodyPivot + neckWorldMedian - firstBodySurfaceWorldMedian)`.
+If the new source
 has no sheet, only new opaque art overlapping the previous registered neck
 sheet is sampled. An absent sheet, empty overlap, missing body reference or
 missing pivot is refused by name; legacy `depth_median` is never converted to
 world units. Other proposal modes (`--keypoints`, `--compare`, `--grid-rule`,
 `--only-missing`) must run separately and are refused in this mode.
+For a config drafted before #1575, copy the neck world median from the original
+draft note into its body unit depth, or draft again from the same source.
 
 **The chest on such a config (issue #1436).** With `--bust-landmarks <file>` or
 `--no-bust "<reason>"` and without `--full` and `--head`, `propose --write-config`
@@ -7247,6 +7251,7 @@ and stay absent).
 | <a id="RIG_TURN_BOUNDARY_DEPTH"></a>`RIG_TURN_BOUNDARY_DEPTH` | boundary names or sheets do not resolve; surfaces are not different, abutting without overlap in one group with common units; band is empty/outside/not boundary-reaching; declarations cycle; or grid support is missing | use exact existing parts, different abutting surfaces in one group with common near/zScale, a contained nonempty band reaching their boundary, acyclic declarations and the generated grid support |
 | <a id="RIG_TURN_SHARED_DEPTH_SCALE"></a>`RIG_TURN_SHARED_DEPTH_SCALE` | `"surface"` parts bound to one head or body turn declare different `near` polarities or `zScale` values | use one shared `near` and `zScale` across all `"surface"` parts in the turn group. The check runs separately for the head and body role sets, so if a surface belongs to both, use the larger required `zScale` in both groups. |
 | <a id="RIG_TURN_UNIT_DEPTH_REQUIRED"></a>`RIG_TURN_UNIT_DEPTH_REQUIRED` | a `"unit"` bone has neither a `unitDepths` entry nor a readable `"surface"` depth sheet | provide a `"surface"` depth sheet or an explicit `unitDepths.<part>` value |
+| <a id="RIG_TURN_BODY_UNIT_CARRIER"></a>`RIG_TURN_BODY_UNIT_CARRIER` | an explicit body unit depth has no movable carrier for its binding, or a shared carrier needs incompatible depths | bind the unit to a movable body branch and use independent branches for different depths |
 | <a id="RIG_TURN_UNIT_DEPTH_SUPPORT"></a>`RIG_TURN_UNIT_DEPTH_SUPPORT` | WARN only: an implicit unit depth sample is outside the source surface pixel-index bounds or its sampled art alpha is below 255 | author an explicit calibrated `unitDepths.<part>` value when this cross-part extrapolation is unintended; existing scalar sampling and refusal behavior are retained |
 | <a id="RIG_TURN_EAR_DEPTH_BEHIND_CHEEK"></a>`RIG_TURN_EAR_DEPTH_BEHIND_CHEEK` | an ear bone in `config.turn.roles` has a calibrated depth at or in front of the cheek surface depth | place the ear behind the cheek surface (for example via `config.turn.unitDepths`) |
 
@@ -10115,6 +10120,15 @@ For each carried unit bone, the existing producer resolves depth in this order:
    reader requires a surface in each active group and supplies declared region
    landmarks or a mesh sampling position. No documented configuration is
    provided here to bypass primary sampling and select the own sheet instead.
+
+An explicit body unit value is the world depth `z`. At body yaw angle `a`,
+its rigid horizontal displacement is `-(pivot + z - zRef) * sin(a)`, using
+the same primary surface reference `zRef` as the body's surface projection.
+A region bound to a torso root gets its own mover under `bodyshift`; a
+region farther down a body branch uses the branch directly under
+`bodyshift`. Each blink-still piece resolves its binding independently.
+When the binding cannot be moved at the declared depth, the rig stage
+refuses with [`RIG_TURN_BODY_UNIT_CARRIER`](#RIG_TURN_BODY_UNIT_CARRIER).
 
 Outside or nonopaque primary support produces
 [`RIG_TURN_UNIT_DEPTH_SUPPORT`](#RIG_TURN_UNIT_DEPTH_SUPPORT), retains the

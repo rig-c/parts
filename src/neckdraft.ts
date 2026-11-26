@@ -75,9 +75,9 @@ export function draftIndependentNeck(input: { config: CharacterConfig; source: R
   if (surf?.record.depth === undefined || surf.depthImage === undefined) return refuse('PROPOSE_NECK_DEPTH_INPUT', `turn.body surface "${surface ?? '(none)'}"`, 'the first declared body surface or its scalar depth sheet is missing; declare a body surface and assemble its config.depth input');
   const zNeck = sampleUnitPartDepth(scalar, art, ref);
   const zRef = sampleUnitPartDepth(extendDepthSilhouette(surf.depthImage, surf.image), surf.image, surf.record.depth);
-  const value = pyRound(pivot + zNeck - zRef, 4);
-  body.unitDepths = { ...unitDepths, [part]: value };
+  const projectedDepth = pyRound(pivot + zNeck - zRef, 4);
+  body.unitDepths = { ...unitDepths, [part]: zNeck };
   notes.push(`neck: "${part}" takes full:neck; sibling bone "${unit}" under "${carrier}", one rigid segment from neck to head; reassembled with the CLI defaults seam=near-white/project=core (source rules are not recorded in parts.json); turn.body.roles.${part} = unit (no head role)`);
-  notes.push(`neck depth: turn.body.unitDepths.${part} = ${value} = round4(body pivot ${pivot} + neck world median ${zNeck} - first body surface "${surface}" world median ${zRef}); median over ${population}, sheet "${ref.image}", near=${ref.near}, zScale=${ref.zScale}; levelToDepthZ applies the declared polarity, not depth_median`);
+  notes.push(`neck depth: turn.body.unitDepths.${part} = neck world median ${zNeck}; projected depth ${projectedDepth} = round4(body pivot ${pivot} + neck world median ${zNeck} - first body surface "${surface}" world median ${zRef}); median over ${population}, sheet "${ref.image}", near=${ref.near}, zScale=${ref.zScale}; levelToDepthZ applies the declared polarity, not depth_median`);
   return { config: cfg, assembled, notes };
 }

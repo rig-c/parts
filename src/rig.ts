@@ -3479,10 +3479,33 @@ export function buildWaistPairSource(
         const bodyTransform = world.get(bodyRoot) as BoneTransform;
         const bodyTurnDeg = turn.get(bodyRoot) ?? 0;
         const surfBones: RigBone[] = [];
-        const unitMeshBones: RigBone[] = [];
+        const bodyUnitBones: RigBone[] = [];
+        const unitDepths = bodySpec.unitDepths ?? cfg.turn.unitDepths;
+        const torsoRoots = new Set<string>([bodyRoot, 'chest', 'hip', `${bodyRoot}${CONTROL_SUFFIX}`, `chest${CONTROL_SUFFIX}`, `hip${CONTROL_SUFFIX}`]);
+        const regionUnitCarriers = new Map<string, string>();
+        const addBodyUnitCarrier = (slot: string): string => {
+          const name = turnUnitBone(slot);
+          if (bones.some(b => b.name === name) || bodyUnitBones.some(b => b.name === name)) {
+            fail('RIG_TURN_NAME_FREE', `bone "${name}"`, `is the body unit carrier for slot "${slot}", and the rig already has a bone of that name; rename it`);
+          } else {
+            bodyUnitBones.push({ name, parent: BODYSHIFT_BONE, x: 0, y: 0 });
+          }
+          return name;
+        };
+        const addRegionUnitCarrier = (part: string, slot: string, bone: string): void => {
+          if (torsoRoots.has(bone) && (unitDepths?.[part] !== undefined || unitDepths?.[bone] !== undefined)) {
+            regionUnitCarriers.set(slot, addBodyUnitCarrier(slot));
+          }
+        };
         for (const p of parts.parts) {
-          if (bodyRoles[p.name] === 'unit' && cfg.meshes[p.name] !== undefined) {
-            unitMeshBones.push({ name: turnUnitBone(p.name), parent: BODYSHIFT_BONE, x: 0, y: 0 });
+          if (bodyRoles[p.name] === 'unit') {
+            if (cfg.meshes[p.name] !== undefined) {
+              addBodyUnitCarrier(p.name);
+            } else if (cfg.regions[p.name] !== undefined) {
+              addRegionUnitCarrier(p.name, p.name, regionBone(cfg.regions[p.name]));
+              const still = stills[p.name];
+              if (still !== undefined) addRegionUnitCarrier(p.name, `${p.name}${STILL_SUFFIX}`, still.bone);
+            }
             continue;
           }
           if (bodyRoles[p.name] !== 'surface' || cfg.meshes[p.name] !== undefined) continue;
@@ -3505,7 +3528,7 @@ export function buildWaistPairSource(
           { name: BODYSHIFT_BONE, parent: bodyRoot, x: 0, y: 0 },
           ...(hasRear ? [{ name: BODY_REAR_SHIFT_BONE, parent: bodyRoot, x: 0, y: 0 }] : []),
           ...surfBones,
-          ...unitMeshBones,
+          ...bodyUnitBones,
         ];
         bones.splice(bodyIdx + 1, 0, ...carriers);
         const bodyDialBone = bodySpec.slider ?? BODY_YAW_DIAL_BONE;
@@ -3520,7 +3543,6 @@ export function buildWaistPairSource(
             throw new Error(`turn invariant violated: turn carrier "${boneName}" must never be reparented (target "${targetParent}")`);
           }
         };
-        const torsoRoots = new Set<string>([bodyRoot, 'chest', 'hip', `${bodyRoot}${CONTROL_SUFFIX}`, `chest${CONTROL_SUFFIX}`, `hip${CONTROL_SUFFIX}`]);
         const headExclusion = new Set<string>(['head', `head${CONTROL_SUFFIX}`, 'neck', `neck${CONTROL_SUFFIX}`, FACESHIFT_BONE, REAR_SHIFT_BONE]);
         const reparentFromTorso = (boneName: string, targetParent: string): void => {
           assertNotBodyTurnCarrier(boneName, targetParent);
@@ -3671,31 +3693,42 @@ export function buildWaistPairSource(
           rebindBodyPartToCarrier(part, unitBone);
         };
 
+        const rebindTorsoRegion = (slot: string, bone: string, carrier: string): void => {
+          const sl = slotByName.get(slot);
+          if (sl !== undefined) sl.bone = carrier;
+          if (bone === bodyRoot) return;
+          const oldTr = world.get(bone);
+          if (oldTr === undefined) return;
+          for (const att of Object.values(skin[slot] ?? {})) {
+            if (!('type' in att)) {
+              const [wx, wy] = toWorld(oldTr, att.x, att.y);
+              const [lx, ly] = toBoneLocal(bodyTransform, wx, wy);
+              att.x = places(lx);
+              att.y = places(ly);
+              if (regionUnitCarriers.get(slot) === carrier) {
+                const rotation = places(normaliseDegrees((att.rotation ?? 0) + (turn.get(bone) ?? 0) - bodyTurnDeg));
+                if (rotation === 0) delete att.rotation;
+                else att.rotation = rotation;
+              }
+            }
+          }
+        };
         for (const [part, role] of Object.entries(bodyRoles)) {
           if (role === 'unit') {
             if (cfg.regions[part] !== undefined) {
               const bName = regionBone(cfg.regions[part]);
               if (torsoRoots.has(bName)) {
-                const sl = slotByName.get(part);
-                if (sl !== undefined) sl.bone = BODYSHIFT_BONE;
-                if (bName !== bodyRoot) {
-                  const oldTr = world.get(bName);
-                  if (oldTr !== undefined) {
-                    for (const att of Object.values(skin[part] ?? {})) {
-                      if (!('type' in att)) {
-                        const [wx, wy] = toWorld(oldTr, att.x, att.y);
-                        const [lx, ly] = toBoneLocal(bodyTransform, wx, wy);
-                        att.x = places(lx);
-                        att.y = places(ly);
-                      }
-                    }
-                  }
-                }
+                rebindTorsoRegion(part, bName, regionUnitCarriers.get(part) ?? BODYSHIFT_BONE);
               } else {
                 reparentFromTorso(bName, BODYSHIFT_BONE);
               }
               const st = stills[part];
-              if (st !== undefined) reparentFromTorso(st.bone, BODYSHIFT_BONE);
+              if (st !== undefined) {
+                const slot = `${part}${STILL_SUFFIX}`;
+                const carrier = regionUnitCarriers.get(slot);
+                if (carrier !== undefined) rebindTorsoRegion(slot, st.bone, carrier);
+                else reparentFromTorso(st.bone, BODYSHIFT_BONE);
+              }
             } else if (cfg.meshes[part] !== undefined) {
               rebindBodyUnitMeshToCarrier(part);
             }
@@ -3703,21 +3736,7 @@ export function buildWaistPairSource(
             if (cfg.regions[part] !== undefined) {
               const bName = regionBone(cfg.regions[part]);
               if (torsoRoots.has(bName)) {
-                const sl = slotByName.get(part);
-                if (sl !== undefined) sl.bone = BODY_REAR_SHIFT_BONE;
-                if (bName !== bodyRoot) {
-                  const oldTr = world.get(bName);
-                  if (oldTr !== undefined) {
-                    for (const att of Object.values(skin[part] ?? {})) {
-                      if (!('type' in att)) {
-                        const [wx, wy] = toWorld(oldTr, att.x, att.y);
-                        const [lx, ly] = toBoneLocal(bodyTransform, wx, wy);
-                        att.x = places(lx);
-                        att.y = places(ly);
-                      }
-                    }
-                  }
-                }
+                rebindTorsoRegion(part, bName, BODY_REAR_SHIFT_BONE);
               } else {
                 reparentFromTorso(bName, BODY_REAR_SHIFT_BONE);
               }

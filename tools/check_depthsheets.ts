@@ -2,6 +2,7 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { compile, f32 } from '@rig-c/core/compile';
+import { poseRawAnimation, poseRawSetup, readModel } from '@rig-c/core/core';
 import { parseMotionSpec, type MotionSpec } from '@rig-c/core/motion';
 import { CompileError } from '@rig-c/core/errors';
 import { parseRigSpec, type RigSpec } from '@rig-c/core/rig';
@@ -19,6 +20,7 @@ import { encodePngBytes, readPng, writePng } from '../src/raster/png.ts';
 import { newRaster, type Raster } from '../src/raster/types.ts';
 import { pad } from '../src/raster/index.ts';
 import { lashConfig, lashImages, lashParts, rigConfig, rigImages, rigParts, writeRigFixture } from '../fixtures/rig.ts';
+import { roleNeighbourTurnFixture } from '../fixtures/turn_overlap.ts';
 
 type Say = (name: string, ok: boolean, detail: string) => void;
 const errors = (f: () => unknown): string[] => { try { f(); return []; } catch (e) { if (e instanceof PartsError) return e.problems.map(p => p.code); throw e; } };
@@ -926,6 +928,50 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
       botDepthRep?.ceiling !== undefined,
     `Core exit=${runBody25.status} (preChest=${runPreChest.status}, bodyshift@${shiftPreIdx}<badge_b@${badgePreIdx}); headDeform=${headDeformSlots.join(',')}; bodyDeform=${bodyDeformSlots.join(',')}; faceCentreDxPos=${faceCentreDxPos.toFixed(4)}; topCentreDxPos=${topCentreDxPos.toFixed(4)}; bodyRearDxPos=${bodyRearDxPos.toFixed(4)}; sliders=${sliderNames.join(',')}; topCeiling=${JSON.stringify(topDepthRep?.ceiling)}; botCeiling=${JSON.stringify(botDepthRep?.ceiling)}`,
   );
+
+  const unitBuild = (bone: string, z: number) => {
+    const fixture = roleNeighbourTurnFixture('unit');
+    delete fixture.config.constraints;
+    delete (fixture.config.meshes as Record<string, unknown>).topwear;
+    (fixture.config.regions as Record<string, string>).topwear = bone;
+    (fixture.config.bones as unknown[]).push({ name: 'plate_tip', parent: 'plate', at: [32, 54] });
+    (fixture.config.turn as { body: { unitDepths?: Record<string, number> } }).body.unitDepths = { topwear: z };
+    return buildRig(parseConfig(fixture.config), fixture.parts, fixture.images);
+  };
+  // The first body surface is flat level 120 (white near, zScale 40),
+  // giving zRef=18.8235 at the rig's four decimal depth precision.
+  for (const [bone, z] of [['chest', 12], ['chest', 24], ['plate_tip', 0]] as const) {
+    const unit = unitBuild(bone, z);
+    const home = join(dir, `body-unit-${bone}-${z}`);
+    mkdirSync(join(home, 'images'), { recursive: true });
+    for (const [name, image] of unit.images) writePng(join(home, 'images', name), image);
+    for (const [name, text] of rigOutputTexts(unit, null)) writeFileSync(join(home, name), text);
+    const out = join(home, 'built');
+    const gated = spawnSync(process.execPath, [fileURLToPath(import.meta.resolve('@rig-c/core/cli')), 'build', '--rig', join(home, 'rig.json'), '--motion', join(home, 'motion.json'), '--out', out, '--profile', 'rig-play'], { encoding: 'utf8' });
+    const test = `DZ1575_BODY_UNIT_${bone.toUpperCase()}_${z}_FOLLOWS_AUTHORED_DEPTH`;
+    if (gated.status !== 0) {
+      say(test, false, `Core build exit=${gated.status}; ${gated.stderr}`);
+      continue;
+    }
+    const doc = readModel(readFileSync(join(out, 'skeleton.model.json'), 'utf8'));
+    const duration = (unit.motion.animations.body_turn as { duration: number }).duration;
+    const rest = poseRawSetup(doc).drawn.find(d => d.slot === 'topwear')!.vertices;
+    const posed = poseRawAnimation(doc, 'body_turn', [duration]).at(-1)!.drawn.find(d => d.slot === 'topwear')!.vertices;
+    const slotBone = unit.rig.slots.find(slot => slot.name === 'topwear')!.bone;
+    const expected = -(24 + z - 18.8235) * Math.sin(Math.PI / 12);
+    const error = Math.max(...posed.map((value, i) => Math.abs(value - rest[i] - (i % 2 === 0 ? expected : 0))));
+    say(test, rest.length === 8 && posed.length === rest.length && error < 0.00001,
+      `bone "${slotBone}" at +15 degrees: first corner dx=${posed[0] - rest[0]}, expected dx=${expected}, maximum coordinate error=${error}`);
+  }
+  let noCarrier: string | undefined;
+  try {
+    unitBuild('head', 12);
+  } catch (error) {
+    if (!(error instanceof PartsError)) throw error;
+    noCarrier = error.problems.find(p => p.code === 'RIG_TURN_BODY_UNIT_CARRIER' && p.object === 'config.turn.body.roles.topwear')?.detail;
+  }
+  say('DZ1575_BODY_UNIT_WITHOUT_MOVABLE_CARRIER_REFUSED', noCarrier?.includes('unit part "topwear" (bone "head")') === true
+    && noCarrier.includes('no movable ancestor directly under "bodyshift"'), noCarrier ?? 'missing named carrier refusal');
 
   const badBodyNoDepth = makeBody25DFixture();
   delete (badBodyNoDepth.pf.parts.find((p) => p.name === 'topwear') as { depth?: unknown }).depth;
