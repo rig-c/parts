@@ -5,6 +5,11 @@
 **Read before upgrading:**
 
 * **`depth-apply` now refuses previously accepted clipped recipes as `DEPTH_APPLY_CLIPPED` before writing outputs.** The refusal names each affected part and its clip fraction, the minimum group `zScale` for upper clipping, and the required median rise for lower clipping. Prepare the revised recipe again before applying. The report keys are unchanged. See [Apply the maps as depth sheets](docs/DEPTH.md#4-apply-the-maps-as-depth-sheets).
+* **The new falloff for `contour.regions` can change rig and downstream build bytes.** Add `falloff: "linear"` to a declared region to preserve its prior weights. Regions derived from `contour.bust`, zero-width bands and automatic meshes keep their prior weighting. See [A contour mesh](docs/AUTHORING.md#a-contour-mesh-meshespartcontour-issue-84).
+
+### Bug Fixes
+
+* **turn** — ease the outer half of explicitly declared contour bands by default to reduce abrupt weight changes that can reverse triangles during a turn. Overlap is checked on the original support, and rig-c's winding gate still decides whether the rig can be written (`#1578`).
 
 ## 2.59.0 (2026-11-26)
 

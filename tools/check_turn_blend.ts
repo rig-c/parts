@@ -261,6 +261,8 @@ export function runTurnBlendChecks(say: Say): void {
   say('BT07_SHARED_MOVING_FRAME_REMAINS_REFUSED',movedCode.includes('RIG_TURN_SURFACE_MESH_BINDINGS'),'a surface spanning both subtrees does not excuse another role moving its torso ancestor; no second carrier displacement is silently added');
 
   const band = bandTurnFixture();
+  const bandMeshes = band.config.meshes as Record<string, { contour: { regions: Array<{ falloff?: 'linear' }> } }>;
+  bandMeshes.topwear.contour.regions[0].falloff = 'linear';
   const bandBuild = buildRig(parseConfig(band.config), band.parts, band.images);
   const bandRead = bandTravelReading(bandBuild);
   const bandFolds = blendSliderFolds(bandBuild, 'topwear');
@@ -268,7 +270,7 @@ export function runTurnBlendChecks(say: Say): void {
   say(
     'BT18_COLLAR_BAND_TRAVEL_IS_MONOTONE_AND_LINEAR_BY_HEIGHT',
     bandRead.monotone && bandRead.maxError < 0.00001 && bandFolds.count === 0 && bandFolds.flat === 0,
-    `+15° head=[${fmt(bandRead.headPos)}] body=[${fmt(bandRead.bodyPos)}] both=[${fmt(bandRead.bothPos)}]; -15° head=[${fmt(bandRead.headNeg)}] body=[${fmt(bandRead.bodyNeg)}] both=[${fmt(bandRead.bothNeg)}]; counts=[${bandRead.counts.join(',')}]; maxError=${pyRound(bandRead.maxError, 8)}; folds=${bandFolds.count}, flat=${bandFolds.flat}`,
+    `explicit linear: +15° head=[${fmt(bandRead.headPos)}] body=[${fmt(bandRead.bodyPos)}] both=[${fmt(bandRead.bothPos)}]; -15° head=[${fmt(bandRead.headNeg)}] body=[${fmt(bandRead.bodyNeg)}] both=[${fmt(bandRead.bothNeg)}]; counts=[${bandRead.counts.join(',')}]; maxError=${pyRound(bandRead.maxError, 8)}; folds=${bandFolds.count}, flat=${bandFolds.flat}`,
   );
 
   const sameGroupBand = bandTurnFixture();

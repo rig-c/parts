@@ -6,15 +6,14 @@
  *
  * ## The falloff, as a definition
  *
- * A region's bone takes the weight
+ * The nominal linear share is
  *
  *     g = 1                      inside the region (its boundary included)
  *     g = 1 − d / band           at a distance d from the region, 0 < d < band
  *     g = 0                      at d ≥ band (for band 0: everywhere outside)
  *
  * where d is the Euclidean distance to the circle (|p − c| − r) or to the
- * nearest point of the polygon's edges. That is the declared falloff — linear,
- * no smoothstep, no tuned curve. The two decisions that are not a value in
+ * nearest point of the polygon's edges. The two decisions that are not a value in
  * between — "inside" (g = 1) and "at or past the band" (g = 0) — are made
  * EXACTLY: every region number is a multiple of 1/256 px (the config loader
  * refuses anything else) and every vertex this package writes is too
@@ -23,7 +22,11 @@
  * inside by the crossing rule on integer orientations, its distance to an edge
  * compared squared in `BigInt`. Only a value strictly in between is computed
  * in doubles (`Math.sqrt` and the reference's segment arithmetic), and it is
- * clamped to [0, 1].
+ * clamped to [0, 1]. Contour weighting applies `4 * g * g * (1 - g)` for
+ * `0 < g < 0.5` after the overlap check (issue #1578). The cubic reaches the
+ * cutoff with zero slope and meets the inner half at the same value and slope.
+ * Declaring `falloff: 'linear'` keeps the nominal share throughout the band,
+ * as automatic weighting does.
  *
  * ## The vertex's weights (see {@link localInfluences})
  *
@@ -44,8 +47,8 @@
  *   lightest bone (its last) is dropped and the rest renormalised before the
  *   scaling, so g itself is never cut. **The floor:** the minimum weight is
  *   applied inside `S` (as today) and not again to the scaled shares — a
- *   share (1 − g)·S(b) under 0.03 is the declared falloff near the region, not
- *   noise to drop, and dropping it would put a step into the linear ramp.
+ *   share (1 − g)·S(b) under 0.03 is part of the blend, and dropping it would
+ *   put a step into the ramp.
  *   The rounding: see `roundShares` in `src/rig.ts`.
  *
  * ## Overlapping regions
@@ -63,7 +66,7 @@
  * between vertices are not refused, and there the mesh interpolates between
  * vertices that each hold one region.
  */
-import type { Point } from './config.ts';
+import type { ContourRegionSpec, Point } from './config.ts';
 import { GRID } from './contour.ts';
 import { DEFAULT_LIMITS, DISTANCE_EXPONENT, type Influence, influences, type InfluenceLimits, type Segment, segmentDistance } from './weights.ts';
 
@@ -121,8 +124,8 @@ function insideRing(px: number, py: number, xs: readonly number[], ys: readonly 
 }
 
 /**
- * The declared falloff: the weight a region's bone takes at `p` (same frame as
- * the region). `p` must be on the 1/256 px grid; see the module header for
+ * The nominal linear share at `p` (same frame as the region), used to decide
+ * support. `p` must be on the 1/256 px grid. See the module header for
  * which decisions are exact.
  */
 export function regionWeight(p: Point, reg: WeightRegion): number {
@@ -167,6 +170,7 @@ export interface LocalInfluence {
   influences: Influence[];
   /** The region that reached the vertex (g > 0), by index, or -1. */
   region: number;
+  /** The unrounded region share used in the blend. */
   g: number;
 }
 
@@ -175,7 +179,9 @@ export interface LocalInfluence {
  * given, is `S` from another rule — bone heat's shares at the vertex
  * (`src/heat.ts`, issue #161), already capped and floored by `limits` — and
  * the regions apply to it exactly as to the distance rule's. Returns the
- * overlap instead when two regions both reach the vertex. Order: with no
+ * nominal overlap when two regions both reach the vertex. With `context`
+ * set to `contour`, the chosen region's outer half is eased by default.
+ * Order: with no
  * region, `S`'s own order; with a region, the region's bone first, then `S`'s
  * bones in `S`'s order.
  */
@@ -183,10 +189,11 @@ export function localInfluences(
   p: Point,
   segments: readonly Segment[],
   r: number,
-  regions: readonly WeightRegion[],
+  regions: readonly (WeightRegion & Pick<ContourRegionSpec, 'falloff'>)[],
   limits: InfluenceLimits = DEFAULT_LIMITS,
   exponent: number = DISTANCE_EXPONENT,
   shares?: Influence[],
+  context?: 'contour',
 ): LocalInfluence | RegionOverlap {
   let region = -1;
   let g = 0;
@@ -199,7 +206,8 @@ export function localInfluences(
   }
   const S = shares ?? influences(p, segments, r, limits, exponent);
   if (region < 0) return { influences: S, region, g: 0 };
-  const bone = regions[region].bone;
+  const { bone, falloff } = regions[region];
+  if (context === 'contour' && falloff !== 'linear' && g < 0.5) g = 4 * g * g * (1 - g);
   if (g >= 1) return { influences: [{ bone, weight: 1 }], region, g };
   let base = S;
   if (!S.some((e) => e.bone === bone) && S.length >= limits.maxInfluences) {

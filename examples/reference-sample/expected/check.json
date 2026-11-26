@@ -73,7 +73,7 @@
   }
  },
  "build": {
-  "model_sha256": "9aede863b3879be9a338ce6a9160a618075cabacf58bcfd85e7d0259ce922534"
+  "model_sha256": "12ea29f9079fc58bf0467d45d4abb40ded2a4a4bd19fe0c596b3a7938ede2270"
  },
  "gate_spine_html_green": true,
  "rigc_entry": {
@@ -140,13 +140,13 @@
       "maxX": 145.99998697886528,
       "maxY": 1140.0000171071174
      },
-     "pose_sha256": "ac530591f037cce85d94c06e44278a42900603b206607bdb64f3e50833d9f8c7"
+     "pose_sha256": "d4598cb6bfc5fc0d2efc06f591822d405ec3a9b825f3177b963c48571d96977c"
     }
    ]
   },
   "denominator_px": 1011712,
   "auto_frame_raw": {
-   "mean": 0.20417850697277287,
+   "mean": 0.20417971691146955,
    "display_mean": 0.204,
    "denominator_px": 460864,
    "px_over_40": 2,
@@ -914,10 +914,10 @@
     "hang_from": "hip",
     "root_rig_px": 0.486,
     "tip_rig_px": 2.62,
-    "ratio": 5.393,
+    "ratio": 5.389,
     "world_root_rig_px": 0.486,
     "world_tip_rig_px": 2.62,
-    "world_ratio": 5.393
+    "world_ratio": 5.389
    },
    {
     "row_scope": "part",

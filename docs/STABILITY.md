@@ -756,7 +756,7 @@ part name, `[i]` an entry of a list):
 - **meshes.&lt;part&gt;.influences** — optional, at least one: `maxInfluences` (a whole number, 1 or more, or null for no cap), `floor` ("cut" or "continuous")
 - **meshes.&lt;part&gt;.ribs.&lt;chain&gt;** — required: `stations`
 - **meshes.&lt;part&gt;.contour** — required: `tolerance`, `margin`, `spacing`; optional: `maxEdge`, `budget`, `stray`, `bridges`, `regions`, `bust`
-- **meshes.&lt;part&gt;.contour.regions[i]** — required: `name`, `shape`, `bone`, `spacing`, `band`, and `cx`, `cy`, `r` for a circle or `points` for a polygon; optional: `cover`
+- **meshes.&lt;part&gt;.contour.regions[i]** — required: `name`, `shape`, `bone`, `spacing`, `band`, and `cx`, `cy`, `r` for a circle or `points` for a polygon; optional: `cover`, `falloff`
 - **meshes.&lt;part&gt;.contour.bust** — required: `apex_r`, `apex_l`, `cleavage`; optional: `alpha`, `clearance`, `bone_r`, `bone_l`, `spacing` (issue #475)
 - **meshes.&lt;part&gt;.auto** — required: `source`, `sourceBounds`, `targets`, `influences`, `budget`, `minArtSamples`, `motion`; optional: `protect`, `regions`, the three Stage B opt-ins `boundaryRuns`, `retriangulate`, `removalOrder`, and `stimulus`
 - **meshes.&lt;part&gt;.auto.source** — required: `tolerance`, `margin`, `spacing`; optional: `stray`
@@ -1710,6 +1710,19 @@ gate file (`CH05`) to their tracked `expected/`, with the tolerances `CH07` plan
 against. The public examples' `expected/` files are this package's own snapshots:
 `tools/regenerate_examples.ts` writes them on Linux, and CI rebuilds the fetched
 examples and compares the files whole with its `--check` (issue #1439).
+
+### Contour band weights (issue #1578)
+
+With the default falloff, a region listed in `contour.regions` applies
+`4g²(1 − g)` to its nominal linear share `g` for `0 < g < 0.5`. An upgrade can
+change written weights and downstream output bytes. Geometric support and
+overlap refusals use the original `g`. The inner half of the band, zero-width
+bands, influence limits and rounding keep their prior behavior. A declared
+contour region accepts `falloff: "linear"` to recover its previous weights
+byte for byte. Other values are `CONFIG_FIELD_TYPE`. The circles derived
+from `contour.bust` and automatic mesh regions keep the prior linear ramp.
+An automatic region or a `contour.bust` block rejects `falloff` as
+`CONFIG_KEY_KNOWN`.
 
 ### Opt-in hybrid provenance (issue #399)
 

@@ -2118,6 +2118,11 @@ export function buildWaistPairSource(
     const w = img.width;
     const h = img.height;
     const regions = contourRegionsOf(spec);
+    const explicitRegions = spec.regions?.length ?? 0;
+    // The shorthand appends its derived circles, which keep the legacy ramp.
+    const weightRegions = spec.bust === undefined ? regions : regions.map((rg, index) =>
+      index < explicitRegions ? rg : { ...rg, falloff: 'linear' as const },
+    );
     const ribs = chainRibs(ribSpec.segments, ribSpec.ribs, ox, oy);
     const cm = rigContour(p, img, spec, ribs);
     if (Array.isArray(cm)) {
@@ -2147,7 +2152,7 @@ export function buildWaistPairSource(
       const wx = vx + ox;
       const wy = vy + oy;
       const vSegs = segsAt(wy);
-      const li = localInfluences([wx, wy], vSegs, r, regions, limits, exponent ?? DISTANCE_EXPONENT, heat === null ? undefined : heatInfluences(heat, [vx, vy], limits));
+      const li = localInfluences([wx, wy], vSegs, r, weightRegions, limits, exponent ?? DISTANCE_EXPONENT, heat === null ? undefined : heatInfluences(heat, [vx, vy], limits), 'contour');
       if ('first' in li) {
         if (!overlapped) {
           let bustHint = '';
@@ -2205,7 +2210,6 @@ export function buildWaistPairSource(
     for (const [x, y] of cm.vertices) uvs.push(pyRound(x / w, 6), pyRound(y / h, 6));
     const bones = new Set(segs.map((s) => s.bone));
     for (const rg of regions) bones.add(rg.bone);
-    const explicitRegions = spec.regions?.length ?? 0;
     if (explicitRegions > 0) {
       contourRegionSummaries.set(
         p.name,

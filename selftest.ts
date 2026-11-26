@@ -13,7 +13,7 @@ import { readModel as readBoundaryModel, poseRawSetup as boundarySetup, poseRawA
 import { stretchLine as boundaryStretchLine } from './src/check.ts';
 import { PHYSICS_CONTRIBUTES_LINE, PHYSICS_LEVERS_TEXT, PHYSICS_OFF_TEXT, physicsDecls, physicsReach, type PhysicsContributionLine, type PhysicsContributionRow } from './src/physicscontrib.ts';
 import { blankRigcRunClock, RIGC_RENDER_RUN_FILE } from './fixtures/rigc_run_clock.ts';
-import { CONTOUR_TURN_STAGE_A_HASHES, writeContourTurnFixture } from './fixtures/contour-turn.ts';
+import { CONTOUR_TURN_STAGE_A_HASHES, writeContourFalloffTurnFixture, writeContourTurnFixture } from './fixtures/contour-turn.ts';
 import { runRigcRunClockChecks } from './fixtures/rigc_run_clock_checks.ts';
 import { runPartsCheckChecks } from './fixtures/parts_check_checks.ts';
 import { runSourceCoverChecks } from './fixtures/source_cover_checks.ts';
@@ -8487,11 +8487,123 @@ export function runBoundaryDepthChecks(dir: string, say: (name: string, ok: bool
   }
 }
 
+/** Issue #1578: the stock gate and its staged topology on each side of the falloff change. */
+function runContourFalloffTurnRigCases(say: FixtureCaseReporter): void {
+  const dir = temp('contour-falloff-turn');
+  try {
+    const runner = rigcRunnerAt(suiteRigc(), spawnRigc);
+    const run = (name: string, parts: string, config: string) => {
+      const out = join(dir, name);
+      const scratch = join(dir, `${name}-scratch`);
+      const calls: Array<{
+        status: number; out: string; mesh: MeshAttachment; times: number[]; model: string | null;
+        peakBodyDepth: number; unitDepth: number | undefined;
+      }> = [];
+      const error = refusals(() => rigStage({ parts, config, out }, (args) => {
+        const rig = JSON.parse(readFileSync(join(scratch, 'rig.json'), 'utf8')) as RigSpec;
+        const motion = JSON.parse(readFileSync(join(scratch, 'motion.json'), 'utf8')) as MotionSpec;
+        const body = motion.animations.body_turn as {
+          deform?: Array<{ slot: string; keys: Array<{ t: number; vertices?: number[] }> }>;
+          tracks?: Array<{ group?: string; keys: Array<{ derive?: { depth?: Record<string, number> } }> }>;
+        } | undefined;
+        const keys = body?.deform?.find(d => d.slot === 'topwear')?.keys ?? [];
+        const offsets = keys[4]?.vertices ?? [];
+        let peakBodyTravel = 0;
+        for (let i = 0; i < offsets.length; i += 2) peakBodyTravel = Math.max(peakBodyTravel, Math.hypot(offsets[i], offsets[i + 1]));
+        const peakBodyDepth = peakBodyTravel / Math.sin(Math.PI / 12);
+        const unitDepth = body?.tracks?.find(track => track.group === 'body_turn_units')?.keys[4]?.derive?.depth?.tab_bone;
+        const call = runner(args);
+        const modelPath = join(scratch, 'build', RIGC_MODEL_DOCUMENT);
+        const model = call.status === 0 && existsSync(modelPath) ? readFileSync(modelPath, 'utf8') : null;
+        calls.push({ ...call, mesh: rig.skins.default.topwear.topwear as MeshAttachment, times: keys.map(key => key.t), model, peakBodyDepth, unitDepth });
+        return call;
+      }, scratch, () => {}));
+      return { count: calls.length, gate: calls[0], error, emitted: existsSync(out) };
+    };
+    const windingFailure = (out: string): string => out.split('\n').find(line =>
+      /^\s*FAIL\s+A39_DEFORM_KEEPS_TRIANGLE_WINDING: animation "body_turn" .*deform topwear\/topwear key 4 \(t=1\.875s\)/.test(line),
+    )?.trim() ?? '';
+    const shape = ({ hull, uvs, triangles }: MeshAttachment): string => JSON.stringify({ hull, uvs, triangles });
+    const minimumArea = (model: string, time: number): number => {
+      const doc = readBoundaryModel(model);
+      const rest = boundarySetup(doc).drawn.find(d => d.slot === 'topwear' && d.kind === 'mesh');
+      const posed = boundaryAnimation(doc, 'body_turn', [time], {}, 'setup').at(-1)?.drawn.find(d => d.slot === 'topwear' && d.kind === 'mesh');
+      if (rest === undefined || posed === undefined || rest.triangles.length === 0 || !isDeepStrictEqual(rest.triangles, posed.triangles)) return NaN;
+      const area = (v: readonly number[], a: number, b: number, c: number): number => (
+        (v[2 * b] - v[2 * a]) * (v[2 * c + 1] - v[2 * a + 1]) - (v[2 * c] - v[2 * a]) * (v[2 * b + 1] - v[2 * a + 1])
+      ) / 2;
+      let min = Infinity;
+      for (let i = 0; i < rest.triangles.length; i += 3) {
+        const [a, b, c] = rest.triangles.slice(i, i + 3);
+        min = Math.min(min, Math.sign(area(rest.vertices, a, b, c)) * area(posed.vertices, a, b, c));
+      }
+      return min;
+    };
+
+    const fixtures = ([250, 400] as const).map(depthScale => ({
+      depthScale, f: writeContourFalloffTurnFixture(join(dir, `scale-${depthScale}`), depthScale),
+    }));
+    let referenceTopology: string | undefined;
+    for (const { depthScale, f } of fixtures) {
+      const red = run(`linear-${depthScale}`, f.parts, f.config('linear'));
+      const green = run(`default-${depthScale}`, f.parts, f.config('default'));
+      const witness = windingFailure(red.gate?.out ?? '');
+      const redArea = Number(/triangle \d+ \[[\d,]+\] [0-9.]+ -> (-[0-9.]+)px²/.exec(witness)?.[1]);
+      const g = green.gate;
+      const topology = g === undefined ? undefined : shape(g.mesh);
+      referenceTopology ??= topology;
+      const sameTopology = red.gate !== undefined && g !== undefined &&
+        g.mesh.triangles.length === 70 * 3 && topology === shape(red.gate.mesh) && topology === referenceTopology;
+      const sameKeys = red.gate !== undefined && g !== undefined && g.times[4] === 1.875 && isDeepStrictEqual(g.times, red.gate.times);
+      const area = g?.model === undefined || g.model === null || !sameKeys ? NaN : minimumArea(g.model, g.times[4]);
+      // The authored planes quantize to body/plateau levels 10/85 or 16/97.
+      const [medianLevel, plateauLevel, unitZ] = depthScale === 250 ? [10, 85, 30] : [16, 97, 48];
+      const zRef = pyRound(medianLevel * 250 / 255, 4);
+      const expectedPeak = plateauLevel * 250 / 255 - zRef;
+      const expectedUnit = pyRound(unitZ - zRef, 4);
+      const placed = [red.gate, g].every(gate => gate !== undefined &&
+        Math.abs(gate.peakBodyDepth - expectedPeak) < 1e-4 && gate.unitDepth === expectedUnit);
+      say(
+        `RG1578_LINEAR_REFUSES_AND_DEFAULT_PASSES_A39_ON_THE_SAME_CONTOUR_${depthScale}`,
+        red.count === 1 && red.gate?.status === 1 && red.error?.problems.length === 1 && red.error.problems[0].code === 'RIG_RIGC_GREEN' &&
+          witness.includes('4 of 70 triangle(s) reverse winding') && redArea < 0 && !red.emitted &&
+          green.count === 1 && g?.status === 0 && green.error === null && green.emitted &&
+          /^\s*PASS\s+A39_DEFORM_KEEPS_TRIANGLE_WINDING\s*$/m.test(g.out) && sameTopology && sameKeys && placed &&
+          Number.isFinite(area) && area > 0,
+        `depth placement scale ${depthScale}, pivot 0; generated surface/unit depth ${g?.peakBodyDepth}/${g?.unitDepth}px; linear exit ${red.gate?.status}, output ${red.emitted}, witness area ${redArea}px²; default exit ${g?.status}, output ${green.emitted}, minimum area ${area}px² at t=1.875s; shared topology ${sameTopology}, same keys ${sameKeys}`,
+        'A39 measures the body slider at both depth placements. Generated surface offsets and the independent unit track verify the placements on the shared contour topology.',
+      );
+    }
+    const { f: widePlacement } = fixtures[1];
+    const doubled = run('doubled', widePlacement.parts, widePlacement.config('doubled'));
+    const overlap = doubled.error?.problems[0];
+    say(
+      'RG1578_DOUBLED_CONTOUR_SUPPORT_REFUSES_UPSTREAM_WITH_NOMINAL_WEIGHTS',
+      doubled.count === 0 && !doubled.emitted && doubled.error?.problems.length === 1 && overlap?.code === 'RIG_CONTOUR_REGIONS_OVERLAP' &&
+        overlap.object === 'config.meshes.topwear.contour.regions' &&
+        overlap.detail.includes('takes weight 0.25 from region "collar" and 1 from region "seam"'),
+      `Core calls ${doubled.count}; output ${doubled.emitted}; ${overlap === undefined ? 'no refusal' : problemLine(overlap)}`,
+      'The original band ends before the seam witness. Doubling it conflicts at a generated vertex and reports the original shares before easing.',
+    );
+    const stronger = writeContourFalloffTurnFixture(join(dir, 'stronger'), 400, true);
+    const strong = run('stronger-default', stronger.parts, stronger.config('default'));
+    const strongWitness = windingFailure(strong.gate?.out ?? '');
+    say(
+      'RG1578_A_STRONGER_GENERATED_FOLD_STILL_REFUSES_WITH_DEFAULT_FALLOFF',
+      strong.count === 1 && strong.gate?.status === 1 && strong.error?.problems.length === 1 && strong.error.problems[0].code === 'RIG_RIGC_GREEN' &&
+        strongWitness.includes('reverse winding') && !strong.emitted,
+      `Core exit ${strong.gate?.status}; output ${strong.emitted}; ${strongWitness.split('. The mesh')[0]}`,
+      'An independently generated stronger scalar ramp on the eased contour still reverses visible triangles at the body key.',
+    );
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
 function runRigSuite(): number {
   section('rig: bones, lattice meshes, weights, regions and the idle');
   const { say, bad } = counter();
   { const dir = temp('boundary-depth'); try { runBoundaryDepthChecks(dir, (name, ok, detail) => say(name, ok, detail, 'synthetic declared band projection; unchanged existing gates')); } finally { rmSync(dir, { recursive: true, force: true }); } }
   runContourBodyTurnRigCases(say);
+  runContourFalloffTurnRigCases(say);
   runTurnRollChecks((name, ok, detail) => say(name, ok, detail, 'report-only head roll; fixed public separation limit and analytic planted angles'));
   { const dir = temp('neck-draft-render'); try { runNeckDraftRenderChecks(dir, (name, ok, detail) => say(name, ok, detail, 'public source-first neck, mandatory Core gate and rendered extreme ROI')); } finally { rmSync(dir, { recursive: true, force: true }); } }
   runTurnUnitPrecedenceChecks((name, ok, detail) => say(name, ok, detail, 'public unit-depth precedence controls; no forced own-sheet fallback'));
@@ -44082,6 +44194,100 @@ function runContourWiringSuite(): number {
     'the distance is to the polygon\'s edges, so past a convex corner it is the distance to the corner — the band rounds there; a point on an edge is inside',
   );
 
+  const falloffRows = [
+    [0, 1, 1],
+    [1, 0.75, 0.75],
+    [2, 0.5, 0.5],
+    [2 + u, 511 / 1024, 133955073 / 268435456],
+    [3, 0.25, 3 / 16],
+    [4 - u, 1 / 1024, 1023 / 268435456],
+    [4, 0, 0],
+    [4 + u, 0, 0],
+  ] as const;
+  const falloffSegments = [{ bone: 'base', a: [0, 0] as Point, b: [24, 0] as Point }];
+  const falloffReadings = [circle, square].flatMap((region) => falloffRows.map(([distance, nominal, eased]) => {
+    const p: Point = region.shape === 'circle' ? [14 + distance, 10] : [16 + distance, 8];
+    const read = (r: ContourRegionSpec) => localInfluences(p, falloffSegments, 8, [r], undefined, undefined, undefined, 'contour');
+    const legacy: ContourRegionSpec = { ...region, falloff: 'linear' };
+    const linear = read(legacy);
+    const curve = read(region);
+    const want = (g: number) => ({
+      influences: [
+        ...(g > 0 ? [{ bone: region.bone, weight: g }] : []),
+        ...(g < 1 ? [{ bone: 'base', weight: 1 - g }] : []),
+      ],
+      region: g > 0 ? 0 : -1,
+      g,
+    });
+    return {
+      nominal: regionWeight(p, region),
+      eased: 'g' in curve ? curve.g : NaN,
+      ok: regionWeight(p, legacy) === nominal && regionWeight(p, region) === nominal &&
+        isDeepStrictEqual(linear, want(nominal)) && isDeepStrictEqual(curve, want(eased)),
+    };
+  }));
+  say(
+    'CW1578_CONTOUR_FALLOFF_PINS_THE_REGION_EDGE_JOIN_OUTER_SHARE_AND_CUTOFF',
+    falloffReadings.every(row => row.ok),
+    `circle then polygon, nominal/default: ${falloffReadings.map(row => `${row.nominal}/${row.eased}`).join(', ')}`,
+    'The axis-aligned distances give exact binary shares, including one grid step outside the join and one inside the unchanged cutoff.',
+  );
+
+  const falloffRig = (band: number, falloff?: 'linear') => buildRig(parseConfig(contourRigConfig(c => {
+    const region = contourRegion0(c);
+    region.band = band;
+    if (falloff !== undefined) region.falloff = falloff;
+  })), rigParts(), rigImages());
+  const easedCloth = falloffRig(4).rig.skins.default.cloth.cloth as MeshAttachment;
+  const linearCloth = falloffRig(4, 'linear').rig.skins.default.cloth.cloth as MeshAttachment;
+  const nominalAt = (i: number): number => {
+    const x = Math.round((linearCloth.uvs[2 * i] * 24 + 6) * 256) / 256;
+    const y = Math.round((linearCloth.uvs[2 * i + 1] * 16 + 6) * 256) / 256;
+    return regionWeight([x, y], { ...circle, cx: 18, cy: 14, r: 2 });
+  };
+  const innerWeights = linearCloth.weights.flatMap((weights, i) => {
+    const g = nominalAt(i);
+    return g >= 0.5 && g < 1 ? [{ i, weights }] : [];
+  });
+  const outerChanges = linearCloth.weights.filter((weights, i) => {
+    const g = nominalAt(i);
+    return g > 0 && g < 0.5 && rigJsonText(weights) !== rigJsonText(easedCloth.weights[i]);
+  }).length;
+  say(
+    'CW1578_INNER_HALF_CONTOUR_WEIGHT_BYTES_MATCH_EXPLICIT_LINEAR',
+    isDeepStrictEqual(linearCloth.uvs, easedCloth.uvs) && innerWeights.length > 0 &&
+      innerWeights.every(({ i, weights }) => rigJsonText(weights) === rigJsonText(easedCloth.weights[i])) && outerChanges > 0,
+    `inner-band byte comparisons ${innerWeights.length}; changed outer-band rows ${outerChanges}`,
+    'Compare complete emitted influence rows on an unchanged topology and witness a different outer row in the same two builds.',
+  );
+
+  const hardEdge = falloffRig(0);
+  const linearHardEdge = falloffRig(0, 'linear');
+  const hardWeights = (hardEdge.rig.skins.default.cloth.cloth as MeshAttachment).weights;
+  const softShares = hardWeights.map(ws => ws.find(w => w.bone === 'soft')?.weight ?? 0);
+  const zeroBytes = [rigJsonText(hardEdge.rig), rigJsonText(hardEdge.motion), rigJsonText(hardEdge.meshReport)];
+  const linearZeroBytes = [rigJsonText(linearHardEdge.rig), rigJsonText(linearHardEdge.motion), rigJsonText(linearHardEdge.meshReport)];
+  const sameZeroBytes = isDeepStrictEqual(zeroBytes, linearZeroBytes);
+  say(
+    'CW1578_ZERO_WIDTH_CONTOUR_REGION_PRESERVES_LEGACY_BYTES',
+    sameZeroBytes && softShares.includes(1) && softShares.includes(0) && softShares.every(w => w === 1 || w === 0),
+    `rig/motion/report bytes match ${sameZeroBytes}; whole vertices ${softShares.filter(w => w === 1).length} of ${softShares.length}`,
+    'A zero-width band is a hard shape edge with whole and untouched vertices. The default and explicit legacy ramp serialize identically.',
+  );
+
+  const badFalloffs = ['cubic', '', null, 0, true].map(value =>
+    load(contourRigConfig(c => { contourRegion0(c).falloff = value; })),
+  );
+  const linearConfig = parseConfig(contourRigConfig(c => { contourRegion0(c).falloff = 'linear'; })).meshes.cloth;
+  const falloffPath = 'config.meshes.cloth.contour.regions[0].falloff';
+  say(
+    'CW1578_ONLY_LINEAR_IS_ACCEPTED_AS_AN_EXPLICIT_CONTOUR_FALLOFF',
+    okContour === null && 'contour' in linearConfig && linearConfig.contour.regions?.[0]?.falloff === 'linear' &&
+      badFalloffs.every(error => error?.problems.length === 1 && hasCode(error, 'CONFIG_FIELD_TYPE', falloffPath, '"linear"')),
+    `explicit linear preserved; invalid string, empty string, null, number, boolean: ${badFalloffs.map(codes).join(', ')}`,
+    'The config reader names the field and required literal for each invalid declaration.',
+  );
+
   // CW09 — no region reaches a vertex: the weights are influences(), exactly.
   const segs9 = [
     { bone: 'a', a: [0, 0] as Point, b: [10, 0] as Point },
@@ -44775,8 +44981,8 @@ function runContourWiringSuite(): number {
     'issue #475: one alpha (0.22) and one clearance (3.8 px) reproduce all 5 calibrated characters within <= 6 px on outer radius R_s and <= 3 px on core radius r_s, whereas projecting the torso midline onto apex_r->apex_l misses cleavage by 14-93 px on 3/4-yaw characters (0/5), so all three landmarks are required',
   );
 
-  // CW92 — issue #475 (Bars 3 & 4): hand-given regions stay byte-identical; contour.bust builds byte-identically to its
-  // derived regions and wires through configRoles; moving apex_r/apex_l by 20 px moves cx/cy by 20 px; clearance = 0 is
+  // CW92 — issue #475 (Bars 3 & 4): contour.bust builds byte-identically to explicitly linear circles and wires
+  // through configRoles; moving apex_r/apex_l by 20 px moves cx/cy by 20 px; clearance = 0 is
   // refused by CONFIG_BUST_CLEARANCE across all 5 calibrated characters (and bypassing CONFIG_BUST_CLEARANCE lets an
   // epsilon = 0 collinear build pass RIG_CONTOUR_REGIONS_OVERLAP); and an overlapping vertex names contour.bust.clearance.
   const bustSpec92 = { apex_r: [14, 14] as Point, apex_l: [22, 14] as Point, cleavage: [18, 14] as Point, alpha: 0.5, clearance: 1, spacing: 2 };
@@ -44792,7 +44998,10 @@ function runContourWiringSuite(): number {
       if (bust !== undefined) cl.bust = bust;
     });
   const builtBust92 = buildRig(parseConfig(bustCfg92(bustSpec92)), rigParts(), rigImages());
-  const builtEquiv92 = buildRig(parseConfig(bustCfg92(undefined, deriveBustRegions(bustSpec92))), rigParts(), rigImages());
+  const authoredBustRegions92 = deriveBustRegions(bustSpec92);
+  const linearBustRegions92 = authoredBustRegions92.map(region => ({ ...region, falloff: 'linear' }));
+  const builtEquiv92 = buildRig(parseConfig(bustCfg92(undefined, linearBustRegions92)), rigParts(), rigImages());
+  const authoredDefault92 = buildRig(parseConfig(bustCfg92(undefined, authoredBustRegions92)), rigParts(), rigImages());
   const roles92 = configRoles(parseConfig(bustCfg92(bustSpec92)));
   const moved20 = deriveBustRegions({
     apex_r: [CALIBRATED_BUST_FIXTURES[0].landmarks.apex_r[0] + 20, CALIBRATED_BUST_FIXTURES[0].landmarks.apex_r[1] - 20],
@@ -44821,6 +45030,7 @@ function runContourWiringSuite(): number {
     'CW92_CONTOUR_BUST_WIRES_PROPOSE_ROLES_AND_RIG_MOVES_WITH_LANDMARKS_AND_GATES_ZERO_CLEARANCE',
     rigJsonText(builtBust92.rig) === rigJsonText(builtEquiv92.rig) &&
       rigJsonText(builtBust92.meshReport) === rigJsonText(builtEquiv92.meshReport) &&
+      rigJsonText(builtBust92.rig) !== rigJsonText(authoredDefault92.rig) &&
       rigJsonText(r13.rig) === rigJsonText(again20.rig) &&
       roles92.get('boob_r')?.role === 'deforms' &&
       roles92.get('boob_l')?.role === 'deforms' &&
@@ -44836,8 +45046,8 @@ function runContourWiringSuite(): number {
       zeroClearanceAll5.every((e) => hasCode(e, 'CONFIG_BUST_CLEARANCE', 'config.meshes.cloth.contour.bust.clearance')) &&
       bypassedZeroClearance92 === null &&
       hasCode(overlapWithBustHint92, 'RIG_CONTOUR_REGIONS_OVERLAP', 'config.meshes.cloth.contour.regions', 'contour.bust.clearance >='),
-    `bust == derived regions: ${rigJsonText(builtBust92.rig) === rigJsonText(builtEquiv92.rig)}; roles boob_r=${roles92.get('boob_r')?.role}, boob_l=${roles92.get('boob_l')?.role}; +20 px shift -> d_cx=(${moved20[0].shape === 'circle' && baseDerived92[0].shape === 'circle' ? moved20[0].cx - baseDerived92[0].cx : 0},${moved20[1].shape === 'circle' && baseDerived92[1].shape === 'circle' ? moved20[1].cx - baseDerived92[1].cx : 0}); clearance=0 on all 5 sets -> ${zeroClearanceAll5.map((e) => e?.problems[0]?.code ?? 'none').join(',')}; mutant (CONFIG_BUST_CLEARANCE bypassed at clearance=0) -> ${lines(bypassedZeroClearance92)}; vertex overlap hint -> ${lines(overlapWithBustHint92)}`,
-    'issue #475: contour.bust is read by propose (configRoles) and rig through contourRegionsOf, moves cx/cy with apex_r/apex_l, refuses clearance <= 0 or R_r + R_l >= D with CONFIG_BUST_CLEARANCE (which vertex-level RIG_CONTOUR_REGIONS_OVERLAP alone would pass on collinear touching circles), and names contour.bust.clearance when a vertex overlaps',
+    `bust == explicit linear: ${rigJsonText(builtBust92.rig) === rigJsonText(builtEquiv92.rig)}; authored default differs: ${rigJsonText(builtBust92.rig) !== rigJsonText(authoredDefault92.rig)}; roles boob_r=${roles92.get('boob_r')?.role}, boob_l=${roles92.get('boob_l')?.role}; +20 px shift -> d_cx=(${moved20[0].shape === 'circle' && baseDerived92[0].shape === 'circle' ? moved20[0].cx - baseDerived92[0].cx : 0},${moved20[1].shape === 'circle' && baseDerived92[1].shape === 'circle' ? moved20[1].cx - baseDerived92[1].cx : 0}); clearance=0 on all 5 sets -> ${zeroClearanceAll5.map((e) => e?.problems[0]?.code ?? 'none').join(',')}; mutant (CONFIG_BUST_CLEARANCE bypassed at clearance=0) -> ${lines(bypassedZeroClearance92)}; vertex overlap hint -> ${lines(overlapWithBustHint92)}`,
+    'contour.bust keeps the linear ramp, is read by propose and rig, moves cx/cy with apex_r/apex_l, refuses clearance <= 0 or R_r + R_l >= D with CONFIG_BUST_CLEARANCE, and names contour.bust.clearance when a vertex overlaps',
   );
 
   // CW100 — issue #570: what a bridge's corners bind. islandImages (fixtures/rig.ts) clears the cloth's unpadded
@@ -55187,6 +55397,27 @@ function runAutoMeshSuite(): number {
 
   // AM05 — regions and protect: every field and every name.
   const region = (over: Record<string, unknown> = {}): Record<string, unknown> => ({ name: 'pinch', shape: 'circle', cx: 18, cy: 14, r: 2, band: 2, bone: 'soft', maxEdgeLength: 2, transition: 1, grade: 1, minArtSamples: 1, ...over });
+  const autoFalloff = load(autoRigConfig((_c, a) => { a.regions = [region({ falloff: 'linear' })]; }));
+  const autoLegacy = sourceWeights(
+    [[10, 8], [11, 8], [12, 8], [13, 8], [14, 8]], 0, 0,
+    [{ bone: 'base', a: [0, 0], b: [24, 0] }], 8,
+    { ...syntheticPolicy(4), regions: [{ ...squareRegion(8, 8, 4, 2), band: 4 }] },
+  );
+  const autoExpected = [
+    [{ bone: 'soft', weight: 1 }],
+    [{ bone: 'soft', weight: 0.75 }, { bone: 'base', weight: 0.25 }],
+    [{ bone: 'soft', weight: 0.5 }, { bone: 'base', weight: 0.5 }],
+    [{ bone: 'soft', weight: 0.25 }, { bone: 'base', weight: 0.75 }],
+    [{ bone: 'base', weight: 1 }],
+  ];
+  const autoBytes = 'weights' in autoLegacy ? JSON.stringify(autoLegacy.weights) : '';
+  say(
+    'AM1578_AUTO_REGION_SOURCE_WEIGHT_BYTES_KEEP_THE_LINEAR_RAMP',
+    autoBytes === JSON.stringify(autoExpected) && autoFalloff?.problems.length === 1 &&
+      has(autoFalloff, 'CONFIG_KEY_KNOWN', `${AT}.regions[0].falloff`),
+    `automatic source weights ${autoBytes || 'missing'}; contour falloff key: ${lines(autoFalloff)}`,
+    'The square ends at x=10 and its four-pixel band gives the legacy ordered influence bytes at each whole-pixel sample.',
+  );
   const r5 = load(
     autoRigConfig((_c, a) => {
       const noL0 = region({ name: 'a' });
