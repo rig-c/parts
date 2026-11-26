@@ -8496,7 +8496,7 @@ function runRigSuite(): number {
   { const dir = temp('neck-draft-render'); try { runNeckDraftRenderChecks(dir, (name, ok, detail) => say(name, ok, detail, 'public source-first neck, mandatory Core gate and rendered extreme ROI')); } finally { rmSync(dir, { recursive: true, force: true }); } }
   runTurnUnitPrecedenceChecks((name, ok, detail) => say(name, ok, detail, 'public unit-depth precedence controls; no forced own-sheet fallback'));
   { const dir = temp('turn-surface'); try { runTurnSurfaceChecks(dir, (name, ok, detail) => say(name, ok, detail, 'weighted surface depth offsets on synthetic flat blocks')); } finally { rmSync(dir, { recursive: true, force: true }); } }
-  { const dir = temp('turn-surface-stops'); try { runTurnSurfaceStopChecks(dir, (name, ok, detail) => say(name, ok, detail, 'declared stop aliases on public synthetic weighted surfaces')); } finally { rmSync(dir, { recursive: true, force: true }); } }
+  { const dir = temp('turn-surface-stops'); try { runTurnSurfaceStopChecks(dir, (name, ok, detail) => say(name, ok, detail, 'declared stop aliases on public synthetic turn surfaces')); } finally { rmSync(dir, { recursive: true, force: true }); } }
   runTurnBlendChecks((name, ok, detail) => say(name, ok, detail, 'two scalar turn fields, independent analytic controls on a synthetic neck'));
   runTurnOverlapChecks((name, ok, detail) => say(name, ok, detail, 'source-alpha seam ownership on a synthetic blended neck, unchanged skin bindings'));
   runTurnBandOverlapChecks((name, ok, detail) => say(name, ok, detail, 'a declared collar band under covers keeps its blended field; undeclared mixing is still owned (#1543)'));
