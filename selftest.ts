@@ -29060,7 +29060,7 @@ function runBuildSuite(): number {
         sameOutputFiles(artifacts, expectedArtifacts) &&
         stageOrder.every((at, i) => at > 0 && (i === 0 || at > stageOrder[i - 1])) &&
         partsSame && idleReceipt?.spec === 'rigc-run/2' && idleReceipt.command === 'render' &&
-        buildReceipt?.spec === 'rig-run/2' && listedRenderReceipts === 0 && listedIdleFrames,
+        buildReceipt?.spec === 'rig-run/3' && listedRenderReceipts === 0 && listedIdleFrames,
       `exit ${green.status}; --out holds [${tree.join(', ')}]; last lines: ${tail.map((l) => l.trim()).join(' | ')}; stage prefixes at ${stageOrder.join(', ')}; parts.json equals the fixture's hand-derived one: ${partsSame}; ` +
         `check/idle_frames/${RIGC_RENDER_RUN_FILE} on disk: ${idleReceipt?.spec ?? 'absent'} (${idleReceipt?.command ?? 'no command'}); ` +
         `${BUILD_RUN_FILE} ${buildReceipt?.spec ?? 'absent'} outputs: ${listedRenderReceipts} render receipts, idle frames.json listed ${listedIdleFrames}`,

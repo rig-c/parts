@@ -10,6 +10,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, posix, relative, resolve, sep, win32 } from 'node:path';
+import { RIGC_RENDER_RUN_FILE } from '../fixtures/rigc_run_clock.ts';
 import { BUILD_RUN_FILE } from '../src/build.ts';
 import { makeOutDir } from '../src/outputpaths.ts';
 import { decodePngBytes } from '../src/raster/png.ts';
@@ -236,21 +237,28 @@ export function runRunRecordCliChecks(dir: string, out: string, say: Say): void 
     `check exit ${checked.status}; keys ${JSON.stringify(rec === null ? null : Object.keys(rec))}; argv ${JSON.stringify(rec?.argv)} against ${JSON.stringify(checkWant)}; replay exit ${checkReplay.status}, check.json byte-equal ${checkSame}, records equal but for the times ${timeless(recAgain) === timeless(rec)}`,
     'issue #1541: a check given relative paths from its working directory records them from --out; the replay is the same check');
 
-  const checkFiles = existsSync(checkOut) ? readdirSync(checkOut, { recursive: true, withFileTypes: true }) : [];
-  const checkOutputs = checkFiles.filter((entry) => entry.isFile())
-    .map((entry) => relative(checkOut, join(entry.parentPath, entry.name)).split(sep).join('/'))
-    .filter((file) => file !== CHECK_RUN_FILE && file !== 'build/run.json').sort()
+  const checkEntries = existsSync(checkOut) ? readdirSync(checkOut, { recursive: true, withFileTypes: true }) : [];
+  const checkFiles = checkEntries.filter((entry) => entry.isFile())
+    .map((entry) => relative(checkOut, join(entry.parentPath, entry.name)).split(sep).join('/'));
+  // STABILITY excludes run.json and any -run.json by basename.
+  const checkOutputs = checkFiles.filter((path) => !/(?:^|-)run\.json$/.test(posix.basename(path))).sort()
     .map((path) => ({ path, sha256: sha256File(join(checkOut, path)) }));
+  const idleReceiptPath = `idle_frames/${RIGC_RENDER_RUN_FILE}`;
+  const idleReceiptOnDisk = checkFiles.includes(idleReceiptPath);
+  const idleReceiptListed = rec?.outputs.some((o) => o.path === idleReceiptPath);
+  const idleFramesListed = rec?.outputs.some((o) => o.path === 'idle_frames/frames.json');
   const legacyCheck = {
     spec: 'rig-run/2', package: { name: pkgName, version }, command: 'check',
     started_at: FIXED_TIME, finished_at: FIXED_TIME, outputs: checkOutputs, argv: checkWant,
   };
-  const checkBytes = rec === null ? '' : readFileSync(join(checkOut, CHECK_RUN_FILE), 'utf8');
-  const legacyBytes = `${JSON.stringify(legacyCheck, null, 1)}\n`;
-  const changedSpec = `${JSON.stringify({ ...legacyCheck, spec: 'rig-run/3' }, null, 1)}\n`;
+  const checkBytes = rec === null ? Buffer.alloc(0) : readFileSync(join(checkOut, CHECK_RUN_FILE));
+  const legacyBytes = Buffer.from(`${JSON.stringify(legacyCheck, null, 1)}\n`);
+  const changedSpec = Buffer.from(`${JSON.stringify({ ...legacyCheck, spec: 'rig-run/3' }, null, 1)}\n`);
   say('BU1556B_CHECK_RUN_2_MATCHES_LEGACY_BYTES_AT_A_FIXED_CLOCK',
-    checked.status === 0 && checkOutputs.length > 0 && checkBytes === legacyBytes && checkBytes !== changedSpec,
-    `${checkBytes.length} actual bytes, ${legacyBytes.length} legacy bytes, ${checkOutputs.length} independently listed outputs; changed spec differs ${checkBytes !== changedSpec}`,
+    checked.status === 0 && checkOutputs.length > 0 && idleReceiptOnDisk && idleReceiptListed === false && idleFramesListed === true &&
+      checkBytes.equals(legacyBytes) && !checkBytes.equals(changedSpec),
+    `${checkBytes.length} actual bytes, ${legacyBytes.length} legacy bytes, ${checkOutputs.length} independently listed outputs; changed spec differs ${!checkBytes.equals(changedSpec)}; ` +
+      `${idleReceiptPath} on disk ${idleReceiptOnDisk}, listed ${idleReceiptListed}; idle frames.json listed ${idleFramesListed}`,
     'issue #1556: compare the actual record to the legacy serializer and fixture layout, including field order, indentation and final newline');
 
   // A refused check over a reused --out clears the earlier record and writes none.
