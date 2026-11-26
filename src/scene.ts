@@ -1068,13 +1068,18 @@ export function scaledConstraint(con: Record<string, unknown>, s: number): Recor
       out.limit = scaledBy(typeof con.limit === 'number' ? con.limit : SPINE_PHYSICS_LIMIT_DEFAULT, s);
       break;
     case 'slider':
-      if (typeof con.bone === 'string' && typeof con.property === 'string' && lengthProperty(con.property)) {
+      if (sliderInputIsLength(con)) {
         len('from');
         out.scale = scaledBy(typeof con.scale === 'number' ? con.scale : SPINE_SLIDER_SCALE_DEFAULT, 1 / s);
       }
       break;
   }
   return out;
+}
+
+/** A bone-driven slider's input may be a length, just like its mapping's `from`. */
+function sliderInputIsLength(con: Record<string, unknown> | undefined): boolean {
+  return typeof con?.bone === 'string' && typeof con.property === 'string' && lengthProperty(con.property);
 }
 
 /** A stop of a character at scale `s` (issue #431): its `at` offset in `against`'s local frame scaled by `s`, its degree bounds unchanged; `s` 1 returns `stop` as given. */
@@ -1615,6 +1620,7 @@ export function composeScene(
   const stops: RigStop[] = [];
   const detached: NonNullable<NonNullable<RigSpec['invariants']>['detached']> = [];
   const axes: NonNullable<NonNullable<RigSpec['invariants']>['axes']> = [];
+  const combinations: NonNullable<NonNullable<RigSpec['invariants']>['deformSliderCombinations']> = [];
   scene.characters.forEach((c) => {
     const b = byId.get(c.id) as CharacterBuild;
     const id = c.id;
@@ -1705,6 +1711,12 @@ export function composeScene(
     for (const d of b.rig.invariants?.detached ?? []) detached.push({ ...d, bone: P(id, d.bone), notUnder: P(id, d.notUnder) });
     // An axis entry's name is unique within one rig, and two characters each carry a "face": the name is prefixed too.
     for (const ax of b.rig.invariants?.axes ?? []) axes.push({ name: prefixed(id, ax.name), through: [P(id, ax.through[0]), P(id, ax.through[1])], bones: ax.bones.map((n) => P(id, n)), tolerance: ax.tolerance });
+    for (const { inputs } of b.rig.invariants?.deformSliderCombinations ?? []) {
+      combinations.push({ inputs: inputs.map(({ slider, value }) => {
+        const constraint = b.rig.constraints?.find(con => con.type === 'slider' && con.name === slider);
+        return { slider: prefixed(id, slider), value: sliderInputIsLength(constraint) ? scaledBy(value, s) : value };
+      }) });
+    }
   });
   const slots: RigSpec['slots'] = [];
   if (scene.plate !== null && plate !== null) slots.push({ name: PLATE, bone: PLATE, attachment: PLATE });
@@ -1720,9 +1732,6 @@ export function composeScene(
   if (axes.length > 0) invariants.axes = axes;
   const mayFold = ready.flatMap(b => (b.rig.invariants?.deformMayFold ?? []).map(e => ({ ...e, slot: prefixed(b.id, e.slot) })));
   if (mayFold.length > 0) invariants.deformMayFold = mayFold;
-  const combinations = ready.flatMap(b => (b.rig.invariants?.deformSliderCombinations ?? []).map(({ inputs }) => ({
-    inputs: inputs.map(({ slider, value }) => ({ slider: prefixed(b.id, slider), value })),
-  })));
   if (combinations.length > 0) invariants.deformSliderCombinations = combinations;
   const meshCounts = (b: CharacterBuild): { meshSlots: number; meshTriangles: number } => {
     let meshSlots = 0, meshTriangles = 0;
