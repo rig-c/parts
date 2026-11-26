@@ -6090,7 +6090,7 @@ function usageDrift(run: (args: string[]) => { status: number; out: string }, su
  */
 const CL26_COMMAND_SETS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['A', ['assemble', 'build', 'bust-landmarks', 'check', 'check-parts', 'compare', 'compose']],
-  ['B', ['comfy', 'depth-apply', 'depth-bind', 'depth-prepare']],
+  ['B', ['comfy', 'depth-apply', 'depth-bind', 'depth-map', 'depth-prepare']],
   ['C', ['diff-components', 'diff-drafts', 'edited-part', 'external-receipt', 'head-crop-preflight', 'inputs', 'layers', 'loop']],
   ['D', ['mesh-draft', 'mesh-stats', 'painting', 'propose', 'remesh', 'retune', 'rig', 'sheet']],
 ];
@@ -61877,11 +61877,224 @@ function runBehindSeamSuite(): number {
   return bad();
 }
 
+/** A NumPy v1 fixture with literal header fields and little-endian payload bytes. */
+function depthArrayFixture(shape: readonly number[], values: readonly number[], dtype: '<f4' | '<f8' = '<f4', fortran = false, descr: string = dtype): Buffer {
+  const fields = `{'descr': '${descr}', 'fortran_order': ${fortran ? 'True' : 'False'}, 'shape': (${shape.join(', ')}${shape.length === 1 ? ',' : ''}), }`;
+  const padding = (64 - (10 + fields.length + 1) % 64) % 64;
+  const header = Buffer.from(fields + ' '.repeat(padding) + '\n', 'ascii');
+  const prefix = Buffer.from([0x93, 0x4e, 0x55, 0x4d, 0x50, 0x59, 1, 0, 0, 0]);
+  prefix.writeUInt16LE(header.length, 8);
+  const payload = Buffer.alloc(values.length * (dtype === '<f4' ? 4 : 8));
+  values.forEach((value, i) => {
+    if (dtype === '<f4') payload.writeFloatLE(value, i * 4);
+    else payload.writeDoubleLE(value, i * 8);
+  });
+  return Buffer.concat([prefix, header, payload]);
+}
+
+function runDepthArrayChecks(dir: string, say: FixtureCaseReporter): void {
+  const source = join(dir, 'source'), part = 'face';
+  writeProposeFixture(source, [{ name: part, from: 'full:face', x: 10, y: 10, w: 4, h: 4, colour: [200, 120, 80] }], { w: 100, h: 100 });
+  const prepared = join(dir, "prepared $model's input"), input = join(prepared, 'face.png');
+  const recipe = join(dir, 'recipe.json'), rig = join(dir, 'rig-config.json');
+  const mapName = "model $output's depth.json", mapFile = join(dir, mapName);
+  const receipt = mapFile + '.binding.json';
+  writeFileSync(recipe, JSON.stringify({
+    spec: 'rig-parts-depth/1', prepare: { longSide: 4, paddingFraction: 0, padding: 0 },
+    groups: { head: { near: 'white', zScale: 100, pivot: 30 } },
+    parts: { face: { map: mapName, source: 'depth', frame: 'input', group: 'head', median: 50, relief: 10 } }, clear: [],
+  }));
+  writeFileSync(rig, JSON.stringify({
+    key: 'fixture', assemble: { rig_scale: 1, plan: [['face', 'full', 'face']] },
+    bones: [{ name: 'head', parent: 'root', at: [40, 40] }], meshes: {}, regions: { face: 'head' },
+    motion: { duration: 1, tracks: [] }, turn: { pivot: 30, roles: { face: 'surface' } },
+  }));
+  const preparation = runCli(['depth-prepare', '--parts', source, '--config', recipe, '--out', prepared]);
+  const convert = (name: string, bytes: Uint8Array, out: string, kind: string, padding?: string,
+    { input: inputPath = input, part: partName = part }: { input?: string; part?: string } = {}) => {
+    const array = join(dir, `${name}.npy`);
+    writeFileSync(array, bytes);
+    return runCli(['depth-map', '--array', array, '--input', inputPath, '--kind', kind, '--part', partName, '--out', out,
+      ...(padding === undefined ? [] : ['--padding', padding])]);
+  };
+  const jsonAt = (path: string): unknown => {
+    if (!existsSync(path)) return null;
+    try { return JSON.parse(readFileSync(path, 'utf8')) as unknown; } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      return null;
+    }
+  };
+  const numericMap = (channels: number, data: number[]) => ({ spec: 'rig-parts-map/1', width: 4, height: 4, channels, data });
+  const matchesMap = (actual: unknown, channels: number, expected: number[]): boolean => {
+    const values = (actual as { data?: unknown } | null)?.data;
+    return Array.isArray(values) && values.length === expected.length &&
+      values.every((v: unknown, i) => typeof v === 'number' && Math.abs(v - expected[i]) < 1e-12) &&
+      isDeepStrictEqual(actual, numericMap(channels, values as number[]));
+  };
+
+  const expectedDepth = Array.from({ length: 16 }, (_, i) => i - 7.75);
+  const depthWidth = 12, depthHeight = 15, depthPadding = '1,2,3,1';
+  const depth = Array.from({ length: depthWidth * depthHeight }, (_, i) => {
+    const x = i % depthWidth - 1, y = Math.floor(i / depthWidth) - 2;
+    if (x < 0 || x >= 8 || y < 0 || y >= 12) return NaN;
+    // Three rows of two offsets cancel around the signed quarter-valued ramp.
+    return expectedDepth[Math.floor(y / 3) * 4 + Math.floor(x / 2)] + [-3, -2, -1, 1, 2, 3][(y % 3) * 2 + x % 2] / 4;
+  });
+  const depthShape = [depthHeight, depthWidth];
+  const pooled = convert('float32', depthArrayFixture(depthShape, depth), mapFile, 'depth', depthPadding);
+  const actualDepth = jsonAt(mapFile);
+  say('DPA1573_FLOAT32_PADDED_DEPTH_POOLS_INDEPENDENT_AXES',
+    preparation.status === 0 && pooled.status === 0 && matchesMap(actualDepth, 1, expectedDepth),
+    `prepare ${preparation.status}, map ${pooled.status}; 12x15 to 4x4; ${JSON.stringify(actualDepth)}; ${pooled.out.trim()}`,
+    'Asymmetric model padding holds NaNs. The retained 2x3 blocks average to a signed ramp in image row order.');
+
+  const quoted = (word: string): string[] => [
+    `'${word.replaceAll("'", "'\\''")}'`,
+    `'${word.replaceAll("'", "'\"'\"'")}'`,
+    `"${word.replace(/[\\"$`]/g, '\\$&')}"`,
+  ];
+  const nextPrefix = 'rig-parts depth-bind ';
+  const next = pooled.out.split(/\r?\n/).find(line => line.includes(nextPrefix))?.split(nextPrefix)[1];
+  const safeNext = quoted(mapFile).some(mapArg => quoted(input).some(inputArg => [part, ...quoted(part)].some(partArg =>
+    next?.trim() === `--map ${mapArg} --input ${inputArg} --part ${partArg}`)));
+  say('DPA1573_PRINTS_SHELL_SAFE_BIND_COMMAND_WITHOUT_RECEIPT', pooled.status === 0 && safeNext && !existsSync(receipt),
+    `suggested arguments ${JSON.stringify(next)}; receipt exists ${existsSync(receipt)}`,
+    'Both paths contain spaces, a dollar sign and an apostrophe. Only the separate binding step may create the receipt.');
+
+  const bound = runCli(['depth-bind', '--map', mapFile, '--input', input, '--part', part]);
+  const applied = join(dir, 'applied');
+  const application = runCli(['depth-apply', '--parts', source, '--manifest', join(prepared, 'manifest.json'),
+    '--config', recipe, '--rig-config', rig, '--out', applied]);
+  const sheetFile = join(applied, 'parts', 'face_depth.png');
+  const hashFile = (path: string): string | null => existsSync(path) ? createHash('sha256').update(readFileSync(path)).digest('hex') : null;
+  const actualReceipt = jsonAt(receipt);
+  const sheet = existsSync(sheetFile) ? readPng(sheetFile) : null;
+  // The complete 0..15 ramp has percentile spread 13.5 and a median offset of 7.5 from its first sample.
+  const levels = Uint8ClampedArray.from(expectedDepth, (_value, i) => (50 + 10 * (i - 7.5) / 13.5) * 255 / 100);
+  say('DPA1573_CONVERTED_DEPTH_BINDS_AND_APPLIES_VIA_CLI',
+    bound.status === 0 && application.status === 0 && !application.out.includes('DEPTH_MAP_BINDING_ABSENT') &&
+      isDeepStrictEqual(actualReceipt, { spec: 'rig-parts-depth-map-binding/1', part, mapSha256: hashFile(mapFile), inputSha256: hashFile(input) }) &&
+      sheet?.width === 4 && sheet.height === 4 && sheet.data.every((value, i) => value === (i % 4 === 3 ? 255 : levels[Math.floor(i / 4)])) &&
+      readParts(join(applied, 'parts.json')).parts[0]?.depth?.image === 'face_depth.png',
+    `bind ${bound.status}; apply ${application.status}; ${JSON.stringify(actualReceipt)}; ${JSON.stringify(sheet === null ? null : Array.from(sheet.data))}; ${application.out.trim()}`,
+    'The receipt hashes the exact converted JSON and prepared PNG. The registered sheet matches the hand-computed depth levels.');
+
+  const singletonShape = [4, 4, 1], singleton = join(dir, 'singleton.json');
+  const singletonBytes = depthArrayFixture(singletonShape, expectedDepth);
+  const equal = convert('singleton', singletonBytes, singleton, 'depth');
+  say('DPA1573_EQUAL_SIZE_DEPTH_ACCEPTS_SINGLETON_CHANNEL', equal.status === 0 && isDeepStrictEqual(jsonAt(singleton), numericMap(1, expectedDepth)),
+    `exit ${equal.status}; ${JSON.stringify(jsonAt(singleton))}; ${equal.out.trim()}`,
+    'A rank-three scalar map with a trailing singleton channel keeps its values when the image sizes agree.');
+
+  const normalWidth = 10, normalHeight = 6, normalPadding = '1,1,1,1';
+  const normalShape = [normalHeight, normalWidth, 3];
+  const normals = Array.from({ length: normalWidth * normalHeight }, (_, i) => {
+    const x = i % normalWidth - 1, y = Math.floor(i / normalWidth) - 1;
+    if (x < 0 || x >= 8 || y < 0 || y >= 4) return (i % 2 === 0 ? [NaN, Infinity, 0] : [0, 0, 0]);
+    const sign = y % 2 === 0 ? 1 : -1;
+    return x % 2 === 0 ? [-3 * sign, 0, 0] : [0, -4 * sign, 12];
+  }).flat();
+  const expectedNormals = expectedDepth.flatMap((_, i) => {
+    const sign = Math.floor(i / 4) % 2 === 0 ? 1 : -1;
+    return [-3 * sign / 13, -4 * sign / 13, 12 / 13];
+  });
+  const normalOut = join(dir, 'normals.json');
+  const normalRun = convert('float64', depthArrayFixture(normalShape, normals, '<f8'), normalOut, 'normals', normalPadding);
+  const actualNormals = jsonAt(normalOut);
+  say('DPA1573_FLOAT64_NORMALS_POOL_RAW_SIGNED_XYZ_THEN_NORMALIZE', normalRun.status === 0 && matchesMap(actualNormals, 3, expectedNormals),
+    `exit ${normalRun.status}; ${JSON.stringify(actualNormals)}; ${normalRun.out.trim()}`,
+    'The first vector has length 3 and the second has length sqrt(160). Normalizing their raw sum gives (±3,±4,12)/13. Discarded border vectors are invalid.');
+
+  const tiny = Number.MIN_VALUE, huge = Number.MAX_VALUE;
+  const extremeRow = [huge, 4 * tiny, -huge, 0, huge, huge, huge, huge,
+    -huge, -4 * tiny, huge, 0, -huge, -huge, -huge, -huge];
+  const extremeBytes = depthArrayFixture([4, 16], Array.from({ length: 4 }, () => extremeRow).flat(), '<f8');
+  const extremeOut = join(dir, 'extreme.json');
+  const extreme = convert('float64-extreme', extremeBytes, extremeOut, 'depth');
+  const actualExtreme = jsonAt(extremeOut), extremeExpected = Array.from({ length: 4 }, () => [tiny, huge, -tiny, -huge]).flat();
+  say('DPA1573_FLOAT64_POOL_PRESERVES_SUBNORMAL_RESIDUAL_AND_FINITE_EXTREMES',
+    extreme.status === 0 && isDeepStrictEqual(actualExtreme, numericMap(1, extremeExpected)),
+    `exit ${extreme.status}; ${JSON.stringify(actualExtreme)}; ${extreme.out.trim()}`,
+    'In each row the cancelling four-sample tiles leave ±4 smallest subnormals before division. The same-sign tiles average to ±MAX_VALUE even though their sums exceed binary64 range.');
+
+  type Plant = { name: string; bytes: Uint8Array; kind?: string; padding?: string; pixel?: string; input?: string; part?: string };
+  const check = (name: string, code: string, plants: readonly Plant[]) => {
+    const results = plants.map(plant => {
+      const out = join(dir, `refused-${plant.name}.json`);
+      const run = convert(plant.name, plant.bytes, out, plant.kind ?? 'depth', plant.padding, plant);
+      const line = failLine(run.out, `${code}:`);
+      const emitted = existsSync(out) || existsSync(out + '.binding.json');
+      return { name: plant.name, exit: run.status, emitted, message: line ?? run.out.trim().slice(0, 500),
+        ok: run.status === 1 && line !== null && (plant.pixel === undefined || line.includes(plant.pixel)) && !emitted };
+    });
+    say(name, results.every(result => result.ok), JSON.stringify(results), 'Every plant must produce the named CLI refusal before writing a map or a binding receipt.');
+  };
+  check('DPA1573_FORMAT_REFUSES_UNSUPPORTED_OR_CORRUPT_NUMPY', 'DEPTH_ARRAY_FORMAT', [
+    { name: 'magic', bytes: Buffer.from('not NumPy') },
+    { name: 'fortran', bytes: depthArrayFixture(singletonShape, expectedDepth, '<f4', true) },
+    { name: 'big-endian', bytes: depthArrayFixture(singletonShape, expectedDepth, '<f4', false, '>f4') },
+    { name: 'integer', bytes: depthArrayFixture(singletonShape, expectedDepth, '<f4', false, '<i4') },
+    { name: 'truncated', bytes: singletonBytes.subarray(0, -1) },
+    { name: 'trailing', bytes: Buffer.concat([singletonBytes, Buffer.alloc(1)]) },
+  ]);
+  check('DPA1573_KIND_REFUSES_UNKNOWN_VALUE', 'DEPTH_ARRAY_KIND', [{ name: 'kind', bytes: singletonBytes, kind: 'height' }]);
+  check('DPA1573_SHAPE_REFUSES_BAD_RANK_OR_CHANNELS', 'DEPTH_ARRAY_SHAPE', [
+    { name: 'rank-one', bytes: depthArrayFixture([16], expectedDepth) },
+    { name: 'depth-two-channels', bytes: depthArrayFixture([4, 2, 2], expectedDepth) },
+    { name: 'normals-one-channel', bytes: singletonBytes, kind: 'normals' },
+  ]);
+  check('DPA1573_PADDING_REFUSES_BAD_COUNTS_AND_EMPTY_CROP', 'DEPTH_ARRAY_PADDING', [
+    { name: 'padding-count', bytes: singletonBytes, padding: '0,0,0' },
+    { name: 'padding-negative', bytes: singletonBytes, padding: '-1,0,0,0' },
+    { name: 'padding-fractional', bytes: singletonBytes, padding: '0,1.5,0,0' },
+    { name: 'padding-empty-crop', bytes: singletonBytes, padding: '1,0,3,0' },
+  ]);
+  check('DPA1573_SIZE_REFUSES_NONINTEGRAL_AXES_AND_UPSAMPLING', 'DEPTH_ARRAY_SIZE', [
+    { name: 'fractional-x', bytes: depthArrayFixture([8, 7], Array(56).fill(1)) },
+    { name: 'fractional-y', bytes: depthArrayFixture([7, 8], Array(56).fill(1)) },
+    { name: 'upsampling', bytes: depthArrayFixture([4, 2], expectedDepth.slice(0, 8)) },
+  ]);
+  check('DPA1573_NONFINITE_DEPTH_NAMES_RETAINED_RAW_PIXEL', 'DEPTH_ARRAY_NONFINITE', [
+    { name: 'depth-nonfinite', bytes: depthArrayFixture(depthShape, depth.with(6 * depthWidth + 5, Infinity)), padding: depthPadding, pixel: '(5,6)' },
+  ]);
+  const normalAt = (3 * normalWidth + 5) * 3;
+  const zeroNormal = normals.slice(), nonfiniteNormal = normals.slice(), cancelledNormal = normals.slice();
+  zeroNormal.splice(normalAt, 3, 0, 0, 0);
+  nonfiniteNormal[normalAt + 1] = NaN;
+  cancelledNormal.splice(normalAt, 6, 1, 0, 0, -1, 0, 0);
+  check('DPA1573_NORMAL_REFUSES_ZERO_NONFINITE_AND_CANCELLED_VECTORS_AT_THEIR_PIXELS', 'DEPTH_ARRAY_NORMAL', [
+    { name: 'normal-zero', bytes: depthArrayFixture(normalShape, zeroNormal, '<f8'), kind: 'normals', padding: normalPadding, pixel: '(5,3)' },
+    { name: 'normal-nonfinite', bytes: depthArrayFixture(normalShape, nonfiniteNormal, '<f8'), kind: 'normals', padding: normalPadding, pixel: '(5,3)' },
+    { name: 'normal-cancelled', bytes: depthArrayFixture(normalShape, cancelledNormal, '<f8'), kind: 'normals', padding: normalPadding, pixel: '(2,2)' },
+  ]);
+  const invalidPng = join(dir, 'invalid.png');
+  writeFileSync(invalidPng, 'not a PNG');
+  check('DPA1573_PREPARED_PNG_REFUSES_MISSING_AND_INVALID_INPUT', 'DEPTH_INPUT_PRESENT', [
+    { name: 'missing-png', bytes: singletonBytes, input: join(dir, 'missing.png') },
+    { name: 'invalid-png', bytes: singletonBytes, input: invalidPng },
+  ]);
+  check('DPA1573_BINDING_REFUSES_INVALID_PART_NAME', 'DEPTH_MAP_BINDING', [
+    { name: 'invalid-part', bytes: singletonBytes, part: '../face' },
+  ]);
+  const existingMap = join(dir, 'existing.json'), sentinel = Buffer.from('existing map sentinel\n');
+  writeFileSync(existingMap, sentinel);
+  const existing = convert('existing-map', singletonBytes, existingMap, 'depth');
+  const unchanged = existsSync(existingMap) && readFileSync(existingMap).equals(sentinel);
+  const receiptAbsent = !existsSync(existingMap + '.binding.json');
+  say('DPA1573_EXISTING_MAP_REFUSES_AND_PRESERVES_SENTINEL',
+    existing.status === 1 && failLine(existing.out, 'DEPTH_OUTPUT_EMPTY:') !== null && unchanged && receiptAbsent,
+    `exit ${existing.status}; unchanged ${unchanged}; receipt absent ${receiptAbsent}; ${existing.out.trim()}`,
+    'A valid conversion targeting an existing map preserves its exact bytes and leaves no binding receipt.');
+}
+
 function runDepthMapSuite(): number {
   section('depth-maps: numeric provider maps and analytic normals');
   const { say, bad } = counter();
   const dir = temp('depth-maps');
-  try { runDepthMapChecks(dir, (name, ok, detail) => say(name, ok, detail, 'Independent synthetic controls; private reproduction and visual acceptance are separate.')); }
+  try {
+    runDepthMapChecks(dir, (name, ok, detail) => say(name, ok, detail, 'Independent synthetic controls; private reproduction and visual acceptance are separate.'));
+    runDepthArrayChecks(join(dir, 'model-array'), say);
+  }
   finally { rmSync(dir, { recursive: true, force: true }); }
   return bad();
 }
