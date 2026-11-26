@@ -578,6 +578,7 @@ and do not certify visibility. See the
 | `external-receipt` | `--kind` (mask), `--file`, `--painting`, `--producer`, `--out`; or `--verify`; or `--help` (`-h`) |
 | `diff-components` | `--stack`, `--painting`, `--parts`, `--floor`; optional `--threshold`, `--figure`, `--owners`, `--help` (`-h`); exactly one of `--out`, `--verify` (issues #1005, #1291; exhaustive native error inventory, `rig-parts-diff-components/1` by default and `rig-parts-diff-components/2` with `--owners`, and byte-bound reader for both) |
 | `diff-drafts` | `--left`, `--right`, `--out`; optional `--help` (`-h`) (issue #1369; draft-to-draft assemble comparison, `rig-parts-draft-diff/1`) |
+| `depth-place` | `--parts`, `--config`, `--rig-config`, `--out`; optional `--check-turn`, `--help` (`-h`) (issue #1570) |
 | `depth-prepare` | `--parts`, `--config`, `--out`; optional `--help` (`-h`) (issue #897; separate numeric-depth recipe) |
 | `depth-map` | `--array`, `--input`, `--kind` (`depth` or `normals`), `--part`, `--out`; optional `--padding` (`LEFT,TOP,RIGHT,BOTTOM`), `--help` (`-h`) (issue #1573; NumPy array to input-frame numeric map) |
 | `depth-bind` | `--map`, `--input`, `--part`; optional `--help` (`-h`) (issue #1284; exclusive receipt creation from current file bytes) |
@@ -2242,6 +2243,20 @@ names each code. Without the block, existing outputs and metadata stay
 byte-identical; an empty receipt list applies no replacement.
 
 ## Provider-map depth stages (#897)
+
+`depth-place` (#1570) accepts an optional `place` block on `rig-parts-depth/1`.
+The command requires the block, a body turn, and an absent or empty output
+directory. It emits `recipe.json`, `config.json` and `depth-place-report.json`
+(`rig-parts-depth-place-report/1`).
+Placement uses the declared polarity and a positive, explicit scale in rig
+pixels per model unit. It writes body placement medians and world rig `z` for
+body units, preserves declared reliefs and `zScale`, and resolves the body pivot
+to an offset from the reference depth. See the
+[placement contract](AUTHORING.md#place-body-depth-from-a-whole-painting-map-1570).
+With `--check-turn`, preparation, application and the real rig gate run in
+scratch space and the report adds `turnCheck`. It records any named check
+refusal. Successful placement emits its three files and exits `0` in either
+check outcome.
 
 The opt-in `depth-prepare` and `depth-apply` commands accept the separate
 `rig-parts-depth/1` recipe and finite floating-point `rig-parts-map/1` JSON.

@@ -3,7 +3,7 @@ import { assemblyChangeDetail, assemblyConfigChanges } from './src/assembly-read
 import { diffComponentsCommand } from './src/diffcomponents.ts';
 import { DIFF_DRAFTS_SPEC, diffDraftsCommand } from './src/diffdrafts.ts';
 import { applyTakenLayers } from './src/takelayers.ts';
-import { applyDepth, bindDepthMap, prepareDepth } from './src/depthworkflow.ts';
+import { applyDepth, bindDepthMap, type DepthPlacementTurnCheck, prepareDepth, stageDepthPlacement } from './src/depthworkflow.ts';
 import { depthMapFail } from './src/depthmaps.ts';
 import { modelArrayMap, serializeModelArrayMap } from './src/modelarray.ts';
 import { externalReceipt } from './src/externalreceipt.ts';
@@ -36,7 +36,7 @@ import { coreCfg, DEFAULT_GROW_PX, runForeground } from './src/plate.ts';
 import { type CharacterConfig, loadClothConfig, loadConfig, loadEarlyConfig, loadPaintConfig } from './src/config.ts';
 import { type ConfigWritePatch, onlyMissingAttachments } from './src/configwrite.ts';
 import { configWriteLines, type ConfigWriteTarget, readConfigWriteTarget, separateConfigWriteTarget, stageConfigWrite, type StagedConfigWrite } from './tools/configwrite.ts';
-import { failLine, guidePointer, PartsError, type Problem } from './src/errors.ts';
+import { failLine, guidePointer, PartsError, type Problem, problemLine } from './src/errors.ts';
 import { GUIDE_DOC, type GuideAnswer, guideRule, guideSection } from './src/guide.ts';
 import { proposeHeadBox, type Box } from './src/headbox.ts';
 import { headCropPreflight, headCropPreflightLines } from './src/headcroppreflight.ts';
@@ -101,6 +101,11 @@ usage:
   rig-parts depth-prepare --parts <assembled-dir> --config <depth-recipe.json> --out <empty-dir>
       Write per-part inference PNGs on neutral gray, upscaled and padded as
       declared, plus a source-hashed manifest. No model is bundled or called.
+
+  rig-parts depth-place --parts <assembled-dir> --config <depth-recipe.json> --rig-config <config.json> --out <empty-dir> [--check-turn]
+      Place body parts using a painting-frame depth map and declared polarity,
+      scale and anchor. Write recipe.json, config.json and depth-place-report.json.
+      --check-turn applies the placed recipe and runs the rig gate in scratch.
 
   rig-parts depth-map --array <file.npy> --input <prepared.png> --kind <depth|normals>
                       --part <name> --out <map.json> [--padding LEFT,TOP,RIGHT,BOTTOM]
@@ -1271,6 +1276,7 @@ const TAKES = {
   'depth-map': { valued: ['--array', '--input', '--kind', '--part', '--out', '--padding'], switches: ['--help'] },
   'depth-bind': { valued: ['--map', '--input', '--part'], switches: ['--help'] },
   'depth-prepare': { valued: ['--parts', '--config', '--out'], switches: ['--help'] },
+  'depth-place': { valued: ['--parts', '--config', '--rig-config', '--out'], switches: ['--check-turn', '--help'] },
   'depth-apply': { valued: ['--parts', '--manifest', '--config', '--rig-config', '--out', '--groups'], switches: ['--help'] },
   layers: { valued: ['--export', '--template', '--canvas', '--full', '--source', '--config'], switches: ['--help'] },
   sheet: { valued: ['--source', '--layers', '--out', '--cell', '--cols'], switches: ['--help'] },
@@ -3038,6 +3044,76 @@ function cmdDepthApply(args: string[]): number {
   } catch (error) { return printRefusal(error); }
 }
 
+function depthPlaceTurnCheck(parts: string, scratch: string, placed: { recipe: string; config: string }): DepthPlacementTurnCheck {
+  const config = placed.recipe, rigConfig = placed.config;
+  const prepared = join(scratch, 'prepared'), applied = join(scratch, 'applied');
+  let stage: 'prepare' | 'apply' | 'rig' = 'prepare';
+  type WindingFinding = Extract<DepthPlacementTurnCheck, { status: 'refused' }>['winding'][number];
+  const findings = new Map<string, WindingFinding>();
+  try {
+    prepareDepth({ parts, config, out: prepared });
+    stage = 'apply';
+    applyDepth({ parts, config, rigConfig, manifest: join(prepared, 'manifest.json'), out: applied }, () => {});
+    stage = 'rig';
+    const bin = findRigc(import.meta.dir, process.env.PATH ?? '');
+    const configPath = join(applied, 'config.json');
+    const { meshes } = loadConfig(configPath);
+    rigStage({ config: configPath, parts: applied, out: join(scratch, 'rig') }, rigcRunner(bin), join(scratch, 'gate'), line => {
+      const address = /^\s*FAIL\s+(A39_DEFORM_KEEPS_TRIANGLE_WINDING): animation "([^"]+)"(?: \(applied by slider "([^"]+)", not played on a track\))? deform ([^/]+)\/(\S+) (.+)$/.exec(line);
+      if (address === null) return;
+      const [, rule, animation, frame, slot, attachment, detail] = address;
+      const witness = /^(?:BETWEEN )?key (\d+) \(t=[^)]+\)(?: and key (\d+) \(t=[^)]+\), [^:]+)?: (\d+) of (\d+) triangle\(s\) reverse winding\b/.exec(detail);
+      if (witness === null) return;
+      const [, key, endKey, reversed, triangles] = witness;
+      const owners = Object.keys(meshes).filter(part => slot.startsWith(`${part}__island`));
+      const part = !Object.hasOwn(meshes, slot) && owners.length === 1 ? owners[0] : slot;
+      findings.set(line.trim(), {
+        rule, animation, part, attachment, key: Number(key),
+        ...(endKey === undefined ? {} : { endKey: Number(endKey) }),
+        reversedTriangles: Number(reversed), triangles: Number(triangles),
+        ...(frame === undefined ? {} : { frame }),
+      });
+    });
+    return { status: 'built' };
+  } catch (error) {
+    if (!(error instanceof PartsError)) throw error;
+    const problems = error.problems.map(({ code, object, detail }) => ({ code, object: object.replaceAll(scratch, '<scratch>'), detail: detail.replaceAll(scratch, '<scratch>') }));
+    return { status: 'refused', stage, problems, winding: [...findings.values()] };
+  }
+}
+
+function cmdDepthPlace(args: string[]): number {
+  const checks = args.filter(arg => arg === '--check-turn').length;
+  if (checks > 1) return usage('--check-turn is given twice');
+  const f = flags(args.filter(arg => arg !== '--check-turn'), 'depth-place', ['--parts', '--config', '--rig-config', '--out']);
+  if (typeof f === 'string') return usage(f);
+  try {
+    const input = { parts: f.get('--parts')!, config: f.get('--config')!, rigConfig: f.get('--rig-config')!, out: f.get('--out')! };
+    const placement = stageDepthPlacement(input);
+    if (checks === 0) placement.write(input.out);
+    else {
+      const scratch = realpathSync(mkdtempSync(join(tmpdir(), 'rig-parts-depth-place-')));
+      try {
+        const placed = placement.write(join(scratch, 'placed'));
+        const check = depthPlaceTurnCheck(input.parts, scratch, placed);
+        placement.write(input.out, check);
+        console.log(`depth-place: turn check ${check.status}`);
+        if (check.status === 'refused') for (const problem of check.problems) {
+          console.log(`depth-place: turn check ${problemLine(problem)}${guidePointer(problem.code)}`);
+        }
+      } finally { rmSync(scratch, { recursive: true, force: true }); }
+    }
+    const { anchor, near, pivot, scale, parts } = placement.report;
+    console.log(`depth-place: anchor=${anchor} near=${near} scale=${scale} pivot=${pivot}`);
+    for (const row of parts) {
+      const round = row.round === undefined ? '' : ` roundScale=${row.round.scale} sections=${row.round.sections} IQR=${JSON.stringify(row.round.iqr)}`;
+      console.log(`depth-place: ${row.part} visible=${row.visibleCount} fraction=${row.visibleFraction} mapMedian=${row.rawMedian} rigMedian=${row.rigMedian} impliedReliefScale=${row.reliefRatio}${round}`);
+    }
+    console.log('depth-place: wrote recipe.json, config.json and depth-place-report.json');
+    return EXIT_OK;
+  } catch (error) { return printRefusal(error); }
+}
+
 function main(argv: string[]): number | Promise<number> {
   const [command, ...rest] = argv;
   if (command === undefined || command === '--help' || command === '-h' || command === 'help') {
@@ -3055,6 +3131,7 @@ function main(argv: string[]): number | Promise<number> {
   if (command === 'layers') return cmdLayers(rest);
   if (command === 'depth-prepare') return cmdDepthPrepare(rest);
   if (command === 'depth-map') return cmdDepthMap(rest);
+  if (command === 'depth-place') return cmdDepthPlace(rest);
   if (command === 'edited-part') return cmdEditedPart(rest);
   if (command === 'external-receipt') return cmdExternalReceipt(rest);
   if (command === 'bust-landmarks') return cmdBustLandmarks(rest);

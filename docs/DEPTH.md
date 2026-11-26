@@ -41,10 +41,11 @@ use. Three things we learned the hard way are built into that path:
   convexity (the middle of a face is nearer than its rim). That integration is
   for the face only: it breaks on anything with an occlusion edge, like hair
   strands or a collar.
-- **The numbers that place a part are yours to declare.** A monocular model
-  gives relative shape, not scale. How far forward each part sits (its
-  `median`) and how deep its own shape is (its `relief`) are declared in rig
-  pixels, and the tool never guesses them.
+- **Placement and relief have separate controls.** The `median` sets where
+  a part sits and its `relief` sets the depth of its own shape, both in rig
+  pixels. Author both directly, or use a whole-painting map to
+  [place body medians](#optional-place-body-parts-from-a-whole-painting-map)
+  with a scale you declare. Relief is always authored separately.
 
 Surfaces in one turn group share one depth reference: the first surface's
 opaque-art median, preferring the face in a head group. With both eye landmarks,
@@ -78,9 +79,9 @@ measures depth discontinuity, not composite visibility.
 See-through, the layer decomposition this package reads, also writes a per-layer
 depth sheet, and a config can register those directly (`config.depth`,
 [Per-layer depth sheets](AUTHORING.md#per-layer-depth-sheets-773)). In
-side-by-side review, per-part maps from a depth model read better by eye than
-a single map of the whole painting, which is why the per-part route below is
-the one this page walks.
+side-by-side review, per-part maps from a depth model read better by eye for
+local shape. A whole-painting map can supply the relative placement of those
+parts before you use per-part maps to shape them.
 
 ## The steps, and what you will see
 
@@ -91,6 +92,38 @@ that bend with their sheet (the face, the hair), `unit` for features that move
 as one piece, `rear` for what sits behind the head. A body group is declared
 the same way under `turn.body.roles`. The roles, the dials and the grid the
 surfaces are built on are in [AUTHORING §3, the `turn` row](AUTHORING.md#3-configjson-field-by-field).
+
+### Optional: Place body parts from a whole-painting map
+
+Use `depth-place` if you have a scalar map for the whole painting and want to
+place assembled body parts relative to one another. Supply a one-channel
+`rig-parts-map/1` on the assembled painting grid (`parts.json`'s `rig_size`)
+and add `place` to the depth recipe. Set `place.near` to `black` when low raw
+values mean near or `white` when high values mean near. Nearer samples produce
+larger rig `z`.
+Declare a positive `place.scale` in rig pixels per model unit and name the
+first body surface as `place.anchor`. That surface keeps its declared median.
+The default pivot is at the anchor depth, with an offset of `0` from the turn's
+reference. A numeric `place.pivot` supplies an explicit offset in rig pixels.
+
+```sh
+rig-parts depth-place --parts assembled --config depth.json --rig-config config.json --out placed --check-turn
+```
+
+The command writes `placed/recipe.json`, `placed/config.json` and
+`placed/depth-place-report.json`. Use the placed recipe in steps 1 and 4 and the
+placed config in step 4. Each median comes from the pixels where that part is
+visible in the assembled draw order. The report shows the visible pixel count
+and fraction and the scales implied by declared reliefs and optional round
+parts. If you omit the scale, the refusal prints the available evidence so you
+can choose one explicitly.
+
+`--check-turn` prepares and applies the placed recipe in scratch space and runs
+the real rig gate. Read `turnCheck` in the report for `built` or a named refusal
+and any available triangle-winding findings. If placement succeeds, a named check
+refusal still leaves the three placement files and exits `0`. The usual rig
+gate still decides whether the turn can build. See the
+[placement fields and refusals](AUTHORING.md#place-body-depth-from-a-whole-painting-map-1570).
 
 ### 1. Prepare one inference image per part
 

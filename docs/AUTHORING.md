@@ -10083,7 +10083,7 @@ by `rig`, so their output requires no alternate compiler or dependency pin.
 | rule | refused input | remedy |
 | --- | --- | --- |
 | <a id="DEPTH_RECIPE"></a>`DEPTH_RECIPE` | unknown, absent or wrongly typed recipe field, group, source or frame | use the documented explicit recipe schema; no guessed field |
-| <a id="DEPTH_RECIPE_NUMBER"></a>`DEPTH_RECIPE_NUMBER` | missing/nonfinite median, relief, near-scale pivot or prepare number; invalid range/integer | declare every numeric field in its documented units and range |
+| <a id="DEPTH_RECIPE_NUMBER"></a>`DEPTH_RECIPE_NUMBER` | missing or nonfinite median, relief, group scale or pivot, or prepare number. Also covers invalid ranges, invalid integers and invalid numeric `place.pivot` | declare numbers in the documented units and range, or use `"anchor"` for the placement pivot |
 | <a id="DEPTH_INPUT_PRESENT"></a>`DEPTH_INPUT_PRESENT` | declared input missing or not a file, or `depth-map` input unreadable or prepared PNG undecodable | restore the named readable input file in its expected format |
 | <a id="DEPTH_INPUT_JSON"></a>`DEPTH_INPUT_JSON` | malformed numeric or configuration JSON | write valid finite JSON |
 | <a id="DEPTH_PART_RESOLVES"></a>`DEPTH_PART_RESOLVES` | selected or cleared name absent from parts.json | use the assembled part name |
@@ -10099,17 +10099,92 @@ by `rig`, so their output requires no alternate compiler or dependency pin.
 | <a id="DEPTH_ARRAY_NONFINITE"></a>`DEPTH_ARRAY_NONFINITE` | retained raw depth pixel contains `NaN` or an infinity | export finite depth values at the named raw pixel |
 | <a id="DEPTH_ARRAY_NORMAL"></a>`DEPTH_ARRAY_NORMAL` | retained raw normal is zero or nonfinite, or a pooled normal cancels to zero | export finite nonzero signed XYZ normals in image axes and inspect the named raw or output pixel |
 | <a id="DEPTH_MAP_FORMAT"></a>`DEPTH_MAP_FORMAT` | wrong numeric schema, channels, shape, count, unknown field or nonfinite element | provide the declared float JSON map, not a preview |
-| <a id="DEPTH_MAP_SIZE"></a>`DEPTH_MAP_SIZE` | map dimensions differ from its explicit frame | use the registered part, enlarged art or padded input grid |
+| <a id="DEPTH_MAP_SIZE"></a>`DEPTH_MAP_SIZE` | map dimensions differ from its explicit frame | use the registered part, enlarged art or padded input grid for a per-part map, or `parts.json`'s `rig_size` for a placement map |
 | <a id="DEPTH_MAP_SUPPORT"></a>`DEPTH_MAP_SUPPORT` | no alpha>=128 support | provide a supported part |
 | <a id="DEPTH_MAP_SPREAD"></a>`DEPTH_MAP_SPREAD` | p5=p95 with nonzero relief | supply a nonflat map or declare relief 0 |
 | <a id="DEPTH_APPLY_CLIPPED"></a>`DEPTH_APPLY_CLIPPED` | a pixel with original alpha >= 128 has pre-encoding depth `z <= 0` or `z >= zScale` | use the reported minimum median for each low-clipped part and the reported minimum group scale for upper clipping. The rig checks the head and body role sets separately, so if a surface belongs to both, use the larger required `zScale` in both groups. Recompute the group scale after median edits if the maximum changes, then prepare again. |
 | <a id="DEPTH_NORMAL_ISLANDS"></a>`DEPTH_NORMAL_ISLANDS` | zero/multiple connected components at native or integration resolution | scalar source, or a larger registered normal input that preserves one island |
 | <a id="DEPTH_NORMAL_VECTOR"></a>`DEPTH_NORMAL_VECTOR` | a sampled support normal is zero | provide nonzero signed XYZ normals |
 | <a id="DEPTH_NORMAL_CONVEXITY"></a>`DEPTH_NORMAL_CONVEXITY` | core/rim or its convexity sign is unresolved | larger closed convex mask or scalar source |
-| <a id="DEPTH_GROUP_BINDING"></a>`DEPTH_GROUP_BINDING` | part outside declared turn roles, mixed retained near/zScale, or filename collision | register exact roles and one shared scale/polarity, replace/clear conflicting sheets, use distinct names |
+| <a id="DEPTH_GROUP_BINDING"></a>`DEPTH_GROUP_BINDING` | part outside declared turn roles, including a placed body part absent from `turn.body.roles`, mixed retained near/zScale, or filename collision | register exact roles and one shared scale/polarity, replace/clear conflicting sheets, use distinct names |
 | <a id="DEPTH_GROUP_SELECTION"></a>`DEPTH_GROUP_SELECTION` | `depth-apply --groups` with an empty list, a group the recipe does not declare, or a group named twice | name each group to apply once, from the recipe's `groups` |
 | <a id="DEPTH_GROUP_LEFT_OUT"></a>`DEPTH_GROUP_LEFT_OUT` | `depth-apply --groups` leaves a group out while the rig config declares that group's turn (`turn.body`; `turn.roles` or `turn.depths` for head) | remove that turn block from the rig config, or name the group in `--groups` |
 | <a id="DEPTH_AUTHORED_UNIT_CONFLICT"></a>`DEPTH_AUTHORED_UNIT_CONFLICT` | a selected part already records `provenance.depth.kind: "authored-unit"`; adding scalar depth would make its two representations conflict | retain the authored unit or supply an explicitly reassembled scalar-compatible input; apply never replaces the provenance automatically |
+| <a id="DEPTH_PLACE_NEAR"></a>`DEPTH_PLACE_NEAR` | `place.near` is missing or invalid | declare `black` for low raw values near or `white` for high raw values near |
+| <a id="DEPTH_PLACE_SCALE"></a>`DEPTH_PLACE_SCALE` | `place.scale` is missing, nonfinite or nonpositive, or a placed median or implied relief overflows | use the available anchor evidence to declare a finite positive scale in rig pixels per model unit that keeps placement values finite |
+| <a id="DEPTH_PLACE_GROUP"></a>`DEPTH_PLACE_GROUP` | missing `groups.body` in the recipe or missing 2.5D `turn.body` in the rig config | declare both body blocks and register the placement parts under the body's turn roles |
+| <a id="DEPTH_PLACE_ANCHOR"></a>`DEPTH_PLACE_ANCHOR` | `place.anchor` is missing or fails to name the first body turn surface | name the first `surface` in `turn.body.roles` and declare its body recipe median |
+| <a id="DEPTH_PLACE_OCCLUDED"></a>`DEPTH_PLACE_OCCLUDED` | a body recipe part or `turn.body` unit has zero visible pixels at alpha >= 128 in the assembled draw order | make the part visible in the assembled art or remove it from placement |
+| <a id="DEPTH_PLACE_ROUND"></a>`DEPTH_PLACE_ROUND` | invalid `place.round`, a name outside the placement set, no measurable section, or a nonpositive fitted slope | list unique body recipe parts or body units with measurable round sections and check the declared polarity and depth profile |
+
+### Place body depth from a whole-painting map (#1570)
+
+Run `depth-place` on the assembled parts before preparing the recipe you will
+apply. Add the optional `place` object to `rig-parts-depth/1` and declare
+`groups.body` and the matching `turn.body` in the rig config.
+
+```sh
+rig-parts depth-place --parts assembled --config depth-recipe.json --rig-config config.json --out placed --check-turn
+```
+
+| `place` field | contract |
+| --- | --- |
+| `map` | Required. A one-channel `rig-parts-map/1` on the assembled painting grid (`parts.json`'s `rig_size`), resolved relative to the recipe. |
+| `near` | Required. `black` means low raw values are near. `white` means high raw values are near. This is the painting map's polarity. `groups.body.near` controls the encoding of the per-part sheets. |
+| `scale` | Required. A finite positive value in rig pixels per model unit. The refusal for a missing scale prints the available anchor evidence. |
+| `anchor` | Required. The body turn's first `surface`, with a median already declared in `parts`. |
+| `round` | Optional. An array of unique body recipe part or body unit names for round-limb scale evidence. |
+| `pivot` | Optional. Omit it or use `"anchor"` to write `0`, the offset at the reference depth. Supply a finite number to write that explicit offset in rig pixels. |
+
+At each painting pixel, the last drawn part with alpha at least 128 owns the
+sample. Every assembled part participates in occlusion. Each body recipe part
+and body turn unit must have at least one visible pixel. Its raw median uses
+those visible samples. The command also refuses missing recipe parts, body
+units or `clear` entries, mismatched map dimensions, and round parts without
+measurable sections or with a nonpositive fitted slope.
+
+With raw medians `m` and `mAnchor`, declared anchor median `zAnchor` and
+scale `k`, the resulting rig depth is `zAnchor + sign * (m - mAnchor) * k`,
+with `sign = -1` for `black` and `+1` for `white`. The anchor retains its
+declared median. Placed unit depths are world rig `z` in
+`turn.body.unitDepths`. A unit can use just the painting map, with no per-part
+map declaration. The body carrier projects an explicit unit depth as
+`pivot + z - zRef`, with `zRef` from the first body surface (#1577).
+
+The output directory receives `recipe.json`, `config.json` and
+`depth-place-report.json`. The placed recipe supplies the body medians and
+the resolved group pivot, which the config also records. Any existing `groups.body.unitDepths` override
+also carries the placed unit values, so applying the recipe preserves them.
+Relief remains declared per part, and the body's sheet `zScale` remains a
+separate authored value. Relative map and config references are rebased to the
+output directory. Prepare with `placed/recipe.json` to bind its bytes, then
+apply with the new preparation manifest and `placed/config.json`. If placement
+changes a declared assembly input, apply's `ASSEMBLY_CONFIG_STALE` refusal names
+the change and requires reassembly with the placed config.
+
+`depth-place-report.json` has `spec: "rig-parts-depth-place-report/1"`, `near`,
+`scale`, `anchor`, `pivot` and `parts`. The rows follow `parts.json` draw order
+and carry `part`, `group`, `visibleCount`, `visibleFraction` (visible pixels
+divided by alpha >= 128 pixels), `rawMedian`, `rawP5`, `rawP95`, `rigMedian`,
+`reliefRatio` (declared relief divided by `rawP95 - rawP5`, or `null` when
+unavailable) and `impliedRelief` (`(rawP95 - rawP5) * scale`, or `null` for a
+unit without a recipe entry). An optional
+`round` row field carries `sections`, `invertedSections`, `scale` (median fit)
+and `iqr` (the 25th and 75th percentiles of the section scales). The fit
+uses the full supported silhouette for its principal axis and section widths
+and the visible samples for regression. For a missing or invalid declared
+scale, the refusal includes the available evidence by part.
+
+With `--check-turn`, the command runs prepare, apply and `rig` with the real
+Core gate in scratch space at the declared turn range and adds `turnCheck`
+to the report. The check object has `status: "built"` on success.
+With `status: "refused"` it also has `stage` (`prepare`, `apply` or `rig`),
+`problems` (each with `code`, `object` and `detail`) and `winding`. Available
+`A39_DEFORM_KEEPS_TRIANGLE_WINDING` findings carry `rule`, `animation`,
+`part`, `attachment`, `key`, `reversedTriangles` and `triangles`, with `endKey`
+for an interval and `frame` when a slider is named. A named check refusal
+still lets successful placement write its files and exit `0`. Adjust the
+declarations and check the new candidate with the same gate.
 
 ### Unit depth precedence
 

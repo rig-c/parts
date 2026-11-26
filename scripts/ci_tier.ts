@@ -209,7 +209,7 @@ export const PATH_TO_SUITE_MAP: readonly MapRule[] = [
   { pattern: 'src/depthmaps.ts', suites: ['depth-maps', 'rig', 'tree'], why: 'depth map reader owned by depth-maps and rig' },
   { pattern: 'src/modelarray.ts', suites: ['depth-maps', 'tree'], why: 'depth-map NumPy decoder and pooling owned by depth-maps' },
   { pattern: 'src/depthsheets.ts', suites: ['depth-maps', 'layers-wrapper', 'rig', 'comfy', 'tree'], why: 'depth contact sheet generator owned by depth-maps, layers-wrapper, rig, comfy' },
-  { pattern: 'src/depthworkflow.ts', suites: ['depth-maps', 'rig', 'tree'], why: 'depth-init / depth-apply workflow owned by depth-maps and rig' },
+  { pattern: 'src/depthworkflow.ts', suites: ['depth-maps', 'rig', 'tree'], why: 'depth-prepare, depth-place and depth-apply workflows owned by depth-maps and rig' },
   { pattern: 'src/setfocus.ts', suites: ['alternate-tips', 'rig', 'config', 'parts', 'tree'], why: 'set focus metadata owned by alternate-tips' },
 
   { pattern: 'src/remesh-api.ts', suites: ['remesh', 'tree'], why: 'public Bun remesh API subpath (TY41 in tree, remesh suite)' },
@@ -386,7 +386,7 @@ export const PATH_TO_SUITE_MAP: readonly MapRule[] = [
   { pattern: 'fixtures/cloth.ts', suites: ['config', 'config-write', 'rig', 'propose', 'influence', 'tree'], why: 'cloth fixture helper' },
   { pattern: 'fixtures/comfyharness.ts', suites: ['comfy', 'tree'], jobs: ['standalone-tools'], why: 'fake ComfyUI server harness' },
   { pattern: 'fixtures/configwrite.ts', suites: ['config-write', 'arm-split-upgrade', 'tree'], why: 'imported by config-write and arm-split-upgrade' },
-  { pattern: 'fixtures/contour-turn.ts', suites: ['rig', 'build', 'tree'], why: 'imported by rig and build suites' },
+  { pattern: 'fixtures/contour-turn.ts', suites: ['rig', 'build', 'depth-maps', 'tree'], why: 'imported by rig, build and depth-maps suites' },
   { pattern: 'fixtures/corepointer.ts', suites: ['core-pointer', 'tree'], why: 'imported by core-pointer suite' },
   { pattern: 'fixtures/crop_edge_checks.ts', suites: ['assemble', 'tree'], why: 'imported by assemble suite' },
   { pattern: 'fixtures/editor_receipts.ts', suites: ['editor-receipts', 'part-sources', 'depth-maps', 'config', 'rig', 'tree'], why: 'imported by editor-receipts, part-sources, depth-maps, config, rig' },
