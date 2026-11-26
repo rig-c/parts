@@ -791,7 +791,8 @@ function placementFixture(dir: string, variant: 'layers' | 'occluded' | 'round' 
     assemble: { rig_scale: 1, plan: pf.parts.map(part => [part.name, ...part.from.split(':')]) },
     bones: [{ name: 'chest', parent: 'root', at: [32, 36] }, { name: 'badge_mount', parent: 'chest', at: [32, 26] }],
     meshes: {}, regions: round ? { torso: 'chest' } : { torso: 'chest', badge: 'badge_mount' },
-    motion: { duration: 1, tracks: [] }, turn: { body: { pivot: 17, roles } },
+    motion: { duration: 1, tracks: [{ bone: 'chest', prop: 'rotate', amp: 0, period: 1, phase: 0 }] },
+    turn: { body: { pivot: 17, roles } },
   });
   pf.assembly_config = assemblyConfigReading(rigConfig, pf);
   writeParts(join(source, 'parts.json'), pf);
