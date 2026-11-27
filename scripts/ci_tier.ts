@@ -123,7 +123,7 @@ export const PATH_TO_SUITE_MAP: readonly MapRule[] = [
   { pattern: 'src/round.ts', suites: ['contour-wiring', 'auto-mesh', 'auto-motion', 'influence', 'tree'], why: 'deterministic rounding helper' },
   { pattern: 'src/length.ts', suites: ['tree', 'contour-wiring'], why: 'edgeLength owned by tree (TY15) and contour-wiring' },
   { pattern: 'src/pyfmt.ts', suites: ['propose', 'tree'], why: 'Python float formatter owned by propose' },
-  { pattern: 'src/runstamp.ts', suites: ['rig', 'assemble', 'scene', 'build', 'tree'], jobs: ['standalone-tools'], why: 'rig-run/1 stamp and rig-run/2 record writer/reader tested by check_run_clock.ts, rig, assemble, scene, build' },
+  { pattern: 'src/runstamp.ts', suites: ['rig', 'assemble', 'scene', 'build', 'check', 'tree'], jobs: ['standalone-tools'], why: 'rig-run/1 stamp and rig-run/2 record writer/reader tested by check_run_clock.ts, rig, assemble, scene, build' },
 
   { pattern: 'src/config.ts', suites: ['config', 'config-write', 'depth-maps', 'tree'], why: 'config loader owned by config, TY14 in tree, and relocation in depth-maps' },
   { pattern: 'src/configrelocation.ts', suites: ['config', 'depth-maps', 'mesh-draft', 'editor-receipts', 'tree'], why: 'config relocation helper' },
@@ -188,7 +188,7 @@ export const PATH_TO_SUITE_MAP: readonly MapRule[] = [
   { pattern: 'src/waist.ts', suites: ['waist', 'tree'], why: 'waist bone logic owned by waist suite' },
   { pattern: 'src/waistmesh.ts', suites: ['waist', 'tree'], why: 'waist mesh solver owned by waist suite' },
   { pattern: 'src/weights.ts', suites: ['rig', 'contour-wiring', 'winding', 'influence', 'waist', 'tree'], why: 'bone weight solver' },
-  { pattern: 'src/localweights.ts', suites: ['contour-wiring', 'auto-mesh', 'rig', 'tree'], why: 'local field weight solver' },
+  { pattern: 'src/localweights.ts', suites: ['contour-wiring', 'auto-mesh', 'rig', 'check', 'tree'], why: 'local field weight solver' },
   { pattern: 'src/heat.ts', suites: ['rig', 'tree'], why: 'bone heat weight solver owned by rig suite' },
   { pattern: 'src/mesh.ts', suites: ['rig', 'auto-mesh', 'winding', 'contour', 'contour-wiring', 'waist', 'tree'], why: 'lattice and contour mesh builder' },
   { pattern: 'src/explicitmesh.ts', suites: ['config', 'rig', 'tree'], why: 'explicit mesh reader owned by config and rig' },

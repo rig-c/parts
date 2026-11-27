@@ -539,6 +539,7 @@ import {
   STRESS_RIGID,
   STRESS_TURNS,
   stressPlan,
+  contourBandText,
   stretchLine,
   SWEEP_LINE,
   sweepAngles,
@@ -795,7 +796,7 @@ import { poseRawAnimation } from '@rig-c/core/core';
 import { AnimationState, AnimationStateData, AtlasAttachmentLoader, MixFrom, Physics, Skeleton as SpineSkeleton, type SkeletonData, SkeletonJson, TextureAtlas } from '@esotericsoftware/spine-core';
 import { compareSceneBytes } from './scripts/scene_parity.ts';
 import { sceneOutputFiles, sceneClip, writeCanvasClipSceneFixture, writeSceneClipBuild, sceneCharacterRig, sceneText, writeFlatPlate, writeSceneBuild, writeTurnSceneBuild, sceneTurnFixture, sceneFoldProducerFixture, writeSceneProducerInput, writePlacementPivotProducerInput, writePlacementPivotRootBuild } from './fixtures/scene.ts';
-import { localInfluences, regionWeight } from './src/localweights.ts';
+import { localInfluences, regionBandSite, regionWeight } from './src/localweights.ts';
 import { boneHeat as solveBoneHeat, HEAT_MAX_ITERATIONS, HEAT_SOURCE_BAND, HEAT_TOLERANCE, latticeSilhouette } from './src/heat.ts';
 import { influences } from './src/weights.ts';
 import { apply as applyAffine, type ComparedMesh, contourAtBudget, cost, errors, fieldAt, fieldContour, fieldLattice, locator, pixelErrors, pixelsOver } from './tools/local_compare.ts';
@@ -23934,6 +23935,139 @@ function runCheckStretchCases(dir: string, say: ReturnType<typeof counter>['say'
       flatProblems.some((p) => p.code === 'CHECK_TEXTURE_STRETCH' && p.detail.startsWith('1 rest edge(s) of length 0, the first triangle 0 edge 0-1')),
     malformed,
     'a figure read off a truncated export would be a wrong number printed as a measurement, and a rest edge of length 0 has no ratio — each is named, neither is divided through',
+  );
+
+  // Issue #1598: when a vertex of a failing TEXTURE_STRETCH edge lies inside a declared contour band or at its cutoff,
+  // the detail names the governing contour band (its region, its target bone, its declared width `band` and each
+  // vertex's band position and share), and every failure off every band keeps its existing text byte for byte.
+  const bandStretchParts = (): PartsFile => {
+    const p = rigParts();
+    p.rig_size = [64, 64];
+    p.scale_rig_per_source = 1;
+    p.parts = [{ ...p.parts[0], name: 'scarf', from: 'full:neckwear', x: 20, y: 16, w: 28, h: 16, opaque_px: 28 * 16 }];
+    return p;
+  };
+  const bandStretchImages = (): Map<string, Raster> => new Map([['scarf', block(28, 16)]]);
+  const bandRegions = [
+    { name: 'collar', shape: 'polygon' as const, points: [[0, 12], [8, 12], [8, 36], [0, 36]] as [number, number][], bone: 'neck_band', spacing: 8, band: 16 },
+    { name: 'pin', shape: 'circle' as const, cx: 32, cy: 16, r: 1, bone: 'torso', spacing: 8, band: 0 },
+  ];
+  const bandStretchConfig = (mode: 'cutoff' | 'off-band'): Record<string, unknown> => ({
+    key: `band_stretch_${mode}`,
+    assemble: { rig_scale: 1, plan: [['scarf', 'full', 'neckwear']] },
+    bones: [
+      { name: 'chest', parent: 'root', at: [32, 48] },
+      { name: 'torso', parent: 'chest', at: [32, 24] },
+      { name: 'head', parent: 'chest', at: [32, 12] },
+      { name: 'neck_band', parent: 'head', at: [20, 24] },
+      { name: 'hem', parent: 'chest', at: [48, 24] },
+    ],
+    regions: {},
+    meshes: {
+      scarf: {
+        r: mode === 'cutoff' ? 4 : 1,
+        segments: mode === 'cutoff'
+          ? [['torso', [20, 24], [48, 24]]]
+          : [
+              ['torso', [20, 16], [44, 16]],
+              ['torso', [20, 24], [44, 24]],
+              ['torso', [20, 32], [44, 32]],
+              ['torso', [44, 16], [44, 32]],
+              ['hem', [48, 16], [48, 32]],
+            ],
+        contour: {
+          tolerance: 0,
+          margin: 0,
+          spacing: 8,
+          maxEdge: 4,
+          regions: bandRegions,
+        },
+      },
+    },
+    motion: {
+      duration: 1,
+      tracks: mode === 'cutoff'
+        ? [{ bone: 'neck_band', prop: 'translatex', amp: -11, period: 1, phase: 0 }]
+        : [{ bone: 'hem', prop: 'translatex', amp: -2.4, period: 1, phase: 0 }],
+    },
+  });
+  const bin1598 = suiteRigc();
+  const runner1598 = rigcRunnerAt(bin1598, spawnRigc);
+  const cutoffHome = join(dir, 'band-cutoff-1598');
+  const cutoffFx = writeRigFixture(cutoffHome, bandStretchConfig('cutoff'), bandStretchImages(), bandStretchParts());
+  const cutoffRigCli = squeezeCli(['rig', '--config', cutoffFx.config, '--parts', cutoffFx.parts, '--out', join(cutoffHome, 'rig')]);
+  const cutoffCliCheck = squeezeCli(['check', '--rig', join(cutoffHome, 'rig'), '--parts', cutoffFx.parts, '--no-extremes', '--out', join(cutoffHome, 'check-cli')]);
+  const cutoffCfgBytes = readFileSync(cutoffFx.config);
+  const cutoffStageReport = checkStage(
+    { rig: join(cutoffHome, 'rig'), parts: cutoffFx.parts, out: join(cutoffHome, 'check-stage'), config: inputFileRecord(cutoffCfgBytes, cutoffFx.config), noExtremes: true },
+    runner1598,
+    bin1598,
+    () => {},
+  );
+  const cutoffProblem = cutoffStageReport.problems.find((p) => p.code === 'CHECK_TEXTURE_STRETCH');
+  const cutoffCliFail = failLine(cutoffCliCheck.out, 'CHECK_TEXTURE_STRETCH');
+  const cutoffStageFail = cutoffProblem === undefined ? null : `  FAIL  CHECK_TEXTURE_STRETCH: ${cutoffProblem.object} — ${cutoffProblem.detail} (see rig-parts guide CHECK_TEXTURE_STRETCH)`;
+  const cutoffWorst = (cutoffStageReport.figures.TEXTURE_STRETCH as StretchFig | undefined)?.worst;
+  const cutoffRigJson = readJsonAt(join(cutoffHome, 'rig', 'rig.json')) as RigSpec;
+  const cutoffMotionJson = readJsonAt(join(cutoffHome, 'rig', 'motion.json')) as Record<string, unknown>;
+  const cutoffExpectedStep = cutoffWorst === undefined ? '' : weightStepText({ ...cutoffRigJson }, 'scarf', 'scarf', cutoffWorst.edge, { stage: cutoffRigJson.skeleton, config: inputFileRecord(cutoffCfgBytes, cutoffFx.config) });
+  const cutoffBeforeDetail = cutoffWorst === undefined ? '' : `the edge is ${cutoffWorst.ratio} times its rest length (max(ratio, 1/ratio) ${(cutoffStageReport.figures.TEXTURE_STRETCH as StretchFig).severity}); <= ${TEXTURE_STRETCH_CEILING} is required; ${edgeBonesText({ ...cutoffRigJson }, cutoffMotionJson, 'scarf', 'scarf', cutoffWorst.edge)}${cutoffExpectedStep === '' ? '' : `; ${cutoffExpectedStep}`} — the texture on it is ${cutoffWorst.ratio >= 1 ? 'stretched' : 'squeezed'}: the bones this mesh is weighted to move apart (amplitudes too large down a chain), or a vertex blends bones that move against each other`;
+  const cutoffStaleText = cutoffWorst === undefined ? 'skipped' : contourBandText({ ...cutoffRigJson }, 'scarf', 'scarf', cutoffWorst.edge, { stage: cutoffRigJson.skeleton, config: { path: cutoffFx.config, sha256: '0'.repeat(64) } });
+  const siteInside = regionBandSite([20, 16], bandRegions[0]);
+  const siteCutoff = regionBandSite([24, 16], bandRegions[0]);
+  const siteOutside = regionBandSite([28, 16], bandRegions[0]);
+  const siteZeroBand = regionBandSite([34, 16], bandRegions[1]);
+  squeezeSay(
+    'CK1598_BAND_CUTOFF_STRETCH_NAMES_GOVERNING_CONTOUR_BAND_TARGET_AND_WIDTH',
+    cutoffRigCli.status === 0 &&
+      cutoffCliCheck.status === 1 &&
+      onlyFailedCheckBar(cutoffStageReport.figures as unknown as Record<string, unknown>, 'TEXTURE_STRETCH') &&
+      cutoffProblem !== undefined &&
+      cutoffWorst !== undefined &&
+      cutoffWorst.ratio === 0.484 &&
+      (cutoffStageReport.figures.TEXTURE_STRETCH as StretchFig).severity === 2.065 &&
+      cutoffCliFail === cutoffStageFail &&
+      Buffer.byteLength(cutoffStageFail ?? '', 'utf8') < PRINTED_LINE_LIMIT &&
+      cutoffProblem.detail.includes('contour band region "collar" (target bone "neck_band", width 16 px at meshes.scarf.contour.regions[0].band): ') &&
+      cutoffProblem.detail.includes('is inside the band (share 0.1875)') &&
+      cutoffProblem.detail.includes('is at its cutoff (share 0), so the band\'s falloff governs this edge') &&
+      !cutoffProblem.detail.includes('"pin"') &&
+      cutoffProblem.detail !== cutoffBeforeDetail &&
+      cutoffStaleText === '' &&
+      siteInside === 'band' &&
+      siteCutoff === 'cutoff' &&
+      siteOutside === 'outside' &&
+      siteZeroBand === 'outside',
+    `rig exit ${cutoffRigCli.status}, cli check exit ${cutoffCliCheck.status}; worst ${JSON.stringify(cutoffWorst ?? null)}; detail: ${cutoffProblem?.detail ?? 'none'}; cli===stage: ${cutoffCliFail === cutoffStageFail}; stale: ${JSON.stringify(cutoffStaleText)}`,
+    'issue #1598 planted control: on a contour mesh whose failing edge spans x=20 (4 px inside collar band width 16 px, eased share 0.1875) to x=24 (exact band cutoff, share 0), both standalone check (via run.json) and build-bound checkStage name region "collar", target bone "neck_band", width 16 px at meshes.scarf.contour.regions[0].band, both vertex shares and the governing falloff while ignoring zero-width region "pin" and stale config hashes',
+  );
+
+  const offBandHome = join(dir, 'band-off-1598');
+  const offBandFx = writeRigFixture(offBandHome, bandStretchConfig('off-band'), bandStretchImages(), bandStretchParts());
+  const offBandRigCli = squeezeCli(['rig', '--config', offBandFx.config, '--parts', offBandFx.parts, '--out', join(offBandHome, 'rig')]);
+  const offBandCfgBytes = readFileSync(offBandFx.config);
+  const offBandReport = checkStage(
+    { rig: join(offBandHome, 'rig'), parts: offBandFx.parts, out: join(offBandHome, 'check'), config: inputFileRecord(offBandCfgBytes, offBandFx.config), noExtremes: true },
+    runner1598,
+    bin1598,
+    () => {},
+  );
+  const offBandProblem = offBandReport.problems.find((p) => p.code === 'CHECK_TEXTURE_STRETCH');
+  const offBandWorst = (offBandReport.figures.TEXTURE_STRETCH as StretchFig | undefined)?.worst;
+  const offBandRigJson = readJsonAt(join(offBandHome, 'rig', 'rig.json')) as RigSpec;
+  const offBandMotionJson = readJsonAt(join(offBandHome, 'rig', 'motion.json')) as Record<string, unknown>;
+  const offBandStep = offBandWorst === undefined ? '' : weightStepText({ ...offBandRigJson }, 'scarf', 'scarf', offBandWorst.edge, { stage: offBandRigJson.skeleton, config: inputFileRecord(offBandCfgBytes, offBandFx.config) });
+  const offBandUnchangedWant = offBandWorst === undefined ? '' : `the edge is ${offBandWorst.ratio} times its rest length (max(ratio, 1/ratio) ${(offBandReport.figures.TEXTURE_STRETCH as StretchFig).severity}); <= ${TEXTURE_STRETCH_CEILING} is required; ${edgeBonesText({ ...offBandRigJson }, offBandMotionJson, 'scarf', 'scarf', offBandWorst.edge)}${offBandStep === '' ? '' : `; ${offBandStep}`} — the texture on it is ${offBandWorst.ratio >= 1 ? 'stretched' : 'squeezed'}: the bones this mesh is weighted to move apart (amplitudes too large down a chain), or a vertex blends bones that move against each other`;
+  squeezeSay(
+    'CK1598_OFF_BAND_STRETCH_KEEPS_EXISTING_REFUSAL_TEXT_BYTE_FOR_BYTE',
+    offBandRigCli.status === 0 &&
+      onlyFailedCheckBar(offBandReport.figures as unknown as Record<string, unknown>, 'TEXTURE_STRETCH') &&
+      offBandProblem !== undefined &&
+      offBandWorst !== undefined &&
+      !offBandProblem.detail.includes('contour band') &&
+      offBandProblem.detail === offBandUnchangedWant,
+    `rig exit ${offBandRigCli.status}; worst ${JSON.stringify(offBandWorst ?? null)}; detail matches pre-#1598 byte-for-byte: ${offBandProblem?.detail === offBandUnchangedWant}; detail: ${offBandProblem?.detail ?? 'none'}`,
+    'issue #1598 negative control: on the same contour mesh with collar band width 16 px still declared, a failing edge outside every band (driven by hem at x=48, past the x=24 cutoff) emits no contour-band clause and keeps its pre-#1598 detail byte for byte',
   );
 }
 

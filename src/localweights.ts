@@ -97,8 +97,12 @@ function onSegment(px: number, py: number, ax: number, ay: number, bx: number, b
   return px >= Math.min(ax, bx) && px <= Math.max(ax, bx) && py >= Math.min(ay, by) && py <= Math.max(ay, by);
 }
 
-/** Is the squared distance from p to a–b at least `r2`? Exact, integer units, `BigInt` where a product could pass 2^53. */
-function atLeast(px: number, py: number, ax: number, ay: number, bx: number, by: number, r2: bigint): boolean {
+function compareBigInt(a: bigint, b: bigint): -1 | 0 | 1 {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** Compare the squared distance from p to segment a–b against `r2`: -1 below, 0 equal, 1 above. Exact on integer units. */
+function compareSegmentDistance2(px: number, py: number, ax: number, ay: number, bx: number, by: number, r2: bigint): -1 | 0 | 1 {
   const dx = bx - ax;
   const dy = by - ay;
   const vx = px - ax;
@@ -106,10 +110,15 @@ function atLeast(px: number, py: number, ax: number, ay: number, bx: number, by:
   const along = BigInt(vx) * BigInt(dx) + BigInt(vy) * BigInt(dy);
   const len2 = BigInt(dx) * BigInt(dx) + BigInt(dy) * BigInt(dy);
   const sq = (x: number, y: number): bigint => BigInt(x) * BigInt(x) + BigInt(y) * BigInt(y);
-  if (along <= 0n) return sq(vx, vy) >= r2;
-  if (along >= len2) return sq(px - bx, py - by) >= r2;
+  if (along <= 0n) return compareBigInt(sq(vx, vy), r2);
+  if (along >= len2) return compareBigInt(sq(px - bx, py - by), r2);
   const cross = BigInt(dx) * BigInt(vy) - BigInt(dy) * BigInt(vx);
-  return cross * cross >= r2 * len2;
+  return compareBigInt(cross * cross, r2 * len2);
+}
+
+/** Is the squared distance from p to a–b at least `r2`? Exact, integer units, `BigInt` where a product could pass 2^53. */
+function atLeast(px: number, py: number, ax: number, ay: number, bx: number, by: number, r2: bigint): boolean {
+  return compareSegmentDistance2(px, py, ax, ay, bx, by, r2) >= 0;
 }
 
 /** Strictly inside the ring by the crossing rule, on integer units (a point on an edge is asked separately). */
@@ -121,6 +130,43 @@ function insideRing(px: number, py: number, xs: readonly number[], ys: readonly 
     if (ys[i] > ys[j] ? o > 0 : o < 0) inside = !inside;
   }
   return inside;
+}
+
+/** Where a 1/256 px grid point sits relative to `reg` and its declared falloff band: exact on integer units. */
+export type RegionBandSite = 'region' | 'band' | 'cutoff' | 'outside';
+
+/**
+ * Classify `p` against `reg` and its declared `band` (`0 < d < band` is `'band'`, `d === band` with `band > 0` is `'cutoff'`).
+ * `p` must lie on the 1/256 px grid, like every contour vertex {@link localInfluences} weights.
+ */
+export function regionBandSite(p: Point, reg: WeightRegion): RegionBandSite {
+  const px = units(p[0], 'point x');
+  const py = units(p[1], 'point y');
+  const B = units(reg.band, 'band');
+  if (reg.shape === 'circle') {
+    const dx = px - units(reg.cx, 'cx');
+    const dy = py - units(reg.cy, 'cy');
+    const R = units(reg.r, 'r');
+    const d2 = BigInt(dx) * BigInt(dx) + BigInt(dy) * BigInt(dy);
+    if (d2 <= BigInt(R) * BigInt(R)) return 'region';
+    if (B === 0) return 'outside';
+    const outer2 = BigInt(R + B) * BigInt(R + B);
+    return d2 < outer2 ? 'band' : d2 === outer2 ? 'cutoff' : 'outside';
+  }
+  const xs = reg.points.map((q) => units(q[0], 'polygon x'));
+  const ys = reg.points.map((q) => units(q[1], 'polygon y'));
+  const n = xs.length;
+  for (let i = 0; i < n; i++) if (onSegment(px, py, xs[i], ys[i], xs[(i + 1) % n], ys[(i + 1) % n])) return 'region';
+  if (insideRing(px, py, xs, ys)) return 'region';
+  if (B === 0) return 'outside';
+  const B2 = BigInt(B) * BigInt(B);
+  let atCutoff = false;
+  for (let i = 0; i < n; i++) {
+    const cmp = compareSegmentDistance2(px, py, xs[i], ys[i], xs[(i + 1) % n], ys[(i + 1) % n], B2);
+    if (cmp < 0) return 'band';
+    if (cmp === 0) atCutoff = true;
+  }
+  return atCutoff ? 'cutoff' : 'outside';
 }
 
 /**
