@@ -18282,6 +18282,38 @@ function checkBarIs<Id extends CheckBarId>(fig: Record<string, unknown> | null, 
   return JSON.stringify(checkBarOutcomes(fig)[id]) === JSON.stringify(outcome);
 }
 
+/** Compare the reported Core object and its endpoints to the take shipped by check or compose. */
+function shippedLoopSeamFaults(checkDir: string, fig: Record<string, unknown> | null, cap: number): string[] {
+  const idleDir = join(checkDir, 'idle_frames');
+  const frames = readJsonFile(join(idleDir, 'frames.json'));
+  const sets: unknown[] = Array.isArray(frames?.sets) ? frames.sets : [];
+  const [set] = sets;
+  if (sets.length !== 1 || !isDriveRecord(set) || typeof set.dir !== 'string') return ['missing shipped idle set'];
+  const seam = fig?.loop_seam;
+  if (!isDriveRecord(seam)) return ['missing check.json loop_seam'];
+  const core = readJsonFile(join(idleDir, set.dir, 'loop-seam.json'));
+  const faults: string[] = [];
+  if (JSON.stringify(seam) !== JSON.stringify(core)) faults.push('differs from shipped Core report');
+  if (seam.spec !== 'rigc-loop-seam/1' || seam.status !== 'met' || seam.animation !== 'idle' || set.animation !== 'idle' ||
+      seam.fps !== IDLE_FPS || seam.fps !== set.fps || typeof seam.period !== 'number' || seam.period <= 0 || seam.period !== set.duration ||
+      JSON.stringify(seam.viewport) !== JSON.stringify(frames?.viewport)) faults.push('schema, verdict or take identity');
+  const bar = seam.bar;
+  if (!isDriveRecord(bar) || bar.channelDelta !== 255 || bar.pixelsAbove !== 0 || seam.cap !== cap) faults.push('declared bar or cap');
+  const series: unknown[] = Array.isArray(seam.series) ? seam.series : [];
+  const [row] = series;
+  if (series.length !== 1 || !isDriveRecord(row) || seam.warmup !== 0 || row.warmup !== 0 ||
+      seam.pixelsAbove !== 0 || row.pixelsAbove !== 0 || seam.differingPixels !== row.differingPixels ||
+      seam.maxChannelDelta !== row.maxChannelDelta) faults.push('first passing warm-up or series');
+  for (const [name, filename, time] of [['first', 'f0000.png', 0], ['wrap', 'loop-wrap.png', seam.period]] as const) {
+    const endpoint = seam[name];
+    const filenameOnDisk = join(idleDir, set.dir, filename);
+    if (!isDriveRecord(endpoint) || endpoint.path !== `${set.dir}/${filename}` || endpoint.time !== time ||
+        (name === 'wrap' && endpoint.encoding !== 'png') || !existsSync(filenameOnDisk) ||
+        endpoint.sha256 !== createHash('sha256').update(readFileSync(filenameOnDisk)).digest('hex')) faults.push(`${name} path, time or SHA-256`);
+  }
+  return faults;
+}
+
 function failedCheckBars(fig: Record<string, unknown> | null): string[] {
   return Object.entries(checkBarOutcomes(fig)).filter(([, outcome]) => isDriveRecord(outcome) && outcome.status === 'FAIL').map(([id]) => id);
 }
@@ -18533,6 +18565,16 @@ function runSourceCases(dir: string, say: (name: string, ok: boolean, detail: st
     `exit ${noIdle.status}; "${summaryOf(noIdle.out)}"; skipped ${JSON.stringify(Object.keys(skippedNo ?? {}))}; CHAIN_LAG ${reasonOf(noIdle.fig, 'CHAIN_LAG').slice(0, 9)}…, TEXTURE_STRETCH ${reasonOf(noIdle.fig, 'TEXTURE_STRETCH').slice(0, 9)}…; idle outputs written: ${noIdleFiles.join(', ') || 'none'}; ${SOURCE_LINE} ${JSON.stringify(noIdle.src) === JSON.stringify(withIdle.src) ? 'identical to the run with an idle' : 'DIFFERENT from the run with an idle'}`,
     "rigc builds a motion spec with no animations green, so the gate needs no idle; a run where only the gate measured is a PASS that says on the same line how much it did not look at — and the setup pose does not depend on the idle, so the source line must not move with it",
   );
+
+  const declaredNoIdleOut = join(noIdle.root, 'declared-loop-seam');
+  const declaredNoIdle = runCli(['check', '--rig', join(noIdle.root, 'rig'), '--out', declaredNoIdleOut,
+    '--loop-seam-bar', '255,0', '--loop-seam-cap', '2']);
+  const noIdleRefusal = failLine(declaredNoIdle.out, 'CHECK_IDLE_PRESENT');
+  say('CK1590_DECLARED_LOOP_SEAM_REQUIRES_AN_IDLE_WITH_POSITIVE_DURATION',
+    declaredNoIdle.status === 1 && noIdleRefusal?.includes('--loop-seam-bar requires an idle with positive duration') === true &&
+      !existsSync(join(declaredNoIdleOut, 'check.json')) && !existsSync(join(declaredNoIdleOut, 'idle_frames')),
+    `exit ${declaredNoIdle.status}; ${noIdleRefusal?.trim() ?? 'no idle refusal'}`,
+    'issue #1590: the same rig that completes an undeclared check with a loop skip refuses a declared seam bar before an idle take or a report.');
 
   const relocated = ['a', 'b'].map(home => {
     const cwd = join(dir, 'report-location', home);
@@ -24455,23 +24497,29 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
     const openPhys = join(dir, 'loop-phys');
     writeCheckRig(openPhys, { lastKey: IDLE_PEAK + 1 });
     withPhysics(openPhys);
-    const op = runCli(['check', '--rig', openPhys, '--out', join(dir, 'loop-phys-out')]);
-    const opf = readJsonFile(join(dir, 'loop-phys-out', 'check.json'));
+    const openPhysOut = join(dir, 'loop-phys-out');
+    const op = runCli(['check', '--rig', openPhys, '--out', openPhysOut, '--loop-seam-bar', '255,0', '--loop-seam-cap', '2']);
+    const opf = readJsonFile(join(openPhysOut, 'check.json'));
     const opl = failLine(op.out, 'CHECK_LOOP_CLOSES');
+    const openLoopLine = op.out.split('\n').find(line => line.startsWith('  loop: '));
+    const openSeamFaults = shippedLoopSeamFaults(openPhysOut, opf, 2);
     say(
       'CK511_A_KEYED_LOOP_THAT_DOES_NOT_CLOSE_STILL_FAILS_WITH_A_PHYSICS_CONSTRAINT_PRESENT',
       op.status === 1 &&
         opl !== null &&
         opl.includes(', its physics constraint(s) left out') &&
+        openLoopLine?.startsWith('  loop: FAIL') === true &&
         opf !== null &&
+        opf.PASS === false && onlyFailedCheckBar(opf, 'loop') && openSeamFaults.length === 0 &&
         typeof opf.loop_max_diff === 'number' &&
         opf.loop_max_diff > 0 &&
         lf !== null &&
         opf.loop_max_diff === lf.loop_max_diff &&
         op.out.includes(physLine) &&
-        !existsSync(join(dir, 'loop-phys-out', '_loop')),
-      `exit ${op.status}; ${opl?.trim() ?? 'no CHECK_LOOP_CLOSES line'}; check.json loop_max_diff ${String(opf?.loop_max_diff)} (CK03's rig, the same keys with no bob and no constraint: ${String(lf?.loop_max_diff)})`,
-      'leaving physics out of the comparison must not leave the keys out of it: the idle whose last key is not its first fails with the constraint present, by the same figure as the same keys without the bone and the constraint (bob at the root\'s origin moves the art nowhere), and the refusal says the constraint was left out',
+        !existsSync(join(openPhysOut, '_loop')),
+      `exit ${op.status}; ${opl?.trim() ?? 'no CHECK_LOOP_CLOSES line'}; keyed max ${String(opf?.loop_max_diff)} vs CK03 ${String(lf?.loop_max_diff)}; ` +
+        `${openLoopLine?.trim() ?? 'no loop line'}; shipped seam faults ${openSeamFaults.join(', ') || 'none'}`,
+      'The idle whose last key differs from its first fails the keyed loop by the same figure as CK03, with bob and its physics omitted. A met physics-on report leaves that failure in place.',
     );
 
     const closedPhys = join(dir, 'phys');
@@ -24489,6 +24537,8 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
         failLine(cp.out, 'CHECK_LOOP_CLOSES') === null &&
         cpf !== null &&
         cpf.PASS === true &&
+        !('loop_seam' in cpf) &&
+        !existsSync(join(dir, 'phys-out', 'idle_frames', 'idle', 'loop-seam.json')) &&
         !checkBarIs(cpf, 'loop', 'PASS') &&
         checkBarIs(cpf, 'loop', 'physics-omitted') &&
         checkStatuses(cpf as unknown as CheckFigures).loop === 'SKIP' &&
@@ -24512,6 +24562,62 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
       `exit ${cp.status}; ${cpLoopLine.trim()}; ${cp.out.split('\n').find((l) => l.startsWith('  loop physics: '))?.trim() ?? 'no loop physics line'}; check.json bar_outcomes.loop ${JSON.stringify(checkBarOutcomes(cpf).loop ?? null)}, skipped ${JSON.stringify(cpf?.skipped ?? null)}, loop_max_diff ${String(cpf?.loop_max_diff)}, loop_physics ${JSON.stringify(cpf?.loop_physics ?? null)}; the idle as rendered with the constraint (idle_frames/) f0000 vs its last frame: max |d| ${withSim ?? 'not read'}/255`,
       'issue #1590: the physics-off posed loop closes while the shipped physics-on idle_frames/ differ at the wrap; check must NOT report loop PASS, must name the omitted constraint, and must say physics-on frames were not measured while keeping top-level PASS true',
     );
+
+    const declaredOut = join(dir, 'declared-loop-seam');
+    const declaredArgs = ['check', '--rig', closedPhys, '--out', declaredOut];
+    const met = runCli([...declaredArgs, '--loop-seam-bar', '255,0', '--loop-seam-cap', '2']);
+    const metFile = join(declaredOut, 'check.json');
+    const metFigures = readJsonFile(metFile);
+    const metSeam = metFigures?.loop_seam;
+    const metFaults = shippedLoopSeamFaults(declaredOut, metFigures, 2);
+    const metSkipped = isDriveRecord(metFigures?.skipped) ? metFigures.skipped : {};
+    say('CK1590_DECLARED_LOOP_SEAM_PASSES_WITH_CORE_REPORT_BOUND_TO_SHIPPED_PNGS',
+      met.status === 0 && metFigures?.PASS === true && checkBarIs(metFigures, 'loop', 'PASS') &&
+        checkStatuses(metFigures as unknown as CheckFigures).loop === 'PASS' && !('loop' in metSkipped) &&
+        metFigures.loop_max_diff === 0 && JSON.stringify(metFigures.loop_physics) === JSON.stringify(cpf?.loop_physics) &&
+        metFaults.length === 0 && isDriveRecord(metSeam) && typeof metSeam.differingPixels === 'number' && metSeam.differingPixels > 0,
+      `exit ${met.status}; outcome ${JSON.stringify(checkBarOutcomes(metFigures).loop ?? null)}; endpoint faults ${metFaults.join(', ') || 'none'}; ` +
+        `keyed max ${String(metFigures?.loop_max_diff)}; Core series ${JSON.stringify(isDriveRecord(metSeam) ? metSeam.series : null)}`,
+      'issue #1590: a channel delta of 255 admits the first physics-on take despite differing pixels. The Core report binds both shipped PNGs and the keyed readings remain available.');
+
+    const strictFlags = ['--loop-seam-bar', '0,0', '--loop-seam-cap', '0'];
+    const directOut = join(dir, 'core-loop-seam-unmet');
+    const directSeam = spawnSync(suiteRigc(), ['render', '--candidate', join(dir, 'phys-out', 'build'), '--animation', 'idle',
+      '--fps', String(IDLE_FPS), '--max', String(IDLE_MAX_PX), '--geometry', '--out', directOut, ...strictFlags], { encoding: 'utf8' });
+    const coreLine = (directSeam.stderr ?? '').split('\n').find(line => line.startsWith('rigc: LOOP_SEAM_BAR_UNMET:'))?.slice('rigc: '.length);
+    const coreSeriesText = coreLine?.match(/, cap 0, series (\[.*\])$/)?.[1];
+    const coreSeries: unknown = coreSeriesText === undefined ? null : JSON.parse(coreSeriesText);
+    const warmupRows: unknown[] = Array.isArray(coreSeries) ? coreSeries : [];
+    const [cold] = warmupRows;
+    const hadReport = existsSync(metFile);
+    let unmetStderr = '';
+    const unmet = runCli([...declaredArgs, ...strictFlags], child => { unmetStderr = child.stderr; });
+    const unmetLine = unmetStderr.split('\n').map(line => line.trimStart()).find(line => line.startsWith('loop: FAIL — '));
+    const takeWritten = existsSync(join(declaredOut, 'idle_frames', 'frames.json')) ||
+      existsSync(join(declaredOut, 'idle_frames', 'idle', 'f0000.png'));
+    say('CK1590_UNMET_LOOP_SEAM_FORWARDS_COMPLETE_CORE_SERIES_AND_REMOVES_STALE_CHECK_JSON',
+      directSeam.status === 2 && !existsSync(directOut) && coreLine !== undefined && warmupRows.length === 1 &&
+        isDriveRecord(cold) && cold.warmup === 0 && typeof cold.pixelsAbove === 'number' && cold.pixelsAbove > 0 &&
+        unmet.status === 1 && unmetLine === `loop: FAIL — ${coreLine}` && hadReport && !existsSync(metFile) && !takeWritten,
+      `Core exit ${directSeam.status}; ${coreLine ?? 'no Core refusal line'}; check exit ${unmet.status}; ${unmetLine?.trim() ?? 'no stderr loop failure'}; ` +
+        `stale report before=${hadReport}, after=${existsSync(metFile)}; take written=${takeWritten}`,
+      'issue #1590: exact closure at cap zero refuses before a take. Reusing a successful output directory removes its check.json and forwards the full Core refusal line to stderr.');
+
+    const badLoopFlags = [
+      { flags: ['--loop-seam-bar', '0,0'], required: ['--loop-seam-bar', '--loop-seam-cap'] },
+      { flags: ['--loop-seam-cap', '0'], required: ['--loop-seam-bar', '--loop-seam-cap'] },
+      { flags: ['--loop-seam-bar', '256,0', '--loop-seam-cap', '0'], required: ['--loop-seam-bar', '256,0'] },
+      { flags: ['--loop-seam-bar', '0,-1', '--loop-seam-cap', '0'], required: ['--loop-seam-bar', '0,-1'] },
+      { flags: ['--loop-seam-bar', '0,0', '--loop-seam-cap', '1.5'], required: ['--loop-seam-cap', '1.5'] },
+    ].map(({ flags, required }, i) => {
+      const out = join(dir, `bad-loop-flags-${i}`);
+      const r = runCli(['check', '--rig', closedPhys, '--out', out, ...flags]);
+      const line = failLine(r.out, 'USAGE');
+      return { flags, status: r.status, line, ok: r.status === 2 && line !== null && required.every(text => line.includes(text)) && !existsSync(out) };
+    });
+    say('CK1590_MALFORMED_OR_UNPAIRED_LOOP_SEAM_FLAGS_REFUSE_BEFORE_OUTPUT',
+      badLoopFlags.every(row => row.ok), JSON.stringify(badLoopFlags),
+      'issue #1590: both flags are required. Channel deltas above 255, negative pixel counts and fractional caps cannot reach the gated build.');
 
     const zeroPhysCheckBytes = existsSync(join(out, 'check.json')) ? readFileSync(join(out, 'check.json'), 'utf8') : '';
     const pre1590ZeroPhysJson = fig === null ? '' : `${JSON.stringify({
@@ -50206,13 +50312,14 @@ function runSceneSuite(): number {
           modelText !== null && sceneClipLoopProblems(modelText, { take: sceneClip(4) }).length === 0 &&
           posed.length === 3 && scenePoseState(posed[0]) === scenePoseState(posed[2]),
         `idle ${separate?.motion.animations.idle.duration}; take ${(separate?.motion.animations.take as { duration?: number } | undefined)?.duration}; posed endpoints ${posed.length === 3 && scenePoseState(posed[0]) === scenePoseState(posed[2])}`, why);
-      const runRed = (key: string, animations: Record<string, unknown>, build?: string) => {
+      const runRed = (key: string, animations: Record<string, unknown>, build?: string, flags: string[] = []) => {
         const target = join(dir, `clip-red-${key}`);
-        const run = runCli(['compose', '--scene', scene(body(animations, build)), '--out', target]);
+        const run = runCli(['compose', '--scene', scene(body(animations, build)), '--out', target, ...flags]);
         return { ...run, empty: !existsSync(join(target, 'rig')) && !existsSync(join(target, SCENE_REPORT_FILE)) };
       };
       const nonclosing = sceneClip(2); nonclosing.tracks[0].keys[2].v = [1, 0];
-      const badIdle = runRed('idle-loop', { idle: nonclosing }), badTake = runRed('take-loop', { take: nonclosing });
+      const badIdle = runRed('idle-loop', { idle: nonclosing }, undefined, ['--loop-seam-bar', '255,0', '--loop-seam-cap', '2']);
+      const badTake = runRed('take-loop', { take: nonclosing });
       say('SC79_BOTH_SCENE_CLIP_FORMS_REFUSE_NONCLOSING_POSED_ENDPOINTS_BEFORE_EMIT',
         [badIdle, badTake].every(r => r.status === 1 && r.empty && r.out.includes('SCENE_ANIMATION_LOOP_CLOSES')) && green.status === 0,
         `idle ${cliDiagnosis(badIdle)}/${badIdle.empty}; take ${cliDiagnosis(badTake)}/${badTake.empty}; positive ${green.status}`, why);
@@ -50542,6 +50649,7 @@ function runSceneSuite(): number {
         say('SC1590_COMPOSED_PHYSICS_SCENE_SKIPS_LOOP_BAR_AND_NAMES_UNMEASURED_FRAMES',
           green.status === 0 &&
             greenCheck?.PASS === true &&
+            !('loop_seam' in greenCheck) &&
             !checkBarIs(greenCheck, 'loop', 'PASS') &&
             checkBarIs(greenCheck, 'loop', 'physics-omitted') &&
             greenCheck?.loop_max_diff === 0 &&
@@ -52162,19 +52270,25 @@ function runSceneSuite(): number {
       const composeShortHelp = runCli(['compose', '-h']);
       const composeBogus = runCli(['compose', '--bogus']);
       const composeHelpBogus = runCli(['compose', '--help', '--bogus']);
+      const unpairedOut = join(dir, 'compose-unpaired-loop-seam');
+      const unpaired = runCli(['compose', '--scene', sceneFile, '--out', unpairedOut, '--loop-seam-cap', '2']);
+      const unpairedLine = failLine(unpaired.out, 'USAGE');
       say(
         'SC118_COMPOSE_HELP_EXITS_ZERO_WITH_USAGE_AND_BOGUS_FLAG_STILL_EXITS_TWO',
         composeHelp.status === 0 &&
           composeShortHelp.status === 0 &&
           composeHelp.out === composeShortHelp.out &&
-          composeHelp.out.startsWith('  rig-parts compose --scene <scene.json> --out <dir> [--requirements <file.json>] [--accept <bar>[,<bar>...]] [--page-size <px>]\n') &&
+          composeHelp.out.startsWith('  rig-parts compose --scene <scene.json> --out <dir> [--requirements <file.json>] [--accept <bar>[,<bar>...]] [--page-size <px>]') &&
+          ['--loop-seam-bar <channel-delta,pixels>', '--loop-seam-cap <loops>'].every(flag => composeHelp.out.includes(flag)) &&
           composeHelp.out.trimEnd().endsWith('Exit 0 when the check is PASS and nothing was accepted, 1 otherwise.') &&
           composeBogus.status === 2 &&
-          composeBogus.out.includes('FAIL  USAGE: compose does not take "--bogus"; it takes --scene, --out, --requirements, --accept, --page-size, --help (see rig-parts guide USAGE)') &&
+          composeBogus.out.includes('FAIL  USAGE: compose does not take "--bogus"; it takes --scene, --out, --requirements, --accept, --page-size, --loop-seam-bar, --loop-seam-cap, --help (see rig-parts guide USAGE)') &&
           composeHelpBogus.status === 2 &&
-          composeHelpBogus.out.includes('FAIL  USAGE: compose does not take "--bogus"'),
-        `--help exit ${composeHelp.status} (${composeHelp.out.split('\n').length} lines); -h exit ${composeShortHelp.status} (equal=${composeHelp.out === composeShortHelp.out}); --bogus exit ${composeBogus.status} "${composeBogus.out.split('\n')[0]?.trim() ?? ''}"`,
-        'issue #1350 item 7: compose --help and -h exit 0 and print compose usage; an unknown flag still exits 2 as a usage error',
+          composeHelpBogus.out.includes('FAIL  USAGE: compose does not take "--bogus"') &&
+          unpaired.status === 2 && unpairedLine?.includes('--loop-seam-bar and --loop-seam-cap must be given together') === true && !existsSync(unpairedOut),
+        `--help exit ${composeHelp.status} (${composeHelp.out.split('\n').length} lines); -h exit ${composeShortHelp.status} (equal=${composeHelp.out === composeShortHelp.out}); ` +
+          `--bogus exit ${composeBogus.status}; unpaired exit ${unpaired.status} ${unpairedLine?.trim() ?? 'no usage line'}`,
+        'Compose help gives both flags and keeps the #1350 help contract. An unknown flag or an unpaired loop seam cap is a usage error.',
       );
 
       const headerOf = (sceneBody: Record<string, unknown>, tag: string): string => {
@@ -52378,7 +52492,16 @@ function runSceneSuite(): number {
         });
         const physComp = compose(physBody);
         const physOut = join(dir, 'phys-composed');
-        const physCli = runCli(['compose', '--scene', scene(physBody), '--out', physOut]);
+        const physCli = runCli(['compose', '--scene', scene(physBody), '--out', physOut, '--loop-seam-bar', '255,0', '--loop-seam-cap', '2']);
+        const physCheckDir = join(physOut, 'check');
+        const physCheck = readJsonFile(join(physCheckDir, 'check.json'));
+        const physSeamFaults = shippedLoopSeamFaults(physCheckDir, physCheck, 2);
+        const physSkipped = isDriveRecord(physCheck?.skipped) ? physCheck.skipped : {};
+        say('SC1590_DECLARED_COMPOSE_LOOP_SEAM_IS_BOUND_TO_THE_SHIPPED_IDLE',
+          physCli.status === 0 && physCheck?.PASS === true && checkBarIs(physCheck, 'loop', 'PASS') && !('loop' in physSkipped) &&
+            physCheck.loop_max_diff === 0 && Array.isArray(physCheck.loop_physics) && physCheck.loop_physics.length > 0 && physSeamFaults.length === 0,
+          `compose exit ${physCli.status}; loop ${JSON.stringify(checkBarOutcomes(physCheck).loop ?? null)}; shipped seam faults ${physSeamFaults.join(', ') || 'none'}`,
+          'issue #1590: compose forwards both flags to the shipped idle render and retains the keyed loop measurements alongside the Core report.');
         const physUnpref = physComp.ok === null ? ['not-composed'] : unprefixedNames(physComp.ok.rig, physComp.ok.motion, ['a', 'b'], true);
         const aWind = (physComp.ok?.motion.animations as Record<string, unknown> | undefined)?.['a:wind'];
         const bGust = (physComp.ok?.motion.animations as Record<string, unknown> | undefined)?.['b:gust'];

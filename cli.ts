@@ -30,7 +30,7 @@ import { DEFAULT_PROJECT_RULE, DEFAULT_SEAM_RULE, headGarmentOverlaps, headGarme
 import { proposeNeck } from './tools/neck-propose.ts';
 import { parseAltArg } from './tools/alternate-cli.ts';
 import { type AlternateCliInput, assembleStage, build, BUILD_OWNS, BUILD_OWNS_FILES, checkStage, checkWrote, emitFillMasksStage, ERROR_MAP_FILE, loopStage, readRuns, readSource, rigStage, suppliedCheckFlag } from './src/build.ts';
-import { ACCEPTABLE_BARS, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, findRigc, PACK_PAGE_SIZE, PACK_SHAPES, rigcRunnerAt, type PackShape, PAGE_EDGES, type PageEdges, parsePageSize, PARTS_HOME_SENTENCE, RIGC_GEOMETRY_VERSION, rigcRanClause, type RigcRunner, NO_PARTS_SENTENCE, SEAM_MEAN_BAR, SOURCE_SENTENCE, SEAM_PX_BAR, SEAM_PX_LEVEL, SPINEBOY_YARDSTICK, TEXTURE_STRETCH_CEILING } from './src/check.ts';
+import { ACCEPTABLE_BARS, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, findRigc, LOOP_SEAM_BAR_UNMET, type LoopSeamRequest, PACK_PAGE_SIZE, PACK_SHAPES, rigcRunnerAt, type PackShape, PAGE_EDGES, type PageEdges, parsePageSize, PARTS_HOME_SENTENCE, RIGC_GEOMETRY_VERSION, rigcRanClause, type RigcRunner, NO_PARTS_SENTENCE, SEAM_MEAN_BAR, SOURCE_SENTENCE, SEAM_PX_BAR, SEAM_PX_LEVEL, SPINEBOY_YARDSTICK, TEXTURE_STRETCH_CEILING } from './src/check.ts';
 import { ComfyClient, resolveHost, runBackground, runMatte, runPainting, runSeeThrough } from './src/comfy/index.ts';
 import { coreCfg, DEFAULT_GROW_PX, runForeground } from './src/plate.ts';
 import { type CharacterConfig, loadClothConfig, loadConfig, loadEarlyConfig, loadPaintConfig } from './src/config.ts';
@@ -645,7 +645,12 @@ usage:
                     [--requirements <file.json>] [--seam-pairs] [--keep-stills]
                     [--set <name> | --all-sets] [--environment <schedule.json>]
                     [--wind-band <spec.json>] [--json]
+                    [--loop-seam-bar <channel-delta,pixels> --loop-seam-cap <loops>]
       --json prints the completed check.json object only, with unchanged exit codes.
+      The loop seam flags together require a positive idle period. Core selects
+      the first whole-loop warm-up from 0 through the cap whose idle wrap meets
+      the RGBA pixel bar at the shipped render's viewport. Incompatible with
+      --environment. The keyed endpoint check still applies.
       check-run.json (rig-run/2, STABILITY) records a completed run: the package,
       the times, every file written with its sha256, and argv, the command and
       the options as given, each path relative to --out and --out as ".": these
@@ -1040,6 +1045,8 @@ usage:
       names the flag on the command that ran.
 
   rig-parts compose --scene <scene.json> --out <dir> [--requirements <file.json>] [--accept <bar>[,<bar>...]] [--page-size <px>]
+                    [--loop-seam-bar <channel-delta,pixels> --loop-seam-cap <loops>]
+      The loop seam flags measure the composed idle in check/, as for check.
       Bind several finished characters into one rig. The scene file (spec
       "${SCENE_SPEC}") states the canvas {width, height}, an optional plate
       {image, provenance: ${PROVENANCES.join(' | ')}, note?}, the characters
@@ -1142,7 +1149,10 @@ ${LATER.length === 0 ? '' : `not implemented in this version (each exits 2):\n${
 
 function printRefusal(err: unknown): number {
   if (err instanceof PartsError) {
-    for (const p of err.problems) console.log(failLine(p));
+    for (const p of err.problems) {
+      if (p.code === LOOP_SEAM_BAR_UNMET) console.error(p.detail);
+      else console.log(failLine(p));
+    }
     console.log(`refused: ${err.problems.length} problem(s)`);
     return EXIT_REFUSED;
   }
@@ -1283,7 +1293,7 @@ const TAKES = {
   rig: { valued: ['--config', '--parts', '--out', '--idle-keys', '--page-edges', '--pack-shape', '--page-size'], switches: ['--help'] },
   propose: { valued: ['--parts', '--source', '--out', '--from-config', '--compare', '--full', '--head', '--canvas', '--keypoints', '--person', '--wrist-snap', '--grid-rule', '--cloth', '--write-config', '--from', '--bust-landmarks', '--no-bust'], switches: ['--head-box', '--no-back-hair', '--only-missing', '--help'] },
   compare: { valued: ['--left', '--right', '--map'], switches: ['--help'] },
-  check: { valued: ['--rig', '--out', '--parts', '--source', '--page-edges', '--pack-shape', '--page-size', '--requirements', '--set', '--environment', '--wind-band'], switches: ['--seam-pairs', '--keep-stills', '--all-sets', '--no-extremes', '--json', '--help'] },
+  check: { valued: ['--rig', '--out', '--parts', '--source', '--page-edges', '--pack-shape', '--page-size', '--requirements', '--set', '--environment', '--wind-band', '--loop-seam-bar', '--loop-seam-cap'], switches: ['--seam-pairs', '--keep-stills', '--all-sets', '--no-extremes', '--json', '--help'] },
   loop: { valued: ['--frames', '--out'], switches: ['--palette', '--help'] },
   assemble: { valued: ['--source', '--full', '--head', '--config', '--out', '--emit-fill-masks', '--seam', '--project', '--alt', '--write-config', '--requirements'], switches: ['--propose-plan', '--help'] },
   'comfy seethrough': { valued: ['--image', '--out', '--resolution', '--steps', '--seed', '--prefix', '--host', '--wait', '--timeout', '--poll', '--config', '--depth-run'], switches: ['--offload', '--no-offload', '--lama', '--nf4', '--help'] },
@@ -1292,7 +1302,7 @@ const TAKES = {
   'comfy plate': { valued: ['--mode', '--painting', '--mask-from', '--occluder', '--out', '--graph', '--model', '--checkpoint-sha256', '--seed', '--grow', '--steps', '--cfg', '--prompt', '--negative', '--host', '--wait', '--timeout', '--poll'], switches: ['--holes', '--help'] },
   inputs: { valued: ['--source', '--config', '--out'], switches: ['--help'] },
   build: { valued: ['--config', '--source', '--full', '--head', '--out', '--seam', '--project', '--page-edges', '--pack-shape', '--page-size', '--requirements', '--idle-keys', '--lead-in', '--alt', '--set', '--environment', '--wind-band'], switches: ['--loop', '--seam-pairs', '--keep-stills', '--all-sets', '--no-extremes', '--help'] },
-  compose: { valued: ['--scene', '--out', '--requirements', '--accept', '--page-size'], switches: ['--help'] },
+  compose: { valued: ['--scene', '--out', '--requirements', '--accept', '--page-size', '--loop-seam-bar', '--loop-seam-cap'], switches: ['--help'] },
   'mesh-draft': { valued: ['--config', '--parts', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape', '--page-size'], switches: ['--more-triangles', '--help'] },
   'mesh-stats': { valued: ['--config', '--parts'], switches: ['--help'] },
   remesh: { valued: ['--rig', '--config', '--parts', '--part', '--mesh', '--delta', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape', '--page-size', '--input-check'], switches: ['--record-input-check', '--help'] },
@@ -1636,6 +1646,26 @@ function flags(args: string[], command: Command, required: readonly string[]): M
   return got;
 }
 
+function parseLoopSeamFlags(values: ReadonlyMap<string, string>): LoopSeamRequest | string | undefined {
+  const bar = values.get('--loop-seam-bar');
+  const capText = values.get('--loop-seam-cap');
+  if (bar === undefined && capText === undefined) return undefined;
+  if (bar === undefined || capText === undefined) return '--loop-seam-bar and --loop-seam-cap must be given together';
+
+  const match = /^(\d+),(\d+)$/.exec(bar);
+  const channelDelta = Number(match?.[1]);
+  const pixelsAbove = Number(match?.[2]);
+  if (!Number.isInteger(channelDelta) || channelDelta > 255 || !Number.isSafeInteger(pixelsAbove)) {
+    return `--loop-seam-bar ${JSON.stringify(bar)}: expected <channel-delta,pixels>, with delta in 0..255 and a nonnegative safe integer pixel count`;
+  }
+  const cap = Number(capText);
+  if (!/^\d+$/.test(capText) || !Number.isSafeInteger(cap)) {
+    return `--loop-seam-cap ${JSON.stringify(capText)}: expected a nonnegative safe integer number of loops`;
+  }
+  if (values.has('--environment')) return '--loop-seam-bar takes no --environment';
+  return { channelDelta, pixelsAbove, cap };
+}
+
 function cmdCheckParts(args: string[]): number {
   const json = args.filter(arg => arg === '--json').length;
   if (json > 1) return usage('--json is given twice');
@@ -1672,6 +1702,8 @@ function cmdCheck(args: string[]): number {
   );
   if (typeof f === 'string') return usage(f);
   if (allSets === 1 && f.has('--set')) return usage('--set and --all-sets are two modes; give one');
+  const loopSeam = parseLoopSeamFlags(f);
+  if (typeof loopSeam === 'string') return usage(loopSeam);
   const rig = f.get('--rig') as string;
   const out = f.get('--out') as string;
   let fixedClock: string | undefined;
@@ -1687,7 +1719,13 @@ function cmdCheck(args: string[]): number {
     const bin = findRigc(import.meta.dir, process.env.PATH ?? '');
     const startedAt = fixedClock ?? new Date().toISOString();
     const r = checkStage(
-      { rig, parts: f.get('--parts'), source: f.get('--source'), out, pageEdges: edges, packShape: shape, ...(size === undefined ? {} : { pageSize: size }), requirements: f.get('--requirements'), seamPairs: seamPairs === 1, keepStills: keepStills === 1, noExtremes: noExtremes === 1, ...(f.has('--set') ? { set: f.get('--set') as string } : {}), allSets: allSets === 1, ...(f.has('--environment') ? { environment: f.get('--environment') as string } : {}), ...(f.has('--wind-band') ? { windBand: f.get('--wind-band') as string } : {}) },
+      {
+        rig, parts: f.get('--parts'), source: f.get('--source'), out, pageEdges: edges, packShape: shape,
+        ...(size === undefined ? {} : { pageSize: size }), requirements: f.get('--requirements'), seamPairs: seamPairs === 1,
+        keepStills: keepStills === 1, noExtremes: noExtremes === 1, ...(f.has('--set') ? { set: f.get('--set') as string } : {}),
+        allSets: allSets === 1, ...(f.has('--environment') ? { environment: f.get('--environment') as string } : {}),
+        ...(f.has('--wind-band') ? { windBand: f.get('--wind-band') as string } : {}), ...(loopSeam === undefined ? {} : { loopSeam }),
+      },
       rigcRunner(bin),
       bin,
       json === 1 ? () => {} : console.log,
@@ -2568,6 +2606,8 @@ function cmdBuild(args: string[]): number {
 function cmdCompose(args: string[]): number {
   const f = flags(args, 'compose', ['--scene', '--out']);
   if (typeof f === 'string') return usage(f);
+  const loopSeam = parseLoopSeamFlags(f);
+  if (typeof loopSeam === 'string') return usage(loopSeam);
   const out = f.get('--out') as string;
   clearComposeRun(out);
   let size: number | undefined;
@@ -2587,7 +2627,11 @@ function cmdCompose(args: string[]): number {
     const req = f.get('--requirements');
     const accept = f.get('--accept');
     const r = composeStage(
-      { scene: f.get('--scene') as string, out, ...(size === undefined ? {} : { pageSize: size }), ...(req === undefined ? {} : { requirements: req }), ...(accept === undefined ? {} : { accept: accept.split(',') }) },
+      {
+        scene: f.get('--scene') as string, out, ...(size === undefined ? {} : { pageSize: size }),
+        ...(req === undefined ? {} : { requirements: req }), ...(accept === undefined ? {} : { accept: accept.split(',') }),
+        ...(loopSeam === undefined ? {} : { loopSeam }),
+      },
       { rig: rigcRunner(bin), check: rigcRunner(bin), checkBin: bin, scratch: join(scratch, 'gate') },
       console.log,
     );

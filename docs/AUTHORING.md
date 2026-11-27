@@ -3428,7 +3428,7 @@ loop: SKIP — physics-on frames not measured (2 physics constraint(s) omitted, 
 
 (`8 of 9` until issue #320, whose fold bar reads `hop`; issue #1590 records `loop` as `SKIP` rather than `PASS` when physics constraints were omitted, because the shipped physics-on frames were not measured.)
 
-The `loop:` and `loop physics:` lines say what was and was not read (§7, *loop*): rig-c's
+Without a declared loop seam bar, the `loop:` and `loop physics:` lines describe the keyed reading (§7, *loop*). Rig-c's
 render resets physics at frame 0 and steps it, so the idle's last frame differs from its first
 by whatever the spring is still doing; the physics-off figure is read off the same rig with every physics
 constraint left out, the constraints left out are listed (`check.json`'s `loop_physics`, PR #184), and when the physics-off figure is 0 the `loop` bar reports `SKIP` (`reason: "physics-omitted"`, `skipped.loop`) rather than claiming the shipped physics-on frames closed (issue #1590). It is not a measure of the jiggle.
@@ -4188,7 +4188,7 @@ all move by physics instead of keyframed sine chains:
   of the loop's frames, reported, not judged`. Because `physics` is left out of that
   comparison, the shipped physics-on frames are not measured there: an open keyframed body
   (`loop_max_diff > 0`) still fails `CHECK_LOOP_CLOSES`, while a closed physics-off idle
-  (`loop_max_diff === 0`) reports `loop: SKIP — physics-on frames not measured …` (`bar_outcomes.loop`
+  (`loop_max_diff === 0`) reports `loop: SKIP — physics-on frames not measured …` without a declared loop seam bar (`bar_outcomes.loop`
   `SKIP` with `reason: "physics-omitted"` and `skipped.loop`, leaving top-level `PASS` true when all
   measured bars pass, issue #1590). When `motion.duration` is
   a whole number of `1/12` s ticks (`CHECK_LOOP_LAST_FRAME_AT_DURATION`, within
@@ -6973,7 +6973,7 @@ outside the consumed inputs.
 | --- | --- | --- |
 | <a id="CHECK_RIGC_PRESENT"></a>`CHECK_RIGC_PRESENT` | no `rigc` binary found in ancestor `node_modules/.bin` directories or on `PATH`. This also applies when the in-process remesh API needs to build a new revision | `bun install` |
 | <a id="CHECK_RIGC_PACKAGE"></a>`CHECK_RIGC_PACKAGE` | `node_modules/.bin/rigc` is missing under the package root named: this lookup (the selftest's, issue #337) takes this package's own rigc and no other — no directory above, no `PATH` | `bun install` in that root |
-| <a id="CHECK_INPUT_PRESENT"></a><a id="CHECK_INPUT_IS_JSON"></a><a id="CHECK_PART_PNG_PRESENT"></a><a id="CHECK_PART_PNG_MATCHES_BOX"></a><a id="CHECK_PART_SLOT_PRESENT"></a><a id="CHECK_RIG_STAGE_PRESENT"></a><a id="CHECK_RIG_STAGE_IS_THE_CANVAS"></a><a id="CHECK_RIG_ROOT_BONE"></a><a id="CHECK_IDLE_PRESENT"></a>`CHECK_INPUT_PRESENT`, `CHECK_INPUT_IS_JSON`, `CHECK_PART_PNG_PRESENT`, `CHECK_PART_PNG_MATCHES_BOX`, `CHECK_PART_SLOT_PRESENT`, `CHECK_RIG_STAGE_PRESENT`, `CHECK_RIG_STAGE_IS_THE_CANVAS`, `CHECK_RIG_ROOT_BONE`, `CHECK_IDLE_PRESENT` | the rig directory is incomplete or disagrees with `parts.json` (`CHECK_PART_SLOT_PRESENT`: a part with no slot of its own name, which the judgement lines render it by; `CHECK_INPUT_PRESENT` on `--set` / `--all-sets`: no `parts.json`, no `alternates`, or the named set is not in `alternates`). `motion.json` is required even with no animation in it, because `rigc build` takes `--motion` (a spec with `"animations": {}` builds green); `CHECK_IDLE_PRESENT` is an `idle` that is there with no positive `duration` — an absent `idle` is measured around (§7). `CHECK_INPUT_PRESENT` on `…/parts.json`: `--parts` named a directory without `parts.json` — most often `parts/` itself — or, without `--parts`, the rig directory has none while the directory above it does (build's layout, `<out>/rig` under `<out>/parts.json`). The detail says it: "--parts names the directory holding parts.json and parts/, not parts/ itself (after build, that is build's --out, whose rig is <out>/rig); without --parts it is --rig", and names the parent when the parent holds `parts.json`. With neither (no `--parts`, and no `parts.json` beside `rig.json` or above it), the rig is measured without parts and nothing is refused (§7) | re-run rig (`build` does both); for `…/parts.json`, `--parts` — the directory above `parts/` |
+| <a id="CHECK_INPUT_PRESENT"></a><a id="CHECK_INPUT_IS_JSON"></a><a id="CHECK_PART_PNG_PRESENT"></a><a id="CHECK_PART_PNG_MATCHES_BOX"></a><a id="CHECK_PART_SLOT_PRESENT"></a><a id="CHECK_RIG_STAGE_PRESENT"></a><a id="CHECK_RIG_STAGE_IS_THE_CANVAS"></a><a id="CHECK_RIG_ROOT_BONE"></a><a id="CHECK_IDLE_PRESENT"></a>`CHECK_INPUT_PRESENT`, `CHECK_INPUT_IS_JSON`, `CHECK_PART_PNG_PRESENT`, `CHECK_PART_PNG_MATCHES_BOX`, `CHECK_PART_SLOT_PRESENT`, `CHECK_RIG_STAGE_PRESENT`, `CHECK_RIG_STAGE_IS_THE_CANVAS`, `CHECK_RIG_ROOT_BONE`, `CHECK_IDLE_PRESENT` | the rig directory is incomplete or disagrees with `parts.json` (`CHECK_PART_SLOT_PRESENT`: a part with no slot of its own name, which the judgement lines render it by; `CHECK_INPUT_PRESENT` on `--set` / `--all-sets`: no `parts.json`, no `alternates`, or the named set is not in `alternates`). `motion.json` is required even with no animation in it, because `rigc build` takes `--motion` (a spec with `"animations": {}` builds green); `CHECK_IDLE_PRESENT` names an `idle` with no positive `duration`, or a missing `idle` when the loop seam bar is declared. Without that bar, an absent `idle` is measured around (§7). `CHECK_INPUT_PRESENT` on `…/parts.json`: `--parts` named a directory without `parts.json` — most often `parts/` itself — or, without `--parts`, the rig directory has none while the directory above it does (build's layout, `<out>/rig` under `<out>/parts.json`). The detail says it: "--parts names the directory holding parts.json and parts/, not parts/ itself (after build, that is build's --out, whose rig is <out>/rig); without --parts it is --rig", and names the parent when the parent holds `parts.json`. With neither (no `--parts`, and no `parts.json` beside `rig.json` or above it), the rig is measured without parts and nothing is refused (§7) | re-run rig (`build` does both); for `…/parts.json`, `--parts` — the directory above `parts/` |
 | <a id="CHECK_SOURCE_SIZE"></a>`CHECK_SOURCE_SIZE` | the painting `--source` names is not this rig's: no single `rig_scale` takes its width and height to the stage's (assemble makes the canvas `trunc(w × rig_scale)` x `trunc(h × rig_scale)`), or, with `parts.json` read, its `scale_rig_per_source` does not; or the stage is not whole pixels. Refused before anything is built | the painting the rig was made from — the stage's own size, or the painting `assemble` was given |
 | <a id="CHECK_SOURCE_PNG"></a>`CHECK_SOURCE_PNG` | `--source` names a file that does not read as a PNG | a PNG |
 | <a id="CHECK_SETUP_MATCHES_PAINTING"></a>`CHECK_SETUP_MATCHES_PAINTING` | region, slot, failing-pixel box, slot pixelcount, complete region pixelcount and declared limit | compare the source painting beside the actual setup; follow [Source before scissors](#source-before-scissors), then rerun with the same authored limit |
@@ -6997,6 +6997,7 @@ outside the consumed inputs.
 | <a id="CHECK_RIGC_VERSION"></a>`CHECK_RIGC_VERSION` | `rigc --version` is below 1.4.0, or prints no version: its `render` has no `--geometry`, which `TEXTURE_STRETCH` reads. Refused before anything is built | `bun install` (this package depends on rig-c ^2.20.4), or put a newer `rigc` first on `PATH` |
 | <a id="CHECK_RIGC_ENTRY"></a><a id="CHECK_RIGC_ENTRY_READS"></a>`CHECK_RIGC_ENTRY`, `CHECK_RIGC_ENTRY_READS` | `rigc --version` names no entry (a rigc below 2.0.0), or names one in neither launcher form (`entry: cli.ts — @esotericsoftware/spine-core <v> present`, `entry: cli_core.ts — @esotericsoftware/spine-core absent — …`); `check.json`'s `rigc_entry` records the one that gated the build | `bun install` |
 | <a id="CHECK_RIGC_GREEN"></a>`CHECK_RIGC_GREEN` | a rigc step failed; its line is quoted | as `RIG_RIGC_GREEN` |
+| <a id="LOOP_SEAM_BAR_UNMET"></a>`LOOP_SEAM_BAR_UNMET` | Core tried every allowed warm-up take without meeting the declared RGBA loop seam bar. Its full refusal line gives the bar, cap and measured series. | Read the series and adjust the idle, physics or declared seam bar. |
 | <a id="CHECK_LOOP_LAST_FRAME_AT_DURATION"></a>`CHECK_LOOP_LAST_FRAME_AT_DURATION` | the idle's last frame does not sit at `duration` | `motion.duration` — a whole number of 1/12 s |
 | <a id="CHECK_LOOP_CLOSES"></a>`CHECK_LOOP_CLOSES` | frame 0 and the frame at `duration` differ (max and first pixel quoted); with a physics constraint, the frames of the rig with every physics constraint left out, and the object says so (§7, *loop*) | a track whose last key is not its first |
 | <a id="CHECK_SEAM_WITHIN_BAR"></a>`CHECK_SEAM_WITHIN_BAR` | the setup pose (or, under `--set <name>` / `--all-sets`, an alternate set's setup pose posed at its `drawn` bone angles with its `<set>_*` attachments and `hides` applied, issue #465) does not reproduce the flat stack of parts (`recomposite_rig.png`, or `recomposite_rig_<set>.png`) | read the `seam pair` lines and `check/seam/` (`check/seam_<set>/`) pictures (§7; magenta = a counted pixel, cyan = the box round them): the pair, its boxes and the pixels counted. Usually a region or mesh placed off its part; compare with `recomposite_rig.png` (`recomposite_rig_<set>.png`). A pair of one layer cut in two with `differing_copies_px` identifies differing copies near the cut; follow [Source before scissors](#source-before-scissors) before revisiting a structural separation. Widening `overlap` is not a source remedy |
@@ -7451,15 +7452,15 @@ assemble*, at the end of this section):
   lacks the last term, so the two agree only at s = 1). `check --keep-stills`
   (and `build --keep-stills`, which forwards it) leaves that frame — rigc's render directory, its `frames.json` (viewport,
   background) beside the PNG — under `check/setup_still/`;
-- **loop**: idle frame 0 against the frame at `t = duration`: max |d| exactly 0 on a rig
+- **loop**: the keyed check compares idle frame 0 against the frame at `t = duration`, with max |d| exactly 0 on a rig
   with no physics constraint. A rig that declares a physics constraint — a `rig.json`
   `constraints` entry of `type` `"physics"`, or an entry of `motion.json`'s `physics`
   table — has its physics-off figure (`loop_max_diff`) read from the same rig and motion with every
   physics constraint left out (with a skin's `physics` list and any track keying one, issue #183), built and
   rendered as the idle is, because rig-c's render resets physics at frame 0 and steps it, so the shipped
   physics-on frames under `idle_frames/` can differ at the wrap. When `loop_max_diff` is above 0, the keyed
-  idle itself does not close and the bar is `FAIL` (`CHECK_LOOP_CLOSES`). When `loop_max_diff` is 0 with
-  physics constraints omitted, the shipped physics-on frames were **not** measured, so the `loop` bar is
+  idle itself does not close (`CHECK_LOOP_CLOSES`). Without a declared loop seam bar, `loop_max_diff` above 0 is
+  `FAIL`, and `loop_max_diff` of 0 with physics constraints omitted leaves the `loop` bar
   `SKIP` (`bar_outcomes.loop` `{"status": "SKIP", "reason": "physics-omitted"}` and `skipped.loop`
   `"physics-on idle frames not measured; N physics constraint(s) omitted"`, leaving top-level `PASS` true
   when the measured bars pass; issue #1590). The console prints
@@ -7472,6 +7473,34 @@ assemble*, at the end of this section):
   any timeline, the keyed build omits it and the `loop physics:` line names it
   (issue #1461). Bone tracks and other timelines, including events and draw order,
   stay in the keyed build.
+
+  **Physics-on idle closure (opt-in, issue #1590).** Pass
+  `--loop-seam-bar <channel-delta,pixels> --loop-seam-cap <loops>` together to
+  `check` or `compose`. Use decimal whole numbers: a channel delta from 0 to 255,
+  a nonnegative safe integer pixel limit, and a nonnegative safe integer warm-up
+  cap. The rig must have an idle of positive duration. Core's warm-up search is
+  incompatible with `check --environment`.
+
+  Core compares the first frame and an exact-period wrap sample in the shipped
+  idle render's viewport. A pixel counts when its largest absolute RGBA channel
+  difference exceeds the declared delta. Core ships the first take whose count
+  is at most the limit, trying warm-up counts from 0 through the cap. Core tries
+  only 0 when the rig has no physics. The selected take is under `idle_frames/`,
+  with its usual frame grid and a separate `loop-wrap.png` for the wrap sample.
+  The `loop:` line gives the selected warm-up, the cap, the count and bar,
+  the differing pixel count and the maximum RGBA delta. It prints `PASS` when
+  the physics-on bar is met and the keyed idle closes. If the physics-on bar
+  is met and the keyed idle is open, it prints `FAIL` and gives the keyed
+  maximum RGB delta and the required value of 0.
+
+  `check.json` carries Core's `rigc-loop-seam/1` `met` object as `loop_seam` after
+  verifying its render identity, declared bar and endpoint PNG hashes against
+  the shipped take. `bar_outcomes.loop` is `PASS` when the seam meets its bar
+  and the keyed check closes. A met seam omits `skipped.loop`. `loop_max_diff`,
+  `loop_physics` where applicable, and `CHECK_LOOP_CLOSES` still report and enforce
+  keyed closure. When Core cannot meet the declared bar, Parts relays the full
+  `LOOP_SEAM_BAR_UNMET` line and writes no `check.json`, including on a rerun over
+  a previous check.
 
 On the examples: `reference-sample` 23/23, seam 0.207 with 0 pixels over 40, loop SKIP (2 physics constraints omitted, physics-off `loop_max_diff` 0);
 `reference-demo` (default rule, 0 physics constraints) 23/23, seam 0.326 with 2 pixels over 40, loop PASS (0).
@@ -7973,7 +8002,7 @@ it reads is there, and says SKIP with the reason when it is not:
 | bar or line | reads | SKIP when |
 | --- | --- | --- |
 | the gate | the rig spec | never — it always runs, on whatever the spec declares |
-| loop | the `idle` | no `idle` in `motion.json` (`check.json`: `loop_max_diff` null, `skipped.loop` the reason), or the rig declares physics constraints and the physics-off idle closes (`bar_outcomes.loop` `SKIP` with `reason: "physics-omitted"`, `skipped.loop` stating that physics-on idle frames were not measured and naming the omitted count, `loop_max_diff` keeping the physics-off figure; issue #1590) |
+| loop | the `idle` | without a declared loop seam bar: no `idle` in `motion.json` (`check.json`: `loop_max_diff` null, `skipped.loop` the reason), or the rig declares physics constraints and the physics-off idle closes (`bar_outcomes.loop` `SKIP` with `reason: "physics-omitted"`, `skipped.loop` stating that physics-on idle frames were not measured and naming the omitted count, `loop_max_diff` keeping the physics-off figure; issue #1590) |
 | seam | `parts.json` and `parts/` | no `parts.json` (`seam_*` null, `skipped.seam` the reason) |
 | `BREATH_VISIBLE`, `BLINK_NO_HOLE`, `TIP_OVER_ROOT`, `STILL_REGIONS_DARK` | `parts.json`'s tags and the idle | either missing, or as in the table above |
 | `CHAIN_LAG`, `TEXTURE_STRETCH` | the idle (and `rig.json`) | no `idle`, or as in the table above |
@@ -7995,10 +8024,12 @@ rig directory, copied away from its `parts.json`, reads `5 of 10`: the gate, the
 
 ### Composing several characters (`compose`, issue #74)
 
-`rig-parts compose --scene <scene.json> --out <dir> [--requirements <file.json>] [--accept <bar>[,<bar>…]] [--page-size <px>]`
+`rig-parts compose --scene <scene.json> --out <dir> [--requirements <file.json>] [--accept <bar>[,<bar>…]] [--page-size <px>] [--loop-seam-bar <channel-delta,pixels> --loop-seam-cap <loops>]`
 binds characters this package already built into one rig. Each character runs the
 single-character path (§4, steps 0–9) on its own, already isolated input to a green
 `build` first; compose reads what that build wrote and changes nothing in it.
+The paired loop seam flags apply to the composed idle under `<out>/check/`, at
+the same viewport compose uses for the shipped frames.
 
 ```
 { "spec": "spine-parts-scene/1",

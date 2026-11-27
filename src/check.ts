@@ -229,6 +229,42 @@ export const IDLE_MAX_PX = 640;
 const STILL_DURATION = 0.1;
 const STILL_FPS = 10;
 
+/** The caller's RGBA seam bar and maximum number of warm-up loops. */
+export type LoopSeamRequest = { channelDelta: number; pixelsAbove: number; cap: number };
+
+const LOOP_SEAM_SPEC = 'rigc-loop-seam/1';
+export const LOOP_SEAM_BAR_UNMET = 'LOOP_SEAM_BAR_UNMET';
+const LOOP_SEAM_FILE = 'loop-seam.json';
+const LOOP_WRAP_FILE = 'loop-wrap.png';
+
+interface LoopSeamPixels {
+  differingPixels: number;
+  maxChannelDelta: number;
+  pixelsAbove: number;
+}
+
+interface LoopSeamEndpoint {
+  time: number;
+  path: string;
+  sha256: string;
+}
+
+/** Core's met report for the shipped idle take, preserved as read. */
+export interface LoopSeamReport extends LoopSeamPixels {
+  spec: typeof LOOP_SEAM_SPEC;
+  animation: 'idle';
+  period: number;
+  fps: number;
+  viewport: Viewport;
+  status: 'met';
+  warmup: number;
+  bar: Pick<LoopSeamRequest, 'channelDelta' | 'pixelsAbove'>;
+  cap: number;
+  first: LoopSeamEndpoint & { time: 0 };
+  wrap: LoopSeamEndpoint & { encoding: 'png' };
+  series: Array<LoopSeamPixels & { warmup: number }>;
+}
+
 /**
  * The judgement lines' bars (issue #11). Each is derived from the two public
  * examples by one stated rule, and AUTHORING §7 quotes what each example
@@ -1190,6 +1226,91 @@ export function readFrameSet(path: string): FrameSet {
     viewport,
     frames,
   };
+}
+
+function readLoopSeamSidecar(path: string): Record<string, unknown> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (err) {
+    return sidecarProblem(path, `cannot read the JSON sidecar: ${(err as Error).message}`);
+  }
+  return isRecord(raw) ? raw : sidecarProblem(path, 'a JSON object is required');
+}
+
+/** Bind Core's report to the retained take before any bar can use it. */
+function readLoopSeam(root: string, duration: number, request: LoopSeamRequest): { frames: FrameSet; report: LoopSeamReport } {
+  const frameIndexPath = join(root, 'frames.json');
+  const frameIndex = readLoopSeamSidecar(frameIndexPath);
+  const set: unknown = Array.isArray(frameIndex.sets) && frameIndex.sets.length === 1 ? frameIndex.sets[0] : undefined;
+  if (frameIndex.spec !== 'rigc-frames/1' || !isRecord(set) || typeof set.dir !== 'string' || unsafeSegmentReason(set.dir) !== null) {
+    return sidecarProblem(frameIndexPath, 'the loop seam requires rigc-frames/1 with one set and a safe "dir" segment');
+  }
+  const frames = readFrameSet(root);
+  const path = join(frames.dir, LOOP_SEAM_FILE);
+  const report = readLoopSeamSidecar(path);
+  const viewport = report.viewport;
+  const period = report.period;
+  if (report.spec !== LOOP_SEAM_SPEC || report.status !== 'met') {
+    return sidecarProblem(path, `spec ${JSON.stringify(report.spec)}, status ${JSON.stringify(report.status)}; ${LOOP_SEAM_SPEC} with status "met" is required`);
+  }
+  if (report.animation !== 'idle' || frames.animation !== 'idle' || report.fps !== IDLE_FPS || frames.fps !== IDLE_FPS ||
+      typeof period !== 'number' || !Number.isFinite(period) || period <= 0 ||
+      Math.abs(period - duration) > TIME_SLACK || Math.abs(period - frames.duration) > TIME_SLACK) {
+    return sidecarProblem(path,
+      `report animation ${JSON.stringify(report.animation)}, fps ${JSON.stringify(report.fps)}, period ${JSON.stringify(period)}; ` +
+      `frames.json animation ${JSON.stringify(frames.animation)}, fps ${frames.fps}, duration ${frames.duration}s; ` +
+      `both must name idle at ${IDLE_FPS} fps and agree with the declared idle duration ${duration}s (within ${TIME_SLACK}s)`);
+  }
+  if (!isRecord(viewport) || (Object.keys(frames.viewport) as Array<keyof Viewport>).some(key => viewport[key] !== frames.viewport[key])) {
+    return sidecarProblem(path, `viewport ${JSON.stringify(viewport)} must match frames.json viewport ${JSON.stringify(frames.viewport)}`);
+  }
+  const bar = report.bar;
+  const { channelDelta, pixelsAbove, cap } = request;
+  if (!isRecord(bar) || bar.channelDelta !== channelDelta || bar.pixelsAbove !== pixelsAbove || report.cap !== cap) {
+    return sidecarProblem(path, `bar ${JSON.stringify(bar)}, cap ${JSON.stringify(report.cap)}; the requested bar is ${channelDelta},${pixelsAbove} with cap ${cap}`);
+  }
+  const whole = (n: unknown, max: number): n is number => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 && n <= max;
+  const warmup = report.warmup;
+  if (!whole(warmup, cap) || set.preroll !== (warmup === 0 ? undefined : warmup)) {
+    return sidecarProblem(path, `warmup ${JSON.stringify(warmup)} must be within 0..${cap} and match frames.json preroll ${JSON.stringify(set.preroll)} (absent at zero)`);
+  }
+  const total = frames.viewport.pixelWidth * frames.viewport.pixelHeight;
+  const pixelFigures = (row: unknown): row is Record<string, unknown> & LoopSeamPixels =>
+    isRecord(row) && whole(row.differingPixels, total) && whole(row.maxChannelDelta, 255) &&
+    whole(row.pixelsAbove, row.differingPixels) && (row.maxChannelDelta > 0) === (row.differingPixels > 0) &&
+    (row.maxChannelDelta > channelDelta) === (row.pixelsAbove > 0);
+  const series = report.series;
+  if (!Array.isArray(series) || series.length !== warmup + 1 ||
+      !series.every((row: unknown, index) => pixelFigures(row) && row.warmup === index && (row.pixelsAbove <= pixelsAbove) === (index === warmup))) {
+    return sidecarProblem(path, `series must record each warm-up from 0 through ${warmup}, with the selected take the first to meet ${pixelsAbove} px over ${channelDelta}`);
+  }
+  const selected: unknown = series[warmup];
+  if (!pixelFigures(report) || !pixelFigures(selected) || report.differingPixels !== selected.differingPixels ||
+      report.maxChannelDelta !== selected.maxChannelDelta || report.pixelsAbove !== selected.pixelsAbove) {
+    return sidecarProblem(path, `pixel figures must match the selected series entry at warm-up ${warmup}`);
+  }
+  if (frames.frames[0]?.name !== 'f0000.png') {
+    return sidecarProblem(frameIndexPath, `the shipped idle starts at ${JSON.stringify(frames.frames[0]?.name)}; f0000.png is required`);
+  }
+  for (const [label, name, time] of [['first', 'f0000.png', 0], ['wrap', LOOP_WRAP_FILE, period]] as const) {
+    const endpoint = report[label];
+    const relativePath = `${set.dir}/${name}`;
+    if (!isRecord(endpoint) || endpoint.path !== relativePath || endpoint.time !== time || (label === 'wrap' && endpoint.encoding !== 'png')) {
+      return sidecarProblem(path, `${label} endpoint ${JSON.stringify(endpoint)} must name ${relativePath} at t = ${time}s${label === 'wrap' ? ' with png encoding' : ''}`);
+    }
+    let bytes: Buffer;
+    try {
+      bytes = readFileSync(join(frames.dir, name));
+    } catch (err) {
+      return sidecarProblem(path, `cannot read the ${label} endpoint ${relativePath}: ${(err as Error).message}`);
+    }
+    const sha256 = createHash('sha256').update(bytes).digest('hex');
+    if (endpoint.sha256 !== sha256) {
+      return sidecarProblem(path, `${label} endpoint ${relativePath} has SHA-256 ${sha256}; the report names ${JSON.stringify(endpoint.sha256)}`);
+    }
+  }
+  return { frames, report: report as unknown as LoopSeamReport };
 }
 
 // ---------------------------------------------------------------------------
@@ -2817,14 +2938,16 @@ export interface CheckFigures {
    * off them ({@link readCheckEnvironment}). Provenance, not a bar; without the flag no key is written.
    */
   environment?: CheckEnvironment;
-  /** Null when the rig has no idle (issue #77); with physics constraints, holds the physics-off reading while `bar_outcomes.loop` and `skipped.loop` record that physics-on frames were not measured (issue #1590). */
+  /** The keyed RGB reading, with physics left out where declared. Null when the rig has no idle (issue #77). */
   loop_max_diff: number | null;
   /**
    * Written only when the rig declares a physics constraint (issue #183):
    * each one {@link withoutPhysics} left out of the physics-off frames `loop_max_diff` was
-   * read from; when `loop_max_diff` is 0, `bar_outcomes.loop` is `SKIP` (`physics-omitted`) and `skipped.loop` states that physics-on frames were not measured (issue #1590). A rig without one writes the keys it always wrote.
+   * read from. With a closed keyed loop and no declared seam bar, the loop outcome is `SKIP` (`physics-omitted`).
    */
   loop_physics?: LoopPhysics[];
+  /** Core's met RGBA wrap-seam report for the shipped idle when a loop seam bar was declared (issue #1590). */
+  loop_seam?: LoopSeamReport;
   /** The seam figures: null when there is no parts.json (issue #77); `skipped.seam` then says why. The two counts are frame pixels. */
   seam_mean: number | null;
   seam_px_over_40: number | null;
@@ -3170,10 +3293,15 @@ function checkBarStatus(fig: Readonly<Record<string, unknown>>, id: CheckBarId):
   switch (id) {
     case 'gate':
       return fig.gate_spine_html_green === true ? 'PASS' : 'FAIL';
-    case 'loop':
+    case 'loop': {
+      const seam = fig.loop_seam;
+      if (seam !== undefined) {
+        return fig.loop_max_diff === LOOP_MAX_BAR && isRecord(seam) && seam.spec === LOOP_SEAM_SPEC && seam.status === 'met' ? 'PASS' : 'FAIL';
+      }
       if (typeof fig.loop_max_diff !== 'number') return 'SKIP';
       if (fig.loop_max_diff !== LOOP_MAX_BAR) return 'FAIL';
       return Array.isArray(fig.loop_physics) && fig.loop_physics.length > 0 ? 'SKIP' : 'PASS';
+    }
     case 'seam':
       if (seamFigureFailed(fig) || (isRecord(fig.sets) && Object.values(fig.sets).some(s => isRecord(s) && seamFigureFailed(s)))) return 'FAIL';
       return typeof fig.seam_mean === 'number' ? 'PASS' : 'SKIP';
@@ -3249,7 +3377,7 @@ export function checkBarOutcomes(fig: Readonly<Record<string, unknown>>, skipRea
 /**
  * The bars a `check.json`, as `check` writes it, says were not met, in
  * {@link BARS} order: the gate when `gate_spine_html_green` is not true, the
- * loop when `loop_max_diff` is a number other than {@link LOOP_MAX_BAR}, the
+ * loop when its keyed reading fails or its seam evidence has no met verdict, the
  * seam when its figures fail {@link seamFails}, and each judgement line whose
  * status is `FAIL`, then {@link FOLD_LINE} when it is written and `FAIL`
  * (issue #320), then {@link LEVEL_LINE} the same way (issue #348), then {@link STRESS_LINE} likewise (issue #347), then
@@ -3358,8 +3486,8 @@ export type CheckStatus = 'PASS' | 'FAIL' | 'SKIP' | 'WARN' | 'CLEAR' | 'REPORTE
  * Every block's status as `check.json` records it (issue #541), read off the figures object `check.json` is written
  * from, in the file's order, one entry per block the file holds. The three bars with figures and no `status` key are
  * read the way {@link checkBarStatus} reads the file: `gate` PASS when `gate_spine_html_green` is true, else FAIL (it is
- * never skipped); `loop` SKIP when `loop_max_diff` is null or when `loop_physics` is non-empty and `loop_max_diff` is
- * {@link LOOP_MAX_BAR} (issue #1590), `seam` SKIP when `seam_mean` is null and no set failed, otherwise FAIL when
+ * never skipped); `loop` reads the keyed result and any declared seam verdict, and skips a closed physics-off
+ * loop without seam evidence or a rig with no idle (issue #1590). `seam` SKIP when `seam_mean` is null and no set failed, otherwise FAIL when
  * {@link barsNotMet} names it and PASS when it does not. Every other block carries its own `status` key and is copied:
  * the judgement lines, then {@link FOLD_LINE}, {@link LEVEL_LINE}, {@link STRESS_LINE}, {@link LIMB_LINE},
  * {@link SWEEP_LINE}, {@link MOTION_SEAM_LINE}, {@link CLOTH_LINE}, {@link PHYSICS_CONTRIBUTES_LINE}, the reported lines, {@link SOURCE_LINE} and
@@ -6837,7 +6965,9 @@ function renderExtremes(build: string, out: string, animations: readonly string[
  * judgement lines that choose regions by tag and `RECOMPOSITE_HOLES` say SKIP
  * with the reason; without an `idle` the loop and every line that reads idle
  * frames say SKIP, and no idle is rendered (no `idle_frames/`, `contact.png`
- * or `motion_heat.png`). `source` (`--source`) adds {@link SOURCE_LINE}.
+ * or `motion_heat.png`). A declared `loopSeam` requires a positive idle and
+ * binds Core's met wrap-seam report to the shipped render. The keyed reading
+ * still runs. `source` (`--source`) adds {@link SOURCE_LINE}.
  *
  * `requirements` (`--requirements`, issue #93) is read with the rig directory
  * and resolved against it before anything is built ({@link readRequirements},
@@ -6847,7 +6977,9 @@ function renderExtremes(build: string, out: string, animations: readonly string[
  * MEASURABLE is a problem. Without it nothing here reads, writes or prints
  * anything it did not before.
  */
-export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, partsHome?: string, mode: PackMode = DEFAULT_PACK_MODE, source?: string, requirements?: string, seamPairsAsked = false, keepStills = false, set?: string, allSets = false, environment?: string, _requirementsAs: string | undefined = requirements, config?: InputFileRecord, windBand?: string, noExtremes = false, supportSource?: string, supportFigure?: Mask, assemblyRules?: AssemblyRules): CheckReport {
+export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, partsHome?: string, mode: PackMode = DEFAULT_PACK_MODE, source?: string, requirements?: string, seamPairsAsked = false, keepStills = false, set?: string, allSets = false, environment?: string, _requirementsAs: string | undefined = requirements, config?: InputFileRecord, windBand?: string, noExtremes = false, supportSource?: string, supportFigure?: Mask, assemblyRules?: AssemblyRules, loopSeam?: LoopSeamRequest): CheckReport {
+  const out = resolve(outDir);
+  if (loopSeam !== undefined) rmSync(join(out, 'check.json'), { force: true });
   const pageSize = parsePageSize(mode.pageSize);
   let inp: CheckInputs;
   let reqFile: RequirementsFile | null = null;
@@ -6866,6 +6998,9 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   };
   const readInputs = (): CheckInputs => {
     const inputs = readCheckInputs(rigDir, partsHome, source, set, allSets);
+    if (loopSeam !== undefined && inputs.idleDuration === null) {
+      throw new PartsError([{ code: 'CHECK_IDLE_PRESENT', object: `${inputs.motionPath} animation "idle"`, detail: `--loop-seam-bar requires an idle with positive duration; ${inputs.noIdle}` }]);
+    }
     if (config !== undefined && inputs.parts !== null) refuseStaleAssembly(config.path, inputs.parts, undefined, assemblyRules);
     return inputs;
   };
@@ -6952,7 +7087,6 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
           }
           return call;
         };
-  const out = resolve(outDir);
   const outExisted = existsSync(out);
   mkdirSync(out, { recursive: true });
   const buildDir = join(out, 'build'), buildReportPath = join(out, BUILD_REPORT_FILE);
@@ -7003,6 +7137,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   let loop: { max: number; x: number; y: number } | null = null;
   let loopSet: FrameSet | null = null;
   let loopPhysics: LoopPhysics[] | null = null;
+  let loopSeamEvidence: LoopSeamReport | null = null;
   // The keyed build (issues #183, #320): with a physics constraint, the same rig and motion with every one left out,
   // built once the same way for the loop and the physics-off reading of the remaining animations.
   const stripped = withoutPhysics(inp.rig, inp.motion);
@@ -7058,9 +7193,18 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const levelProblems: Problem[] = [];
   try {
     if (inp.idleDuration !== null) {
-      const render = measured(['render', '--candidate', buildDir, '--animation', 'idle', '--fps', String(IDLE_FPS), '--max', String(IDLE_MAX_PX), '--geometry', '--out', idleDir]);
-      if (render.status !== 0) refuseIfAny(rigcFailed('render --animation idle --geometry', render, render.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
-      idle = readFrameSet(idleDir);
+      const seamArgs = loopSeam === undefined ? [] :
+        ['--loop-seam-bar', `${loopSeam.channelDelta},${loopSeam.pixelsAbove}`, '--loop-seam-cap', String(loopSeam.cap)];
+      const render = measured(['render', '--candidate', buildDir, '--animation', 'idle', '--fps', String(IDLE_FPS), '--max', String(IDLE_MAX_PX), '--geometry', '--out', idleDir, ...seamArgs]);
+      if (render.status !== 0) {
+        if (loopSeam !== undefined) {
+          const unmet = render.out.split(/\r?\n/).map(line => line.replace(/^rigc: /, '')).find(line => line.startsWith(`${LOOP_SEAM_BAR_UNMET}:`));
+          if (unmet !== undefined) throw new PartsError([{ code: LOOP_SEAM_BAR_UNMET, object: 'idle', detail: `  loop: FAIL — ${unmet}` }]);
+        }
+        refuseIfAny(rigcFailed('render --animation idle --geometry', render, render.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
+      }
+      const checked = loopSeam === undefined ? null : readLoopSeam(idleDir, inp.idleDuration, loopSeam);
+      idle = checked?.frames ?? readFrameSet(idleDir);
       const last = idle.frames[idle.frames.length - 1];
       // Issue #244: the last frame's time and the duration are compared within TIME_SLACK, not with `!==` — a whole
       // number of frames (40/12 s) is not exact in binary, and rigc writes its last frame at 40 * (1/12), one ulp off.
@@ -7073,6 +7217,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
           },
         ]);
       }
+      loopSeamEvidence = checked?.report ?? null;
       const contact = join(idle.dir, 'contact.png');
       if (existsSync(contact)) {
         copyFileSync(contact, join(out, 'contact.png'));
@@ -7187,6 +7332,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     }
   } finally {
     rmSync(loopDir, { recursive: true, force: true });
+    if (loopSeam !== undefined && loopSeamEvidence === null) rmSync(idleDir, { recursive: true, force: true });
   }
 
   // 3b. the parts a judgement reads alone: each rendered by its own slots, on the whole rig's grid
@@ -7773,7 +7919,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
 
   const skipped: { loop?: string; seam?: string } = {};
   if (inp.noIdle !== null) skipped.loop = inp.noIdle;
-  else if (loop !== null && loop.max === LOOP_MAX_BAR && loopPhysics !== null && loopPhysics.length > 0) {
+  else if (loopSeamEvidence === null && loop !== null && loop.max === LOOP_MAX_BAR && loopPhysics !== null && loopPhysics.length > 0) {
     skipped.loop = `physics-on idle frames not measured; ${loopPhysics.length} physics constraint(s) omitted`;
   }
   if (inp.noParts !== null) skipped.seam = inp.noParts;
@@ -7785,6 +7931,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     ...(recordedEnv === null ? {} : { environment: recordedEnv }),
     loop_max_diff: loop === null ? null : loop.max,
     ...(loopPhysics === null ? {} : { loop_physics: loopPhysics.map(row => ({ ...row, ...checkRow('loop_physics', 'rig', false, []) })) }),
+    ...(loopSeamEvidence === null ? {} : { loop_seam: loopSeamEvidence }),
     seam_mean: seam === null ? null : round3(seam.mean),
     seam_px_over_40: seam === null ? null : seam.over40,
     seam_px_over_80: seam === null ? null : seam.over80,

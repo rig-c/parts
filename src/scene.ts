@@ -107,7 +107,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { dirname, join, resolve } from 'node:path';
 import { deformSliderCombinationProblem, type RigStop } from '@rig-c/core/rig';
 import { checkStage, gateThroughRigc, type Log } from './build.ts';
-import { ACCEPTABLE_BARS, barsNotMet, CHECK_SPEC, type CheckReport, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, type PackMode, parsePageSize, requirementsNotPass, type RigcRunner } from './check.ts';
+import { ACCEPTABLE_BARS, barsNotMet, CHECK_SPEC, type CheckReport, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, LOOP_SEAM_BAR_UNMET, type LoopSeamRequest, type PackMode, parsePageSize, requirementsNotPass, type RigcRunner } from './check.ts';
 import { CONSTRAINT_BONE_FIELDS, editorReceiptProblems, ROOT_BONE } from './config.ts';
 import { cropToSpineY } from './coords.ts';
 import { failLine, PartsError, type Problem, refuseIfAny } from './errors.ts';
@@ -2078,6 +2078,8 @@ export interface ComposeInput {
   /** The packed builds' `--page-size`; rigc's default when absent (issue #1352). */
   pageSize?: number;
   requirements?: string;
+  /** Declared RGBA loop seam bar and warm-up cap for the composed idle render (issue #1590). */
+  loopSeam?: LoopSeamRequest;
   /** `--accept`: the bars every character's own check may fail and still be composed (issue #203). */
   accept?: readonly string[];
 }
@@ -2116,7 +2118,10 @@ export function composeStage(input: ComposeInput, run: ComposeRunners, log: Log)
   const refused = (stage: ComposeStage, err: unknown, composed: ComposedScene | null = null): ComposeResult => {
     if (!(err instanceof PartsError)) throw err;
     const p = prefix(stage);
-    for (const x of err.problems) p(failLine(x));
+    for (const x of err.problems) {
+      if (x.code === LOOP_SEAM_BAR_UNMET) log(x.detail);
+      else p(failLine(x));
+    }
     p(`refused: ${err.problems.length} problem(s)`);
     log(`compose: stopped at ${stage}; nothing ${stage === 'compose' ? 'was written' : 'after the check was written'}`);
     return { stoppedAt: stage, composed, check: null };
@@ -2205,7 +2210,12 @@ export function composeStage(input: ComposeInput, run: ComposeRunners, log: Log)
   }
   let report: CheckReport;
   try {
-    report = checkStage({ rig: rigDir, out: join(input.out, 'check'), pageEdges: mode.pageEdges, packShape: mode.packShape, ...(pageSize === undefined ? {} : { pageSize }), ...(input.requirements === undefined ? {} : { requirements: input.requirements }) }, checkRigc, run.checkBin, prefix('check'));
+    report = checkStage({
+      rig: rigDir, out: join(input.out, 'check'), pageEdges: mode.pageEdges, packShape: mode.packShape,
+      ...(pageSize === undefined ? {} : { pageSize }),
+      ...(input.requirements === undefined ? {} : { requirements: input.requirements }),
+      ...(input.loopSeam === undefined ? {} : { loopSeam: input.loopSeam }),
+    }, checkRigc, run.checkBin, prefix('check'));
   } catch (err) {
     return refused('check', err, composed);
   }

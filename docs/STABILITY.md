@@ -599,10 +599,10 @@ and do not certify visibility. See the
 | `compare` | `--left`, `--right`; optional `--map`, `--help` (`-h`) |
 | `rig` | `--config`, `--parts`, `--out`; optional `--idle-keys` (ctl, direct), `--page-edges` (pot, free), `--pack-shape` (rect, polygon), `--page-size`, `--help` (`-h`) |
 | `check-parts` | `--parts`, `--out`; optional `--json`, `--help` (`-h`) |
-| `check` | `--rig`, `--out`; optional `--parts`, `--source`, `--page-edges`, `--pack-shape`, `--page-size`, `--requirements`, `--seam-pairs`, `--keep-stills`, `--no-extremes` (issue #829), `--set` or `--all-sets` (issue #454), `--environment` (issue #538, additive), `--wind-band` (issue #590, additive), `--json` (issue #904), `--help` (`-h`) |
+| `check` | `--rig`, `--out`; optional `--parts`, `--source`, `--page-edges`, `--pack-shape`, `--page-size`, `--requirements`, `--seam-pairs`, `--keep-stills`, `--no-extremes` (issue #829), `--set` or `--all-sets` (issue #454), `--environment` (issue #538, additive), `--wind-band` (issue #590, additive), paired `--loop-seam-bar` and `--loop-seam-cap` (issue #1590), `--json` (issue #904), `--help` (`-h`) |
 | `loop` | `--frames`, `--out`; optional `--palette`, `--help` (`-h`) |
 | `build` | `--config`, `--source`, `--full`, `--out`; optional `--head` (as for `assemble`), `--seam`, `--project`, `--page-edges`, `--pack-shape`, `--page-size`, `--loop`, `--lead-in`, `--requirements`, `--idle-keys`, `--seam-pairs`, `--keep-stills`, `--no-extremes` (issue #829), `--alt` (as for `assemble`, issue #454), `--set` or `--all-sets` (as for `check`, issue #454), `--environment` (as for `check`, issue #538, additive), `--wind-band` (as for `check`, issue #590, additive), `--help` (`-h`) |
-| `compose` | `--scene`, `--out`; optional `--requirements`, `--accept`, `--page-size`, `--help` (`-h`) |
+| `compose` | `--scene`, `--out`; optional `--requirements`, `--accept`, `--page-size`, paired `--loop-seam-bar` and `--loop-seam-cap` (issue #1590), `--help` (`-h`) |
 | `mesh-draft` | `--config`, `--parts`, `--out`; optional `--requirements`, `--idle-keys` (ctl, direct), `--page-edges` (pot, free), `--pack-shape` (rect, polygon), `--page-size`, `--more-triangles`, `--help` (`-h`) |
 | `mesh-stats` | `--config`, `--parts`; optional `--help` (`-h`) (issue #566, additive: prints, writes nothing) |
 | `remesh` | `--rig`, `--config`, `--parts`, `--part`, `--out`, and one of `--mesh` or `--delta` (issue #526); optional `--requirements`, `--idle-keys` (ctl, direct), `--page-edges` (pot, free), `--pack-shape` (rect, polygon), `--page-size`, `--record-input-check` and `--input-check` (issue #617, additive: without them nothing `remesh` prints or writes changes), `--help` (`-h`) |
@@ -1326,6 +1326,27 @@ in the order below. Its values are `{"status":"PASS"}`, `{"status":"FAIL"}`,
 or `{"status":"SKIP","reason":"<stable reason>"}`. The `reason` field appears
 only on SKIP. Read the existing blocks for detailed measurements and diagnostics.
 
+`check` and `compose` accept `--loop-seam-bar <channel-delta,pixels>` and
+`--loop-seam-cap <loops>` as a pair (issue #1590). The channel delta is a whole
+number from 0 to 255, and the pixel limit and cap are nonnegative safe integers.
+The pair requires a positive idle period and is incompatible with `--environment`.
+Core selects the first take meeting the RGBA bar from warm-up 0 through the cap,
+at the viewport used for the shipped idle, including the canvas viewport when
+compose applies it. Without physics Core tries 0 only.
+
+The optional `loop_seam` follows `loop_max_diff` and any `loop_physics` in the
+report. It contains Core's exact `rigc-loop-seam/1` object with `status: "met"`.
+Parts verifies its schema, render identity, declared bar and
+cap, and the SHA-256 of its first and wrap PNGs in `idle_frames/`. The object
+retains Core's per-take `series` and the selected take's pixel figures. A met
+seam omits `skipped.loop`. `bar_outcomes.loop` is `PASS` when the declared seam
+bar is met and the keyed check closes. The report retains the keyed
+`loop_max_diff` and any `loop_physics` readings, and `CHECK_LOOP_CLOSES` can
+still fail the overall check. On an unmet bar Parts relays the full
+`LOOP_SEAM_BAR_UNMET` line and leaves no `check.json`, including
+when reusing the output directory. Without the pair the report has no `loop_seam`
+and the existing loop outcomes and idle outputs apply.
+
 The existing boolean `PASS` is the overall outcome. For a completed
 `rig-parts check`, true corresponds to exit 0 and false to exit 1. It is
 false exactly when a bar is FAIL or a declared requirement is FAIL or
@@ -1351,7 +1372,7 @@ pairs and the unmeasured render rows. [Motion seam coverage](AUTHORING.md#motion
 | Bar id | Measurement | SKIP reasons in precedence order |
 | --- | --- | --- |
 | `gate` | Packed rig-play gate | Never |
-| `loop` | First vs final idle-frame pixel difference on the shipped frames when the rig declares no physics constraint; when `loop_physics` is non-empty, `loop_max_diff` holds the physics-off reading, a non-zero `loop_max_diff` is `FAIL`, and `loop_max_diff === 0` is `SKIP` with `physics-omitted` and `skipped.loop` because the shipped physics-on frames were not measured (issue #1590) | `no-idle`, `physics-omitted` |
+| `loop` | With the declared seam bar, Core's verified met reading on the shipped idle. Without the bar, first vs final idle-frame pixel difference on the shipped frames when the rig declares no physics constraint. When `loop_physics` is non-empty, the keyed `loop_max_diff` holds the physics-off reading. Without a declared bar a nonzero reading is `FAIL` and a zero reading is `SKIP` with `physics-omitted` and `skipped.loop` (issue #1590). | `no-idle`, `physics-omitted` (without a declared bar) |
 | `seam` | Setup against the composited parts on the canonical grid. Counts the base alone by default, the base and the named alternate with `--set`, or the base and every declared alternate with `--all-sets`. Fails if the base or any counted alternate fails its existing seam rule. | `no-parts` |
 | `BREATH_VISIBLE` | Idle breath signal on eligible torso or planted-foot regions | `no-idle`, `no-parts`, `no-eligible-region`, `no-reading` (eligible region outside frame) |
 | `BLINK_NO_HOLE` | Closed-eye coverage vs open eye and idle | `no-idle`, `no-parts`, `no-eye-parts`, `no-blink-track`, `no-reading` (incompatible grids or eye outside frame) |
@@ -1615,7 +1636,8 @@ in the package.
 
 ## rig-c
 
-`dependencies` takes `@rig-c/core` `3.10.0` exactly. Bun 1.4 or later
+`dependencies` takes `@rig-c/core` `^3.11.0`. Core 3.11.0 supplies the idle
+render's `--loop-seam-bar` and `--loop-seam-cap` support. Bun 1.4 or later
 is the declared floor (`engines.bun` `>=1.4.0`; older 1.4 releases are not tested in
 CI, which runs `latest`, and compatibility with an older 1.4 release is handled when
 reported as an issue). What this package relies on in rig-c, every import
