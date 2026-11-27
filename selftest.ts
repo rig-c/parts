@@ -23952,7 +23952,21 @@ function runCheckStretchCases(dir: string, say: ReturnType<typeof counter>['say'
     { name: 'collar', shape: 'polygon' as const, points: [[0, 12], [8, 12], [8, 36], [0, 36]] as [number, number][], bone: 'neck_band', spacing: 8, band: 16 },
     { name: 'pin', shape: 'circle' as const, cx: 32, cy: 16, r: 1, bone: 'torso', spacing: 8, band: 0 },
   ];
-  const bandStretchConfig = (mode: 'cutoff' | 'off-band'): Record<string, unknown> => ({
+  const shareBandRegions = [
+    { name: 'collar', shape: 'polygon' as const, points: [[0, 12], [12, 12], [12, 36], [0, 36]] as [number, number][], bone: 'neck_band', spacing: 8, band: 16 },
+    bandRegions[1],
+  ];
+  const bustBandSpec = {
+    apex_r: [4, 16] as [number, number],
+    apex_l: [4, 58] as [number, number],
+    cleavage: [4, 37] as [number, number],
+    alpha: 0.2,
+    clearance: 1,
+    spacing: 8,
+    bone_r: 'neck_band',
+    bone_l: 'hem',
+  };
+  const bandStretchConfig = (mode: 'cutoff' | 'off-band' | 'share' | 'bust'): Record<string, unknown> => ({
     key: `band_stretch_${mode}`,
     assemble: { rig_scale: 1, plan: [['scarf', 'full', 'neckwear']] },
     bones: [
@@ -23965,8 +23979,8 @@ function runCheckStretchCases(dir: string, say: ReturnType<typeof counter>['say'
     regions: {},
     meshes: {
       scarf: {
-        r: mode === 'cutoff' ? 4 : 1,
-        segments: mode === 'cutoff'
+        r: mode === 'off-band' ? 1 : 4,
+        segments: mode !== 'off-band'
           ? [['torso', [20, 24], [48, 24]]]
           : [
               ['torso', [20, 16], [44, 16]],
@@ -23980,15 +23994,17 @@ function runCheckStretchCases(dir: string, say: ReturnType<typeof counter>['say'
           margin: 0,
           spacing: 8,
           maxEdge: 4,
-          regions: bandRegions,
+          ...(mode === 'bust'
+            ? { regions: [bandRegions[1]], bust: bustBandSpec }
+            : { regions: mode === 'share' ? shareBandRegions : bandRegions }),
         },
       },
     },
     motion: {
       duration: 1,
-      tracks: mode === 'cutoff'
-        ? [{ bone: 'neck_band', prop: 'translatex', amp: -11, period: 1, phase: 0 }]
-        : [{ bone: 'hem', prop: 'translatex', amp: -2.4, period: 1, phase: 0 }],
+      tracks: mode === 'off-band'
+        ? [{ bone: 'hem', prop: 'translatex', amp: -2.4, period: 1, phase: 0 }]
+        : [{ bone: 'neck_band', prop: 'translatex', amp: mode === 'share' ? -7 : -11, period: 1, phase: 0 }],
     },
   });
   const bin1598 = suiteRigc();
@@ -24068,6 +24084,233 @@ function runCheckStretchCases(dir: string, say: ReturnType<typeof counter>['say'
       offBandProblem.detail === offBandUnchangedWant,
     `rig exit ${offBandRigCli.status}; worst ${JSON.stringify(offBandWorst ?? null)}; detail matches pre-#1598 byte-for-byte: ${offBandProblem?.detail === offBandUnchangedWant}; detail: ${offBandProblem?.detail ?? 'none'}`,
     'issue #1598 negative control: on the same contour mesh with collar band width 16 px still declared, a failing edge outside every band (driven by hem at x=48, past the x=24 cutoff) emits no contour-band clause and keeps its pre-#1598 detail byte for byte',
+  );
+
+  // Issue #1602: planted controls for every silent branch of the standalone `run.json` verification route and the
+  // target-bone share check, each paired with its matched positive control (the planted copy with only that one fault
+  // removed), plus a positive control for a derived `contour.bust` band and its linear falloff share.
+  const sha256File1602 = (p: string): string => createHash('sha256').update(readFileSync(p)).digest('hex');
+  const offBandFormWant1602 = (rigDoc: RigSpec, motionDoc: Record<string, unknown>, fig: StretchFig | undefined): string => {
+    if (fig?.worst === undefined) return '';
+    const step = weightStepText({ ...rigDoc }, 'scarf', 'scarf', fig.worst.edge, { stage: rigDoc.skeleton });
+    return `the edge is ${fig.worst.ratio} times its rest length (max(ratio, 1/ratio) ${fig.severity}); <= ${TEXTURE_STRETCH_CEILING} is required; ${edgeBonesText({ ...rigDoc }, motionDoc, 'scarf', 'scarf', fig.worst.edge)}${step === '' ? '' : `; ${step}`} — the texture on it is ${fig.worst.ratio >= 1 ? 'stretched' : 'squeezed'}: the bones this mesh is weighted to move apart (amplitudes too large down a chain), or a vertex blends bones that move against each other`;
+  };
+  const runStandaloneStretch1602 = (rigDir: string, partsPath: string, outDir: string) => {
+    const report = checkStage({ rig: rigDir, parts: partsPath, out: outDir, noExtremes: true }, runner1598, bin1598, () => {});
+    const problem = report.problems.find((p) => p.code === 'CHECK_TEXTURE_STRETCH');
+    const fig = report.figures.TEXTURE_STRETCH as StretchFig | undefined;
+    const onlyStretch = onlyFailedCheckBar(report.figures as unknown as Record<string, unknown>, 'TEXTURE_STRETCH');
+    const fail = problem === undefined ? null : `  FAIL  CHECK_TEXTURE_STRETCH: ${problem.object} — ${problem.detail} (see rig-parts guide CHECK_TEXTURE_STRETCH)`;
+    return { report, problem, fig, onlyStretch, withinLimit: Buffer.byteLength(fail ?? '', 'utf8') < PRINTED_LINE_LIMIT };
+  };
+  const cutoffOrigStampText = readFileSync(join(cutoffHome, 'rig', 'run.json'), 'utf8');
+  const cutoffBandClausePrefix = 'contour band region "collar" (target bone "neck_band", width 16 px at meshes.scarf.contour.regions[0].band): ';
+  const stampSilentPairs1602: ReadonlyArray<{
+    slug: string;
+    silentName: string;
+    positiveName: string;
+    plant: (rigDir: string) => void;
+    removeFault: (rigDir: string) => void;
+    why: string;
+  }> = [
+    {
+      slug: 'bad-rig-sha',
+      silentName: 'CK1602_STAMP_RIG_SHA256_MISMATCH_SILENCES_BAND_CLAUSE_KEEPING_LINE_BYTE_FOR_BYTE',
+      positiveName: 'CK1602_STAMP_RIG_SHA256_RESTORED_NAMES_GOVERNING_CONTOUR_BAND',
+      plant: (rigDir) => {
+        const stamp = JSON.parse(readFileSync(join(rigDir, 'run.json'), 'utf8')) as { outputs: Array<{ path: string; sha256: string }> };
+        const entry = stamp.outputs.find((e) => e.path === 'rig.json');
+        if (entry !== undefined) entry.sha256 = '0'.repeat(64);
+        writeFileSync(join(rigDir, 'run.json'), `${JSON.stringify(stamp, null, 2)}\n`);
+      },
+      removeFault: (rigDir) => {
+        const stamp = JSON.parse(readFileSync(join(rigDir, 'run.json'), 'utf8')) as { outputs: Array<{ path: string; sha256: string }> };
+        const entry = stamp.outputs.find((e) => e.path === 'rig.json');
+        if (entry !== undefined) entry.sha256 = sha256File1602(join(rigDir, 'rig.json'));
+        writeFileSync(join(rigDir, 'run.json'), `${JSON.stringify(stamp, null, 2)}\n`);
+      },
+      why: 'issue #1602 silent branch 1: when run.json records a mismatched rig.json sha256, standalone check omits the contour-band clause and keeps the off-band line byte for byte; restoring only that sha256 names the band again',
+    },
+    {
+      slug: 'bad-cfg-sha',
+      silentName: 'CK1602_STAMP_CONFIG_SHA256_MISMATCH_SILENCES_BAND_CLAUSE_KEEPING_LINE_BYTE_FOR_BYTE',
+      positiveName: 'CK1602_STAMP_CONFIG_SHA256_RESTORED_NAMES_GOVERNING_CONTOUR_BAND',
+      plant: (rigDir) => {
+        const stamp = JSON.parse(readFileSync(join(rigDir, 'run.json'), 'utf8')) as { config: { path: string; sha256: string } };
+        stamp.config.sha256 = '0'.repeat(64);
+        writeFileSync(join(rigDir, 'run.json'), `${JSON.stringify(stamp, null, 2)}\n`);
+      },
+      removeFault: (rigDir) => {
+        const stamp = JSON.parse(readFileSync(join(rigDir, 'run.json'), 'utf8')) as { config: { path: string; sha256: string } };
+        stamp.config.sha256 = sha256File1602(cutoffFx.config);
+        writeFileSync(join(rigDir, 'run.json'), `${JSON.stringify(stamp, null, 2)}\n`);
+      },
+      why: 'issue #1602 silent branch 2: when run.json records a mismatched config sha256, standalone check omits the contour-band clause and keeps the off-band line byte for byte; restoring only that sha256 names the band again',
+    },
+    {
+      slug: 'missing-run-json',
+      silentName: 'CK1602_MISSING_RUN_STAMP_SILENCES_BAND_CLAUSE_KEEPING_LINE_BYTE_FOR_BYTE',
+      positiveName: 'CK1602_RESTORED_RUN_STAMP_NAMES_GOVERNING_CONTOUR_BAND',
+      plant: (rigDir) => {
+        rmSync(join(rigDir, 'run.json'));
+      },
+      removeFault: (rigDir) => {
+        writeFileSync(join(rigDir, 'run.json'), cutoffOrigStampText);
+      },
+      why: 'issue #1602 silent branch 3: when run.json is absent from the rig directory, standalone check omits the contour-band clause and keeps the off-band line byte for byte; restoring run.json names the band again',
+    },
+    {
+      slug: 'assemble-command',
+      silentName: 'CK1602_ASSEMBLE_RUN_STAMP_SILENCES_BAND_CLAUSE_KEEPING_LINE_BYTE_FOR_BYTE',
+      positiveName: 'CK1602_RIG_COMMAND_RUN_STAMP_NAMES_GOVERNING_CONTOUR_BAND',
+      plant: (rigDir) => {
+        const stamp = JSON.parse(readFileSync(join(rigDir, 'run.json'), 'utf8')) as { command: string };
+        stamp.command = 'assemble';
+        writeFileSync(join(rigDir, 'run.json'), `${JSON.stringify(stamp, null, 2)}\n`);
+      },
+      removeFault: (rigDir) => {
+        const stamp = JSON.parse(readFileSync(join(rigDir, 'run.json'), 'utf8')) as { command: string };
+        stamp.command = 'rig';
+        writeFileSync(join(rigDir, 'run.json'), `${JSON.stringify(stamp, null, 2)}\n`);
+      },
+      why: 'issue #1602 silent branch 4: when run.json carries command "assemble" instead of "rig", standalone check omits the contour-band clause and keeps the off-band line byte for byte; restoring command "rig" names the band again',
+    },
+  ];
+  for (const c of stampSilentPairs1602) {
+    const plantedRigDir = join(cutoffHome, `rig-${c.slug}`);
+    cpSync(join(cutoffHome, 'rig'), plantedRigDir, { recursive: true });
+    c.plant(plantedRigDir);
+    const positiveRigDir = join(cutoffHome, `rig-${c.slug}-pos`);
+    cpSync(plantedRigDir, positiveRigDir, { recursive: true });
+    c.removeFault(positiveRigDir);
+    const plantedRun = runStandaloneStretch1602(plantedRigDir, cutoffFx.parts, join(cutoffHome, `check-${c.slug}`));
+    const positiveRun = runStandaloneStretch1602(positiveRigDir, cutoffFx.parts, join(cutoffHome, `check-${c.slug}-pos`));
+    const plantedWant = offBandFormWant1602(cutoffRigJson, cutoffMotionJson, plantedRun.fig);
+    squeezeSay(
+      c.silentName,
+      plantedRun.onlyStretch &&
+        plantedRun.withinLimit &&
+        plantedRun.problem !== undefined &&
+        !plantedRun.problem.detail.includes('contour band') &&
+        plantedRun.problem.detail === cutoffBeforeDetail &&
+        plantedRun.problem.detail === plantedWant,
+      `slug ${c.slug}; silent matches off-band form byte-for-byte: ${plantedRun.problem?.detail === cutoffBeforeDetail}; detail: ${plantedRun.problem?.detail ?? 'none'}`,
+      c.why,
+    );
+    squeezeSay(
+      c.positiveName,
+      positiveRun.onlyStretch &&
+        positiveRun.withinLimit &&
+        positiveRun.problem !== undefined &&
+        cutoffProblem !== undefined &&
+        positiveRun.problem.detail.includes(cutoffBandClausePrefix) &&
+        positiveRun.problem.detail === cutoffProblem.detail,
+      `slug ${c.slug}-pos; restored matches band-clause detail byte-for-byte: ${positiveRun.problem?.detail === cutoffProblem?.detail}; detail: ${positiveRun.problem?.detail ?? 'none'}`,
+      `${c.why} (matched positive control)`,
+    );
+  }
+
+  const shareHome = join(dir, 'band-share-1602');
+  const shareFx = writeRigFixture(shareHome, bandStretchConfig('share'), bandStretchImages(), bandStretchParts());
+  const shareRigCli = squeezeCli(['rig', '--config', shareFx.config, '--parts', shareFx.parts, '--out', join(shareHome, 'rig')]);
+  const shareBaseRigText = readFileSync(join(shareHome, 'rig', 'rig.json'), 'utf8');
+  const shareBaseRigDoc = JSON.parse(shareBaseRigText) as RigSpec;
+  const shareMotionDoc = readJsonAt(join(shareHome, 'rig', 'motion.json')) as Record<string, unknown>;
+  const sharePreCheck = runStandaloneStretch1602(join(shareHome, 'rig'), shareFx.parts, join(shareHome, 'check-pre'));
+  const shareEdge = sharePreCheck.fig?.worst?.edge ?? [];
+  const sharePlantedRigDir = join(shareHome, 'rig-zero-share');
+  cpSync(join(shareHome, 'rig'), sharePlantedRigDir, { recursive: true });
+  const sharePlantedDoc = JSON.parse(shareBaseRigText) as {
+    skins: { default: { scarf: { scarf: { weights: Array<Array<{ bone: string; x: number; y: number; weight: number }>> } } } };
+  };
+  const shareWeights = sharePlantedDoc.skins.default.scarf.scarf.weights;
+  const zeroedVertex = shareEdge.find((v) => shareWeights[v]?.some((b) => b.bone === 'neck_band' && b.weight === 0.1875));
+  if (zeroedVertex !== undefined) {
+    shareWeights[zeroedVertex] = shareWeights[zeroedVertex]
+      .filter((b) => b.bone !== 'neck_band')
+      .map((b) => (b.bone === 'torso' ? { ...b, weight: 1 } : b));
+  }
+  writeFileSync(join(sharePlantedRigDir, 'rig.json'), `${JSON.stringify(sharePlantedDoc, null, 2)}\n`);
+  const sharePlantedStamp = JSON.parse(readFileSync(join(sharePlantedRigDir, 'run.json'), 'utf8')) as { outputs: Array<{ path: string; sha256: string }> };
+  const shareRigStampEntry = sharePlantedStamp.outputs.find((e) => e.path === 'rig.json');
+  if (shareRigStampEntry !== undefined) shareRigStampEntry.sha256 = sha256File1602(join(sharePlantedRigDir, 'rig.json'));
+  writeFileSync(join(sharePlantedRigDir, 'run.json'), `${JSON.stringify(sharePlantedStamp, null, 2)}\n`);
+
+  const sharePositiveRigDir = join(shareHome, 'rig-restored-share');
+  cpSync(sharePlantedRigDir, sharePositiveRigDir, { recursive: true });
+  writeFileSync(join(sharePositiveRigDir, 'rig.json'), shareBaseRigText);
+  const shareRestoredStamp = JSON.parse(readFileSync(join(sharePositiveRigDir, 'run.json'), 'utf8')) as { outputs: Array<{ path: string; sha256: string }> };
+  const shareRestoredEntry = shareRestoredStamp.outputs.find((e) => e.path === 'rig.json');
+  if (shareRestoredEntry !== undefined) shareRestoredEntry.sha256 = sha256File1602(join(sharePositiveRigDir, 'rig.json'));
+  writeFileSync(join(sharePositiveRigDir, 'run.json'), `${JSON.stringify(shareRestoredStamp, null, 2)}\n`);
+
+  const sharePlantedRun = runStandaloneStretch1602(sharePlantedRigDir, shareFx.parts, join(shareHome, 'check-zero-share'));
+  const sharePositiveRun = runStandaloneStretch1602(sharePositiveRigDir, shareFx.parts, join(shareHome, 'check-restored-share'));
+  const sharePlantedRigDoc = readJsonAt(join(sharePlantedRigDir, 'rig.json')) as RigSpec;
+  const sharePlantedWant = offBandFormWant1602(sharePlantedRigDoc, shareMotionDoc, sharePlantedRun.fig);
+  squeezeSay(
+    'CK1602_ZERO_TARGET_SHARE_IN_BAND_SILENCES_BAND_CLAUSE_KEEPING_LINE_BYTE_FOR_BYTE',
+    shareRigCli.status === 0 &&
+      zeroedVertex !== undefined &&
+      sharePlantedRun.onlyStretch &&
+      sharePlantedRun.withinLimit &&
+      sharePlantedRun.problem !== undefined &&
+      !sharePlantedRun.problem.detail.includes('contour band') &&
+      sharePlantedRun.problem.detail === sharePlantedWant,
+    `rig exit ${shareRigCli.status}; zeroed vertex ${zeroedVertex ?? 'none'} on edge ${JSON.stringify(sharePlantedRun.fig?.worst?.edge ?? null)}; matches off-band form byte-for-byte: ${sharePlantedRun.problem?.detail === sharePlantedWant}; detail: ${sharePlantedRun.problem?.detail ?? 'none'}`,
+    'issue #1602 silent branch 5: when an edge vertex sits inside the collar band (x=24, d=12 < 16, effective share 0.1875 >= 1e-4) with a verified run.json stamp yet carries 0 share on target bone "neck_band", check omits the contour-band clause and keeps the off-band line byte for byte',
+  );
+  squeezeSay(
+    'CK1602_MATCHED_TARGET_SHARE_IN_BAND_NAMES_GOVERNING_CONTOUR_BAND',
+    shareRigCli.status === 0 &&
+      sharePositiveRun.onlyStretch &&
+      sharePositiveRun.withinLimit &&
+      sharePositiveRun.problem !== undefined &&
+      sharePreCheck.problem !== undefined &&
+      sharePositiveRun.problem.detail.includes(cutoffBandClausePrefix) &&
+      sharePositiveRun.problem.detail.includes('is inside the band (share 0.5)') &&
+      sharePositiveRun.problem.detail.includes('is inside the band (share 0.1875), so the band\'s falloff governs this edge') &&
+      sharePositiveRun.problem.detail === sharePreCheck.problem.detail &&
+      sharePositiveRun.problem.detail !== offBandFormWant1602(shareBaseRigDoc, shareMotionDoc, sharePositiveRun.fig),
+    `restored vertex ${zeroedVertex ?? 'none'}; detail: ${sharePositiveRun.problem?.detail ?? 'none'}`,
+    'issue #1602 silent branch 5 matched positive control: restoring only that vertex\'s target-bone share (0.1875 on "neck_band") names region "collar" and both vertices\' shares on the same failing edge',
+  );
+
+  const bustHome = join(dir, 'band-bust-1602');
+  const bustFx = writeRigFixture(bustHome, bandStretchConfig('bust'), bandStretchImages(), bandStretchParts());
+  const bustRigCli = squeezeCli(['rig', '--config', bustFx.config, '--parts', bustFx.parts, '--out', join(bustHome, 'rig')]);
+  const bustCliCheck = squeezeCli(['check', '--rig', join(bustHome, 'rig'), '--parts', bustFx.parts, '--no-extremes', '--out', join(bustHome, 'check-cli')]);
+  const bustCfgBytes = readFileSync(bustFx.config);
+  const bustStageReport = checkStage(
+    { rig: join(bustHome, 'rig'), parts: bustFx.parts, out: join(bustHome, 'check-stage'), config: inputFileRecord(bustCfgBytes, bustFx.config), noExtremes: true },
+    runner1598,
+    bin1598,
+    () => {},
+  );
+  const bustProblem = bustStageReport.problems.find((p) => p.code === 'CHECK_TEXTURE_STRETCH');
+  const bustCliFail = failLine(bustCliCheck.out, 'CHECK_TEXTURE_STRETCH');
+  const bustStageFail = bustProblem === undefined ? null : `  FAIL  CHECK_TEXTURE_STRETCH: ${bustProblem.object} — ${bustProblem.detail} (see rig-parts guide CHECK_TEXTURE_STRETCH)`;
+  const bustDerived = deriveBustRegions(bustBandSpec);
+  squeezeSay(
+    'CK1602_DERIVED_BUST_BAND_STRETCH_NAMES_CONTOUR_BUST_AND_LINEAR_FALLOFF_SHARE',
+    bustRigCli.status === 0 &&
+      bustCliCheck.status === 1 &&
+      onlyFailedCheckBar(bustStageReport.figures as unknown as Record<string, unknown>, 'TEXTURE_STRETCH') &&
+      bustProblem !== undefined &&
+      bustCliFail === bustStageFail &&
+      Buffer.byteLength(bustStageFail ?? '', 'utf8') < PRINTED_LINE_LIMIT &&
+      bustDerived[0].name === 'bust_r' &&
+      bustDerived[0].shape === 'circle' &&
+      bustDerived[0].r === 4 &&
+      bustDerived[0].band === 16 &&
+      bustProblem.detail.includes('contour band region "bust_r" (target bone "neck_band", width 16 px at meshes.scarf.contour.bust): ') &&
+      bustProblem.detail.includes('is inside the band (share 0.25)') &&
+      bustProblem.detail.includes('is at its cutoff (share 0)') &&
+      bustProblem.detail.includes(', so the band\'s falloff governs this edge — ') &&
+      !bustProblem.detail.includes('"bust_l"') &&
+      !bustProblem.detail.includes('"pin"'),
+    `rig exit ${bustRigCli.status}, cli check exit ${bustCliCheck.status}; cli===stage: ${bustCliFail === bustStageFail}; detail: ${bustProblem?.detail ?? 'none'}`,
+    'issue #1602 derived bust-band positive control: a failing edge spanning x=20 (d=12 px in bust_r width 16 px, un-eased linear ramp share 0.25 vs 0.1875 cubic) to x=24 (cutoff, share 0) names region "bust_r", target bone "neck_band", width 16 px at meshes.scarf.contour.bust, the linear share 0.25 and the governing falloff on both standalone check and build-bound checkStage',
   );
 }
 
