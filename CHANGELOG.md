@@ -1,10 +1,17 @@
 # Changelog
 
-## Unreleased
+## 2.63.1 (2026-11-27)
+
+A `TEXTURE_STRETCH` refusal at a contour band now names the band, so an author knows which width to change.
+
+**Read before upgrading:**
+
+* **The `TEXTURE_STRETCH` detail gains a band clause when a vertex of the failing edge lies inside a declared contour band or at its cutoff.** A consumer that matches that refusal's text exactly sees the longer line for those cases. Every other refusal keeps its text byte for byte.
+* **`rig-parts --version` and the `package.version` field in run stamps and run records now read `2.63.1`.** The version bump changes those receipt bytes. The receipt fields and output hashes keep their meaning. No public example's expected file changes since 2.63.0.
 
 ### Fixes
 
-* **check** names the governing contour band in a `TEXTURE_STRETCH` refusal. When a vertex of the failing edge lies inside a declared contour band, or at its cutoff, the detail adds the band's region, its target bone, its width with the config path, and each vertex's position in the band. The failure map in AUTHORING sends that case to the band's width, and notes that the reachable angle does not grow steadily with it. A standalone `check --rig` finds the config through a verified `run.json`. Every other refusal keeps its text byte for byte. ([#1598](https://github.com/rig-c/parts/issues/1598))
+* **check** names the governing contour band in a `TEXTURE_STRETCH` refusal. When a vertex of the failing edge lies inside a declared contour band, or at its cutoff, the detail adds the band's region, its target bone, its width with the config path, and each vertex's position in the band. The failure map in AUTHORING sends that case to the band's width, and notes that the reachable angle does not grow steadily with it. A standalone `check --rig` finds the config through a verified `run.json`. Every other refusal keeps its text byte for byte. ([#1598](https://github.com/rig-c/parts/issues/1598), [#1601](https://github.com/rig-c/parts/pull/1601))
 
 ## 2.63.0 (2026-11-27)
 
