@@ -153,7 +153,9 @@ import {
 import { type AlternatePartsRecord, FRONT_SUFFIX, type LimbRecord, partImageReference, type PartRecord, type PartsFile, readParts } from './parts.ts';
 import { ARM_SPLIT_MIGRATION, poseRigBonesForDrawn, type RigBone, SETS_FILE, writtenShares } from './rig.ts';
 import { TURN_BONE, turnConstraintName, turnTwin } from './turn.ts';
-import { ROOT_BONE, loadConfigWithBytes, type Point } from './config.ts';
+import { type CharacterConfig, contourRegionsOf, ROOT_BONE, loadConfigWithBytes, type Point } from './config.ts';
+import { GRID } from './contour.ts';
+import { regionBandSite, regionWeight, type RegionBandSite } from './localweights.ts';
 import { influences, meshLimits, type Segment, type Influence, type InfluenceLimits } from './weights.ts';
 import {
   requirementAnimations,
@@ -9970,9 +9972,126 @@ function stretchAtText(s: { triangle: number; vertices: readonly number[]; edge:
 export interface WeightStepContext {
   config?: InputFileRecord;
   stage?: StageBox;
+  rigDir?: string;
 }
 
 type StepBinding = { bone: string; x: number; y: number; weight: number };
+
+const RIG_RUN_STAMP_FILE = 'run.json';
+const RIG_RUN_STAMP_SPEC = 'rig-run/1';
+const CONTOUR_GRID_TOLERANCE = 1e-2;
+
+/** Load a hash-verified config from an explicit record (`build`) or the rig directory's `rig-run/1` stamp (`check`). */
+function loadVerifiedContourConfig(context?: WeightStepContext): CharacterConfig | null {
+  if (context === undefined) return null;
+  try {
+    if (context.config !== undefined) {
+      const loaded = loadConfigWithBytes(context.config.path);
+      return inputFileRecord(loaded.bytes, context.config.path).sha256 === context.config.sha256 ? loaded.config : null;
+    }
+    if (context.rigDir !== undefined) {
+      const stampPath = join(context.rigDir, RIG_RUN_STAMP_FILE);
+      if (!existsSync(stampPath)) return null;
+      const stamp: unknown = JSON.parse(readFileSync(stampPath, 'utf8'));
+      if (!isRecord(stamp) || stamp.spec !== RIG_RUN_STAMP_SPEC || stamp.command !== 'rig' ||
+        !isRecord(stamp.config) || typeof stamp.config.path !== 'string' || typeof stamp.config.sha256 !== 'string' ||
+        !Array.isArray(stamp.outputs)) return null;
+      const rigEntry = stamp.outputs.find((e): e is Record<string, unknown> => isRecord(e) && e.path === 'rig.json');
+      const rigPath = join(context.rigDir, 'rig.json');
+      if (rigEntry === undefined || typeof rigEntry.sha256 !== 'string' || !existsSync(rigPath)) return null;
+      if (createHash('sha256').update(readFileSync(rigPath)).digest('hex') !== rigEntry.sha256) return null;
+      const cfgPath = resolve(context.rigDir, stamp.config.path);
+      const loaded = loadConfigWithBytes(cfgPath);
+      return inputFileRecord(loaded.bytes, cfgPath).sha256 === stamp.config.sha256 ? loaded.config : null;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function bandSiteLabel(site: RegionBandSite): string {
+  if (site === 'band') return 'inside the band';
+  if (site === 'cutoff') return 'at its cutoff';
+  return site === 'region' ? 'inside the region' : 'outside the band';
+}
+
+function bandTargetShare(part: string, targetBone: string, bindings: readonly StepBinding[]): number {
+  const twin = turnTwin(part, targetBone);
+  const stopped = `${targetBone}_d`;
+  let share = 0;
+  for (const b of bindings) {
+    if (b.bone === targetBone || b.bone === twin || b.bone === stopped) share += b.weight;
+  }
+  return round6(share);
+}
+
+/**
+ * Issue #1598: when a vertex of a failing `TEXTURE_STRETCH` edge lies inside a declared contour band (`0 < d < band`)
+ * or at its cutoff (`d === band`), name the governing contour band — its region, its target bone, its declared width
+ * (`band`), and each vertex's band position and written share — from the verified config declaration and `rig.json`'s
+ * weights alone. Empty for every other edge so unrelated failures keep their text byte for byte.
+ */
+export function contourBandText(
+  rig: Record<string, unknown>,
+  slot: string,
+  attachment: string,
+  edge: readonly number[],
+  context?: WeightStepContext,
+  slotParts?: ReadonlyMap<string, string>,
+): string {
+  if (context?.stage === undefined || edge.length === 0) return '';
+  const cfg = loadVerifiedContourConfig(context);
+  if (cfg === null) return '';
+  const part = slotParts?.get(slot) ?? slot;
+  const meshPart = part in cfg.meshes ? part : slot in cfg.meshes ? slot : null;
+  if (meshPart === null) return '';
+  const mesh = cfg.meshes[meshPart];
+  if (!('contour' in mesh)) return '';
+  const regions = contourRegionsOf(mesh.contour);
+  if (!regions.some((rg) => rg.band > 0)) return '';
+  const skins = isRecord(rig.skins) ? rig.skins : {};
+  const skin = isRecord(skins.default) ? skins.default : {};
+  const onSlot = isRecord(skin[slot]) ? skin[slot] : {};
+  const att = onSlot[attachment];
+  if (!isRecord(att) || !Array.isArray(att.weights)) return '';
+  const transforms = setupWorld(rig);
+  const vertices: Array<{ index: number; point: Point; bindings: StepBinding[] }> = [];
+  for (const v of edge) {
+    const row = att.weights[v];
+    if (!Array.isArray(row) || row.length === 0 || row.some((b) => !isRecord(b) || typeof b.bone !== 'string' ||
+      typeof b.x !== 'number' || typeof b.y !== 'number' || typeof b.weight !== 'number')) return '';
+    const bindings = (row as StepBinding[]).filter((b) => b.weight > 0);
+    const first = bindings[0];
+    if (first === undefined) return '';
+    const transform = transforms.get(first.bone);
+    if (transform === undefined) return '';
+    const rx = transform.a * first.x + transform.b * first.y + transform.worldX - context.stage.x;
+    const ry = cropToSpineY(transform.c * first.x + transform.d * first.y + transform.worldY - context.stage.y, context.stage.height);
+    const ux = Math.round(rx * GRID);
+    const uy = Math.round(ry * GRID);
+    if (!Number.isFinite(ux) || !Number.isFinite(uy) ||
+      Math.abs(rx * GRID - ux) > CONTOUR_GRID_TOLERANCE || Math.abs(ry * GRID - uy) > CONTOUR_GRID_TOLERANCE) return '';
+    vertices.push({ index: v, point: [ux / GRID, uy / GRID], bindings });
+  }
+  const explicitCount = mesh.contour.regions?.length ?? 0;
+  const clauses: string[] = [];
+  for (const [k, reg] of regions.entries()) {
+    if (reg.band <= 0) continue;
+    const sites = vertices.map((v) => ({ ...v, site: regionBandSite(v.point, reg), share: bandTargetShare(meshPart, reg.bone, v.bindings) }));
+    if (!sites.some((s) => s.site === 'band' || s.site === 'cutoff')) continue;
+    if (sites.some((s) => {
+      if (s.site !== 'band' && s.site !== 'region') return false;
+      const g = regionWeight(s.point, reg);
+      const effective = k < explicitCount && reg.falloff !== 'linear' && g < 0.5 ? 4 * g * g * (1 - g) : g;
+      return effective >= 1e-4 && s.share <= 0;
+    })) continue;
+    const atField = k < explicitCount ? `meshes.${meshPart}.contour.regions[${k}].band` : `meshes.${meshPart}.contour.bust`;
+    const perVertex = sites.map((s) => `vertex ${s.index} is ${bandSiteLabel(s.site)} (share ${s.share})`).join(' and ');
+    clauses.push(`contour band region "${reg.name}" (target bone "${reg.bone}", width ${reg.band} px at ${atField}): ${perVertex}, so the band's falloff governs this edge`);
+  }
+  return clauses.join('; ');
+}
 
 /** Recover only a replay that reproduces every written share on the named vertices. */
 function weightCutReplay(rig: Record<string, unknown>, part: string, rows: ReadonlyMap<number, StepBinding[]>, context?: WeightStepContext): { raw: Map<number, Influence[]>; limits: InfluenceLimits } | null {
@@ -10182,10 +10301,11 @@ export function stretchLine(geo: IdleGeometry | null, path: string, problems: Pr
     if (severity > TEXTURE_STRETCH_CEILING) {
       failed = true;
       const step = bound === undefined ? '' : weightStepText(bound.rig, m.slot, m.attachment, at.edge, bound);
+      const band = bound === undefined ? '' : contourBandText(bound.rig, m.slot, m.attachment, at.edge, bound, slotParts);
       problems.push({
         code: 'CHECK_TEXTURE_STRETCH',
         object: `mesh "${m.slot}" ${stretchAtText(at)}`,
-        detail: `the edge is ${round3(at.ratio)} times its rest length (max(ratio, 1/ratio) ${severity}); <= ${TEXTURE_STRETCH_CEILING} is required${bound === undefined ? '' : `; ${edgeBonesText(bound.rig, bound.motion, m.slot, m.attachment, at.edge)}${step === '' ? '' : `; ${step}`}`} — the texture on it is ${at.ratio >= 1 ? 'stretched' : 'squeezed'}: the bones this mesh is weighted to move apart (amplitudes too large down a chain), or a vertex blends bones that move against each other`,
+        detail: `the edge is ${round3(at.ratio)} times its rest length (max(ratio, 1/ratio) ${severity}); <= ${TEXTURE_STRETCH_CEILING} is required${bound === undefined ? '' : `; ${edgeBonesText(bound.rig, bound.motion, m.slot, m.attachment, at.edge)}${step === '' ? '' : `; ${step}`}${band === '' ? '' : `; ${band}`}`} — the texture on it is ${at.ratio >= 1 ? 'stretched' : 'squeezed'}: the bones this mesh is weighted to move apart (amplitudes too large down a chain), or a vertex blends bones that move against each other`,
       });
     }
   }
