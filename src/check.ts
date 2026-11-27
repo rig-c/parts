@@ -98,7 +98,7 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import type { Candidate, Piece, Viewport as RootCoverageViewport } from '@rig-c/core/render-shared';
 import { fillHoles } from './raster/morph.ts';
-import { closeSync, copyFileSync, cpSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, copyFileSync, cpSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { argvPathFromOut, diagnosticSegment, diagnosticSiblings, unsafeSegmentReason } from './outputpaths.ts';
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { measureRecomposite, type RecompositeFigures, recompositeRecord, scenePhrase, sourceInRig, figureSilhouette } from './assemble.ts';
@@ -10000,7 +10000,7 @@ function loadVerifiedContourConfig(context?: WeightStepContext): CharacterConfig
       const rigPath = join(context.rigDir, 'rig.json');
       if (rigEntry === undefined || typeof rigEntry.sha256 !== 'string' || !existsSync(rigPath)) return null;
       if (createHash('sha256').update(readFileSync(rigPath)).digest('hex') !== rigEntry.sha256) return null;
-      const cfgPath = resolve(context.rigDir, stamp.config.path);
+      const cfgPath = resolve(realpathSync(context.rigDir), stamp.config.path);
       const loaded = loadConfigWithBytes(cfgPath);
       return inputFileRecord(loaded.bytes, cfgPath).sha256 === stamp.config.sha256 ? loaded.config : null;
     }
