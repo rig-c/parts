@@ -2393,7 +2393,8 @@ export function motionSeamLines(line: MotionSeamLine, plant: MotionSeamPlant = {
     ...motionJointContactLines(line),
     ...unmeasured,
     ...line.pairs.filter((p) => p.unread !== undefined).map((p) => `seam "${p.pair}" (${p.declared.join('; ')}): not read — ${String(p.unread)}`),
-    ...line.rows.filter((r) => r.status === 'skip').map((r) => `seam "${r.pair}" in "${r.animation}": SKIP — rigc read no band on any of the ${r.drawn} frame(s) both slots draw, so there is no seam to read`),
+    ...line.rows.filter((r) => r.status === 'skip' || r.banded <= 0).map((r) =>
+      `seam "${r.pair}" in "${r.animation}": SKIP — rigc read no band on any of the ${r.drawn} frame(s) both slots draw, so there is no seam to read`),
     ...(plant.silent === true ? [] : line.rows.filter((r) => r.opens.length > 0).map(r => line.pairs.some(p => p.pair === r.pair && p.root !== undefined)
       ? `FAIL seam "${r.pair}" opens on ${r.opens.length} frame(s) ${frameRuns(r.opens)} max ${r.max_px} px in "${r.animation}" — body-root gapOpen + UNDER-owned ghost over the one-cell floor`
       : motionSeamWarnText(r))),
