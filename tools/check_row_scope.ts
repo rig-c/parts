@@ -3,6 +3,15 @@ import { pathToFileURL } from 'node:url';
 import { CHECK_ROW_FAMILY, CHECK_ROW_PATHS, checkRow, checkSlotParts, checkSlotRow, serializeCheckRows, type CheckRowFamily } from '../src/checkrow.ts';
 /** An omission guard over emitted object rows, not a field-name classifier. */
 const object = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
+const CORE_LOOP_SEAM_PATH = ['loop_seam', 'series'] as const;
+export const CORE_LOOP_SEAM_SERIES_PATH = CORE_LOOP_SEAM_PATH.join('.');
+
+/** Core owns the direct sample records. Nested arrays still go through the guard. */
+function coreLoopSeamSeries(report: Record<string, unknown>, at: readonly string[], key: string): boolean {
+  return at.length === 1 && at[0] === CORE_LOOP_SEAM_PATH[0] && key === CORE_LOOP_SEAM_PATH[1] &&
+    report.spec === 'rigc-loop-seam/1' && report.status === 'met';
+}
+
 export function checkRowFaults(value: unknown): string[] {
   const faults: string[] = [];
   const check = (row: Record<string, unknown>, path: string): void => {
@@ -10,17 +19,17 @@ export function checkRowFaults(value: unknown): string[] {
     const subjects = row.row_subjects;
     if (!Array.isArray(subjects) || !subjects.every(s => typeof s === 'string' && s.length > 0) || subjects.length !== (row.row_scope === 'part' ? 1 : row.row_scope === 'pair' ? 2 : 0)) faults.push(`${path}: invalid row_subjects`);
   };
-  const walk = (v: unknown, path: string): void => {
+  const walk = (v: unknown, path: string, keys: string[], coreSeries = false): void => {
     if (Array.isArray(v)) v.forEach((entry, i) => {
-      if (object(entry)) check(entry, `${path}[${i}]`);
-      walk(entry, `${path}[${i}]`);
+      if (!coreSeries && object(entry)) check(entry, `${path}[${i}]`);
+      walk(entry, `${path}[${i}]`, [...keys, '[]']);
     });
     else if (object(v)) for (const [key, entry] of Object.entries(v)) {
       if (key === 'lines' && path.endsWith('.requirements') && object(entry)) for (const [name, row] of Object.entries(entry)) if (object(row)) check(row, `${path}.lines.${name}`);
-      walk(entry, `${path}.${key}`);
+      walk(entry, `${path}.${key}`, [...keys, key], coreLoopSeamSeries(v, keys, key));
     }
   };
-  walk(value, 'check');
+  walk(value, 'check', []);
   return faults;
 }
 export function checkRowCombinations(value: unknown): string[] {
@@ -54,15 +63,15 @@ export function checkRowSchemaFaults(value: unknown, requireFamily = true): stri
     const subjects = v.row_subjects;
     if (!Array.isArray(subjects) || !subjects.every(s => typeof s === 'string' && s.length > 0) || subjects.length !== (v.row_scope === 'part' ? 1 : v.row_scope === 'pair' ? 2 : 0)) faults.push(`${shown}: invalid row_subjects: scope ${String(v.row_scope)} requires ${v.row_scope === 'part' ? 1 : v.row_scope === 'pair' ? 2 : 0} named subject(s); found ${JSON.stringify(subjects)}${Array.isArray(v.parts) ? ` for parts ${JSON.stringify(v.parts)}` : ''}`);
   };
-  const walk = (v: unknown, path: string[]): void => {
+  const walk = (v: unknown, path: string[], coreSeries = false): void => {
     if (Array.isArray(v)) v.forEach((entry, i) => {
-      if (object(entry)) row(entry, [...path, String(i)], path);
+      if (!coreSeries && object(entry)) row(entry, [...path, String(i)], path);
       walk(entry, [...path, '[]']);
     });
     else if (object(v)) for (const [key, entry] of Object.entries(v)) {
       const next = [...path, key];
       if (key === 'lines' && path.length === 1 && path[0] === 'requirements' && object(entry)) for (const [name, item] of Object.entries(entry)) if (object(item)) row(item, [...next, name], [...next, name]);
-      walk(entry, next);
+      walk(entry, next, coreLoopSeamSeries(v, path, key));
     }
   };
   walk(value, []);
@@ -111,6 +120,23 @@ export function runCheckRowSchemaChecks(say: (name: string, ok: boolean, detail:
   const unknown = checkRowSchemaFaults({ future: [{ ...checkRow('loop_physics', 'rig', false, []) }] });
   say('TY827_A_LABELLED_UNREGISTERED_OBJECT_ARRAY_IS_REFUSED', unknown.some(p => p.includes('unregistered object-row path')),
     unknown.join('; '), 'labels alone cannot extend the schema');
+  const sample = { warmup: 0, differingPixels: 0, maxChannelDelta: 0, pixelsAbove: 0 };
+  const seam = { spec: 'rigc-loop-seam/1', status: 'met', series: [sample] };
+  const native = { loop_seam: seam };
+  const foreignPlants = [
+    { value: { loop_seam: { ...seam, another: [sample] } }, path: 'loop_seam.another.0' },
+    { value: { loop_seam: { ...seam, series: [{ ...sample, nested: [sample] }] } }, path: 'loop_seam.series.[].nested.0' },
+    { value: { loop_seam: { ...seam, spec: 'unknown' } }, path: 'loop_seam.series.0' },
+    { value: { wrapper: native }, path: 'wrapper.loop_seam.series.0' },
+    { value: { 'loop_seam.series': [sample] }, path: 'loop_seam.series.0' },
+  ];
+  const nativeFaults = [...checkRowSchemaFaults(native), ...checkRowFaults(native)];
+  const missed = foreignPlants.filter(({ value, path }) =>
+    !checkRowSchemaFaults(value).includes(`${path}: unregistered object-row path`) || checkRowFaults(value).length === 0);
+  say('TY834_ONLY_THE_NATIVE_CORE_LOOP_SEAM_SERIES_HAS_NO_PARTS_ROW_LABELS',
+    nativeFaults.length === 0 && missed.length === 0,
+    `native faults: ${nativeFaults.join('; ') || 'none'}; missed plants: ${missed.map(({ path }) => path).join(', ') || 'none'}`,
+    'the met Core report keeps its own sample records at the exact path. Other object rows remain guarded, including arrays inside a sample.');
   const withoutSymbols = (value: unknown): unknown => Array.isArray(value) ? value.map(withoutSymbols) : object(value) ? Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, withoutSymbols(entry)])) : value;
   const bytes = fixtures.every(f => {
     const expected = JSON.stringify(withoutSymbols(f.value), null, 1) + '\n';

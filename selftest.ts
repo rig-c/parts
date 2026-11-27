@@ -24,7 +24,7 @@ import { runOccluderConfigChecks, runOccluderCopyChecks } from './tools/check_oc
 import './tools/check_row_guard.ts';
 import { runSeamCellChecks } from './tools/check_seam_cells.ts';
 import { motionSeamFinding } from './src/check.ts';
-import { checkRowFaults, checkRowSchemaFaults, checkRowCombinations, runCheckRowSchemaChecks, runCheckRowGuardChecks } from './tools/check_row_scope.ts';
+import { checkRowFaults, checkRowSchemaFaults, checkRowCombinations, CORE_LOOP_SEAM_SERIES_PATH, runCheckRowSchemaChecks, runCheckRowGuardChecks } from './tools/check_row_scope.ts';
 import { rowTableFaults, checkRowTypeInventory } from './tools/check_row_reference.ts';
 import { runClothTargetsChecks } from './tools/check_cloth_targets.ts';
 import { validationRebuildProbe } from './fixtures/validation_rebuild.ts';
@@ -46881,10 +46881,14 @@ function runTreeSuite(_corpus: string | null = null, pre = false): number {
     `${motionPredicates1092.length} combinations; non-root skip/open warns, root read/unbanded/open is not a finding`,
     'only the row labels change; the existing warning count and root failure logic stay in place');
   const rowType1092 = checkRowTypeInventory(import.meta.dir);
-  const rowTypePlant1092 = checkRowTypeInventory(import.meta.dir, '\nexport interface CheckFigures { planted_rows: Array<{ measured: number }>; planted_objects: object[]; planted_unknown: unknown }\n');
-  say('TY831_SERIALIZED_OBJECT_ARRAY_TYPES_REQUIRE_REGISTERED_PATHS', rowType1092.arrays.length > 0 && rowType1092.faults.length === 0 && rowTypePlant1092.faults.some(f => f === 'planted_rows: object-array type has no registered family') && rowTypePlant1092.faults.some(f => f === 'planted_objects: object-array type has no registered family') && rowTypePlant1092.faults.some(f => f === 'planted_unknown: unknown output type has no documented schema exclusion'),
-    `${rowType1092.arrays.length} declared object-array paths; ${rowType1092.unknown.length} explicit open-type exclusions; ${rowType1092.faults.join('; ') || 'record-array, object-array and unknown-type plants refused'}`,
-    'type coverage is independent of whether a fixture emits a row, and open legacy figure dictionaries remain guarded recursively at serialization');
+  const unregisteredRowType = (path: string): string => `${path}: object-array type has no registered family`;
+  const rowTypePlant1092 = checkRowTypeInventory(import.meta.dir, '\nexport interface CheckFigures { planted_rows: Array<{ measured: number }>; planted_objects: object[]; planted_unknown: unknown; planted_loop_seam: { series: Array<{ warmup: number }> } }\n');
+  say('TY831_SERIALIZED_OBJECT_ARRAY_TYPES_REQUIRE_REGISTERED_PATHS',
+    rowType1092.arrays.includes(CORE_LOOP_SEAM_SERIES_PATH) && rowType1092.faults.length === 0 &&
+    ['planted_rows', 'planted_objects', 'planted_loop_seam.series'].every(path => rowTypePlant1092.faults.includes(unregisteredRowType(path))) &&
+    rowTypePlant1092.faults.includes('planted_unknown: unknown output type has no documented schema exclusion'),
+    `${rowType1092.arrays.length} declared object-array paths including Core's ${CORE_LOOP_SEAM_SERIES_PATH}; ${rowType1092.unknown.length} explicit open-type exclusions; ${rowType1092.faults.join('; ') || 'record-array, object-array, lookalike and unknown-type plants refused'}`,
+    'type coverage is independent of whether a fixture emits a row. Core owns the exact loop seam series path. Open legacy figure dictionaries remain guarded recursively at serialization.');
   const rowDoc1089 = readFileSync(join(import.meta.dir, 'docs/AUTHORING.md'), 'utf8');
   const rowDocFaults1089 = rowTableFaults(import.meta.dir, rowDoc1089);
   const rowDocPlant1089 = rowDoc1089.replace('<!-- check-row-table:begin -->', '<!-- removed row table -->');
