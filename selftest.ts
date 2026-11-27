@@ -18251,7 +18251,7 @@ const CHECK_KEYS = ['spec', 'bar_outcomes', 'build', 'gate_spine_html_green', 'r
 // The signed wire contract, independent of the producer's classifier and legacy reader.
 const CHECK_SKIP_REASONS = {
   gate: [],
-  loop: ['no-idle'],
+  loop: ['no-idle', 'physics-omitted'],
   seam: ['no-parts'],
   BREATH_VISIBLE: ['no-idle', 'no-parts', 'no-eligible-region', 'no-reading'],
   BLINK_NO_HOLE: ['no-idle', 'no-parts', 'no-eye-parts', 'no-blink-track', 'no-reading'],
@@ -24365,26 +24365,70 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
     const cp = runCli(['check', '--rig', closedPhys, '--out', join(dir, 'phys-out')]);
     const cpf = readJsonFile(join(dir, 'phys-out', 'check.json'));
     const withSim = idleEnds(join(dir, 'phys-out'));
+    const cpLoopLine = cp.out.split('\n').find((l) => l.startsWith('  loop: ')) ?? '';
+    const cpSummary = cp.out.split('\n').find((l) => l.startsWith('check: ')) ?? '';
     say(
-      'CK512_PHYSICS_ON_A_CLOSED_KEYED_LOOP_PASSES_AND_IS_REPORTED_ON_ITS_OWN_LINE',
+      'CK512_PHYSICS_ON_A_CLOSED_KEYED_LOOP_SKIPS_THE_LOOP_BAR_AND_STATES_PHYSICS_ON_FRAMES_WERE_NOT_MEASURED',
       cp.status === 0 &&
         cp.out.includes('check: PASS') &&
         failLine(cp.out, 'CHECK_LOOP_CLOSES') === null &&
         cpf !== null &&
-        checkBarIs(cpf, 'loop', 'PASS') &&
+        cpf.PASS === true &&
+        !checkBarIs(cpf, 'loop', 'PASS') &&
+        checkBarIs(cpf, 'loop', 'physics-omitted') &&
+        checkStatuses(cpf as unknown as CheckFigures).loop === 'SKIP' &&
         cpf.loop_max_diff === 0 &&
+        JSON.stringify(cpf.skipped) === '{"loop":"physics-on idle frames not measured; 1 physics constraint(s) omitted"}' &&
         JSON.stringify(cpf.loop_physics) === '[{"name":"bob_phys","bone":"bob","in":"rig.json","row_scope":"rig","row_kind":"evidence","row_subjects":[]}]' &&
         Object.keys(cpf).join(',') === CHECK_KEYS.flatMap(key => {
           if (key === 'loop_max_diff') return [key, 'loop_physics'];
           if (key === 'RECOMPOSITE_HOLES') return [CLOTH_LINE, PHYSICS_CONTRIBUTES_LINE, key];
+          if (key === COINCIDE_LINE) return ['skipped', key];
           return [key];
         }).join(',') &&
+        cpLoopLine.startsWith('  loop: SKIP — physics-on frames not measured (1 physics constraint(s) omitted, named on the `loop physics:` line; ') &&
+        cpLoopLine.includes('; physics-off idle ') &&
+        cpLoopLine.endsWith(': max |d| 0 (0 required)') &&
+        /\bskipped \((?:[^)]*, )?loop(?:, [^)]*)?\)/.test(cpSummary) &&
         cp.out.split('\n').filter((l) => l.startsWith('  loop physics: ')).length === 1 &&
         cp.out.includes(physLine) &&
         withSim !== null &&
         withSim > 0,
-      `exit ${cp.status}; ${cp.out.split('\n').find((l) => l.startsWith('  loop physics: '))?.trim() ?? 'no loop physics line'}; check.json loop_max_diff ${String(cpf?.loop_max_diff)}, loop_physics ${JSON.stringify(cpf?.loop_physics ?? null)}; the idle as rendered with the constraint (idle_frames/) f0000 vs its last frame: max |d| ${withSim ?? 'not read'}/255`,
-      'the keys close, and the render with the constraint does not (the witness: idle_frames/ is rendered with it, and its ends differ), which is what the loop bar refused before issue #183; the constraint is named with its bone on one line and in check.json beside the figure it was left out of, and judged by nothing',
+      `exit ${cp.status}; ${cpLoopLine.trim()}; ${cp.out.split('\n').find((l) => l.startsWith('  loop physics: '))?.trim() ?? 'no loop physics line'}; check.json bar_outcomes.loop ${JSON.stringify(checkBarOutcomes(cpf).loop ?? null)}, skipped ${JSON.stringify(cpf?.skipped ?? null)}, loop_max_diff ${String(cpf?.loop_max_diff)}, loop_physics ${JSON.stringify(cpf?.loop_physics ?? null)}; the idle as rendered with the constraint (idle_frames/) f0000 vs its last frame: max |d| ${withSim ?? 'not read'}/255`,
+      'issue #1590: the physics-off posed loop closes while the shipped physics-on idle_frames/ differ at the wrap; check must NOT report loop PASS, must name the omitted constraint, and must say physics-on frames were not measured while keeping top-level PASS true',
+    );
+
+    const zeroPhysCheckBytes = existsSync(join(out, 'check.json')) ? readFileSync(join(out, 'check.json'), 'utf8') : '';
+    const pre1590ZeroPhysJson = fig === null ? '' : `${JSON.stringify({
+      ...fig,
+      bar_outcomes: { ...checkBarOutcomes(fig), loop: { status: fig.loop_max_diff === 0 ? 'PASS' : 'FAIL' } },
+    }, null, 1)}\n`;
+    const zeroPhysLoopLine = ok.out.split('\n').find((l) => l.startsWith('  loop: ')) ?? '';
+    const plantedFalseGreen = cpf === null ? [] : checkOutcomeFaults({
+      ...cpf,
+      bar_outcomes: { ...checkBarOutcomes(cpf), loop: { status: 'PASS' } },
+    });
+    const legacyVerdictCaught = cpf !== null && checkStatuses(cpf as unknown as CheckFigures).loop === 'SKIP' && !checkBarIs({
+      ...cpf,
+      bar_outcomes: { ...checkBarOutcomes(cpf), loop: { status: 'PASS' } },
+    }, 'loop', 'physics-omitted');
+    say(
+      'CK1590_ZERO_PHYSICS_CHECK_JSON_IS_BYTE_IDENTICAL_AND_A_PLANTED_LOOP_PASS_WITH_OMITTED_PHYSICS_IS_CAUGHT',
+      fig !== null &&
+        fig.PASS === true &&
+        checkBarIs(fig, 'loop', 'PASS') &&
+        checkStatuses(fig as unknown as CheckFigures).loop === 'PASS' &&
+        !('loop_physics' in fig) &&
+        !('skipped' in fig) &&
+        zeroPhysCheckBytes.length > 0 &&
+        zeroPhysCheckBytes === pre1590ZeroPhysJson &&
+        zeroPhysLoopLine.startsWith('  loop: idle ') &&
+        !zeroPhysLoopLine.includes('SKIP') &&
+        !zeroPhysLoopLine.includes('not measured') &&
+        plantedFalseGreen.length === 0 &&
+        legacyVerdictCaught,
+      `0-physics loop outcome ${JSON.stringify(checkBarOutcomes(fig).loop ?? null)}, byte-identical=${zeroPhysCheckBytes === pre1590ZeroPhysJson}, line="${zeroPhysLoopLine.trim()}"; planted physics-omitted PASS caught=${legacyVerdictCaught}`,
+      'issue #1590 positive and planted controls: a rig with 0 physics constraints keeps loop PASS and byte-identical check.json and console line, while claiming loop PASS on a rig with omitted physics contradicts checkStatuses and checkBarIs',
     );
 
     const windRig = join(dir, 'named-wind');
@@ -24404,7 +24448,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
     const windRefusal = failLine(windCheck.out, 'CHECK_RIGC_GREEN');
     say(
       'CK1395_PHYSICS_ONLY_WIND_BESIDE_IDLE_PASSES_THE_KEYED_LOOP_AND_NAMES_THE_FOLD_SKIP',
-      windCheck.status === 0 && checkBarIs(windFigures, 'loop', 'PASS') && windFigures?.loop_max_diff === 0 &&
+      windCheck.status === 0 && checkBarIs(windFigures, 'loop', 'physics-omitted') && windFigures?.loop_max_diff === 0 &&
         windFolds?.status === 'PASS' && JSON.stringify(windFolds.animations) === '["idle","wind","mixed"]' &&
         JSON.stringify(windFolds.physics_off_skipped) === '["wind"]' &&
         windCheck.out.split('\n').includes(`${physLine}; physics-only animation(s) omitted from the keyed build: "wind"`) &&
@@ -28931,19 +28975,20 @@ function runLoopSuite(): number {
       "a consumer that has just read check's `max |d| 0` and then 'the loop will jump' needs the cause and the flag on the line that reports the jump; with no physics the lead-in settles nothing, so it is not offered, and a set that closes has no jump to explain whatever the rig holds",
     );
 
-    // Issue #325: check's loop line says on itself that physics was left out of its comparison. The figures are written
-    // by hand: the demo's idle, 41 frames at 12 fps, its last at 40 x (1/12) s as rigc writes it.
+    // Issue #325, #1590: check's loop line says SKIP — physics-on frames not measured when physics constraints were
+    // omitted and the physics-off reading closed, and FAIL when the physics-off reading itself did not close.
     const idle41 = { frames: 41, fps: 12, duration: 40 * (1 / 12), lastIndex: 40 };
     const checkPlain = loopCheckLine(idle41, 0, 0);
     const withPhys = loopCheckLine(idle41, 0, 29);
+    const openWithPhys = loopCheckLine(idle41, 7, 29);
     say(
-      'LP12_CHECKS_LOOP_LINE_SAYS_ON_ITSELF_THAT_ITS_PHYSICS_WAS_LEFT_OUT',
+      'LP12_CHECKS_LOOP_LINE_STATES_SKIP_NOT_MEASURED_AND_LABELS_THE_PHYSICS_OFF_FIGURE',
       checkPlain === `loop: idle 41 frame(s) at 12 fps, f0000 vs f0040 (t = ${40 * (1 / 12)}s): max |d| 0 (0 required)` &&
-        withPhys.startsWith(`loop: idle 41 frame(s) at 12 fps, f0000 vs f0040 (t = ${40 * (1 / 12)}s) with the rig's 29 physics constraint(s) left out (`) &&
+        withPhys === `loop: SKIP — physics-on frames not measured (29 physics constraint(s) omitted, named on the \`loop physics:\` line; rendered with them, the ends need not meet — \`build --loop --lead-in <n>\`); physics-off idle 41 frame(s) at 12 fps, f0000 vs f0040 (t = ${40 * (1 / 12)}s): max |d| 0 (0 required)` &&
         withPhys.includes(remedy) &&
-        withPhys.endsWith(': max |d| 0 (0 required)'),
-      `no physics: ${checkPlain}; 29 constraints: ${withPhys}`,
-      "the comparison's max |d| 0 is true of the rig without its physics; said five lines later it reads as the loop closing, which the frames rendered with physics do not",
+        openWithPhys === `loop: FAIL — physics-on frames not measured (29 physics constraint(s) omitted, named on the \`loop physics:\` line); physics-off idle 41 frame(s) at 12 fps, f0000 vs f0040 (t = ${40 * (1 / 12)}s): max |d| 7 (0 required)`,
+      `no physics: ${checkPlain}; 29 constraints closed: ${withPhys}; 29 constraints open: ${openWithPhys}`,
+      'issue #1590: with physics constraints omitted, a closed physics-off reading prints SKIP — physics-on frames not measured with the physics-off figure labelled as physics-off, an open physics-off reading prints FAIL, and a 0-physics rig keeps its exact line',
     );
 
     const openIdx = join(dir, 'open-indexed.png');
@@ -50325,7 +50370,8 @@ function runSceneSuite(): number {
           `${object} channel ${channel}: start ${start} at t=0; end ${end} at t=2; tolerance 0 (exact equality)`;
         const names = (result: ReturnType<typeof probe>, detail: string): boolean => result.problems.length === 1 &&
           result.problems[0].code === 'SCENE_ANIMATION_LOOP_CLOSES' && result.problems[0].object === 'scene.animations.take' &&
-          result.problems[0].detail.startsWith(`${detail}; identical endpoint poses are required (physics left out: `);
+          result.problems[0].detail.startsWith(`${detail}; identical posed endpoint values with physics omitted are required (physics omitted: `) &&
+          result.problems[0].detail.endsWith('; physics-on frames not measured)');
         const summary = (result: ReturnType<typeof probe>) => result.problems.map(problemLine).join(' | ') || 'no refusal';
         const sameBonesAndSlots = (result: ReturnType<typeof probe>): boolean => result.poses.length === 2 &&
           JSON.stringify(result.poses[0].bones) === JSON.stringify(result.poses[1].bones) &&
@@ -50368,13 +50414,28 @@ function runSceneSuite(): number {
         // 2^-20 is exactly representable in float32 and float64; it must never become an epsilon pass.
         const tiny = probe({ bones: [boneTrack('plate', 0, 2 ** -20)] });
         const note = 'numeric tolerance 0 (exact equality)';
-        const stableLoopMessage = (text: string) => text.includes('Issue #1358') && text.includes('first differing bone or slot') && text.includes(note);
+        const stableLoopMessage = (text: string) => text.includes('Issue #1358') && text.includes('first differing bone or slot') && text.includes(note) && text.includes('physics-on frames');
         say('SC136_LOOP_REJECTS_EXACT_BINARY_TINY_DELTA_AND_DOCUMENTS_UNCHANGED_GATE',
           names(tiny, expected('bone "plate"', 'worldX', '0', JSON.stringify(2 ** -20))) &&
             closed.poses.length === 2 && closed.problems.length === 0 &&
             stableLoopMessage(stabilityClips) && !stableLoopMessage(stabilityClips.replace(note, 'numeric tolerance 1')) &&
             green.status === 0 && modelText !== null && readFileSync(modelFile, 'utf8') === modelText,
           `${summary(tiny)}; equal endpoint companion ${summary(closed)}; gated model file unchanged; tolerance note and planted relaxation checked`, why);
+        const greenCheck = readJsonFile(join(out, 'check', 'check.json'));
+        const greenPhys = Array.isArray(greenCheck?.loop_physics) ? greenCheck.loop_physics : [];
+        const greenSkipped = isDriveRecord(greenCheck?.skipped) ? greenCheck.skipped : null;
+        say('SC1590_COMPOSED_PHYSICS_SCENE_SKIPS_LOOP_BAR_AND_NAMES_UNMEASURED_FRAMES',
+          green.status === 0 &&
+            greenCheck?.PASS === true &&
+            !checkBarIs(greenCheck, 'loop', 'PASS') &&
+            checkBarIs(greenCheck, 'loop', 'physics-omitted') &&
+            greenCheck?.loop_max_diff === 0 &&
+            greenPhys.length > 0 &&
+            typeof greenSkipped?.loop === 'string' &&
+            greenSkipped.loop.includes('physics-on idle frames not measured') &&
+            green.out.includes('[check]   loop: SKIP — physics-on frames not measured'),
+          JSON.stringify({ outcome: checkBarOutcomes(greenCheck).loop ?? null, skipped: greenSkipped?.loop ?? null, physics: greenPhys.length }),
+          'issue #1590: compose on a physics character whose posed loop closes keeps PASS true while check reports loop SKIP (physics-omitted) and states that physics-on frames were not measured');
       }
 
     }
@@ -53825,10 +53886,11 @@ function checkSideDrift(side: Pick<CheckSide, 'line' | 'status'>, stdout: string
   const fig = checkJson as Record<string, unknown>;
   const notMet = barsNotMet(fig);
   const read = (bar: string, v: unknown): string => (v === null ? 'SKIP' : notMet.includes(bar) ? 'FAIL' : 'PASS');
+  const loopUnmeasured = (v: unknown): boolean => v === null || (Array.isArray(fig.loop_physics) && fig.loop_physics.length > 0 && !notMet.includes('loop'));
   const want: Array<[string, string]> = [];
   for (const [k, v] of Object.entries(fig)) {
     if (k === 'gate_spine_html_green') want.push(['gate', v === true ? 'PASS' : 'FAIL']);
-    else if (k === 'loop_max_diff') want.push(['loop', read('loop', v)]);
+    else if (k === 'loop_max_diff') want.push(['loop', loopUnmeasured(v) ? 'SKIP' : read('loop', v)]);
     else if (k === 'seam_mean') want.push(['seam', read('seam', v)]);
     else if (typeof v === 'object' && v !== null && !Array.isArray(v) && typeof (v as { status?: unknown }).status === 'string') want.push([k, String((v as { status: string }).status)]);
   }

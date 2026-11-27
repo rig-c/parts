@@ -291,7 +291,7 @@ export function sceneRepeatSourceLoopProblems(modelText: string, object: string)
 }
 
 /** Measure the actual gated poses at both endpoints, without wrapping duration to zero.
- * Physics is omitted only from this observation, as in check's keyed-loop bar;
+ * Physics is omitted from this posed-value check, and physics-on frames are not measured here;
  * the gated/emitted motion and physics constraints are never edited.
  */
 export function sceneClipLoopProblems(modelText: string, clips: SceneAnimations, repeatedIdle = false): Problem[] {
@@ -306,10 +306,10 @@ export function sceneClipLoopProblems(modelText: string, clips: SceneAnimations,
           : poses[0].animationTime !== 0 || poses[1].trackTime !== clip.duration
             ? `pose sample clocks start ${poses[0].animationTime}, end ${poses[1].trackTime}; required 0 and ${clip.duration}; tolerance 0 (exact equality)`
             : poseDifferenceDetail(poses[0], poses[1]);
-        problems.push({ code: 'SCENE_ANIMATION_LOOP_CLOSES', object: `scene.animations.${name}`, detail: `${difference}; identical endpoint poses are required (physics left out: ${physics.join(', ') || 'none'})` });
+        problems.push({ code: 'SCENE_ANIMATION_LOOP_CLOSES', object: `scene.animations.${name}`, detail: `${difference}; identical posed endpoint values with physics omitted are required (physics omitted: ${physics.join(', ') || 'none'}; physics-on frames not measured)` });
       } else if (name === 'idle' && repeatedIdle) {
         const { difference } = storedIdleLoopDifference(modelText);
-        if (difference !== null) problems.push({ code: 'SCENE_ANIMATION_LOOP_CLOSES', object: 'scene.animations.idle', detail: `${difference}; identical endpoint poses are required (physics left out: ${physics.join(', ') || 'none'})` });
+        if (difference !== null) problems.push({ code: 'SCENE_ANIMATION_LOOP_CLOSES', object: 'scene.animations.idle', detail: `${difference}; identical posed endpoint values with physics omitted are required (physics omitted: ${physics.join(', ') || 'none'}; physics-on frames not measured)` });
       }
     }
     return problems;
