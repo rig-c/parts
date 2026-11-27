@@ -1,18 +1,18 @@
 # Changelog
 
-## Unreleased
+## 2.63.0 (2026-11-27)
 
-**Read before upgrading**
+`compose` can now key a camera, with pan and zoom, as a view transform. The skeleton no longer has to move to zoom or pan a scene, and the stock stretch, fold and physics checks no longer read a camera move as a defect.
 
-* **Camera scenes write `spine-parts-scene-report/2`.** Update readers to accept
-  the new report before composing a scene with `camera`. Scenes without a
-  camera still write report /1, and the compose receipt retains its schema.
+**Read before upgrading:**
+
+* **Camera scenes write `spine-parts-scene-report/2`.** A scene that declares the new optional `camera` writes report /2 at the existing `scene.json` path. Report /2 binds the packed model's SHA-256 and records the keyed camera, the coverage at each sampled frame and the projected figure bounds. A reader that accepts only `/1` refuses it, by design, until it adopts `/2`. Nothing changes for a scene without `camera`: it still writes report /1, and its outputs are byte-identical to 2.62.0's at the same paths. `compose-run.json` stays `rig-compose-run/1`.
+* **New refusals, raised only for scenes that declare `camera`:** `SCENE_CAMERA_TRACK`, `SCENE_CAMERA_LOOP_CLOSES`, `SCENE_CAMERA_BACKDROP`, `SCENE_CAMERA_PLATE_EDGE` and `SCENE_CAMERA_PLATE_ALPHA`. A camera that uncovers the plate's edge, or samples plate pixels below full opacity on any sampled frame, is refused, and the refusal names the take, the frame and the measured overrun. The backdrop may move.
+* **`rig-parts --version` and the `package.version` field in run stamps and run records now read `2.63.0`.** The version bump changes those receipt bytes. The receipt fields and output hashes keep their meaning. No public example's expected file changes since 2.62.0.
 
 ### Features
 
-* **compose** adds optional pan and zoom keys using the scene animation easing
-  vocabulary. Coverage checks use the posed backdrop at every sampled camera
-  frame. See [Keyed scene camera](docs/AUTHORING.md#keyed-scene-camera-issue-1596).
+* **compose** adds optional pan and zoom keys per composed take, using the scene animations' `ease` and `curve` vocabulary, which Core evaluates. Coverage is checked against the posed backdrop at every sampled camera frame. See [Keyed scene camera](docs/AUTHORING.md#keyed-scene-camera-issue-1596). ([#1596](https://github.com/rig-c/parts/issues/1596), [#1599](https://github.com/rig-c/parts/pull/1599))
 
 ## 2.62.0 (2026-11-27)
 
