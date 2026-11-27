@@ -105,21 +105,25 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { documentPageLookup, readModel, type ModelPageRegion } from '@rig-c/core/core';
+import { CandidateAtlasError, CandidatePairError, CoreInputError, loadCandidate, PoserChoiceError, projector, renderFrame, SpineRuntimeError, throughPoser, type Piece, type Quad, type Viewport } from '@rig-c/core/render-shared';
 import { deformSliderCombinationProblem, type RigStop } from '@rig-c/core/rig';
 import { checkStage, gateThroughRigc, type Log } from './build.ts';
-import { ACCEPTABLE_BARS, barsNotMet, CHECK_SPEC, type CheckReport, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, LOOP_SEAM_BAR_UNMET, type LoopSeamRequest, type PackMode, parsePageSize, requirementsNotPass, type RigcRunner } from './check.ts';
+import { ACCEPTABLE_BARS, barsNotMet, CHECK_SPEC, type CheckReport, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, IDLE_FPS, LOOP_SEAM_BAR_UNMET, type LoopSeamRequest, type PackMode, parsePageSize, requirementsNotPass, type RigcRunner } from './check.ts';
 import { CONSTRAINT_BONE_FIELDS, editorReceiptProblems, ROOT_BONE } from './config.ts';
 import { cropToSpineY } from './coords.ts';
 import { failLine, PartsError, type Problem, refuseIfAny } from './errors.ts';
 import { readParts } from './parts.ts';
 import { missingReceipts, readEditorReceipts, type EditorReceipts } from './editreceipt.ts';
+import { edgeLength } from './length.ts';
 import type { MotionSpec } from './motion.ts';
 import { decodePngBytes } from './raster/png.ts';
+import type { Raster } from './raster/types.ts';
 import { clearComposeRun, COMPOSE_RUN_FILE, COMPOSE_RUN_SPEC, type ComposeRun, type RunStampFileEntry } from './runstamp.ts';
 import { readRequirements, type RequirementsFile } from './requirements.ts';
 import { OFFSET_PLACES, rigJsonText, type RigSpec } from './rig.ts';
 import { pyRound } from './round.ts';
-import { mergeSceneAnimations, readSceneAnimations, sceneBoneContext, sceneClipLoopProblems, sceneRepeatSourceLoopProblems, type SceneAnimations, type ScenePlacementPivot } from './sceneclips.ts';
+import { mergeSceneAnimations, readSceneAnimations, readSceneCamera, resolveSceneCamera, sceneBoneContext, sceneClipLoopProblems, sceneRepeatSourceLoopProblems, type ResolvedSceneCamera, type ResolvedSceneCameraTrack, type SceneAnimations, type SceneCamera, type SceneCameraSample, type ScenePlacementPivot } from './sceneclips.ts';
 import { repeatSceneKeys } from './scenerepeat.ts';
 
 /** The scene file's `spec`. */
@@ -127,6 +131,7 @@ export const SCENE_SPEC = 'spine-parts-scene/1';
 
 /** `scene.json`'s `spec`: what `compose` writes beside its outputs. */
 export const SCENE_REPORT_SPEC = 'spine-parts-scene-report/1';
+export const SCENE_CAMERA_REPORT_SPEC = 'spine-parts-scene-report/2';
 
 /** The file `compose` writes beside `rig/` and `check/`. */
 export const SCENE_REPORT_FILE = 'scene.json';
@@ -210,6 +215,7 @@ export interface SceneFile {
   plate: ScenePlate | null;
   plates?: NamedScenePlate[];
   animations?: SceneAnimations;
+  camera?: SceneCamera;
   characters: SceneCharacter[];
   order: string[];
 }
@@ -283,6 +289,7 @@ export function loadScene(path: string): SceneFile {
   }
   if (!isRecord(raw)) refuseIfAny([{ code: 'SCENE_FILE', object: at, detail: `is ${show(raw)}; a JSON object is required` }]);
   const o = raw as Record<string, unknown>;
+  const { camera: rawCamera, ...fields } = o;
   const base = dirname(at);
   const problems: Problem[] = [];
   const fail = (code: string, object: string, detail: string): void => {
@@ -293,7 +300,7 @@ export function loadScene(path: string): SceneFile {
       if (!keys.includes(k) && !freeKey(k, v)) fail('SCENE_KEY_KNOWN', `${where}.${k}`, `is a key ${SCENE_SPEC} does not read; it reads ${keys.join(', ')} (and "note", "…_note" strings and "x-…" records, which nothing reads)`);
     }
   };
-  known(o, 'scene', ['spec', 'canvas', 'plate', 'plates', 'characters', 'order', 'animations']);
+  known(fields, 'scene', ['spec', 'canvas', 'plate', 'plates', 'characters', 'order', 'animations']);
   if (o.spec !== SCENE_SPEC) fail('SCENE_SPEC', 'scene.spec', `is ${show(o.spec)}; "${SCENE_SPEC}" is required`);
 
   // canvas
@@ -475,13 +482,21 @@ export function loadScene(path: string): SceneFile {
       problems.push(...err.problems);
     }
   }
+  let camera: SceneCamera | undefined;
+  if ('camera' in o) {
+    try { camera = readSceneCamera(rawCamera); }
+    catch (err) {
+      if (!(err instanceof PartsError)) throw err;
+      problems.push(...err.problems);
+    }
+  }
   if (!(isRecord(o.animations) && Object.hasOwn(o.animations, 'idle'))) {
     for (const c of characters) if (c.idle_repeats !== undefined) {
       fail('SCENE_REPEAT_IDLE_REQUIRED', 'scene.animations.idle', `is absent for character ${show(c.id)} with idle_repeats ${c.idle_repeats}. Declare the scene idle and its duration`);
     }
   }
   refuseIfAny(problems);
-  return { path: at, sha256, canvas, plate, ...('plates' in o ? { plates } : {}), ...(animations === undefined ? {} : { animations }), characters, order };
+  return { path: at, sha256, canvas, plate, ...('plates' in o ? { plates } : {}), ...(animations === undefined ? {} : { animations }), ...(camera === undefined ? {} : { camera }), characters, order };
 }
 
 // ---------------------------------------------------------------------------
@@ -1115,6 +1130,146 @@ export function sceneStage(canvas: SceneFile['canvas']): RigSpec['skeleton'] {
   return { x: -canvas.width / 2, y: 0, width: canvas.width, height: canvas.height };
 }
 
+type CameraPoint = [number, number];
+type CameraBox = [number, number, number, number];
+
+interface CameraFrameReport {
+  frame: number;
+  compiled_time: number;
+  authored_time: number;
+  pan: CameraPoint;
+  zoom: number;
+  /** View and posed backdrop corners in scene pixels, x right and y down. */
+  view: CameraBox;
+  backdrop_quad: CameraPoint[];
+  figures: Array<{ id: string; bounds: CameraBox | null; clipped_bounds: CameraBox | null; canvas_clipped: boolean; clip_slots: string[] }>;
+}
+
+interface SceneCameraReport {
+  backdrop: string;
+  model_sha256: string;
+  fps: number;
+  coverage: { status: 'PASS'; max_edge_overrun_px: 0; nonopaque_source_texels: 0; nonopaque_output_pixels: 0 };
+  tracks: Record<string, { keys: ResolvedSceneCameraTrack['keys']; duration: number; compiled_duration: number; loop: boolean; frames: CameraFrameReport[] }>;
+}
+
+function cameraViewport(stage: RigSpec['skeleton'], { pan, zoom }: { pan: readonly [number, number]; zoom: number }): Viewport | null {
+  const { width, height } = stage;
+  const cx = stage.x + width / 2 + pan[0];
+  const cy = stage.y + cropToSpineY(height / 2 + pan[1], height);
+  const halfWidth = width / zoom / 2;
+  const halfHeight = height / zoom / 2;
+  const minX = cx - halfWidth, maxX = cx + halfWidth;
+  const minY = cy - halfHeight, maxY = cy + halfHeight;
+  const outputWidth = (maxX - minX) * zoom, outputHeight = (maxY - minY) * zoom;
+  if (![minX, maxX, minY, maxY, zoom, outputWidth, outputHeight].every(Number.isFinite) || zoom <= 0 || outputWidth <= 0 || outputHeight <= 0) return null;
+  return { minX, minY, maxX, maxY, scale: zoom, width, height };
+}
+
+function cameraPoint(x: number, y: number, stage: RigSpec['skeleton']): CameraPoint {
+  return [x - stage.x, cropToSpineY(y - stage.y, stage.height)];
+}
+
+function cameraCorners(view: Viewport): CameraPoint[] {
+  const { minX, minY, maxX, maxY } = view;
+  return [[minX, minY], [minX, maxY], [maxX, maxY], [maxX, minY]];
+}
+
+function backdropQuad(piece: Quad, region: ModelPageRegion): { corners: CameraPoint[]; determinant: number } | null {
+  if (piece.world.length !== 8 || !piece.world.every(Number.isFinite)) return null;
+  const [blx, bly, tlx, tly, trx, topRightY, brx, bry] = piece.world;
+  const posed: CameraPoint[] = [[blx, bly], [tlx, tly], [trx, topRightY], [brx, bry]];
+  // The poser gives the packed quad, whose vertices retain the art's order
+  // even when the packing turns it on the page. Extend a trimmed quad into
+  // its authored image space so transparent trim is tested as alpha.
+  const { offsetX, offsetY, width, height, originalWidth, originalHeight } = region;
+  const corners = offsetX === 0 && offsetY === 0 && width === originalWidth && height === originalHeight ? posed :
+    ([[0, 0], [0, originalHeight], [originalWidth, originalHeight], [originalWidth, 0]] as CameraPoint[])
+      .map(([x, y]): CameraPoint => {
+        const u = (x - offsetX) / width, v = (y - offsetY) / height;
+        return [blx + u * (brx - blx) + v * (tlx - blx), bly + u * (bry - bly) + v * (tly - bly)];
+      });
+  const [bottomLeft, topLeft, , bottomRight] = corners;
+  const determinant = (bottomRight[0] - bottomLeft[0]) * (topLeft[1] - bottomLeft[1])
+    - (bottomRight[1] - bottomLeft[1]) * (topLeft[0] - bottomLeft[0]);
+  if (!Number.isFinite(determinant) || determinant === 0 || !corners.flat().every(Number.isFinite)) return null;
+  return { corners, determinant };
+}
+
+function cameraEdgeOverruns(view: CameraPoint[], corners: CameraPoint[], determinant: number): Array<{ side: string; overrun: number }> {
+  // The viewport and Core's posed corners arrive by different double-precision
+  // calculations. Cancel the rounding of flush coordinates before measuring
+  // distance. Packed opacity still uses the unmodified viewport and geometry.
+  const precision = 4 * Number.EPSILON * Math.max(1, ...[...view, ...corners].flat().map(Math.abs));
+  return ['left', 'top', 'right', 'bottom'].map((side, i) => {
+    const [x, y] = corners[i];
+    const [nextX, nextY] = corners[(i + 1) % corners.length];
+    const dx = nextX - x, dy = nextY - y;
+    // The region order is bottom-left, top-left, top-right, bottom-right in
+    // art space. The determinant keeps the outside sign under reflections.
+    const distances = view.map(([vx, vy]) => dx * (vy - y) - dy * (vx - x));
+    const overrun = Math.max(0, ...distances.map(d => Math.sign(determinant) * d)) / edgeLength(dx, dy);
+    return { side, overrun: overrun <= precision ? 0 : overrun };
+  });
+}
+
+/** Test the loose art's nonzero bilinear support against the entire inverse view. */
+function nonopaqueSourceTexel(art: Raster, view: Viewport, window: CameraPoint[], quad: CameraPoint[], det: number): { x: number; y: number; alpha: number } | null {
+  const [bottomLeft, topLeft, , bottomRight] = quad;
+  const [ox, oy] = bottomLeft;
+  const [ax, ay] = [bottomRight[0] - ox, bottomRight[1] - oy];
+  const [bx, by] = [topLeft[0] - ox, topLeft[1] - oy];
+  const artWindow = window.map(([x, y]) => {
+    const dx = x - ox, dy = y - oy;
+    return [(dx * by - dy * bx) / det * art.width, cropToSpineY((ax * dy - ay * dx) / det * art.height, art.height)];
+  });
+  const x0 = Math.min(...artWindow.map(p => p[0])), x1 = Math.max(...artWindow.map(p => p[0]));
+  const y0 = Math.min(...artWindow.map(p => p[1])), y1 = Math.max(...artWindow.map(p => p[1]));
+  // A texel center contributes at distances strictly below one texel. A
+  // clamped image-edge tap obeys the same bound on this in-image view.
+  // Test the four separating axes in art and world coordinates so rotated
+  // views do not count defects in empty corners of the bounding box.
+  const radiusX = Math.abs(ax / art.width) + Math.abs(bx / art.height);
+  const radiusY = Math.abs(ay / art.width) + Math.abs(by / art.height);
+  for (let y = Math.max(0, Math.floor(y0 - 1)); y < Math.min(art.height, Math.ceil(y1 + 1)); y++) {
+    for (let x = Math.max(0, Math.floor(x0 - 1)); x < Math.min(art.width, Math.ceil(x1 + 1)); x++) {
+      const alpha = art.data[(y * art.width + x) * 4 + 3];
+      if (alpha === 255 || x + 1.5 <= x0 || x - 0.5 >= x1 || y + 1.5 <= y0 || y - 0.5 >= y1) continue;
+      const s = (x + 0.5) / art.width;
+      const t = cropToSpineY(y + 0.5, art.height) / art.height;
+      const wx = ox + s * ax + t * bx, wy = oy + s * ay + t * by;
+      if (wx + radiusX > view.minX && wx - radiusX < view.maxX && wy + radiusY > view.minY && wy - radiusY < view.maxY) return { x, y, alpha };
+    }
+  }
+  return null;
+}
+
+function cameraFigureBounds(pieces: readonly Piece[], view: Viewport, ids: readonly string[], owners: ReadonlyMap<string, string>, object: string): CameraFrameReport['figures'] {
+  const project = projector(view);
+  const figures: CameraFrameReport['figures'] = ids.map(id => ({ id, bounds: null, clipped_bounds: null, canvas_clipped: false, clip_slots: [] }));
+  const byId = new Map(figures.map(row => [row.id, row]));
+  for (const piece of pieces) {
+    const id = owners.get(piece.slot);
+    const row = id === undefined ? undefined : byId.get(id);
+    if (row === undefined) continue;
+    if (piece.kind === 'mesh' && piece.source !== undefined) row.clip_slots.push(piece.slot);
+    for (let i = 0; i < piece.world.length; i += 2) {
+      const [x, y] = project(piece.world[i], piece.world[i + 1]);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) cameraProblem('SCENE_CAMERA_TRACK', object,
+        `figure slot ${show(piece.slot)} projects to [${x}, ${y}]; finite output coordinates are required`);
+      const b = row.bounds;
+      row.bounds = b === null ? [x, y, x, y] : [Math.min(x, b[0]), Math.min(y, b[1]), Math.max(x, b[2]), Math.max(y, b[3])];
+    }
+  }
+  for (const row of figures) if (row.bounds !== null) {
+    const [x0, y0, x1, y1] = row.bounds;
+    row.canvas_clipped = x0 < 0 || y0 < 0 || x1 > view.width || y1 > view.height;
+    const clipped: CameraBox = [Math.max(0, x0), Math.max(0, y0), Math.min(view.width, x1), Math.min(view.height, y1)];
+    if (clipped[0] < clipped[2] && clipped[1] < clipped[3]) row.clipped_bounds = clipped;
+  }
+  return figures;
+}
+
 /** One character's row of `scene.json`. */
 export interface SceneCharacterReport {
   id: string;
@@ -1145,7 +1300,7 @@ export interface SceneCharacterReport {
   accepted?: string[];
 }
 
-export interface SceneReport {
+interface SceneReportV1 {
   spec: typeof SCENE_REPORT_SPEC;
   scene: string;
   canvas: { width: number; height: number };
@@ -1159,6 +1314,11 @@ export interface SceneReport {
   idle_duration: number;
 }
 
+export type SceneReport = SceneReportV1 | (Omit<SceneReportV1, 'spec'> & {
+  spec: typeof SCENE_CAMERA_REPORT_SPEC;
+  camera: SceneCameraReport;
+});
+
 export interface ComposedScene {
   rig: RigSpec;
   motion: MotionSpec;
@@ -1167,6 +1327,7 @@ export interface ComposedScene {
   report: SceneReport;
   /** Opt-in declaration retained for pre-emission pose measurement; never serialized. */
   sceneAnimations?: SceneAnimations;
+  sceneCamera?: ResolvedSceneCamera;
 }
 
 /** The plate image's bytes and size, read by the caller. */
@@ -1174,6 +1335,168 @@ export interface PlateImage {
   bytes: Uint8Array;
   width: number;
   height: number;
+}
+
+interface CameraEvidence {
+  report: SceneCameraReport;
+  files: ReadonlyMap<string, string>;
+}
+
+const CAMERA_MODEL = 'skeleton.model.json';
+const CAMERA_DRAW = { subset: undefined, unclipped: false, texture: false, regionInfo: true };
+
+function cameraProblem(code: string, object: string, detail: string): never {
+  throw new PartsError([{ code, object, detail }]);
+}
+
+function packedFileHash(build: string, file: string): string {
+  const path = join(build, file);
+  if (!existsSync(path)) cameraProblem('SCENE_CAMERA_BACKDROP', 'check/build', `${show(file)} is absent; the camera requires the complete green packed artifact`);
+  return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
+
+function measureSceneCamera(build: string, composed: ComposedScene, camera: ResolvedSceneCamera): CameraEvidence {
+  const stage = composed.rig.skeleton;
+  const ids = composed.report.characters.map(c => c.id);
+  const layerNames = new Set([PLATE, ...(composed.report.plates ?? []).map(p => p.slot)]);
+  const owners = new Map(composed.rig.slots.filter(s => !layerNames.has(s.name)).map(s => [s.name, s.name.slice(0, s.name.indexOf(PREFIX_SEP))]));
+  const slot = camera.backdrop;
+  const image = slot === PLATE ? PLATE_IMAGE : plateImageName((composed.report.plates ?? []).findIndex(p => p.slot === slot));
+  const bytes = composed.images.find(([file]) => file === image)?.[1];
+  if (bytes === undefined) cameraProblem('SCENE_CAMERA_BACKDROP', 'scene.camera.backdrop', `${show(slot)} has no composed plate image; its exact loose pixels are required`);
+  const art = decodePngBytes(bytes, image);
+  const artHasAlpha = art.data.some((value, i) => i % 4 === 3 && value < 255);
+  const region = image.slice(0, -'.png'.length);
+  const skel = 'skeleton.json';
+  const atlas = 'skeleton.atlas';
+  const files = new Map([CAMERA_MODEL, skel, atlas].map(file => [file, packedFileHash(build, file)]));
+  const skeleton = join(build, skel);
+  const atlasPath = join(build, atlas);
+  const trackReports: Array<[string, SceneCameraReport['tracks'][string]]> = [];
+  const problems: Problem[] = [];
+  let object = 'scene.camera.backdrop';
+  try {
+    const modelPath = join(build, CAMERA_MODEL);
+    const packedModel = readModel(readFileSync(modelPath, 'utf8'), modelPath);
+    const binding = documentPageLookup(packedModel.pages ?? [])(region);
+    if (binding === null || binding.region.originalWidth !== art.width || binding.region.originalHeight !== art.height) {
+      cameraProblem('SCENE_CAMERA_BACKDROP', object, `slot ${show(slot)} needs packed region ${show(region)} over its ${art.width}x${art.height} source image`);
+    }
+    const candidate = loadCandidate({ skeletonText: readFileSync(skeleton, 'utf8'), atlasText: readFileSync(atlasPath, 'utf8'), atlasDir: build, label: 'scene camera' }, { skeleton, atlas: atlasPath }, 'core');
+    if (candidate.choice.core === null) cameraProblem('SCENE_CAMERA_BACKDROP', object, `the packed artifact cannot be read by the Core poser: ${candidate.choice.why}`);
+    for (const page of candidate.pages.keys()) files.set(page, packedFileHash(build, page));
+    throughPoser(candidate.choice, poser => {
+      for (const [name, track] of camera.tracks) {
+        const field = `scene.camera.tracks[${show(name)}]`;
+        object = field;
+        const compiledDuration = poser.animations.find(animation => animation.name === name)?.duration;
+        if (compiledDuration === undefined || !Number.isFinite(compiledDuration) || compiledDuration < 0 || (compiledDuration === 0) !== (track.duration === 0)) {
+          problems.push({ code: 'SCENE_CAMERA_TRACK', object: field, detail: `compiled duration ${String(compiledDuration)} s cannot map to the authored ${track.duration} s take` });
+          continue;
+        }
+        const ticks = Math.ceil(track.duration * IDLE_FPS);
+        // The poser takes a JavaScript array of times, including the closing pose.
+        if (ticks >= 0xffffffff) {
+          problems.push({ code: 'SCENE_CAMERA_TRACK', object: field, detail: `authored duration ${track.duration} s cannot fit a ${IDLE_FPS} fps pose schedule with its endpoint` });
+          continue;
+        }
+        const authoredTimes = [0];
+        for (let i = 1; i < ticks && i / IDLE_FPS < track.duration; i++) authoredTimes.push(i / IDLE_FPS);
+        if (track.duration > 0) authoredTimes.push(track.duration);
+        // Keep authored ticks exact, including keys on that grid. Both the camera
+        // and the packed pose read the same phase at their own clock precision.
+        const times = authoredTimes.map(time => time === track.duration ? compiledDuration : time / track.duration * compiledDuration);
+        const frames: CameraFrameReport[] = [];
+        // The track remains unwrapped through the closing pose, with one
+        // physics clock stepping the entire schedule, including a short end step.
+        poser.animation(name, undefined, IDLE_FPS, times.length - 1, (index, posed) => {
+          const time = times[index];
+          const authored = authoredTimes[index];
+          object = `${field} frame ${index} (t=${time} s, authored ${authored} s)`;
+          const fail = (code: string, detail: string): void => { problems.push({ code, object, detail }); };
+          let sample: SceneCameraSample;
+          try { sample = track.sample(authored); }
+          catch (err) {
+            if (!(err instanceof PartsError)) throw err;
+            for (const problem of err.problems) fail(problem.code, problem.detail);
+            return;
+          }
+          const view = cameraViewport(stage, sample);
+          if (view === null) {
+            fail('SCENE_CAMERA_TRACK', `evaluated pan ${show(sample.pan)} and zoom ${sample.zoom}; a finite, positive, noncollapsed view is required`);
+            return;
+          }
+          const pieces = posed.pieces(CAMERA_DRAW);
+          const at = pieces.findIndex(piece => piece.slot === slot);
+          const plate = pieces[at];
+          const name = show(slot);
+          if (plate === undefined) {
+            fail('SCENE_CAMERA_BACKDROP', `slot ${name} is absent; its bound region must draw behind the figure`);
+            return;
+          }
+          if (plate.kind !== 'region') {
+            fail('SCENE_CAMERA_BACKDROP', `slot ${name} ${plate.source === undefined ? 'draws a mesh' : 'is cut by clipping'}; an uncut bound region is required`);
+            return;
+          }
+          const info = plate.regionInfo;
+          if (info === undefined || info.attachment !== slot || info.region !== region || plate.page !== binding.page.name) {
+            fail('SCENE_CAMERA_BACKDROP', `slot ${name} draws ${show(info)}; attachment ${name} and packed region ${show(region)} on ${show(binding.page.name)} are required`);
+            return;
+          }
+          const front = pieces.slice(0, at).find(piece => owners.has(piece.slot) && piece.world.length > 0);
+          if (front !== undefined) {
+            fail('SCENE_CAMERA_BACKDROP', `slot ${name} draws after figure slot ${show(front.slot)}; it must draw behind the figure`);
+            return;
+          }
+          const quad = backdropQuad(plate, binding.region);
+          if (quad === null) {
+            fail('SCENE_CAMERA_BACKDROP', `slot ${name} has nonfinite or degenerate posed corners; a finite drawable quad is required`);
+            return;
+          }
+          const window = cameraCorners(view);
+          const over = cameraEdgeOverruns(window, quad.corners, quad.determinant).filter(edge => edge.overrun !== 0);
+          if (over.length > 0) {
+            for (const edge of over) fail('SCENE_CAMERA_PLATE_EDGE', `slot ${name} ${edge.side} edge overrun ${edge.overrun} scene px; 0 is required`);
+            return;
+          }
+          const source = artHasAlpha ? nonopaqueSourceTexel(art, view, window, quad.corners, quad.determinant) : null;
+          if (source !== null) fail('SCENE_CAMERA_PLATE_ALPHA', `slot ${name} samples source texel [${source.x}, ${source.y}] with alpha ${source.alpha}; 255 is required throughout the view footprint`);
+          const backdrop = renderFrame({ index, time, pieces: [plate] }, candidate.pages, view, [0, 0, 0, 0]);
+          let nonopaque = 0;
+          let minAlpha = 255;
+          for (let i = 3; i < backdrop.data.length; i += 4) {
+            const alpha = backdrop.data[i];
+            if (alpha < 255) nonopaque++;
+            minAlpha = Math.min(minAlpha, alpha);
+          }
+          if (plate.tint[3] !== 1 || nonopaque > 0) {
+            fail('SCENE_CAMERA_PLATE_ALPHA', `slot ${name} tint alpha ${plate.tint[3]}, ${nonopaque} nonopaque packed output pixel(s), minimum alpha ${minAlpha}; tint 1 and every pixel 255 are required`);
+          }
+          const [x0, y0] = cameraPoint(view.minX, view.maxY, stage);
+          const [x1, y1] = cameraPoint(view.maxX, view.minY, stage);
+          frames.push({
+            frame: index, compiled_time: time, authored_time: authored, pan: sample.pan, zoom: sample.zoom,
+            view: [x0, y0, x1, y1], backdrop_quad: quad.corners.map(([x, y]) => cameraPoint(x, y, stage)),
+            figures: cameraFigureBounds(pieces, view, ids, owners, object),
+          });
+        }, undefined, undefined, times);
+        trackReports.push([name, { keys: track.keys, duration: track.duration, compiled_duration: compiledDuration, loop: track.loop, frames }]);
+      }
+    });
+  } catch (err) {
+    if (!(err instanceof CandidateAtlasError || err instanceof CandidatePairError || err instanceof CoreInputError || err instanceof PoserChoiceError || err instanceof SpineRuntimeError)) throw err;
+    problems.push({ code: 'SCENE_CAMERA_BACKDROP', object, detail: `the packed pose could not be read: ${err.message}` });
+  }
+  refuseIfAny(problems);
+  const modelSha256 = files.get(CAMERA_MODEL)!;
+  return {
+    files,
+    report: {
+      backdrop: slot, model_sha256: modelSha256, fps: IDLE_FPS,
+      coverage: { status: 'PASS', max_edge_overrun_px: 0, nonopaque_source_texels: 0, nonopaque_output_pixels: 0 },
+      tracks: Object.fromEntries(trackReports),
+    },
+  };
 }
 
 type Attachment = Record<string, unknown>;
@@ -1231,6 +1554,9 @@ export function composeScene(
 
   const layers = scene.plates ?? [];
   const layerNames = new Set(layers.map(p => p.name));
+  if (scene.camera !== undefined && !(scene.camera.backdrop === PLATE ? scene.plate !== null : layerNames.has(scene.camera.backdrop))) {
+    fail('SCENE_CAMERA_BACKDROP', 'scene.camera.backdrop', `selects ${show(scene.camera.backdrop)}; the legacy plate or a declared named plate is required`);
+  }
   const reserved = new Set([ROOT_BONE, PLATE, 'idle', ...ids, ...generatedBones, ...ready.flatMap(b => [
     ...b.rig.bones.map(x => prefixed(b.id, x.name)),
     ...b.rig.slots.map(x => prefixed(b.id, x.name)),
@@ -1825,6 +2151,14 @@ export function composeScene(
     refuseIfAny(problems);
   }
   if (scene.animations !== undefined || pivots.size > 0) mergeSceneAnimations(rig, motion, scene.animations ?? {}, [...pivots.values()]);
+  const sceneCamera = scene.camera === undefined ? undefined : resolveSceneCamera(scene.camera, motion);
+  if (sceneCamera !== undefined) {
+    for (const [name, track] of sceneCamera.tracks) for (const key of track.keys) {
+      if (cameraViewport(stage, key) === null) fail('SCENE_CAMERA_TRACK', `scene.camera.tracks[${show(name)}]`,
+        `key at ${key.t} s has pan ${show(key.pan)} and zoom ${key.zoom}; a finite, positive, noncollapsed view is required`);
+    }
+    refuseIfAny(problems);
+  }
 
   const report: SceneReport = {
     spec: SCENE_REPORT_SPEC,
@@ -1841,7 +2175,7 @@ export function composeScene(
     order: { declared: [...scene.order], slots: slots.map((s) => s.name), judged_by: 'nothing' },
     idle_duration: idleDuration,
   };
-  return { rig, motion, images, report, ...(scene.animations === undefined ? {} : { sceneAnimations: scene.animations }) };
+  return { rig, motion, images, report, ...(scene.animations === undefined ? {} : { sceneAnimations: scene.animations }), ...(sceneCamera === undefined ? {} : { sceneCamera }) };
 }
 
 // ---------------------------------------------------------------------------
@@ -2167,12 +2501,33 @@ export function composeStage(input: ComposeInput, run: ComposeRunners, log: Log)
     ['rig.json', rigJsonText(composed.rig)],
     ['motion.json', rigJsonText(composed.motion)],
   ];
+  const camera = composed.sceneCamera;
+  const gated: { camera?: CameraEvidence } = {};
   let gate: ReturnType<typeof gateThroughRigc>;
   try {
     const clips = composed.sceneAnimations;
-    gate = gateThroughRigc(composed.images, texts, run.rig, run.scratch, mode, clips === undefined ? undefined : build => {
+    const readLoop = (build: string): void => {
+      if (clips === undefined) return;
       refuseIfAny(sceneClipLoopProblems(readFileSync(join(build, 'skeleton.model.json'), 'utf8'), clips, r.characters.some(c => c.idle_repeats !== undefined)));
-    });
+    };
+    if (camera === undefined) {
+      gate = gateThroughRigc(composed.images, texts, run.rig, run.scratch, mode, clips === undefined ? undefined : readLoop);
+    } else {
+      // Core binds the model to skeleton.json, whose image path is relative
+      // to the build. Mirror check's rig/ and check/build/ in gate scratch.
+      const scratch = join(run.scratch, 'rig');
+      const build = join(run.scratch, 'check', 'build');
+      rmSync(run.scratch, { recursive: true, force: true });
+      try {
+        const packed: RigcRunner = args => run.rig(args.map((arg, i) => args[i - 1] === '--out' ? build : arg));
+        gate = gateThroughRigc(composed.images, texts, packed, scratch, mode, () => {
+          readLoop(build);
+          gated.camera = measureSceneCamera(build, composed, camera);
+        });
+      } finally {
+        rmSync(run.scratch, { recursive: true, force: true });
+      }
+    }
   } catch (err) { return refused('compose', err); }
   if (composed.sceneAnimations !== undefined) for (const g of gate) {
     g.lines = g.lines.map(line => sceneBoneContext(line, composed.report.characters.map(c => c.id)));
@@ -2198,8 +2553,12 @@ export function composeStage(input: ComposeInput, run: ComposeRunners, log: Log)
   mkdirSync(join(rigDir, 'images'), { recursive: true });
   for (const [file, bytes] of composed.images) writeFileSync(join(rigDir, 'images', file), bytes);
   for (const [file, text] of texts) writeFileSync(join(rigDir, file), text);
-  writeFileSync(join(input.out, SCENE_REPORT_FILE), rigJsonText(r));
-  say(`wrote ${join(rigDir, 'rig.json')}, motion.json and ${composed.images.length} image(s) under ${join(rigDir, 'images')}, and ${join(input.out, SCENE_REPORT_FILE)}`);
+  const reportPath = join(input.out, SCENE_REPORT_FILE);
+  const wroteRig = `wrote ${join(rigDir, 'rig.json')}, motion.json and ${composed.images.length} image(s) under ${join(rigDir, 'images')}`;
+  if (gated.camera === undefined) {
+    writeFileSync(reportPath, rigJsonText(r));
+    say(`${wroteRig}, and ${reportPath}`);
+  }
   let checkRigc = run.check;
   if (r.characters.some(c => c.canvas_clip === true)) {
     const stage = composed.rig.skeleton;
@@ -2208,6 +2567,31 @@ export function composeStage(input: ComposeInput, run: ComposeRunners, log: Log)
       ? [...args, '--viewport', viewport]
       : args);
   }
+  let cameraBound = false;
+  let cameraBindingFailed = false;
+  const evidence = gated.camera;
+  if (evidence !== undefined) {
+    const build = resolve(input.out, 'check', 'build');
+    const stock = checkRigc;
+    checkRigc = args => {
+      const result = stock(args);
+      if (result.status !== 0 || args[0] !== 'build' || args[args.indexOf('--out') + 1] !== build) return result;
+      cameraBindingFailed = true;
+      for (const [file, expected] of evidence.files) {
+        const found = packedFileHash(build, file);
+        if (found !== expected) cameraProblem('SCENE_CAMERA_BACKDROP', 'check/build', `${show(file)} has SHA-256 ${found}; expected ${expected} from the green camera audit`);
+      }
+      cameraBindingFailed = false;
+      cameraBound = true;
+      return result;
+    };
+  }
+  const writeCameraReport = (): void => {
+    if (evidence === undefined || !cameraBound) return;
+    composed.report = { ...r, spec: SCENE_CAMERA_REPORT_SPEC, camera: evidence.report };
+    writeFileSync(reportPath, rigJsonText(composed.report));
+    say(`${wroteRig}, and ${reportPath}`);
+  };
   let report: CheckReport;
   try {
     report = checkStage({
@@ -2217,8 +2601,18 @@ export function composeStage(input: ComposeInput, run: ComposeRunners, log: Log)
       ...(input.loopSeam === undefined ? {} : { loopSeam: input.loopSeam }),
     }, checkRigc, run.checkBin, prefix('check'));
   } catch (err) {
+    if (cameraBindingFailed) {
+      for (const p of COMPOSE_OWNS) rmSync(join(input.out, p), { recursive: true, force: true });
+      return refused('compose', err);
+    }
+    writeCameraReport();
     return refused('check', err, composed);
   }
+  if (evidence !== undefined && (!cameraBound || report.figures.build.model_sha256 !== evidence.report.model_sha256)) {
+    for (const p of COMPOSE_OWNS) rmSync(join(input.out, p), { recursive: true, force: true });
+    return refused('compose', new PartsError([{ code: 'SCENE_CAMERA_BACKDROP', object: 'check/build', detail: 'the checked model did not bind to the green camera audit; an exact packed artifact match is required' }]));
+  }
+  writeCameraReport();
   // Issue #203: a character taken with an accepted failing bar never makes the scene green, even where the composed
   // rig's check cannot measure that bar (no parts.json: the seam and four judgement lines say SKIP).
   const taken = r.characters.filter((c) => c.accepted !== undefined).map((c) => `"${c.id}" (${(c.accepted as string[]).join(', ')})`);

@@ -7222,6 +7222,11 @@ and stay absent).
 | <a id="SCENE_DIAL_KEY_DECLARED"></a>`SCENE_DIAL_KEY_DECLARED` | a scene key uses `derive` on a slider's input property, including one that also carries a raw `v`; derived slider inputs are not a supported scene dial dialect | declare an explicit numeric `v` for the named dial, within the named slider's own range; group member values are checked separately |
 | <a id="SCENE_ANIMATION_LOOP_CLOSES"></a>`SCENE_ANIMATION_LOOP_CLOSES` | the gated posed values at 0 and the scene clip's declared duration differ with physics omitted, for a new clip or an idle extension (physics-on frames are not measured by this check) | close the posed bone, slot, geometry, alpha, clip and draw-order values with physics omitted; comparison never wraps the endpoint to zero, and physics-on frame closure is not measured here |
 | <a id="SCENE_ANIMATION_POSE_READABLE"></a>`SCENE_ANIMATION_POSE_READABLE` | Core cannot read or pose the compiled scene clip for its endpoint comparison | correct the construct named by Core; unreadable poses never count as closed and no scene is emitted |
+| <a id="SCENE_CAMERA_TRACK"></a>`SCENE_CAMERA_TRACK` | a camera track names an unknown take, has invalid keys or easing, or produces a nonfinite or collapsed view | correct the take name, key times, easing or camera values |
+| <a id="SCENE_CAMERA_LOOP_CLOSES"></a>`SCENE_CAMERA_LOOP_CLOSES` | a looping take's camera pan or zoom differs at the unwrapped endpoints | give its first and last keys the same pan and zoom |
+| <a id="SCENE_CAMERA_BACKDROP"></a>`SCENE_CAMERA_BACKDROP` | a camera backdrop does not resolve to its declared, measurable region behind the figures | select a plate that draws its bound region behind the figures throughout the keyed take |
+| <a id="SCENE_CAMERA_PLATE_EDGE"></a>`SCENE_CAMERA_PLATE_EDGE` | the camera view extends past the posed backdrop on the named frame | adjust the camera or plate motion, or extend the plate to cover the required view |
+| <a id="SCENE_CAMERA_PLATE_ALPHA"></a>`SCENE_CAMERA_PLATE_ALPHA` | the posed backdrop admits transparent coverage on the named camera frame | fill the transparent area or move the view into opaque art |
 | <a id="SCENE_PIVOT_NAME_FREE"></a>`SCENE_PIVOT_NAME_FREE` | an opted-in character's source build already has a bone named `placement` that resolves to the generated name | rename the source bone or omit `placement_pivot` |
 | <a id="SCENE_PIVOT_DECLARED"></a>`SCENE_PIVOT_DECLARED` | a scene track keys an unresolved `<id>:placement` directly or through a bone group, and the character has not opted in | declare `"placement_pivot": true` on the named character |
 | <a id="SCENE_PIVOT_UNUSED"></a>`SCENE_PIVOT_UNUSED` | an opted-in character has no scene-authored translation key on its generated pivot | add a `translate`, `translatex` or `translatey` track with a key on `<id>:placement` in `animations`, or omit `placement_pivot` |
@@ -8056,6 +8061,7 @@ the same viewport compose uses for the shipped frames.
 | `characters[].idle_repeats` | optional safe integer of 2 or more (issue #1511). Counts total plays of this character's source idle within an explicit `scene.animations.idle`. Its declared duration must equal `idle_repeats * source idle duration` exactly. In the same scene, each character without the key must fill the duration once. In `scene.json`, `characters[].idle_duration` gives the source period, `characters[].idle_repeats` appears on opted-in rows, and top-level `idle_duration` gives the scene period |
 | `characters[].accept` | optional, a list of bar names: the bars this character's own check may have failed and still be composed (issue #203). `compose --accept <bar>[,<bar>…]` is the same list for every character; the two are joined, so the command line applies to every character and a character's list adds to it. Each name is one of the bars `check`'s summary names, less the gate — `loop`, `seam`, `BREATH_VISIBLE`, `BLINK_NO_HOLE`, `CHAIN_LAG`, `TIP_OVER_ROOT`, `STILL_REGIONS_DARK`, `TEXTURE_STRETCH`, `ANIMATIONS_DO_NOT_FOLD` (issue #320), `STRESS_OFF_CHAIN` (issue #347), `SEAM_OVER_MOTION` (the body-root bar, issue #686); anything else is `SCENE_ACCEPT_KNOWN`. When `check/check.json` declares `spec: "rig-parts-check/1"`, `compose` reads its `bar_outcomes` for the bars whose outcome status is `FAIL` in the report's order (issue #1373); without that spec it keeps the legacy `barsNotMet` reading. A build is taken when every bar its `check.json` failed is named; its gate red, a declared requirement not PASS, or a bar not named is `SCENE_BUILD_GREEN` as before. **It is for looking, not for shipping:** the `[compose]` line says which failing bars were accepted, `scene.json` records them as the character's `accepted`, the composed rig's own check measures them again and reports them as it finds them, and the run exits 1 even when that check is PASS (a composed rig has no `parts.json`, so the seam and four judgement lines say SKIP there). A list that accepts nothing — every build green — composes to the bytes a scene without one writes |
 | `animations` | optional map by scene clip name, each value a rigc `MotionAnimation` (`duration`, `tracks`, optional `loop`, `note`, and core timeline collections). Names resolve against the final scene without another prefix or unit conversion: `root`, `plate`, declared named plate bones and `<id>:<bone>`, including generated dials. Keying `root` moves the whole scene. A new name adds a clip. `idle` appends tracks and timelines once to the composed idle, preserving character metadata and physics constraints. Its duration must exactly equal the composed idle (`SCENE_DURATION_AGREES`, or `SCENE_REPEAT_DURATION` when a character opts in to repetition). Imported animation names are reserved (`SCENE_ANIMATION_NAME_FREE`). Absent declaration preserves legacy bytes and output paths (issue #1346) |
+| `camera` | optional keyed view over composed animation names. See [Keyed scene camera](#keyed-scene-camera-issue-1596) for the camera clock, coverage requirements and opt-in report version |
 | `order` | the draw order, back to front: a character id (its slots not named elsewhere, in its own order) or one `<id>:<slot>`. Every slot of every character is drawn exactly once. Interleaving is written by naming slots: `["a", "b:arm_l", "b"]` draws `b`'s left arm between `a` and the rest of `b` |
 
 A `root` key moves plates together with figures. For layered travel, key the plate bones and the character's `<id>:placement` bone enabled by `placement_pivot`.
@@ -8344,6 +8350,71 @@ move; person detection, segmentation, isolation or occlusion completion (each
 character's input arrives isolated); a composed `parts.json`, so the bars that
 read See-through tags are measured per character by its own `build`, not over the
 scene; a rig `build` did not write.
+
+#### Keyed scene camera (issue #1596)
+
+A camera projects an already posed scene into the fixed canvas. It follows the
+selected animation clock and leaves the rig, physics, stretch, fold and stock
+check viewport unchanged. Assign one or more camera tracks in the scene input.
+This example uses an existing two-second take called `shot`.
+
+```json
+{
+  "backdrop": "background",
+  "tracks": {
+    "shot": [
+      { "t": 0, "pan": [0, 0], "zoom": 1 },
+      { "t": 1, "pan": [12, -4], "zoom": 1.2 },
+      { "t": 2, "pan": [0, 0], "zoom": 1 }
+    ]
+  }
+}
+```
+
+The example object is the value of `camera`. `backdrop` names one scene plate
+behind the characters. A track names a final composed animation, including
+`idle` or a prefixed clip. A take without a track uses the existing view.
+Times are seconds, strictly increasing from zero through the declared
+duration. Pan offsets the view center from the stage center in canvas pixels,
+with positive X right and positive Y down. Zoom is positive and finite.
+Zoom 1 shows a stage-sized window. Zoom 2 halves its visible width and height
+about the panned center. The first and last pan and zoom must agree on a
+looping take at its unwrapped endpoints.
+
+Between keys the default interpolation is linear in pan and reciprocal zoom.
+The outgoing key may use the same `ease` or `curve` as the scene's animation
+keys. Named easings use the composed easing table. Explicit curve channels
+are pan X, pan Y and reciprocal zoom, in that order. Controls use absolute
+time in seconds and the corresponding channel's absolute value units.
+
+Compose checks every camera frame at 12 fps, including the exact take
+endpoint. The frame grid uses authored seconds, and each frame poses the
+packed model at the corresponding compiled animation phase. The selected
+plate can move with its own animation, its parents,
+or the whole scene. The posed plate must cover the view with opaque art at
+every sampled frame. Figure bounds and projected clipping are reported as
+framing evidence. Coverage is measured on the camera frame grid.
+
+Coverage refusals name the take, plate and affected frame. See
+[`SCENE_CAMERA_PLATE_EDGE`](#SCENE_CAMERA_PLATE_EDGE) and
+[`SCENE_CAMERA_PLATE_ALPHA`](#SCENE_CAMERA_PLATE_ALPHA).
+
+Camera scenes write `spine-parts-scene-report/2` to the existing
+`<out>/scene.json` path. The `camera` record contains `backdrop`,
+`model_sha256`, `fps`, `coverage` and `tracks`. The three coverage measures
+`max_edge_overrun_px`, `nonopaque_source_texels` and
+`nonopaque_output_pixels` are zero on `PASS`. Each keyed take lists its
+normalized `keys`, authored `duration`, `compiled_duration`, `loop` flag
+and `frames`. Named easings are resolved to absolute curves in the report.
+Each frame lists its index, both clock readings, pan, zoom, view rectangle,
+posed backdrop quad and projected figure bounds. The view and backdrop quad
+are in scene pixels, with X right and Y down. Figure bounds are in output
+pixels. The model hash names the exact packed
+`<out>/check/build/skeleton.model.json` whose poses were measured.
+
+Backdrop raster coverage and figure framing are computed in memory. The
+compose input record keeps `rig-compose-run/1`. Existing scenes without a
+camera retain the report /1 schema and the same output bytes.
 
 #### Animate a character's placement (issue #1498)
 
