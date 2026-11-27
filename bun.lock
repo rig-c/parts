@@ -5,7 +5,7 @@
     "": {
       "name": "@rig-c/parts",
       "dependencies": {
-        "@rig-c/core": "^3.11.0",
+        "@rig-c/core": "3.11.0",
         "ag-psd": "^31.0.2",
       },
       "devDependencies": {

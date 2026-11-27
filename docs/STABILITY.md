@@ -1636,7 +1636,7 @@ in the package.
 
 ## rig-c
 
-`dependencies` takes `@rig-c/core` `^3.11.0`. Core 3.11.0 supplies the idle
+`dependencies` takes `@rig-c/core` `3.11.0` exactly. Core 3.11.0 supplies the idle
 render's `--loop-seam-bar` and `--loop-seam-cap` support. Bun 1.4 or later
 is the declared floor (`engines.bun` `>=1.4.0`; older 1.4 releases are not tested in
 CI, which runs `latest`, and compatibility with an older 1.4 release is handled when
