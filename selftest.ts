@@ -50313,6 +50313,20 @@ function runSceneSuite(): number {
         malformed.map(({ result }) => explain(result, trackCode)).join(' | '),
         `${why}: unknown name, duplicate or short keys, zero zoom, infinite and collapsed windows, two-channel curve and missing named easing`);
 
+      const blankEasing = [0, 1].map(index => {
+        const keys = stationary.map((entry, i) => i === index ? { ...entry, ease: '' } : entry);
+        const result = run(`blank-ease-${index}`, withCamera({ rest: keys }));
+        return { index, result };
+      });
+      say('SC1596_EMPTY_EASE_REFUSES_ON_OUTGOING_AND_TERMINAL_KEYS',
+        greenSpec && blankEasing.every(({ index, result }) => {
+          const line = refused(result, trackCode);
+          return line?.includes(`scene.camera.tracks["rest"][${index}].ease`) === true &&
+            line.includes('is "". Use a nonempty easing name') && noSuccess(result.target);
+        }),
+        blankEasing.map(({ result }) => explain(result, trackCode)).join(' | '),
+        `${why}: an omitted easing is linear, while an explicitly empty easing names the key it failed to supply`);
+
       const loopCode = 'SCENE_CAMERA_LOOP_CLOSES';
       const openPan = run('loop-pan', withCamera({ sweep: [key(0, 0), key(duration, 2 ** -20)] }));
       const openZoom = run('loop-zoom', withCamera({ sweep: [key(0, 0), key(duration, 0, 0, 1 + 2 ** -20)] }));
@@ -52563,6 +52577,7 @@ function runSceneSuite(): number {
           composeHelp.out === composeShortHelp.out &&
           composeHelp.out.startsWith('  rig-parts compose --scene <scene.json> --out <dir> [--requirements <file.json>] [--accept <bar>[,<bar>...]] [--page-size <px>]') &&
           ['--loop-seam-bar <channel-delta,pixels>', '--loop-seam-cap <loops>'].every(flag => composeHelp.out.includes(flag)) &&
+          composeHelp.out.replace(/\s+/g, ' ').includes('scene.json (spec "spine-parts-scene-report/1" without a camera, "spine-parts-scene-report/2" with a camera)') &&
           composeHelp.out.trimEnd().endsWith('Exit 0 when the check is PASS and nothing was accepted, 1 otherwise.') &&
           composeBogus.status === 2 &&
           composeBogus.out.includes('FAIL  USAGE: compose does not take "--bogus"; it takes --scene, --out, --requirements, --accept, --page-size, --loop-seam-bar, --loop-seam-cap, --help (see rig-parts guide USAGE)') &&
@@ -52571,7 +52586,7 @@ function runSceneSuite(): number {
           unpaired.status === 2 && unpairedLine?.includes('--loop-seam-bar and --loop-seam-cap must be given together') === true && !existsSync(unpairedOut),
         `--help exit ${composeHelp.status} (${composeHelp.out.split('\n').length} lines); -h exit ${composeShortHelp.status} (equal=${composeHelp.out === composeShortHelp.out}); ` +
           `--bogus exit ${composeBogus.status}; unpaired exit ${unpaired.status} ${unpairedLine?.trim() ?? 'no usage line'}`,
-        'Compose help gives both flags and keeps the #1350 help contract. An unknown flag or an unpaired loop seam cap is a usage error.',
+        'Compose help gives both flags, keeps the #1350 help contract and names the report version selected by the camera. An unknown flag or an unpaired loop seam cap is a usage error.',
       );
 
       const headerOf = (sceneBody: Record<string, unknown>, tag: string): string => {

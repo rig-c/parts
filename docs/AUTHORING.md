@@ -8412,9 +8412,9 @@ are in scene pixels, with X right and Y down. Figure bounds are in output
 pixels. The model hash names the exact packed
 `<out>/check/build/skeleton.model.json` whose poses were measured.
 
-Camera rendering and coverage audits run in memory. The compose input record
-keeps `rig-compose-run/1`. Existing scenes without a camera retain the
-report /1 schema and the same output bytes.
+Backdrop raster coverage and figure framing are computed in memory. The
+compose input record keeps `rig-compose-run/1`. Existing scenes without a
+camera retain the report /1 schema and the same output bytes.
 
 #### Animate a character's placement (issue #1498)
 

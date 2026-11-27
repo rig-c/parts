@@ -93,15 +93,15 @@ function readCameraKeys(raw: unknown, object: string, problems: Problem[]): Scen
     const validZoom = cameraNumber(zoom) && usableZoom(zoom);
     if (!validZoom) problems.push({ code: CAMERA_TRACK, object: `${at}.zoom`, detail: `is ${cameraValue(zoom)}. Positive finite zoom and reciprocal zoom are required` });
 
-    if (ease !== undefined && typeof ease !== 'string') {
-      problems.push({ code: CAMERA_TRACK, object: `${at}.ease`, detail: `is ${cameraValue(ease)}. Use a named easing or "stepped"` });
+    if (ease !== undefined && (typeof ease !== 'string' || ease.length === 0)) {
+      problems.push({ code: CAMERA_TRACK, object: `${at}.ease`, detail: `is ${cameraValue(ease)}. Use a nonempty easing name or "stepped"` });
     }
     if (curve !== undefined && curve !== 'stepped' && !(Array.isArray(curve) && curve.length === CAMERA_CURVE_LENGTH && [...curve].every(cameraFloat))) {
       problems.push({ code: CAMERA_TRACK, object: `${at}.curve`, detail: `is ${cameraValue(curve)}. Use "stepped" or ${CAMERA_CURVE_LENGTH} finite numbers at float32 precision` });
     }
     if (ease !== undefined && curve !== undefined) {
       problems.push({ code: CAMERA_TRACK, object: at, detail: 'carries both ease and curve. Use one outgoing curve declaration' });
-    } else if (i === raw.length - 1 && (curve !== undefined || ease)) {
+    } else if (i === raw.length - 1 && (curve !== undefined || ease !== undefined)) {
       problems.push({ code: CAMERA_TRACK, object: at, detail: 'carries an outgoing easing or curve. The terminal key has no following segment' });
     }
     if (problems.length === before && validTime && validPan && validZoom) {
@@ -221,7 +221,7 @@ export function resolveSceneCamera(camera: SceneCamera, motion: MotionSpec): Res
       if (problem !== null) problems.push(problem);
     }
 
-    const eased = authored.some(key => key.curve !== undefined || Boolean(key.ease));
+    const eased = authored.some(key => key.curve !== undefined || key.ease !== undefined);
     const times = authored.map(key => eased ? cameraStoredTime(key.t) : key.t);
     const keys = authored.map((key, i): ResolvedSceneCameraTrack['keys'][number] => {
       const at = `${object}[${i}]`;
@@ -236,8 +236,8 @@ export function resolveSceneCamera(camera: SceneCamera, motion: MotionSpec): Res
       }
       if (key.curve === 'stepped' || key.ease === 'stepped') return { ...normalized, curve: 'stepped' };
       if (key.curve !== undefined) return { ...normalized, curve: key.curve.map(f32) };
-      if (!key.ease) return normalized;
-      const handles = Object.hasOwn(motion.easings, key.ease) ? motion.easings[key.ease] : undefined;
+      if (key.ease === undefined) return normalized;
+      const handles = key.ease !== '' && Object.hasOwn(motion.easings, key.ease) ? motion.easings[key.ease] : undefined;
       if (!Array.isArray(handles) || handles.length !== 4 || ![...handles].every(cameraFloat)) {
         problems.push({ code: CAMERA_TRACK, object: `${at}.ease`, detail: `names ${JSON.stringify(key.ease)}. Declare that easing in the composed motion with four finite handles at float32 precision` });
         return normalized;

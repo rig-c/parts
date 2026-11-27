@@ -55,7 +55,7 @@ import { RETUNE_FILE, RETUNE_SPEC, retuneStage } from './src/retune.ts';
 import { checkPainting, DEFAULT_PAINTING_FORM, isPaintingForm, PAINTING_FORMS, paintingFormOf } from './src/paintcheck.ts';
 import { decodePngBytes, readPng, writePng } from './src/raster/png.ts';
 import { REQUIREMENTS_SENTENCE } from './src/requirements.ts';
-import { composeStage, IMAGE_SEP, PLATE, PROVENANCES, SCENE_REPORT_FILE, SCENE_REPORT_SPEC, SCENE_SPEC } from './src/scene.ts';
+import { composeStage, IMAGE_SEP, PLATE, PROVENANCES, SCENE_CAMERA_REPORT_SPEC, SCENE_REPORT_FILE, SCENE_REPORT_SPEC, SCENE_SPEC } from './src/scene.ts';
 import { buildSheet, defaultCaption, type Tile, tilesFrom } from './src/sheet.ts';
 import { loadComparison, requiredProblems, structureLines } from './src/structure.ts';
 import { type ArgvTable, assembleOutputFiles, BUILD_RUN_FILE, CHECK_RUN_FILE, clearComposeRun, clearRunRecord, clearRunStamp, readPackageIdentity, recordArgv, rigOutputFiles, RUN_STAMP_FILE, RUN_STAMP_SPEC, writeRunRecord, writeRunStamp } from './src/runstamp.ts';
@@ -1082,10 +1082,11 @@ usage:
       rig or motion compose does not know. The result is gated through
       rig-c as rig gates its own (build --profile rig-play --pack, the
       compile and the packed pages on disk); --out receives rig/ (rig.json,
-      motion.json, images/) and ${SCENE_REPORT_FILE} (spec "${SCENE_REPORT_SPEC}":
+      motion.json, images/) and ${SCENE_REPORT_FILE} (spec "${SCENE_REPORT_SPEC}"
+      without a camera, "${SCENE_CAMERA_REPORT_SPEC}" with a camera):
       every setting, each character's offset, scale, bounds and shift (and what it
       moved),
-      the plate's provenance, the declared and the composed order) only when
+      the plate's provenance, the declared and the composed order, only when
       it is green; then check runs over rig/ into check/, as on a rig it did
       not build (no parts.json: the seam, BREATH_VISIBLE, BLINK_NO_HOLE,
       TIP_OVER_ROOT, STILL_REGIONS_DARK and RECOMPOSITE_HOLES say SKIP and

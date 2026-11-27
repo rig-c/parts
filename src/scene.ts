@@ -106,7 +106,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { documentPageLookup, readModel, type ModelPageRegion } from '@rig-c/core/core';
-import { CandidateAtlasError, CandidatePairError, CoreInputError, loadCandidate, PoserChoiceError, projector, renderFrame, SpineRuntimeError, throughPoser, type Frame, type Piece, type Quad, type Viewport } from '@rig-c/core/render-shared';
+import { CandidateAtlasError, CandidatePairError, CoreInputError, loadCandidate, PoserChoiceError, projector, renderFrame, SpineRuntimeError, throughPoser, type Piece, type Quad, type Viewport } from '@rig-c/core/render-shared';
 import { deformSliderCombinationProblem, type RigStop } from '@rig-c/core/rig';
 import { checkStage, gateThroughRigc, type Log } from './build.ts';
 import { ACCEPTABLE_BARS, barsNotMet, CHECK_SPEC, type CheckReport, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, IDLE_FPS, LOOP_SEAM_BAR_UNMET, type LoopSeamRequest, type PackMode, parsePageSize, requirementsNotPass, type RigcRunner } from './check.ts';
@@ -1244,7 +1244,7 @@ function nonopaqueSourceTexel(art: Raster, view: Viewport, window: CameraPoint[]
   return null;
 }
 
-function cameraFigureBounds(pieces: readonly Piece[], view: Viewport, ids: readonly string[], owners: ReadonlyMap<string, string>): CameraFrameReport['figures'] {
+function cameraFigureBounds(pieces: readonly Piece[], view: Viewport, ids: readonly string[], owners: ReadonlyMap<string, string>, object: string): CameraFrameReport['figures'] {
   const project = projector(view);
   const figures: CameraFrameReport['figures'] = ids.map(id => ({ id, bounds: null, clipped_bounds: null, canvas_clipped: false, clip_slots: [] }));
   const byId = new Map(figures.map(row => [row.id, row]));
@@ -1255,7 +1255,8 @@ function cameraFigureBounds(pieces: readonly Piece[], view: Viewport, ids: reado
     if (piece.kind === 'mesh' && piece.source !== undefined) row.clip_slots.push(piece.slot);
     for (let i = 0; i < piece.world.length; i += 2) {
       const [x, y] = project(piece.world[i], piece.world[i + 1]);
-      if (!Number.isFinite(x) || !Number.isFinite(y)) throw new CoreInputError(`camera projection of figure slot ${show(piece.slot)} is nonfinite`);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) cameraProblem('SCENE_CAMERA_TRACK', object,
+        `figure slot ${show(piece.slot)} projects to [${x}, ${y}]; finite output coordinates are required`);
       const b = row.bounds;
       row.bounds = b === null ? [x, y, x, y] : [Math.min(x, b[0]), Math.min(y, b[1]), Math.max(x, b[2]), Math.max(y, b[3])];
     }
@@ -1452,7 +1453,6 @@ function measureSceneCamera(build: string, composed: ComposedScene, camera: Reso
             fail('SCENE_CAMERA_BACKDROP', `slot ${name} has nonfinite or degenerate posed corners; a finite drawable quad is required`);
             return;
           }
-          const frame: Frame = { index, time, pieces };
           const window = cameraCorners(view);
           const over = cameraEdgeOverruns(window, quad.corners, quad.determinant).filter(edge => edge.overrun !== 0);
           if (over.length > 0) {
@@ -1461,7 +1461,7 @@ function measureSceneCamera(build: string, composed: ComposedScene, camera: Reso
           }
           const source = artHasAlpha ? nonopaqueSourceTexel(art, view, window, quad.corners, quad.determinant) : null;
           if (source !== null) fail('SCENE_CAMERA_PLATE_ALPHA', `slot ${name} samples source texel [${source.x}, ${source.y}] with alpha ${source.alpha}; 255 is required throughout the view footprint`);
-          const backdrop = renderFrame({ ...frame, pieces: [plate] }, candidate.pages, view, [0, 0, 0, 0]);
+          const backdrop = renderFrame({ index, time, pieces: [plate] }, candidate.pages, view, [0, 0, 0, 0]);
           let nonopaque = 0;
           let minAlpha = 255;
           for (let i = 3; i < backdrop.data.length; i += 4) {
@@ -1472,13 +1472,12 @@ function measureSceneCamera(build: string, composed: ComposedScene, camera: Reso
           if (plate.tint[3] !== 1 || nonopaque > 0) {
             fail('SCENE_CAMERA_PLATE_ALPHA', `slot ${name} tint alpha ${plate.tint[3]}, ${nonopaque} nonopaque packed output pixel(s), minimum alpha ${minAlpha}; tint 1 and every pixel 255 are required`);
           }
-          renderFrame(frame, candidate.pages, view, [0, 0, 0, 0]);
           const [x0, y0] = cameraPoint(view.minX, view.maxY, stage);
           const [x1, y1] = cameraPoint(view.maxX, view.minY, stage);
           frames.push({
             frame: index, compiled_time: time, authored_time: authored, pan: sample.pan, zoom: sample.zoom,
             view: [x0, y0, x1, y1], backdrop_quad: quad.corners.map(([x, y]) => cameraPoint(x, y, stage)),
-            figures: cameraFigureBounds(pieces, view, ids, owners),
+            figures: cameraFigureBounds(pieces, view, ids, owners, object),
           });
         }, undefined, undefined, times);
         trackReports.push([name, { keys: track.keys, duration: track.duration, compiled_duration: compiledDuration, loop: track.loop, frames }]);
