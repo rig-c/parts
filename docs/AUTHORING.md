@@ -7103,10 +7103,10 @@ flag) and 8 `CLOTH_SETTLES` warnings for 9 (selftest `CK515`).
 `check.json` `SEAM_OVER_MOTION.status` report body-root `FAIL` first, then
 full `SKIP` (no reading or an explicit skip reason), `WARN`, partial `SKIP`,
 then `CLEAR`. For each declared pair and animation, a measurement requires
-rigc's `read` status and `banded > 0`. With some measurements, no warnings
-and incomplete coverage, the headline and JSON say `SKIP` with the reason
-`one or more declared pair/animation readings are unmeasured`. A `WARN`
-still reports its warnings and has no outer `reason` key.
+rigc's `read` status and a positive `banded` count. With some measurements,
+no warnings and incomplete coverage, the headline and JSON say `SKIP` with
+the reason `one or more declared pair/animation readings are unmeasured`.
+A `WARN` still reports its warnings and has no outer `reason` key.
 
 The console names each unmeasured render row with its pair and animation.
 `rows[]` keeps those names and rigc's `status` and `banded` for coverage
