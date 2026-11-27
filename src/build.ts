@@ -101,6 +101,7 @@ import {
 } from './autoreplay.ts';
 import { physicsLines } from './physicscontrib.ts';
 import { besideIdleLine, checkSummaryLine, inputFileRecord, type InputFileRecord, CLOTH_LINE, type ClothLine, clothWarnText, figureOpeningLines, frameRuns, MOTION_SEAM_LINE, type MotionSeamLine, type MotionSeamPlant, motionSeamRequiredLine, motionSeamWarnText, motionJointContactLines, FOLD_LINE, type FoldsLine, LEVEL_LINE, type LevelLine, LIMB_LINE, type LimbLine, STRESS_LINE, SWEEP_LINE, type SweepLine, buildGateLines, causeLines, environmentLine, IDLE_FPS, IDLE_MAX_PX, maxRgbDiff, REQUIREMENTS_DIR, type CheckReport, type PackLine, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, GATE_PROFILE, JUDGEMENT_LINES, type JudgementLine, packedBuildArgs, packedBuildLabel, type PackMode, parsePageSize, readCheckEnvironment, readWindBand, type PackShape, type PageEdges, readFrameSet, rigcFailed, rigcIdentity, rigcRanClause, REPORTED_LINES, type ReportedLine, type RigcRunner, runCheck, SEAM_DIR, SEAM_MEAN_BAR, seamPairText, seamRigPxText, SOURCE_LINE, SEAM_PX_BAR, SEAM_PX_LEVEL, SEAM_PX_LEVEL_HIGH, SPINEBOY_YARDSTICK, STILL_DIR, WIND_BAND_LINE, windBandLines } from './check.ts';
+import type { LoopSeamRequest } from './check.ts';
 import { type CharacterConfig, type Cut, type Extend, loadConfigAndAnimations, loadConfigWithBytes, loadEarlyConfig, type Patch, type PlanEntry } from './config.ts';
 import { coreCompileGuideLine, failLine, foldName, PartsError, type Problem, refuseIfAny } from './errors.ts';
 import { editedConfigImages, editedRunImages, missingReceipts, readEditorReceipts } from './editreceipt.ts';
@@ -2200,6 +2201,8 @@ export interface CheckStageInput {
   keepStills?: boolean;
   /** Skip the extra extremes renders and remove stale extremes outputs (issue #829). */
   noExtremes?: boolean;
+  /** Declared RGBA loop seam bar and warm-up cap for the shipped idle render (issue #1590). */
+  loopSeam?: LoopSeamRequest;
   /** `check --set <name>` (issue #454): measure one declared alternate set's setup-pose seam and recomposite figures. */
   set?: string;
   /** `check --all-sets` (issue #454): measure every declared alternate set's setup-pose seam and recomposite figures. */
@@ -2465,14 +2468,25 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
   const entryLine = versionLines.find((l) => l.startsWith('entry:'));
   log(`  ${rigcIdentity(bin, v)}${entryLine === undefined ? '' : `; ${entryLine}`}`);
   const mode: PackMode = { pageEdges: input.pageEdges ?? DEFAULT_PAGE_EDGES, packShape: input.packShape ?? DEFAULT_PACK_SHAPE, ...(pageSize === undefined ? {} : { pageSize }) };
-  const r = runCheck(input.rig, input.out, rigc, input.parts, mode, input.source, input.requirements, input.seamPairs === true, input.keepStills === true, input.set, input.allSets === true, input.environment, input.requirementsAs, input.config, input.windBand, input.noExtremes === true, input.supportSource, input.supportFigure, input.assemblyRules);
+  const r = runCheck(
+    input.rig, input.out, rigc, input.parts, mode, input.source, input.requirements, input.seamPairs === true,
+    input.keepStills === true, input.set, input.allSets === true, input.environment, input.requirementsAs, input.config,
+    input.windBand, input.noExtremes === true, input.supportSource, input.supportFigure, input.assemblyRules, input.loopSeam,
+  );
   if (r.figures.environment !== undefined) log(`  ${environmentLine(r.figures.environment)}`);
   log(`  gate rig-play (rigc ${packedBuildLabel(mode)}), verbatim:`);
   for (const l of r.gateHtml) log(l);
   for (const l of packLines(r)) log(`  ${l}`);
   for (const line of r.extremes ?? []) log(`  ${line}`);
   const fig = r.figures;
-  if (r.idle === null) log(`  loop: SKIP — ${fig.skipped?.loop ?? ''}`);
+  const seam = fig.loop_seam;
+  if (seam?.status === 'met') {
+    const reading = `warm-up ${seam.warmup}/${seam.cap}, ${seam.pixelsAbove} px over ${seam.bar.channelDelta} (<= ${seam.bar.pixelsAbove}), ` +
+      `${seam.differingPixels} differing px, max RGBA delta ${seam.maxChannelDelta}`;
+    log(fig.bar_outcomes.loop.status === 'PASS'
+      ? `  loop: PASS — physics-on idle, ${reading}`
+      : `  loop: FAIL — physics-on bar met, keyed RGB max |d| ${fig.loop_max_diff} (0 required), ${reading}`);
+  } else if (r.idle === null) log(`  loop: SKIP — ${fig.skipped?.loop ?? ''}`);
   else log(`  ${loopCheckLine(r.idle, fig.loop_max_diff, fig.loop_physics?.length ?? 0)}`);
   if (r.loopPhysics !== null) log(`  ${r.loopPhysics}`);
   const beside = besideIdleLine(r.besideIdle, fig[LEVEL_LINE] !== undefined, (fig[FOLD_LINE]?.physics_off_skipped?.length ?? 0) > 0);
@@ -2844,7 +2858,7 @@ export interface BuildInput {
   windBand?: string;
 }
 
-/** What `build` does with one flag `check` takes: hands it to its check stage, takes it as its own, or refuses it because build supplies the value or report itself. */
+/** What `build` does with a flag `check` takes: forwards it, takes it as its own, or refuses it by name. */
 export type CheckFlagInBuild =
   | { as: 'forwarded' }
   | { as: 'own'; why: string }
@@ -2872,6 +2886,8 @@ export const CHECK_FLAGS_IN_BUILD: Readonly<Record<string, CheckFlagInBuild>> = 
   '--no-extremes': { as: 'forwarded' },
   '--environment': { as: 'forwarded' },
   '--wind-band': { as: 'forwarded' },
+  '--loop-seam-bar': { as: 'supplied', why: 'run check or compose with --loop-seam-bar and --loop-seam-cap to measure the shipped idle' },
+  '--loop-seam-cap': { as: 'supplied', why: 'run check or compose with --loop-seam-bar and --loop-seam-cap to measure the shipped idle' },
   '--json': { as: 'supplied', why: 'build supplies its multi-stage text report; run check --rig <out>/rig --parts <out> --out <dir> --json for the completed check object' },
 };
 
@@ -2938,7 +2954,7 @@ export function refuseUnnamedAssemblyRequirements(flag: string | undefined, decl
   }
 }
 
-/** The `build` refusal of a `check` flag whose value or report build supplies itself ({@link CHECK_FLAGS_IN_BUILD}), or null for any other flag. */
+/** The `build` refusal of a check-only flag ({@link CHECK_FLAGS_IN_BUILD}), or null for any other flag. */
 export function suppliedCheckFlag(flag: string): string | null {
   const row = Object.hasOwn(CHECK_FLAGS_IN_BUILD, flag) ? CHECK_FLAGS_IN_BUILD[flag] : undefined;
   return row?.as === 'supplied' ? `build does not take "${flag}"; ${row.why}` : null;

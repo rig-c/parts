@@ -3428,7 +3428,7 @@ loop: SKIP — physics-on frames not measured (2 physics constraint(s) omitted, 
 
 (`8 of 9` until issue #320, whose fold bar reads `hop`; issue #1590 records `loop` as `SKIP` rather than `PASS` when physics constraints were omitted, because the shipped physics-on frames were not measured.)
 
-The `loop:` and `loop physics:` lines say what was and was not read (§7, *loop*): rig-c's
+Without a declared loop seam bar, the `loop:` and `loop physics:` lines describe the keyed reading (§7, *loop*). Rig-c's
 render resets physics at frame 0 and steps it, so the idle's last frame differs from its first
 by whatever the spring is still doing; the physics-off figure is read off the same rig with every physics
 constraint left out, the constraints left out are listed (`check.json`'s `loop_physics`, PR #184), and when the physics-off figure is 0 the `loop` bar reports `SKIP` (`reason: "physics-omitted"`, `skipped.loop`) rather than claiming the shipped physics-on frames closed (issue #1590). It is not a measure of the jiggle.
@@ -4188,7 +4188,7 @@ all move by physics instead of keyframed sine chains:
   of the loop's frames, reported, not judged`. Because `physics` is left out of that
   comparison, the shipped physics-on frames are not measured there: an open keyframed body
   (`loop_max_diff > 0`) still fails `CHECK_LOOP_CLOSES`, while a closed physics-off idle
-  (`loop_max_diff === 0`) reports `loop: SKIP — physics-on frames not measured …` (`bar_outcomes.loop`
+  (`loop_max_diff === 0`) reports `loop: SKIP — physics-on frames not measured …` without a declared loop seam bar (`bar_outcomes.loop`
   `SKIP` with `reason: "physics-omitted"` and `skipped.loop`, leaving top-level `PASS` true when all
   measured bars pass, issue #1590). When `motion.duration` is
   a whole number of `1/12` s ticks (`CHECK_LOOP_LAST_FRAME_AT_DURATION`, within
@@ -6973,7 +6973,7 @@ outside the consumed inputs.
 | --- | --- | --- |
 | <a id="CHECK_RIGC_PRESENT"></a>`CHECK_RIGC_PRESENT` | no `rigc` binary found in ancestor `node_modules/.bin` directories or on `PATH`. This also applies when the in-process remesh API needs to build a new revision | `bun install` |
 | <a id="CHECK_RIGC_PACKAGE"></a>`CHECK_RIGC_PACKAGE` | `node_modules/.bin/rigc` is missing under the package root named: this lookup (the selftest's, issue #337) takes this package's own rigc and no other — no directory above, no `PATH` | `bun install` in that root |
-| <a id="CHECK_INPUT_PRESENT"></a><a id="CHECK_INPUT_IS_JSON"></a><a id="CHECK_PART_PNG_PRESENT"></a><a id="CHECK_PART_PNG_MATCHES_BOX"></a><a id="CHECK_PART_SLOT_PRESENT"></a><a id="CHECK_RIG_STAGE_PRESENT"></a><a id="CHECK_RIG_STAGE_IS_THE_CANVAS"></a><a id="CHECK_RIG_ROOT_BONE"></a><a id="CHECK_IDLE_PRESENT"></a>`CHECK_INPUT_PRESENT`, `CHECK_INPUT_IS_JSON`, `CHECK_PART_PNG_PRESENT`, `CHECK_PART_PNG_MATCHES_BOX`, `CHECK_PART_SLOT_PRESENT`, `CHECK_RIG_STAGE_PRESENT`, `CHECK_RIG_STAGE_IS_THE_CANVAS`, `CHECK_RIG_ROOT_BONE`, `CHECK_IDLE_PRESENT` | the rig directory is incomplete or disagrees with `parts.json` (`CHECK_PART_SLOT_PRESENT`: a part with no slot of its own name, which the judgement lines render it by; `CHECK_INPUT_PRESENT` on `--set` / `--all-sets`: no `parts.json`, no `alternates`, or the named set is not in `alternates`). `motion.json` is required even with no animation in it, because `rigc build` takes `--motion` (a spec with `"animations": {}` builds green); `CHECK_IDLE_PRESENT` is an `idle` that is there with no positive `duration` — an absent `idle` is measured around (§7). `CHECK_INPUT_PRESENT` on `…/parts.json`: `--parts` named a directory without `parts.json` — most often `parts/` itself — or, without `--parts`, the rig directory has none while the directory above it does (build's layout, `<out>/rig` under `<out>/parts.json`). The detail says it: "--parts names the directory holding parts.json and parts/, not parts/ itself (after build, that is build's --out, whose rig is <out>/rig); without --parts it is --rig", and names the parent when the parent holds `parts.json`. With neither (no `--parts`, and no `parts.json` beside `rig.json` or above it), the rig is measured without parts and nothing is refused (§7) | re-run rig (`build` does both); for `…/parts.json`, `--parts` — the directory above `parts/` |
+| <a id="CHECK_INPUT_PRESENT"></a><a id="CHECK_INPUT_IS_JSON"></a><a id="CHECK_PART_PNG_PRESENT"></a><a id="CHECK_PART_PNG_MATCHES_BOX"></a><a id="CHECK_PART_SLOT_PRESENT"></a><a id="CHECK_RIG_STAGE_PRESENT"></a><a id="CHECK_RIG_STAGE_IS_THE_CANVAS"></a><a id="CHECK_RIG_ROOT_BONE"></a><a id="CHECK_IDLE_PRESENT"></a>`CHECK_INPUT_PRESENT`, `CHECK_INPUT_IS_JSON`, `CHECK_PART_PNG_PRESENT`, `CHECK_PART_PNG_MATCHES_BOX`, `CHECK_PART_SLOT_PRESENT`, `CHECK_RIG_STAGE_PRESENT`, `CHECK_RIG_STAGE_IS_THE_CANVAS`, `CHECK_RIG_ROOT_BONE`, `CHECK_IDLE_PRESENT` | the rig directory is incomplete or disagrees with `parts.json` (`CHECK_PART_SLOT_PRESENT`: a part with no slot of its own name, which the judgement lines render it by; `CHECK_INPUT_PRESENT` on `--set` / `--all-sets`: no `parts.json`, no `alternates`, or the named set is not in `alternates`). `motion.json` is required even with no animation in it, because `rigc build` takes `--motion` (a spec with `"animations": {}` builds green); `CHECK_IDLE_PRESENT` names an `idle` with no positive `duration`, or a missing `idle` when the loop seam bar is declared. Without that bar, an absent `idle` is measured around (§7). `CHECK_INPUT_PRESENT` on `…/parts.json`: `--parts` named a directory without `parts.json` — most often `parts/` itself — or, without `--parts`, the rig directory has none while the directory above it does (build's layout, `<out>/rig` under `<out>/parts.json`). The detail says it: "--parts names the directory holding parts.json and parts/, not parts/ itself (after build, that is build's --out, whose rig is <out>/rig); without --parts it is --rig", and names the parent when the parent holds `parts.json`. With neither (no `--parts`, and no `parts.json` beside `rig.json` or above it), the rig is measured without parts and nothing is refused (§7) | re-run rig (`build` does both); for `…/parts.json`, `--parts` — the directory above `parts/` |
 | <a id="CHECK_SOURCE_SIZE"></a>`CHECK_SOURCE_SIZE` | the painting `--source` names is not this rig's: no single `rig_scale` takes its width and height to the stage's (assemble makes the canvas `trunc(w × rig_scale)` x `trunc(h × rig_scale)`), or, with `parts.json` read, its `scale_rig_per_source` does not; or the stage is not whole pixels. Refused before anything is built | the painting the rig was made from — the stage's own size, or the painting `assemble` was given |
 | <a id="CHECK_SOURCE_PNG"></a>`CHECK_SOURCE_PNG` | `--source` names a file that does not read as a PNG | a PNG |
 | <a id="CHECK_SETUP_MATCHES_PAINTING"></a>`CHECK_SETUP_MATCHES_PAINTING` | region, slot, failing-pixel box, slot pixelcount, complete region pixelcount and declared limit | compare the source painting beside the actual setup; follow [Source before scissors](#source-before-scissors), then rerun with the same authored limit |
@@ -6997,6 +6997,7 @@ outside the consumed inputs.
 | <a id="CHECK_RIGC_VERSION"></a>`CHECK_RIGC_VERSION` | `rigc --version` is below 1.4.0, or prints no version: its `render` has no `--geometry`, which `TEXTURE_STRETCH` reads. Refused before anything is built | `bun install` (this package depends on rig-c ^2.20.4), or put a newer `rigc` first on `PATH` |
 | <a id="CHECK_RIGC_ENTRY"></a><a id="CHECK_RIGC_ENTRY_READS"></a>`CHECK_RIGC_ENTRY`, `CHECK_RIGC_ENTRY_READS` | `rigc --version` names no entry (a rigc below 2.0.0), or names one in neither launcher form (`entry: cli.ts — @esotericsoftware/spine-core <v> present`, `entry: cli_core.ts — @esotericsoftware/spine-core absent — …`); `check.json`'s `rigc_entry` records the one that gated the build | `bun install` |
 | <a id="CHECK_RIGC_GREEN"></a>`CHECK_RIGC_GREEN` | a rigc step failed; its line is quoted | as `RIG_RIGC_GREEN` |
+| <a id="LOOP_SEAM_BAR_UNMET"></a>`LOOP_SEAM_BAR_UNMET` | Core tried every allowed warm-up take without meeting the declared RGBA loop seam bar. Its full refusal line gives the bar, cap and measured series. | Read the series and adjust the idle, physics or declared seam bar. |
 | <a id="CHECK_LOOP_LAST_FRAME_AT_DURATION"></a>`CHECK_LOOP_LAST_FRAME_AT_DURATION` | the idle's last frame does not sit at `duration` | `motion.duration` — a whole number of 1/12 s |
 | <a id="CHECK_LOOP_CLOSES"></a>`CHECK_LOOP_CLOSES` | frame 0 and the frame at `duration` differ (max and first pixel quoted); with a physics constraint, the frames of the rig with every physics constraint left out, and the object says so (§7, *loop*) | a track whose last key is not its first |
 | <a id="CHECK_SEAM_WITHIN_BAR"></a>`CHECK_SEAM_WITHIN_BAR` | the setup pose (or, under `--set <name>` / `--all-sets`, an alternate set's setup pose posed at its `drawn` bone angles with its `<set>_*` attachments and `hides` applied, issue #465) does not reproduce the flat stack of parts (`recomposite_rig.png`, or `recomposite_rig_<set>.png`) | read the `seam pair` lines and `check/seam/` (`check/seam_<set>/`) pictures (§7; magenta = a counted pixel, cyan = the box round them): the pair, its boxes and the pixels counted. Usually a region or mesh placed off its part; compare with `recomposite_rig.png` (`recomposite_rig_<set>.png`). A pair of one layer cut in two with `differing_copies_px` identifies differing copies near the cut; follow [Source before scissors](#source-before-scissors) before revisiting a structural separation. Widening `overlap` is not a source remedy |
@@ -7451,15 +7452,15 @@ assemble*, at the end of this section):
   lacks the last term, so the two agree only at s = 1). `check --keep-stills`
   (and `build --keep-stills`, which forwards it) leaves that frame — rigc's render directory, its `frames.json` (viewport,
   background) beside the PNG — under `check/setup_still/`;
-- **loop**: idle frame 0 against the frame at `t = duration`: max |d| exactly 0 on a rig
+- **loop**: the keyed check compares idle frame 0 against the frame at `t = duration`, with max |d| exactly 0 on a rig
   with no physics constraint. A rig that declares a physics constraint — a `rig.json`
   `constraints` entry of `type` `"physics"`, or an entry of `motion.json`'s `physics`
   table — has its physics-off figure (`loop_max_diff`) read from the same rig and motion with every
   physics constraint left out (with a skin's `physics` list and any track keying one, issue #183), built and
   rendered as the idle is, because rig-c's render resets physics at frame 0 and steps it, so the shipped
   physics-on frames under `idle_frames/` can differ at the wrap. When `loop_max_diff` is above 0, the keyed
-  idle itself does not close and the bar is `FAIL` (`CHECK_LOOP_CLOSES`). When `loop_max_diff` is 0 with
-  physics constraints omitted, the shipped physics-on frames were **not** measured, so the `loop` bar is
+  idle itself does not close (`CHECK_LOOP_CLOSES`). Without a declared loop seam bar, `loop_max_diff` above 0 is
+  `FAIL`, and `loop_max_diff` of 0 with physics constraints omitted leaves the `loop` bar
   `SKIP` (`bar_outcomes.loop` `{"status": "SKIP", "reason": "physics-omitted"}` and `skipped.loop`
   `"physics-on idle frames not measured; N physics constraint(s) omitted"`, leaving top-level `PASS` true
   when the measured bars pass; issue #1590). The console prints
@@ -7472,6 +7473,34 @@ assemble*, at the end of this section):
   any timeline, the keyed build omits it and the `loop physics:` line names it
   (issue #1461). Bone tracks and other timelines, including events and draw order,
   stay in the keyed build.
+
+  **Physics-on idle closure (opt-in, issue #1590).** Pass
+  `--loop-seam-bar <channel-delta,pixels> --loop-seam-cap <loops>` together to
+  `check` or `compose`. Use decimal whole numbers: a channel delta from 0 to 255,
+  a nonnegative safe integer pixel limit, and a nonnegative safe integer warm-up
+  cap. The rig must have an idle of positive duration. Core's warm-up search is
+  incompatible with `check --environment`.
+
+  Core compares the first frame and an exact-period wrap sample in the shipped
+  idle render's viewport. A pixel counts when its largest absolute RGBA channel
+  difference exceeds the declared delta. Core ships the first take whose count
+  is at most the limit, trying warm-up counts from 0 through the cap. Core tries
+  only 0 when the rig has no physics. The selected take is under `idle_frames/`,
+  with its usual frame grid and a separate `loop-wrap.png` for the wrap sample.
+  The `loop:` line gives the selected warm-up, the cap, the count and bar,
+  the differing pixel count and the maximum RGBA delta. It prints `PASS` when
+  the physics-on bar is met and the keyed idle closes. If the physics-on bar
+  is met and the keyed idle is open, it prints `FAIL` and gives the keyed
+  maximum RGB delta and the required value of 0.
+
+  `check.json` carries Core's `rigc-loop-seam/1` `met` object as `loop_seam` after
+  verifying its render identity, declared bar and endpoint PNG hashes against
+  the shipped take. `bar_outcomes.loop` is `PASS` when the seam meets its bar
+  and the keyed check closes. A met seam omits `skipped.loop`. `loop_max_diff`,
+  `loop_physics` where applicable, and `CHECK_LOOP_CLOSES` still report and enforce
+  keyed closure. When Core cannot meet the declared bar, Parts relays the full
+  `LOOP_SEAM_BAR_UNMET` line and writes no `check.json`, including on a rerun over
+  a previous check.
 
 On the examples: `reference-sample` 23/23, seam 0.207 with 0 pixels over 40, loop SKIP (2 physics constraints omitted, physics-off `loop_max_diff` 0);
 `reference-demo` (default rule, 0 physics constraints) 23/23, seam 0.326 with 2 pixels over 40, loop PASS (0).
@@ -7973,7 +8002,7 @@ it reads is there, and says SKIP with the reason when it is not:
 | bar or line | reads | SKIP when |
 | --- | --- | --- |
 | the gate | the rig spec | never — it always runs, on whatever the spec declares |
-| loop | the `idle` | no `idle` in `motion.json` (`check.json`: `loop_max_diff` null, `skipped.loop` the reason), or the rig declares physics constraints and the physics-off idle closes (`bar_outcomes.loop` `SKIP` with `reason: "physics-omitted"`, `skipped.loop` stating that physics-on idle frames were not measured and naming the omitted count, `loop_max_diff` keeping the physics-off figure; issue #1590) |
+| loop | the `idle` | without a declared loop seam bar: no `idle` in `motion.json` (`check.json`: `loop_max_diff` null, `skipped.loop` the reason), or the rig declares physics constraints and the physics-off idle closes (`bar_outcomes.loop` `SKIP` with `reason: "physics-omitted"`, `skipped.loop` stating that physics-on idle frames were not measured and naming the omitted count, `loop_max_diff` keeping the physics-off figure; issue #1590) |
 | seam | `parts.json` and `parts/` | no `parts.json` (`seam_*` null, `skipped.seam` the reason) |
 | `BREATH_VISIBLE`, `BLINK_NO_HOLE`, `TIP_OVER_ROOT`, `STILL_REGIONS_DARK` | `parts.json`'s tags and the idle | either missing, or as in the table above |
 | `CHAIN_LAG`, `TEXTURE_STRETCH` | the idle (and `rig.json`) | no `idle`, or as in the table above |
@@ -7995,10 +8024,12 @@ rig directory, copied away from its `parts.json`, reads `5 of 10`: the gate, the
 
 ### Composing several characters (`compose`, issue #74)
 
-`rig-parts compose --scene <scene.json> --out <dir> [--requirements <file.json>] [--accept <bar>[,<bar>…]] [--page-size <px>]`
+`rig-parts compose --scene <scene.json> --out <dir> [--requirements <file.json>] [--accept <bar>[,<bar>…]] [--page-size <px>] [--loop-seam-bar <channel-delta,pixels> --loop-seam-cap <loops>]`
 binds characters this package already built into one rig. Each character runs the
 single-character path (§4, steps 0–9) on its own, already isolated input to a green
 `build` first; compose reads what that build wrote and changes nothing in it.
+The paired loop seam flags apply to the composed idle under `<out>/check/`, at
+the same viewport compose uses for the shipped frames.
 
 ```
 { "spec": "spine-parts-scene/1",
@@ -10605,7 +10636,7 @@ existing contract. Removing only the three `row_` fields recovers legacy JSON.
 The registered families declare their permitted JSON paths in `src/checkrow.ts`.
 A TypeScript type walk independently inventories object-array paths in
 `CheckFigures`, including intersections, the object keyword and alternate sets.
-New paths require a registered family even when no fixture emits them. Open legacy figure dictionaries
+New Parts row paths require a registered family even when no fixture emits them. Open legacy figure dictionaries
 have explicit exclusions below and are checked by the recursive output schema; a
 new unknown-typed field also fails the type inventory.
 The recursive row schema rejects an unregistered object-array path, missing
@@ -10613,6 +10644,9 @@ labels, or a family used at another path. Every registered family and projection
 has an emitted schema fixture. Scalar arrays and tuples are excluded because
 they contain no object rows; aggregate records are excluded except for the named
 `requirements.lines` row dictionary. These exclusions do not exclude nested arrays.
+The direct entries of `loop_seam.series` in the top-level `rigc-loop-seam/1`
+`met` report retain Core's native shape. The guard still checks other object
+arrays, including any nested inside a Core series entry.
 
 Selftests preload the schema guard at the check serializer and forward it to
 Bun descendants, including build stage children. A swallowed schema error still
@@ -10652,8 +10686,8 @@ Internal `SeamSupport.drawings` never enters check JSON. Named requirement
 <!-- check-row-table:begin -->
 | Row family | Registered JSON paths | row_scope | row_kind | row_subjects (producer expression) | Producer |
 | --- | --- | --- | --- | --- | --- |
-| `ANIMATIONS_DO_NOT_FOLD.declared_not_folding` | `ANIMATIONS_DO_NOT_FOLD.declared_not_folding` | part when the supplied mapping resolves a piece; otherwise rig | finding | resolved piece for e.slot; otherwise [] | [check.ts:3746](../src/check.ts#L3746) |
-| `ANIMATIONS_DO_NOT_FOLD.folding` | `ANIMATIONS_DO_NOT_FOLD.folding` | part when the supplied mapping resolves a piece; otherwise rig | finding when entry === undefined; otherwise evidence | resolved piece for slot; otherwise [] | [check.ts:3706](../src/check.ts#L3706) |
+| `ANIMATIONS_DO_NOT_FOLD.declared_not_folding` | `ANIMATIONS_DO_NOT_FOLD.declared_not_folding` | part when the supplied mapping resolves a piece; otherwise rig | finding | resolved piece for e.slot; otherwise [] | [check.ts:3874](../src/check.ts#L3874) |
+| `ANIMATIONS_DO_NOT_FOLD.folding` | `ANIMATIONS_DO_NOT_FOLD.folding` | part when the supplied mapping resolves a piece; otherwise rig | finding when entry === undefined; otherwise evidence | resolved piece for slot; otherwise [] | [check.ts:3834](../src/check.ts#L3834) |
 | `ART_JOINT_DISTANCE.joints` | `ART_JOINT_DISTANCE.joints` | 'rig' | finding when status === 'FAIL'; otherwise evidence | [] | [artjoints.ts:86](../src/artjoints.ts#L86) |
 | `BEHIND_PART_SEAMS.contributors` | `BEHIND_PART_SEAMS.turn.pairs[].frames[].standing.samples[].contributors`; `BEHIND_PART_SEAMS.turn.pairs[].frames[].motion_opened.samples[].contributors`; `BEHIND_PART_SEAMS.pairs[].setup.motion_opened.samples[].contributors`; `BEHIND_PART_SEAMS.pairs[].setup.standing.samples[].contributors`; `BEHIND_PART_SEAMS.pairs[].frames[].motion_opened.samples[].contributors`; `BEHIND_PART_SEAMS.pairs[].frames[].standing.samples[].contributors` | 'pair' | evidence | [pair.a, pair.b] | [behindseams.ts:664](../src/behindseams.ts#L664) |
 | `BEHIND_PART_SEAMS.hits` | `BEHIND_PART_SEAMS.pairs[].motion_opened.frames`; `BEHIND_PART_SEAMS.pairs[].standing.frames`; `BEHIND_PART_SEAMS.pairs[].motion_opened.worst`; `BEHIND_PART_SEAMS.pairs[].standing.worst` | 'pair' | finding when r.px > allowance; otherwise evidence | parts | [behindseams.ts:750](../src/behindseams.ts#L750) |
@@ -10669,55 +10703,55 @@ Internal `SeamSupport.drawings` never enters check JSON. Named requirement
 | `BEHIND_PART_SEAMS.unread_corridors` | `BEHIND_PART_SEAMS.turn.pairs[].frames[].standing.unread_corridors`; `BEHIND_PART_SEAMS.pairs[].setup.standing.unread_corridors`; `BEHIND_PART_SEAMS.pairs[].frames[].standing.unread_corridors` | 'pair' | evidence | [pair.a, pair.b] | [behindseams.ts:585](../src/behindseams.ts#L585) |
 | `BOUNDARY_COLOUR_STEP.over` | `BOUNDARY_COLOUR_STEP.over` | 'pair' | finding | r.parts | [boundarycolour.ts:221](../src/boundarycolour.ts#L221) |
 | `BOUNDARY_COLOUR_STEP.unmeasured` | `BOUNDARY_COLOUR_STEP.unmeasured` | part when the supplied mapping resolves a piece; otherwise rig | evidence | resolved piece for r.slot; otherwise [] | [boundarycolour.ts:222](../src/boundarycolour.ts#L222) |
-| `CLOTH_SETTLES.rows` | `CLOTH_SETTLES.rows` | 'rig' | finding when speeds.length > 0 && s < speeds.length; otherwise evidence | [] | [check.ts:6199](../src/check.ts#L6199) |
+| `CLOTH_SETTLES.rows` | `CLOTH_SETTLES.rows` | 'rig' | finding when speeds.length > 0 && s < speeds.length; otherwise evidence | [] | [check.ts:6327](../src/check.ts#L6327) |
 | `CUT_JOINT_MATERIAL.rows` | `CUT_JOINT_MATERIAL.rows` | 'part' | finding when r.status === 'FAIL'; otherwise evidence | [r.part] | [cutmaterial.ts:280](../src/cutmaterial.ts#L280) |
-| `FEET_STAY_LEVEL.feet` | `FEET_STAY_LEVEL.feet` | 'part' | finding when row.status === 'FAIL'; otherwise evidence | [row.part] | [check.ts:3948](../src/check.ts#L3948) |
-| `FEET_STAY_LEVEL.feet[].worst.through` | `FEET_STAY_LEVEL.feet[].worst.through` | 'rig' | evidence | [] | [check.ts:3923](../src/check.ts#L3923) |
-| `LIMB_ONE_BONE.parts` | `LIMB_ONE_BONE.parts` | 'part' | finding when fail; otherwise evidence | [p.name] | [check.ts:4241](../src/check.ts#L4241) |
+| `FEET_STAY_LEVEL.feet` | `FEET_STAY_LEVEL.feet` | 'part' | finding when row.status === 'FAIL'; otherwise evidence | [row.part] | [check.ts:4076](../src/check.ts#L4076) |
+| `FEET_STAY_LEVEL.feet[].worst.through` | `FEET_STAY_LEVEL.feet[].worst.through` | 'rig' | evidence | [] | [check.ts:4051](../src/check.ts#L4051) |
+| `LIMB_ONE_BONE.parts` | `LIMB_ONE_BONE.parts` | 'part' | finding when fail; otherwise evidence | [p.name] | [check.ts:4369](../src/check.ts#L4369) |
 | `PART_SUPPORT_REPORT.pairs` | `PART_SUPPORT_REPORT.pairs` | 'pair' | evidence; finding when length > 0; otherwise evidence | [F.name, B.name] | [coincide.ts:114](../src/coincide.ts#L114), [coincide.ts:130](../src/coincide.ts#L130) |
 | `PART_SUPPORT_REPORT.raw_pairs` | `PART_SUPPORT_REPORT.raw_pairs` | 'pair' | evidence | [F.name, B.name] | [coincide.ts:110](../src/coincide.ts#L110) |
 | `PART_SUPPORT_REPORT.unowned.regions` | `PART_SUPPORT_REPORT.unowned.regions` | 'rig' | finding | [] | [coincide.ts:145](../src/coincide.ts#L145) |
 | `PHYSICS_CONTRIBUTES.rows` | `PHYSICS_CONTRIBUTES.rows` | 'part' | evidence; finding when !moves; otherwise evidence | [part] | [physicscontrib.ts:217](../src/physicscontrib.ts#L217), [physicscontrib.ts:220](../src/physicscontrib.ts#L220) |
-| `SEAM_OVER_MOTION.pairs` | `SEAM_OVER_MOTION.pairs` | 'pair' | evidence | [p.a, p.b] | [check.ts:5596](../src/check.ts#L5596) |
-| `SEAM_OVER_MOTION.required.pairs` | `SEAM_OVER_MOTION.required.pairs` | 'pair' | finding when open > 0; otherwise evidence | [p.a, p.b] | [check.ts:4911](../src/check.ts#L4911) |
-| `SEAM_OVER_MOTION.required.pairs[].open_frames` | `SEAM_OVER_MOTION.required.pairs[].open_frames` | 'pair' | evidence | [p.a, p.b] | [check.ts:4903](../src/check.ts#L4903) |
-| `SEAM_OVER_MOTION.roots.unmeasured` | `SEAM_OVER_MOTION.roots.unmeasured` | 'part' | evidence | [root.part] | [check.ts:5569](../src/check.ts#L5569) |
-| `SEAM_OVER_MOTION.rows` | `SEAM_OVER_MOTION.rows` | 'pair'; unique ? 'pair' : 'rig' | finding when motionSeamFinding(want.root !== undefined, p.status, p.banded, opens.length); otherwise evidence; finding when motionSeamFinding(rootNames.has(r.pair), r.status, r.banded, r.opens.length); otherwise evidence | [want.a, want.b]; unique ? [pair.a, pair.b] : [] | [check.ts:5526](../src/check.ts#L5526), [check.ts:5602](../src/check.ts#L5602) |
-| `SEAM_OVER_MOTION.rows[].cells` | `SEAM_OVER_MOTION.rows[].cells` | 'pair' | evidence | [want.a, want.b] | [check.ts:5539](../src/check.ts#L5539) |
-| `SEAM_OVER_MOTION.rows[].joint_contact.reasons` | `SEAM_OVER_MOTION.rows[].joint_contact.reasons` | 'pair' | evidence | [want.a, want.b] | [check.ts:5529](../src/check.ts#L5529) |
+| `SEAM_OVER_MOTION.pairs` | `SEAM_OVER_MOTION.pairs` | 'pair' | evidence | [p.a, p.b] | [check.ts:5724](../src/check.ts#L5724) |
+| `SEAM_OVER_MOTION.required.pairs` | `SEAM_OVER_MOTION.required.pairs` | 'pair' | finding when open > 0; otherwise evidence | [p.a, p.b] | [check.ts:5039](../src/check.ts#L5039) |
+| `SEAM_OVER_MOTION.required.pairs[].open_frames` | `SEAM_OVER_MOTION.required.pairs[].open_frames` | 'pair' | evidence | [p.a, p.b] | [check.ts:5031](../src/check.ts#L5031) |
+| `SEAM_OVER_MOTION.roots.unmeasured` | `SEAM_OVER_MOTION.roots.unmeasured` | 'part' | evidence | [root.part] | [check.ts:5697](../src/check.ts#L5697) |
+| `SEAM_OVER_MOTION.rows` | `SEAM_OVER_MOTION.rows` | 'pair'; unique ? 'pair' : 'rig' | finding when motionSeamFinding(want.root !== undefined, p.status, p.banded, opens.length); otherwise evidence; finding when motionSeamFinding(rootNames.has(r.pair), r.status, r.banded, r.opens.length); otherwise evidence | [want.a, want.b]; unique ? [pair.a, pair.b] : [] | [check.ts:5654](../src/check.ts#L5654), [check.ts:5730](../src/check.ts#L5730) |
+| `SEAM_OVER_MOTION.rows[].cells` | `SEAM_OVER_MOTION.rows[].cells` | 'pair' | evidence | [want.a, want.b] | [check.ts:5667](../src/check.ts#L5667) |
+| `SEAM_OVER_MOTION.rows[].joint_contact.reasons` | `SEAM_OVER_MOTION.rows[].joint_contact.reasons` | 'pair' | evidence | [want.a, want.b] | [check.ts:5657](../src/check.ts#L5657) |
 | `SEAM_OVER_MOTION.rows[].pose_at_worst.joints` | `SEAM_OVER_MOTION.rows[].pose_at_worst.joints` | 'rig' | evidence | [] | [motionseampose.ts:53](../src/motionseampose.ts#L53) |
-| `SEAM_OVER_MOTION.worlds.*.rows` | `SEAM_OVER_MOTION.worlds.*.rows` | 'pair' | evidence | [want.a, want.b] | [check.ts:5523](../src/check.ts#L5523) |
-| `SEAM_OVER_RANGE.joints` | `SEAM_OVER_RANGE.joints` | 'part' | evidence; finding when poses.some(p => p.status === 'FAIL'); otherwise evidence | [j.part] | [check.ts:4565](../src/check.ts#L4565), [check.ts:4611](../src/check.ts#L4611) |
-| `SEAM_OVER_RANGE.joints[].poses` | `SEAM_OVER_RANGE.joints[].poses` | 'part' | finding when fail; otherwise evidence | [j.part] | [check.ts:4609](../src/check.ts#L4609) |
+| `SEAM_OVER_MOTION.worlds.*.rows` | `SEAM_OVER_MOTION.worlds.*.rows` | 'pair' | evidence | [want.a, want.b] | [check.ts:5651](../src/check.ts#L5651) |
+| `SEAM_OVER_RANGE.joints` | `SEAM_OVER_RANGE.joints` | 'part' | evidence; finding when poses.some(p => p.status === 'FAIL'); otherwise evidence | [j.part] | [check.ts:4693](../src/check.ts#L4693), [check.ts:4739](../src/check.ts#L4739) |
+| `SEAM_OVER_RANGE.joints[].poses` | `SEAM_OVER_RANGE.joints[].poses` | 'part' | finding when fail; otherwise evidence | [j.part] | [check.ts:4737](../src/check.ts#L4737) |
 | `SETUP_MATCHES_PAINTING.regions` | `SETUP_MATCHES_PAINTING.regions` | 'rig' | finding when status === 'FAIL'; otherwise evidence | [] | [setuppainting.ts:175](../src/setuppainting.ts#L175) |
 | `SETUP_MATCHES_PAINTING.regions[].slots` | `SETUP_MATCHES_PAINTING.regions[].slots` | part when the supplied mapping resolves a piece; otherwise rig | evidence | resolved piece for slot; otherwise [] | [setuppainting.ts:176](../src/setuppainting.ts#L176) |
 | `SOURCE_EXPOSURE.rows` | `SOURCE_EXPOSURE.rows` | 'part' | finding when declared !== undefined && r.px > declared.max_px; otherwise evidence | [r.part] | [sourceexposure.ts:292](../src/sourceexposure.ts#L292) |
 | `SOURCE_EXPOSURE.unmeasured` | `SOURCE_EXPOSURE.unmeasured` | part when the supplied mapping resolves a piece; otherwise rig | finding when declared !== undefined; otherwise evidence | resolved piece for u.slot; otherwise [] | [sourceexposure.ts:293](../src/sourceexposure.ts#L293) |
-| `STILL_REGIONS_DARK.*.crossing` | `STILL_REGIONS_DARK.*.crossing` | part when the supplied mapping resolves a piece; otherwise rig | finding | resolved piece for sl.name; otherwise [] | [check.ts:9374](../src/check.ts#L9374) |
-| `STILL_REGIONS_DARK.*.still_slots` | `STILL_REGIONS_DARK.*.still_slots` | part when the supplied mapping resolves a piece; otherwise rig | evidence; finding when r.max > tolerance; otherwise evidence | resolved piece for slot; otherwise [] | [check.ts:9360](../src/check.ts#L9360), [check.ts:9365](../src/check.ts#L9365) |
-| `STRESS_OFF_CHAIN.not_read` | `STRESS_OFF_CHAIN.not_read` | 'part' | evidence | [r.part] | [check.ts:4169](../src/check.ts#L4169) |
-| `STRESS_OFF_CHAIN.per_part` | `STRESS_OFF_CHAIN.per_part` | 'part' | finding when poses.some(p => typeof p.reading === 'number' && p.reading > STRESS_RIGID); otherwise evidence | [r.part] | [check.ts:4157](../src/check.ts#L4157) |
-| `STRESS_OFF_CHAIN.per_part[].off_chain` | `STRESS_OFF_CHAIN.per_part[].off_chain` | 'part' | evidence | [r.part] | [check.ts:4157](../src/check.ts#L4157) |
-| `STRESS_OFF_CHAIN.per_part[].poses` | `STRESS_OFF_CHAIN.per_part[].poses` | 'part' | evidence; finding when shown > STRESS_RIGID; otherwise evidence | [r.part] | [check.ts:4125](../src/check.ts#L4125), [check.ts:4143](../src/check.ts#L4143) |
-| `TEXTURE_STRETCH.per_mesh` | `TEXTURE_STRETCH.per_mesh` | part when the supplied mapping resolves a piece; otherwise rig | evidence; finding when severity > TEXTURE_STRETCH_CEILING; otherwise evidence | resolved piece for m.slot; otherwise [] | [check.ts:10024](../src/check.ts#L10024), [check.ts:10034](../src/check.ts#L10034) |
-| `TIP_OVER_ROOT.parts` | `TIP_OVER_ROOT.parts` | 'part' | evidence; finding when !ok && !(!rigid && hanging.onLink && Math.max(c.root, c.tip) < TIP_TRAVEL_FLOOR); otherwise evidence | [p.name] | [check.ts:8749](../src/check.ts#L8749), [check.ts:8754](../src/check.ts#L8754), [check.ts:8775](../src/check.ts#L8775), [check.ts:8786](../src/check.ts#L8786) |
-| `WIND_BAND.pairs` | `WIND_BAND.pairs` | 'pair' | finding when !holdsAll; otherwise evidence | [p.a, p.b] | [check.ts:6703](../src/check.ts#L6703) |
-| `WIND_BAND.pairs[].steps` | `WIND_BAND.pairs[].steps` | 'pair' | finding when !s.holds; otherwise evidence | [p.a, p.b] | [check.ts:6714](../src/check.ts#L6714) |
-| `figure_openings.openings` | `figure_openings.openings` | 'pair' | finding | [ps.under, ps.above] | [check.ts:6020](../src/check.ts#L6020) |
-| `loop_physics` | `loop_physics` | 'rig' | evidence | [] | [check.ts:7787](../src/check.ts#L7787) |
-| `requirements.lines.* (bone)` | `requirements.lines.*` | 'rig' | finding when line.status === 'FAIL'; otherwise evidence | [] | [check.ts:8117](../src/check.ts#L8117) |
-| `requirements.lines.* (seam)` | `requirements.lines.*` | 'pair' | finding when line.status === 'FAIL'; otherwise evidence | [r.part, r.neighbour] | [check.ts:8117](../src/check.ts#L8117) |
-| `requirements.lines.* (stretch)` | `requirements.lines.*` | part when the supplied mapping resolves a piece; otherwise rig | finding when line.status === 'FAIL'; otherwise evidence | resolved piece for r.slot; otherwise [] | [check.ts:8117](../src/check.ts#L8117) |
-| `seam_cells.frames` | `frames` | 'pair' | evidence | [p.a, p.b] | [check.ts:4900](../src/check.ts#L4900) |
-| `seam_cells.frames[].cells` | `frames[].cells` | part when the supplied mapping resolves a piece; otherwise rig | evidence | resolved piece for cell.setupTop ?? ''; otherwise [] | [check.ts:4860](../src/check.ts#L4860) |
-| `seam_pairs` | `seam_pairs`; `seam_scope.whole_pairs`; `sets.*.seam_pairs`; `sets.*.seam_scope.whole_pairs` | subjects.length === 0 ? 'rig' : subjects.length === 1 ? 'part' : 'pair' | evidence | subjects | [check.ts:2585](../src/check.ts#L2585) |
-| `seam_scope.changes` | `seam_scope.changes`; `sets.*.seam_scope.changes` | 'rig' | evidence | [] | [check.ts:2063](../src/check.ts#L2063) |
-| `seam_scope.domain.states` | `seam_scope.domain.states`; `sets.*.seam_scope.domain.states` | 'rig' | evidence | [] | [check.ts:2148](../src/check.ts#L2148) |
-| `seam_scope.pairs` | `seam_scope.pairs`; `sets.*.seam_scope.pairs` | subjects.length === 0 ? 'rig' : subjects.length === 1 ? 'part' : 'pair' | evidence | subjects | [check.ts:7637](../src/check.ts#L7637) |
-| `seam_scope.population.pairs` | `seam_scope.population.pairs`; `sets.*.seam_scope.population.pairs` | 'pair' | evidence | row.parts | [check.ts:2519](../src/check.ts#L2519) |
-| `seam_scope.population.single_art` | `seam_scope.population.single_art`; `sets.*.seam_scope.population.single_art` | 'part' | evidence | [row.part] | [check.ts:2520](../src/check.ts#L2520) |
+| `STILL_REGIONS_DARK.*.crossing` | `STILL_REGIONS_DARK.*.crossing` | part when the supplied mapping resolves a piece; otherwise rig | finding | resolved piece for sl.name; otherwise [] | [check.ts:9521](../src/check.ts#L9521) |
+| `STILL_REGIONS_DARK.*.still_slots` | `STILL_REGIONS_DARK.*.still_slots` | part when the supplied mapping resolves a piece; otherwise rig | evidence; finding when r.max > tolerance; otherwise evidence | resolved piece for slot; otherwise [] | [check.ts:9507](../src/check.ts#L9507), [check.ts:9512](../src/check.ts#L9512) |
+| `STRESS_OFF_CHAIN.not_read` | `STRESS_OFF_CHAIN.not_read` | 'part' | evidence | [r.part] | [check.ts:4297](../src/check.ts#L4297) |
+| `STRESS_OFF_CHAIN.per_part` | `STRESS_OFF_CHAIN.per_part` | 'part' | finding when poses.some(p => typeof p.reading === 'number' && p.reading > STRESS_RIGID); otherwise evidence | [r.part] | [check.ts:4285](../src/check.ts#L4285) |
+| `STRESS_OFF_CHAIN.per_part[].off_chain` | `STRESS_OFF_CHAIN.per_part[].off_chain` | 'part' | evidence | [r.part] | [check.ts:4285](../src/check.ts#L4285) |
+| `STRESS_OFF_CHAIN.per_part[].poses` | `STRESS_OFF_CHAIN.per_part[].poses` | 'part' | evidence; finding when shown > STRESS_RIGID; otherwise evidence | [r.part] | [check.ts:4253](../src/check.ts#L4253), [check.ts:4271](../src/check.ts#L4271) |
+| `TEXTURE_STRETCH.per_mesh` | `TEXTURE_STRETCH.per_mesh` | part when the supplied mapping resolves a piece; otherwise rig | evidence; finding when severity > TEXTURE_STRETCH_CEILING; otherwise evidence | resolved piece for m.slot; otherwise [] | [check.ts:10171](../src/check.ts#L10171), [check.ts:10181](../src/check.ts#L10181) |
+| `TIP_OVER_ROOT.parts` | `TIP_OVER_ROOT.parts` | 'part' | evidence; finding when !ok && !(!rigid && hanging.onLink && Math.max(c.root, c.tip) < TIP_TRAVEL_FLOOR); otherwise evidence | [p.name] | [check.ts:8896](../src/check.ts#L8896), [check.ts:8901](../src/check.ts#L8901), [check.ts:8922](../src/check.ts#L8922), [check.ts:8933](../src/check.ts#L8933) |
+| `WIND_BAND.pairs` | `WIND_BAND.pairs` | 'pair' | finding when !holdsAll; otherwise evidence | [p.a, p.b] | [check.ts:6831](../src/check.ts#L6831) |
+| `WIND_BAND.pairs[].steps` | `WIND_BAND.pairs[].steps` | 'pair' | finding when !s.holds; otherwise evidence | [p.a, p.b] | [check.ts:6842](../src/check.ts#L6842) |
+| `figure_openings.openings` | `figure_openings.openings` | 'pair' | finding | [ps.under, ps.above] | [check.ts:6148](../src/check.ts#L6148) |
+| `loop_physics` | `loop_physics` | 'rig' | evidence | [] | [check.ts:7933](../src/check.ts#L7933) |
+| `requirements.lines.* (bone)` | `requirements.lines.*` | 'rig' | finding when line.status === 'FAIL'; otherwise evidence | [] | [check.ts:8264](../src/check.ts#L8264) |
+| `requirements.lines.* (seam)` | `requirements.lines.*` | 'pair' | finding when line.status === 'FAIL'; otherwise evidence | [r.part, r.neighbour] | [check.ts:8264](../src/check.ts#L8264) |
+| `requirements.lines.* (stretch)` | `requirements.lines.*` | part when the supplied mapping resolves a piece; otherwise rig | finding when line.status === 'FAIL'; otherwise evidence | resolved piece for r.slot; otherwise [] | [check.ts:8264](../src/check.ts#L8264) |
+| `seam_cells.frames` | `frames` | 'pair' | evidence | [p.a, p.b] | [check.ts:5028](../src/check.ts#L5028) |
+| `seam_cells.frames[].cells` | `frames[].cells` | part when the supplied mapping resolves a piece; otherwise rig | evidence | resolved piece for cell.setupTop ?? ''; otherwise [] | [check.ts:4988](../src/check.ts#L4988) |
+| `seam_pairs` | `seam_pairs`; `seam_scope.whole_pairs`; `sets.*.seam_pairs`; `sets.*.seam_scope.whole_pairs` | subjects.length === 0 ? 'rig' : subjects.length === 1 ? 'part' : 'pair' | evidence | subjects | [check.ts:2706](../src/check.ts#L2706) |
+| `seam_scope.changes` | `seam_scope.changes`; `sets.*.seam_scope.changes` | 'rig' | evidence | [] | [check.ts:2184](../src/check.ts#L2184) |
+| `seam_scope.domain.states` | `seam_scope.domain.states`; `sets.*.seam_scope.domain.states` | 'rig' | evidence | [] | [check.ts:2269](../src/check.ts#L2269) |
+| `seam_scope.pairs` | `seam_scope.pairs`; `sets.*.seam_scope.pairs` | subjects.length === 0 ? 'rig' : subjects.length === 1 ? 'part' : 'pair' | evidence | subjects | [check.ts:7783](../src/check.ts#L7783) |
+| `seam_scope.population.pairs` | `seam_scope.population.pairs`; `sets.*.seam_scope.population.pairs` | 'pair' | evidence | row.parts | [check.ts:2640](../src/check.ts#L2640) |
+| `seam_scope.population.single_art` | `seam_scope.population.single_art`; `sets.*.seam_scope.population.single_art` | 'part' | evidence | [row.part] | [check.ts:2641](../src/check.ts#L2641) |
 
-| Open serialized type path | Reason for schema exclusion |
+| Serialized type path | Reason for schema exclusion |
 | --- | --- |
 | `BLINK_NO_HOLE.*` | Open judgement figures; every emitted nested object row is schema checked. |
 | `BREATH_VISIBLE.*` | Open judgement figures; every emitted nested object row is schema checked. |
@@ -10730,6 +10764,7 @@ Internal `SeamSupport.drawings` never enters check JSON. Named requirement
 | `TIP_OVER_ROOT.*` | Open judgement figures; every emitted nested object row is schema checked. |
 | `requirements.lines.*.*` | Open requirement figures; the dictionary rows and nested object arrays are schema checked. |
 | `sets.*.RECOMPOSITE_HOLES.*` | Open alternate reported figures; every emitted nested object row is schema checked. |
+| `loop_seam.series` | Direct samples in the met rigc-loop-seam/1 report keep their native Core fields. Nested object arrays remain schema checked. |
 <!-- check-row-table:end -->
 
 ## Relocating config file references

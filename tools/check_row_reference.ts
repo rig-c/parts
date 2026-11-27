@@ -3,6 +3,7 @@ import ts from 'typescript';
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { CHECK_ROW_PATHS } from '../src/checkrow.ts';
+import { CORE_LOOP_SEAM_SERIES_PATH } from './check_row_scope.ts';
 
 export const ROW_TABLE_BEGIN = '<!-- check-row-table:begin -->';
 export const ROW_TABLE_END = '<!-- check-row-table:end -->';
@@ -54,9 +55,10 @@ export function checkRowTable(root: string): string {
     };
     visit(tree);
   }
+  const exclusions = { ...CHECK_ROW_TYPE_EXCLUSIONS, ...NATIVE_CHECK_ROW_ARRAY_EXCLUSIONS };
   return [ROW_TABLE_BEGIN, '| Row family | Registered JSON paths | row_scope | row_kind | row_subjects (producer expression) | Producer |',
     '| --- | --- | --- | --- | --- | --- |', ...[...families].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([name, row]) =>
-      `| \`${name}\` | ${CHECK_ROW_PATHS[name as keyof typeof CHECK_ROW_PATHS].map(p => `\`${p}\``).join('; ')} | ${[...row.scopes].join('; ')} | ${[...row.kinds].join('; ')} | ${[...row.subjects].join('; ')} | ${row.sites.join(', ')} |`), '', '| Open serialized type path | Reason for schema exclusion |', '| --- | --- |', ...Object.entries(CHECK_ROW_TYPE_EXCLUSIONS).map(([path, reason]) => `| \`${path}\` | ${reason} |`), ROW_TABLE_END].join('\n');
+      `| \`${name}\` | ${CHECK_ROW_PATHS[name as keyof typeof CHECK_ROW_PATHS].map(p => `\`${p}\``).join('; ')} | ${[...row.scopes].join('; ')} | ${[...row.kinds].join('; ')} | ${[...row.subjects].join('; ')} | ${row.sites.join(', ')} |`), '', '| Serialized type path | Reason for schema exclusion |', '| --- | --- |', ...Object.entries(exclusions).map(([path, reason]) => `| \`${path}\` | ${reason} |`), ROW_TABLE_END].join('\n');
 }
 export function rowTableFaults(root: string, authoring: string): string[] {
   const start = authoring.indexOf(ROW_TABLE_BEGIN), end = authoring.indexOf(ROW_TABLE_END);
@@ -77,6 +79,11 @@ export const CHECK_ROW_TYPE_EXCLUSIONS: Readonly<Record<string, string>> = {
   'TIP_OVER_ROOT.*': 'Open judgement figures; every emitted nested object row is schema checked.',
   'requirements.lines.*.*': 'Open requirement figures; the dictionary rows and nested object arrays are schema checked.',
   'sets.*.RECOMPOSITE_HOLES.*': 'Open alternate reported figures; every emitted nested object row is schema checked.',
+};
+
+/** Exact array paths whose direct entries belong to another report schema. */
+const NATIVE_CHECK_ROW_ARRAY_EXCLUSIONS: Readonly<Record<string, string>> = {
+  [CORE_LOOP_SEAM_SERIES_PATH]: 'Direct samples in the met rigc-loop-seam/1 report keep their native Core fields. Nested object arrays remain schema checked.',
 };
 
 /** Read the serialized public type, independently of calls and runtime fixtures. */
@@ -121,7 +128,7 @@ export function checkRowTypeInventory(root: string, plant = ''): { arrays: strin
     return p.length === a.length && p.every((v, i) => v === '*' || v === a[i]);
   };
   const registered = Object.values(CHECK_ROW_PATHS).flat();
-  const faults = [...[...arrays].filter(path => !registered.some(p => matches(p, path))).map(path => `${path}: object-array type has no registered family`),
+  const faults = [...[...arrays].filter(path => !Object.hasOwn(NATIVE_CHECK_ROW_ARRAY_EXCLUSIONS, path) && !registered.some(p => matches(p, path))).map(path => `${path}: object-array type has no registered family`),
     ...[...unknown].filter(path => !(path in CHECK_ROW_TYPE_EXCLUSIONS)).map(path => `${path}: unknown output type has no documented schema exclusion`)];
   return { arrays: [...arrays].sort(), unknown: [...unknown].sort(), faults };
 }
