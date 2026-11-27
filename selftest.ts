@@ -50052,6 +50052,285 @@ function runSceneSuite(): number {
     };
     const has = (err: PartsError | null, code: string, text = ''): boolean => err !== null && err.problems.some((p) => p.code === code && problemLine(p).includes(text));
 
+    {
+      const why = 'issue #1596';
+      const frameTime = 1 / 12;
+      const duration = 2 * frameTime;
+      const backdrop = 'backdrop';
+      const figure = 'plain';
+      const easing = `${figure}:shut`;
+      const namedDuration = 0.2;
+      writeSceneBuild(join(dir, 'camera-figure'), 'plain', { motion: raw => {
+        const motion = raw as unknown as MotionSpec;
+        motion.animations.idle = { duration: 1, loop: true, note: 'camera fixture idle', tracks: [
+          { bone: 'eye', property: 'rotate', keys: [{ t: 0, v: [0] }, { t: 1, v: [0] }] },
+        ] };
+        motion.animations.probe = { duration: namedDuration, loop: false, tracks: [
+          { bone: 'body', property: 'translatex', keys: [{ t: 0, v: [0], ease: 'shut' }, { t: namedDuration, v: [8] }] },
+        ] };
+      } });
+      const namedTake = `${figure}:probe`;
+      const translate = (bone: string, x: number) => ({ bone, property: 'translatex', keys:
+        [{ t: 0, v: [0] }, { t: frameTime, v: [x] }, { t: duration, v: [0] }] });
+      const pose = (x: number, counter = 0, loop = true) => ({ duration, loop, tracks: [
+        translate(backdrop, x), translate(`${figure}:body`, counter),
+      ] });
+      const plate = 'camera-opaque.png';
+      writeFlatPlate(join(dir, plate), 200, 60, [96, 112, 128]);
+      const base = two({
+        plate: undefined,
+        plates: [{ name: backdrop, image: plate, provenance: 'generated', at: [-50, 0], opaque_backdrop: true }],
+        characters: [{ id: figure, build: 'camera-figure', offset: [32, 10] }],
+        order: [backdrop, figure],
+        animations: { sweep: pose(-40, 40), reverse: pose(40, -40), room: pose(40), rest: pose(0), push_in: pose(0, 0, false) },
+      });
+      type CameraKey = { t: number; pan: [number, number]; zoom: number; ease?: string; curve?: number[] };
+      const key = (t: number, x: number, y = 0, zoom = 1): CameraKey => ({ t, pan: [x, y], zoom });
+      const sweep = (x: number) => [key(0, 0), key(frameTime, x), key(duration, 0)];
+      const stationary = [key(0, 0), key(duration, 0)];
+      // At u=1/2 these pan handles give (3/8) * 80 + (3/8) * 80 = 60 px.
+      const handleTimes = [duration / 3, 2 * duration / 3];
+      const eased = [
+        { ...key(0, 0), curve: [handleTimes[0], 80, handleTimes[1], 80,
+          handleTimes[0], 0, handleTimes[1], 0, handleTimes[0], 1, handleTimes[1], 1] },
+        key(duration, 0),
+      ];
+      const tracks = {
+        // Core's nominally upright region leans about 0.000002785 px to the
+        // left at the top edge on this 60 px plate. Keep 0.00001 px inside
+        // the right edge. The reverse take has exact contact on the left.
+        idle: [key(0, 0), key(1, 0)], sweep: sweep(10 - 0.00001), reverse: sweep(-10), room: eased, rest: stationary,
+        push_in: [key(0, 0), key(duration, 20, -10, 2)],
+        [namedTake]: [{ ...key(0, 0), ease: easing }, key(namedDuration, 8)],
+      };
+      const withCamera = (selectedTracks: Record<string, unknown> = tracks, selectedBackdrop = backdrop) =>
+        ({ ...base, camera: { backdrop: selectedBackdrop, tracks: selectedTracks } });
+      const source = scene(withCamera());
+      const out = join(dir, 'camera-compose');
+      const cli = (input: string, output: string) => runCli(['compose', '--scene', input, '--out', output]);
+      const run = (label: string, body: Record<string, unknown>) => {
+        const target = join(dir, `camera-${label}`);
+        return { ...cli(scene(body), target), target };
+      };
+      const noSuccess = (dir: string) => [SCENE_REPORT_FILE, COMPOSE_RUN_FILE].every(file => !existsSync(join(dir, file)));
+      const explain = (result: { status: number; out: string }, code: string) =>
+        `exit ${result.status}, ${composeFail(result.out, code) ?? lastLines(result.out, 3).join(' | ')}`;
+      const refused = (result: { status: number; out: string }, code: string) =>
+        result.status === 1 ? composeFail(result.out, code) : null;
+      const atFrameOne = (line: string | null) => line !== null && /\bframe(?:\s+|\s*=\s*|\[)1\b/i.test(line);
+      const reportPath = join(out, SCENE_REPORT_FILE);
+      const receiptPath = join(out, COMPOSE_RUN_FILE);
+      const green = cli(source, out);
+      const report = readJsonFile(reportPath) as unknown as ComposedScene['report'] | null;
+      const receipt = readJsonFile(receiptPath) as unknown as ComposeRun | null;
+      const greenSpec = green.status === 0 && report?.spec === 'spine-parts-scene-report/2';
+      const audit = report?.spec === 'spine-parts-scene-report/2' ? report.camera : undefined;
+      const receiptBinds = receipt?.spec === COMPOSE_RUN_SPEC && receipt.scene.path === source &&
+        receipt.scene.sha256 === createHash('sha256').update(readFileSync(source)).digest('hex');
+      const snapshot = () => new Map(sceneOutputFiles(out).filter(file => file !== SCENE_REPORT_FILE && file !== COMPOSE_RUN_FILE)
+        .map(file => [file, readFileSync(join(out, file))]));
+      const cameraBytes = snapshot();
+
+      const modelPath = join(out, 'check', 'build', 'skeleton.model.json');
+      const modelText = existsSync(modelPath) ? readFileSync(modelPath, 'utf8') : null;
+      const modelHash = modelText === null ? null : createHash('sha256').update(readFileSync(modelPath)).digest('hex');
+      const modelBinds = modelHash !== null && audit?.model_sha256 === modelHash;
+      const fullCoverage = audit?.coverage?.status === 'PASS' && audit.coverage.max_edge_overrun_px === 0 &&
+        audit.coverage.nonopaque_source_texels === 0 && audit.coverage.nonopaque_output_pixels === 0;
+      const model = modelText === null ? null : sceneKeyedModel(modelText).doc;
+      const positions = (name: string, at?: number) => {
+        const end = model?.animations.find(animation => animation.name === name)?.timelines.duration;
+        if (model === null || end === undefined) return [];
+        const middle = at ?? end / 2;
+        return poseRawAnimation(model, name, [middle, end - middle]).map(frame =>
+          [backdrop, `${figure}:body`].map(bone => frame.bones.find(b => b.name === bone)?.worldX ?? NaN));
+      };
+      const shifts = (name: string) => {
+        const samples = positions(name);
+        return samples.map(sample => sample.map((x, i) => x - samples[0][i]));
+      };
+      const forward = shifts('sweep'), reverse = shifts('reverse');
+      const exactMotion = JSON.stringify([forward, reverse]) === '[[[0,0],[-40,40],[0,0]],[[0,0],[40,-40],[0,0]]]';
+      const fwdTrack = audit?.tracks?.sweep, revTrack = audit?.tracks?.reverse;
+      const close = (a: number, b: number) => Math.abs(a - b) < 0.00001;
+      const exactView = fwdTrack?.frames?.[1]?.view.every((v, i) => close(v, [9.99999, 0, 109.99999, 60][i])) === true &&
+        revTrack?.frames?.[1]?.view.join(',') === '-10,0,90,60';
+      const fwdEdges = fwdTrack?.frames?.map(frame => Math.max(...frame.backdrop_quad.map(([x]) => x)));
+      const revEdges = revTrack?.frames?.map(frame => Math.min(...frame.backdrop_quad.map(([x]) => x)));
+      say('SC1596_MOVING_BACKDROP_AND_CAMERA_SHARE_EXACT_COVERAGE_FRAMES',
+        greenSpec && receiptBinds && modelBinds && fullCoverage && audit?.backdrop === backdrop && audit.fps === 12 &&
+          fwdTrack?.loop === true && fwdTrack.duration === duration && JSON.stringify(fwdTrack.keys) === JSON.stringify(tracks.sweep) &&
+          exactMotion && exactView && fwdEdges?.[0] === 150 && fwdEdges[1] === 110 && fwdEdges.at(-1) === 150 &&
+          revEdges?.length === 3 && close(revEdges[0], -50) && close(revEdges[1], -10) && close(revEdges[2], -50),
+        `camera ${green.status}; report ${report?.spec}; receipt and model bind ${receiptBinds}/${modelBinds}; coverage ${JSON.stringify(audit?.coverage)}; ` +
+          (greenSpec ? '' : `${lastLines(green.out, 12).join(' | ')}; `) +
+          `plate edges ${JSON.stringify([fwdEdges, revEdges])}; posed plate and figure X deltas ${JSON.stringify([forward, reverse])}`,
+        `${why}: frame 1 fits just inside the posed right edge in sweep and meets the left edge in reverse while the figure moves the other way`);
+
+      const named = audit?.tracks?.[namedTake];
+      const namedMiddle = named?.frames?.[1];
+      const easedPan = namedMiddle?.pan[0];
+      const easePoses = positions(namedTake, namedMiddle?.compiled_time);
+      const keyedPan = easePoses[1]?.[1] - easePoses[0]?.[1];
+      const linearPan = 8 * frameTime / namedDuration;
+      const normalizedCurve = named?.keys?.[0]?.curve;
+      say('SC1596_NAMED_EASE_MATCHES_A_CORE_CHANNEL_AND_REPORT_INCLUDES_THE_OFF_GRID_END',
+        greenSpec && easedPan !== undefined && Math.abs(easedPan - keyedPan) < 0.00001 && Math.abs(keyedPan - linearPan) > 0.1 &&
+          Array.isArray(normalizedCurve) && normalizedCurve.length === 12 && named?.loop === false && named.duration === namedDuration &&
+          named.frames?.length === 4 && close(named.frames[2].authored_time, 2 / 12) && named.frames[3].authored_time === namedDuration &&
+          named.frames[3].compiled_time === named.compiled_duration && named.frames[3].pan.join(',') === '8,0',
+        `camera pan ${easedPan}; gated Core bone shift ${keyedPan}; linear companion ${linearPan}; ` +
+          `normalized handles ${JSON.stringify(normalizedCurve)}; phases ${named?.frames?.map(f => f.authored_time).join(',')}`,
+        `${why}: the outgoing named easing matches the ordinary Core channel at frame 1, and the nonlooping 0.2 s endpoint is included after frame 2`);
+
+      const push = audit?.tracks?.push_in;
+      const halfway = push?.frames?.[1], ending = push?.frames?.at(-1);
+      const flatFigure = push?.frames?.[0]?.figures?.find(f => f.id === figure)?.bounds;
+      const movedFigure = ending?.figures?.find(f => f.id === figure);
+      const wantFigure = flatFigure?.map((v, i) => 2 * v - (i % 2 === 0 ? 90 : 10));
+      say('SC1596_CAMERA_USES_RECIPROCAL_ZOOM_AND_PANNED_FOCAL_POINT',
+        greenSpec && halfway?.view.every((v, i) => close(v, [22.5, 2.5, 97.5, 47.5][i])) === true &&
+          ending?.view.join(',') === '45,5,95,35' && ending.pan.join(',') === '20,-10' && ending.zoom === 2 &&
+          wantFigure !== undefined && movedFigure?.bounds?.every((v, i) => close(v, wantFigure[i])) === true &&
+          movedFigure.canvas_clipped && movedFigure.clipped_bounds?.[0] === 0,
+        `mid view ${JSON.stringify(halfway?.view)}; end view ${JSON.stringify(ending?.view)}; ` +
+          `figure ${JSON.stringify(movedFigure)}; expected uncut bounds ${JSON.stringify(wantFigure)}`,
+        `${why}: the midpoint window measures 75 by 45; the panned center [70,20] stays at output [50,30] and the figure crosses the left edge`);
+
+      writeFileSync(source, sceneText(withCamera({ ...tracks, sweep: sweep(11) })));
+      const red = cli(source, out);
+      const edgeCode = 'SCENE_CAMERA_PLATE_EDGE';
+      const edge = refused(red, edgeCode);
+      const rightOverrun = (line: string | null) => Number(/\bright edge overrun ([\d.e+-]+) scene px\b/.exec(line ?? '')?.[1]);
+      const rightByOne = atFrameOne(edge) && close(rightOverrun(edge), 1);
+      say('SC1596_ONE_PIXEL_OF_RIGHT_OVERRUN_REMOVES_STALE_CAMERA_SUCCESS',
+        greenSpec && receiptBinds && rightByOne && noSuccess(out),
+        `${explain(red, edgeCode)}; report and receipt cleared ${noSuccess(out)}`,
+        `${why}: moving plate ends at scene X=110 in frame 1, while this camera sees through X=111`);
+
+      writeFileSync(source, sceneText(base));
+      const fixed = cli(source, out);
+      const fixedReport = readJsonFile(reportPath);
+      const fixedReceipt = readJsonFile(receiptPath) as unknown as ComposeRun | null;
+      const sameReceipt = receipt !== null && fixedReceipt !== null && fixedReceipt.scene.path === source &&
+        fixedReceipt.scene.sha256 !== receipt.scene.sha256 && fixedReceipt.scene.sha256 === createHash('sha256').update(readFileSync(source)).digest('hex') &&
+        JSON.stringify({ ...receipt, scene: fixedReceipt.scene }) === JSON.stringify(fixedReceipt);
+      const parity = compareSceneBytes(cameraBytes, snapshot());
+      const checkReport = readJsonFile(join(out, 'check', 'check.json'));
+      say('SC1596_CAMERA_OPT_IN_PRESERVES_STOCK_RIG_CHECK_AND_PACKED_BYTES',
+        greenSpec && fixed.status === 0 && fixedReport?.spec === 'spine-parts-scene-report/1' && !('camera' in fixedReport) &&
+          sameReceipt && checkReport?.PASS === true && modelText !== null && cameraBytes.size > 0 && parity.stableEqual,
+        `fixed-view exit ${fixed.status}; report ${fixedReport?.spec}; receipt changes only its scene hash ${sameReceipt}; ` +
+          `${cameraBytes.size} paths; raw equal ${parity.rawEqual}; differences ${JSON.stringify(parity.differences)}`,
+        `${why}: changing the camera declaration changes scene.json and the source hash only, apart from the two recorded wall-clock fields`);
+
+      const overshoot = run('overshoot', withCamera({ rest: eased }));
+      const beyond = refused(overshoot, edgeCode);
+      const linearMiddle = audit?.tracks?.rest?.frames?.[1]?.pan[0];
+      const easedMiddle = audit?.tracks?.room?.frames?.[1]?.pan[0];
+      say('SC1596_CORE_BEZIER_OVERSHOOT_FAILS_BETWEEN_FITTING_KEYS',
+        greenSpec && linearMiddle === 0 && easedMiddle !== undefined && close(easedMiddle, 60) &&
+          atFrameOne(beyond) && close(rightOverrun(beyond), 10) && noSuccess(overshoot.target),
+        `linear pan ${linearMiddle}; moving-plate eased pan ${easedMiddle}; static plate ${explain(overshoot, edgeCode)}`,
+        `${why}: equal endpoints with linear interpolation fit; pan 60 between Bezier keys exceeds the static plate margin of 50; room has the same curve and moving overscan`);
+
+      const alphaScene = (column: number, border = false) => {
+        const texels = newRaster(200, 60);
+        for (let i = 0; i < texels.data.length; i += 4) texels.data.set([96, 112, 128, 255], i);
+        if (border) {
+          for (let y = 0; y < texels.height; y++) texels.data[4 * (y * texels.width + column) + 3] = 0;
+        } else texels.data[4 * (20 * texels.width + column) + 3] = 254;
+        const image = `camera-${border ? 'border' : 'alpha'}-${column}.png`;
+        writeFileSync(join(dir, image), encodePngBytes(texels));
+        return { ...withCamera({ sweep: tracks.sweep }),
+          plates: [{ name: backdrop, image, provenance: 'generated', at: [-50, 0], opaque_backdrop: true }] };
+      };
+      const clear = run('clear-texel', alphaScene(20));
+      const alpha = run('visible-texel', alphaScene(175));
+      const alphaCode = 'SCENE_CAMERA_PLATE_ALPHA';
+      const alphaFailure = refused(alpha, alphaCode);
+      say('SC1596_NONOPAQUE_SOURCE_TEXEL_IS_CAUGHT_ONLY_WHEN_IT_MOVES_INTO_VIEW',
+        clear.status === 0 && readJsonFile(join(clear.target, SCENE_REPORT_FILE))?.spec === 'spine-parts-scene-report/2' &&
+          atFrameOne(alphaFailure) && alphaFailure?.includes('source texel [175, 20] with alpha 254') === true && noSuccess(alpha.target),
+        `out of view exit ${clear.status}; in view ${explain(alpha, alphaCode)}`,
+        `${why}: visible source columns are [50,150) at rest and [100,200) when the plate moves, so column 175 enters the view while column 20 stays outside`);
+
+      const clearBorder = run('clear-border', alphaScene(0, true));
+      const visibleBorder = run('visible-border', alphaScene(199, true));
+      const visibleBorderFailure = refused(visibleBorder, alphaCode);
+      say('SC1596_TRANSPARENT_BORDER_IS_REFUSED_ONLY_WHEN_THE_VIEW_REACHES_IT',
+        clearBorder.status === 0 && atFrameOne(visibleBorderFailure) &&
+          visibleBorderFailure?.includes('source texel [199, 0] with alpha 0') === true && noSuccess(visibleBorder.target),
+        `out of view exit ${clearBorder.status}; in view ${explain(visibleBorder, alphaCode)}`,
+        `${why}: the out-of-view transparent column may be trimmed by packing; a visible transparent column still belongs to the source image and fails alpha coverage`);
+
+      // Plant a fault after the real packed gate so the source opacity audit still sees an opaque plate.
+      const bin = suiteRigc();
+      const runner = rigcRunnerAt(bin, spawnRigc);
+      let packedDefects = 0;
+      const damaged: RigcRunner = args => {
+        const result = runner(args);
+        if (args[0] !== 'build' || result.status !== 0) return result;
+        const pages = args[args.indexOf('--out') + 1];
+        for (const file of readdirSync(pages).filter(file => file.endsWith('.png'))) {
+          const path = join(pages, file);
+          const page = decodePngBytes(readFileSync(path), file);
+          let changed = 0;
+          for (let i = 0; i < page.data.length; i += 4) {
+            if (page.data[i] !== 96 || page.data[i + 1] !== 112 || page.data[i + 2] !== 128 || page.data[i + 3] !== 255) continue;
+            page.data[i + 3] = 254;
+            changed++;
+          }
+          if (changed > 0) writeFileSync(path, encodePngBytes(page));
+          packedDefects += changed;
+        }
+        return result;
+      };
+      const packedOut = join(dir, 'camera-damaged-packed');
+      const packedLogs: string[] = [];
+      const packed = composeStage({ scene: scene(withCamera({ rest: stationary })), out: packedOut },
+        { rig: damaged, check: runner, checkBin: bin, scratch: join(dir, 'camera-packed-gate') }, line => packedLogs.push(line));
+      const packedFailure = composeFail(packedLogs.join('\n'), alphaCode);
+      say('SC1596_NONOPAQUE_PACKED_OUTPUT_REFUSES_WITH_OPAQUE_SOURCE',
+        greenSpec && packedDefects > 0 && packed.stoppedAt !== null && packedFailure?.includes('minimum alpha 254') === true && noSuccess(packedOut),
+        `planted atlas texels ${packedDefects}; stage ${packed.stoppedAt}; ${packedFailure ?? lastLines(packedLogs.join('\n'), 3).join(' | ')}`,
+        `${why}: only the atlas bytes returned from the green gate have lowered alpha`);
+
+      const trackCode = 'SCENE_CAMERA_TRACK';
+      const malformed = [
+        { label: 'unknown-take', name: 'ghost_take', body: withCamera({ ghost_take: stationary }) },
+        { label: 'empty-tracks', name: 'tracks', body: withCamera({}) },
+        { label: 'duplicate-time', name: 'sweep', body: withCamera({ sweep: [key(0, 0), key(0, 10), key(duration, 0)] }) },
+        { label: 'wrong-end', name: 'sweep', body: withCamera({ sweep: [key(0, 0), key(frameTime, 0)] }) },
+        { label: 'nonpositive-zoom', name: 'sweep', body: withCamera({ sweep: [key(0, 0, 0, 0), key(duration, 0)] }) },
+        { label: 'nonfinite-window', name: 'sweep', body: withCamera({ sweep: [key(0, 0, 0, Number.MIN_VALUE), key(duration, 0)] }) },
+        { label: 'collapsed-window', name: 'sweep', body: withCamera({ sweep: [key(0, 0, 0, Number.MAX_VALUE), key(duration, 0, 0, Number.MAX_VALUE)] }) },
+        { label: 'malformed-curve', name: 'rest', body: withCamera({ rest: [{ ...eased[0], curve: eased[0].curve?.slice(0, 8) }, key(duration, 0)] }) },
+        { label: 'unknown-ease', name: 'rest', body: withCamera({ rest: [{ ...key(0, 0), ease: 'ghost_ease' }, key(duration, 0)] }) },
+      ].map(({ label, name, body }) => ({ name, result: run(label, body) }));
+      say('SC1596_MALFORMED_TRACKS_NAME_THE_TAKE_BEFORE_SUCCESS',
+        greenSpec && malformed.every(({ name, result }) => refused(result, trackCode)?.includes(name) && noSuccess(result.target)),
+        malformed.map(({ result }) => explain(result, trackCode)).join(' | '),
+        `${why}: unknown name, duplicate or short keys, zero zoom, infinite and collapsed windows, two-channel curve and missing named easing`);
+
+      const loopCode = 'SCENE_CAMERA_LOOP_CLOSES';
+      const openPan = run('loop-pan', withCamera({ sweep: [key(0, 0), key(duration, 2 ** -20)] }));
+      const openZoom = run('loop-zoom', withCamera({ sweep: [key(0, 0), key(duration, 0, 0, 1 + 2 ** -20)] }));
+      say('SC1596_LOOP_CAMERA_ENDPOINTS_MUST_MATCH_EXACTLY',
+        greenSpec && [openPan, openZoom].every(r => refused(r, loopCode)?.includes('sweep') && noSuccess(r.target)),
+        [openPan, openZoom].map(r => explain(r, loopCode)).join(' | '),
+        `${why}: a binary delta of 2^-20 in either end channel refuses a looping take; the green scene includes closed loops and nonlooping cameras with unequal endpoints`);
+
+      const backdropCode = 'SCENE_CAMERA_BACKDROP';
+      const missing = run('missing-backdrop', withCamera({ rest: stationary }, 'ghost_backdrop'));
+      const front = run('front-backdrop', { ...withCamera({ rest: stationary }), order: [figure, backdrop] });
+      say('SC1596_SELECTED_BACKDROP_MUST_RESOLVE_AND_DRAW_BEHIND_THE_FIGURE',
+        greenSpec && refused(missing, backdropCode)?.includes('ghost_backdrop') === true &&
+          refused(front, backdropCode)?.includes('behind the figure') === true && [missing, front].every(r => noSuccess(r.target)),
+        [missing, front].map(r => explain(r, backdropCode)).join(' | '),
+        `${why}: missing and frontmost layers refuse; the same selected layer with back-to-front order covers the green scene`);
+    }
+
     // #1348: SC104 upward were unused in the tree before this block was added.
     {
       const why = 'issue #1348: exact consumed bytes, deterministic independent input hashes, no stale or refused receipt';

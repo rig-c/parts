@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+**Read before upgrading**
+
+* **Camera scenes write `spine-parts-scene-report/2`.** Update readers to accept
+  the new report before composing a scene with `camera`. Scenes without a
+  camera still write report /1, and the compose receipt retains its schema.
+
+### Features
+
+* **compose** adds optional pan and zoom keys using the scene animation easing
+  vocabulary. Coverage checks use the posed backdrop at every sampled camera
+  frame. See [Keyed scene camera](docs/AUTHORING.md#keyed-scene-camera-issue-1596).
+
 ## 2.62.0 (2026-11-27)
 
 `check` and `compose` no longer report a loop or a motion seam as passing when they did not measure it, and a caller can now declare a bar for the physics-on idle seam that Core 3.11.0 measures.
