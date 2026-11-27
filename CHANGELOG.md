@@ -1,10 +1,21 @@
 # Changelog
 
-## Unreleased
+## 2.62.0 (2026-11-27)
 
-`check` and `compose` no longer report frame-level loop closure for physics-on frames they did not measure.
+`check` and `compose` no longer report a loop or a motion seam as passing when they did not measure it, and a caller can now declare a bar for the physics-on idle seam that Core 3.11.0 measures.
 
 **Read before upgrading:**
+
+Three changes to `check/check.json` (`rig-parts-check/1`). Two of them change what a rig that is not edited at all reports:
+
+* **`loop` can read `SKIP` where it read `PASS`.** On a rig with physics constraints whose idle closes with physics left out, `bar_outcomes.loop` is now `SKIP` with reason `physics-omitted`, because the physics-on frames were not measured. A consumer reading `bar_outcomes.loop`, or the console `loop:` line, sees this with no change on its side. Top-level `PASS` is unchanged. A rig without physics constraints reports what it did before.
+* **`SEAM_OVER_MOTION` can read `SKIP` where it read `CLEAR`.** When some declared seam pair or animation was not measured and nothing warned, the headline and the JSON status are now `SKIP` with a `reason`, not `CLEAR`. A consumer reading the `SEAM_OVER_MOTION` headline or its `status` sees this with no change on its side. A rig whose declared pairs all read a band is unchanged.
+* **New, opt-in: `--loop-seam-bar <channel-delta,pixels>` with `--loop-seam-cap <loops>` on `check` and `compose`.** Both flags or neither. With them, Parts passes the bar to Core's idle render, records Core's met report under the new `loop_seam` key, and reports `bar_outcomes.loop` as `PASS` only when that report is bound to the exported frames and the keyed loop closes. A bar Core cannot meet within the cap is refused as `LOOP_SEAM_BAR_UNMET` with Core's full series, and no `check.json` is left in the output directory. Nothing changes for a caller that passes neither flag.
+* **`@rig-c/core` is pinned exactly at 3.11.0, which provides those flags.** Rig and build output are byte-identical to 3.10.0's: no public example's expected file moved with the bump.
+* **`rig-parts --version` and the `package.version` field in run stamps and run records now read `2.62.0`.** The version bump changes those receipt bytes. The receipt fields and output hashes keep their meaning.
+* In the public examples since 2.61.0, only `examples/{demo,reference-sample,scarf,wind}/expected/{check.json,machine-class.txt}` change, from the `loop` SKIP above. `examples/reference-demo/expected/*` is byte-identical.
+
+Detail of each change:
 
 * **Declare a physics-on idle seam bar by passing both `--loop-seam-bar <channel-delta,pixels>` and `--loop-seam-cap <loops>` to `check` or `compose`.** Core 3.11.0 chooses the first warm-up within the declared cap that meets the bar and renders the exported idle with that warm-up. `check.json` records Core's `rigc-loop-seam/1` report under `loop_seam` and reports `bar_outcomes.loop` as `PASS` when Core meets the bar, the endpoint hashes match the exported PNGs, and the keyed idle closes. `loop_max_diff` still holds the keyed reading. If Core refuses with `LOOP_SEAM_BAR_UNMET`, the command reports the full series and leaves no `check.json`, even when reusing an output directory. With neither flag, a closed physics-off idle on a rig with physics keeps `SKIP` (`physics-omitted`).
 * **With physics constraints and neither seam flag, a closed physics-off idle reports `loop` as `SKIP`.** In `check/check.json` (`rig-parts-check/1`), when `loop_physics` is non-empty and `loop_max_diff === 0`, `bar_outcomes.loop` is `{"status": "SKIP", "reason": "physics-omitted"}` and `skipped.loop` is `"physics-on idle frames not measured; <N> physics constraint(s) omitted"`. `loop_max_diff` keeps its physics-off reading (`0` when closed; `> 0` still fails `CHECK_LOOP_CLOSES` with `bar_outcomes.loop` `FAIL` and `PASS: false`), and top-level `PASS`, `gate_spine_html_green` and `build.model_sha256` are unchanged when the measured bars pass. The console prints `loop: SKIP — physics-on frames not measured …; physics-off idle …: max |d| 0 (0 required)` and counts `loop` under `skipped`. With neither flag, rigs with zero physics constraints keep byte-identical `check.json` and console output. In the public examples, `examples/{demo,reference-sample,scarf,wind}/expected/{check.json,machine-class.txt}` move; `examples/reference-demo/expected/*` is byte-identical.
@@ -23,13 +34,13 @@
 
 ### Features
 
-* **check, compose:** pass a caller-declared physics-on idle seam bar to Core and bind its verdict to the exported frames (`#1590`).
+* **check, compose:** pass a caller-declared physics-on idle seam bar to Core and bind its verdict to the exported frames (`#1590`, `#1594`, `367ff47`).
 
 ### Bug Fixes
 
-* **check, compose:** stop reporting `loop` `PASS` when physics constraints were omitted from the loop comparison, and state in `check.json`, the console and `SCENE_ANIMATION_LOOP_CLOSES` that physics-on frames were not measured (`#1590`).
+* **check, compose:** stop reporting `loop` `PASS` when physics constraints were omitted from the loop comparison, and state in `check.json`, the console and `SCENE_ANIMATION_LOOP_CLOSES` that physics-on frames were not measured (`#1590`, `#1591`, `23421cd`).
 * **check, build:** report partial `SEAM_OVER_MOTION` coverage with a named
-  `SKIP` when the measured readings are clean (`#1592`).
+  `SKIP` when the measured readings are clean (`#1592`, `#1593`, `7291e0b`).
 
 ## 2.61.0 (2026-11-26)
 
