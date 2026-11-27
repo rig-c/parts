@@ -7268,7 +7268,7 @@ and stay absent).
 | <a id="RIG_TURN_SURFACE_DEPTH_REQUIRED"></a>`RIG_TURN_SURFACE_DEPTH_REQUIRED` | a part with role `"surface"` in `config.turn.roles` or `config.turn.body.roles` carries no depth sheet in `parts.json` | run `assemble` with `config.depth` or provide `<part>_depth.png` in `parts.json` |
 | <a id="RIG_TURN_GRID_BUDGET"></a>`RIG_TURN_GRID_BUDGET` | a `"surface"` grid exceeds 2,400 triangles on one slot or 4,000 triangles across all `"surface"` slots | lower `config.turn.grid` / `config.turn.body.grid` `[cols, rows]` within the per-slot and total budgets |
 | <a id="RIG_TURN_HEAD_BONE"></a>`RIG_TURN_HEAD_BONE` | `buildRig` found no `"head"` (or body turn root) bone when emitting 2.5D turn carriers | declare `"head"` (or the body turn root bone) in `config.bones` |
-| <a id="RIG_TURN_BOUNDARY_DEPTH"></a>`RIG_TURN_BOUNDARY_DEPTH` | boundary names or sheets do not resolve; surfaces are not different, abutting without overlap in one group with common units; band is empty/outside/not boundary-reaching; declarations cycle; or grid support is missing | use exact existing parts, different abutting surfaces in one group with common near/zScale, a contained nonempty band reaching their boundary, acyclic declarations and the generated grid support |
+| <a id="RIG_TURN_BOUNDARY_DEPTH"></a>`RIG_TURN_BOUNDARY_DEPTH` | boundary names or sheets do not resolve; surfaces are not different in one group with common units, or do not match the declared contact mode (abutting without overlap by default, or overlapping under `contact: "overlap"`); band is empty, outside the target, misses the shared boundary or misses an overlap cell; declarations cycle; or grid support is missing | use exact existing parts, different surfaces in one group with common near/zScale, matching contact (`contact: "overlap"` when painted to overlap), a contained band reaching the shared boundary or covering every overlap cell, acyclic declarations and the generated grid support |
 | <a id="RIG_TURN_SHARED_DEPTH_SCALE"></a>`RIG_TURN_SHARED_DEPTH_SCALE` | `"surface"` parts bound to one head or body turn declare different `near` polarities or `zScale` values | use one shared `near` and `zScale` across all `"surface"` parts in the turn group. The check runs separately for the head and body role sets, so if a surface belongs to both, use the larger required `zScale` in both groups. |
 | <a id="RIG_TURN_UNIT_DEPTH_REQUIRED"></a>`RIG_TURN_UNIT_DEPTH_REQUIRED` | a `"unit"` bone has neither a `unitDepths` entry nor a readable `"surface"` depth sheet | provide a `"surface"` depth sheet or an explicit `unitDepths.<part>` value |
 | <a id="RIG_TURN_BODY_UNIT_CARRIER"></a>`RIG_TURN_BODY_UNIT_CARRIER` | an explicit body unit depth has no movable carrier for its binding, or a shared carrier needs incompatible depths | bind the unit to a movable body branch and use independent branches for different depths |
@@ -9497,10 +9497,13 @@ never described as no declared range.
 
 Optional `turn.boundaryDepths` and `turn.body.boundaryDepths` are maps keyed by
 an exact target part name. Every entry requires `neighbour` and `band`, both
-exact existing names in `parts.json`. Target and neighbour must be different
-`surface` parts in that same turn group, with common `near` and `zScale`.
-The band can be the target itself or another part whose nonzero alpha support
-is contained in the target and reaches its shared boundary with the neighbour.
+exact existing names in `parts.json`, and accepts optional `contact: "overlap"`.
+Target and neighbour must be different `surface` parts in that same turn group,
+with common `near` and `zScale`. When `contact` is omitted, target and neighbour
+must abut without overlap and the band must be contained in the target and reach
+their shared boundary; under `contact: "overlap"`, target and neighbour must
+share at least one nonzero-alpha pixel cell and the band must be contained in
+the target and cover every overlapping pixel cell.
 Missing fields use `CONFIG_FIELD_PRESENT`; malformed fields use
 `CONFIG_FIELD_TYPE`; unresolved config names use `CONFIG_NAME_RESOLVES`.
 Rig-time support failures and reciprocal or longer cycles use
@@ -9535,12 +9538,17 @@ claim traced source-part provenance. A separately authored layer added to
 producer, inferred width or hidden drawing is introduced by this feature.
 
 Support is the union of closed native pixel cells with alpha greater than
-zero. Target and neighbour must share cell edges and have no overlapping
-support; corner-only contact is not an abutting edge. Inside the band each
-sample projects onto the nearest shared edge and bilinearly samples the
-**original**, silhouette-extended neighbour sheet there. Distinct equidistant
-projection points contribute their arithmetic mean, once per point. The
-result stays floating point until the existing motion encoding; no corrected
+zero. When `contact` is omitted, target and neighbour must share cell edges and
+have no overlapping support; corner-only contact is not an abutting edge, and
+inside the band each sample projects onto the nearest shared edge and bilinearly
+samples the **original**, silhouette-extended neighbour sheet there. Under
+`contact: "overlap"`, band samples inside the closed overlap cells bilinearly
+sample the **original**, silhouette-extended neighbour sheet at the same world
+point, while band samples outside the overlap project onto the nearest cell edge
+where the neighbour's support ends inside or abuts the target (extending the
+band onto a disconnected target island with no such edge is refused). Distinct
+equidistant projection points contribute their arithmetic mean, once per point.
+The result stays floating point until the existing motion encoding; no corrected
 sheet is written. Outside the band the original target sample is used exactly:
 a hard switch with no blend. Transparent silhouette and image-padding samples
 inherit their nearest opaque target cell, as with the existing scalar extension.

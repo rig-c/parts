@@ -5445,10 +5445,10 @@ function checkTurn(
     }
   };
   const checkBoundaryDepths = (bAt: string, value: Json, roles: Json | undefined): void => {
-    if (!isPlainObject(value)) { c.fail('CONFIG_FIELD_TYPE', bAt, 'requires an object of target part -> {neighbour, band}'); return; }
+    if (!isPlainObject(value)) { c.fail('CONFIG_FIELD_TYPE', bAt, 'requires an object of target part -> {neighbour, band, contact?}'); return; }
     for (const [target, raw] of Object.entries(value)) {
       const field = `${bAt}.${target}`;
-      const declaration = c.object(field, raw, ['neighbour', 'band'], []);
+      const declaration = c.object(field, raw, ['neighbour', 'band'], ['contact']);
       if (!attached.has(target)) c.fail('CONFIG_NAME_RESOLVES', field, `names "${target}"; an exact attached part name is required`);
       if (!isPlainObject(roles) || roles[target] !== 'surface') c.fail('CONFIG_FIELD_TYPE', field, `target "${target}" requires role "surface" in this turn group`);
       if (declaration === null) continue;
@@ -5457,6 +5457,9 @@ function checkTurn(
         const name = declaration[key];
         if (typeof name !== 'string' || name.length === 0) c.fail('CONFIG_FIELD_TYPE', `${field}.${key}`, 'requires an exact nonempty part name');
         else if (!attached.has(name)) c.fail('CONFIG_NAME_RESOLVES', `${field}.${key}`, `names "${name}"; an exact attached part name is required`);
+      }
+      if ('contact' in declaration && declaration.contact !== 'overlap') {
+        c.fail('CONFIG_FIELD_TYPE', `${field}.contact`, `is ${show(declaration.contact)}; expected "overlap" or omit for abutting surfaces`);
       }
       if (typeof declaration.neighbour === 'string' && (!isPlainObject(roles) || roles[declaration.neighbour] !== 'surface' || declaration.neighbour === target)) {
         c.fail('CONFIG_FIELD_TYPE', `${field}.neighbour`, `requires a different surface in the same turn group as "${target}"`);

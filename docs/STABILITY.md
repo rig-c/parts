@@ -785,8 +785,8 @@ part name, `[i]` an entry of a list):
 - **motion.blink.still.&lt;part&gt;** — required: `row`, `bone`
 - **motion.animations_from**, the file it names — required: `spec`, `animations`
 - **turn** — required: `pivot`, `depths` (or `roles` / `body`, issues #763, #787); optional: `deform`, `band`, `radius`, `surface`, `head`, `roles`, `counter`, `grid`, `unitDepths`, `boundaryDepths`, `body`
-- **turn.boundaryDepths.&lt;part&gt;**, when an object — required: `neighbour`, `band` (issue #1342)
-- **turn.body.boundaryDepths.&lt;part&gt;**, when an object — required: `neighbour`, `band` (issue #1342)
+- **turn.boundaryDepths.&lt;part&gt;**, when an object — required: `neighbour`, `band`; optional: `contact` (issue #1342)
+- **turn.body.boundaryDepths.&lt;part&gt;**, when an object — required: `neighbour`, `band`; optional: `contact` (issue #1342)
 - **turn.depths.&lt;part&gt;** — a See-through depth
 - **turn.roles.&lt;part&gt;** — `"surface"`, `"unit"` or `"rear"` (issue #763)
 - **turn.unitDepths.&lt;part&gt;** — a calibrated world depth in rig pixels (issue #763)

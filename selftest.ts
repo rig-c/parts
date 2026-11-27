@@ -8426,6 +8426,90 @@ export function runBoundaryDepthChecks(dir: string, say: (name: string, ok: bool
     misses.samplers.size === 0 && misses.problems.length === 2 && misses.problems.some(p => p.detail.includes('has support outside target')) &&
     misses.problems.some(p => p.detail.includes('empty or does not reach')) && !misses.problems.some(p => p.detail.includes('does not abut')),
     JSON.stringify({ positive: reaches.problems, negative: misses.problems }));
+  // #1572: opt-in `contact: "overlap"` samples the extended original neighbour
+  // inside closed overlap cells and projects onto the overlap/abutment boundary
+  // outside them, while keeping default abutting refusals and bytes unchanged.
+  const upperSheet = block(4, 3), lowerSheet = block(4, 4);
+  for (let v = 0; v < 3; v++) for (let u = 0; u < 4; u++) upperSheet.data.set([20 + 20 * u + 40 * v, 20 + 20 * u + 40 * v, 20 + 20 * u + 40 * v, 255], (v * 4 + u) * 4);
+  for (let i = 0; i < 16; i++) lowerSheet.data.set([200, 200, 200, 255], i * 4);
+  const overlapParts = [
+    { name: 'band_mask', x: 0, y: 2, w: 4, h: 2 },
+    { name: 'upper', x: 0, y: 0, w: 4, h: 3, depth: { ...ref, image: 'upper.png' } },
+    { name: 'lower', x: 0, y: 2, w: 4, h: 4, depth: { ...ref, image: 'lower.png' } },
+  ];
+  const overlapImages = new Map<string, Raster>([
+    ['band_mask', block(4, 2)], ['upper', block(4, 3)], ['lower', block(4, 4)],
+    ['upper.png', upperSheet], ['lower.png', lowerSheet],
+  ]);
+  const overlapRoles = { upper: 'surface', lower: 'surface' };
+  const overlapSampler = checkedBoundaryDepthSamplers({ lower: { neighbour: 'upper', band: 'band_mask', contact: 'overlap' } }, overlapParts, overlapImages, overlapRoles, 'config.turn.body').get('lower')!;
+  // Concave L-shaped overlap at (0,0), (1,0), (0,1): transparent (1,1) inherits
+  // nearest supported cell (1,0)=40 under silhouette extension, so point
+  // (1.5, 1.5) outside the overlap is equidistant (d = 0.5) from [(1,1),(2,1)]
+  // at (1.5, 1.0) -> (40+40)/2=40 and [(1,1),(1,2)] at (1.0, 1.5) -> (60+40)/2=50,
+  // arithmetic mean (40+50)/2 = 45.
+  const lUpperArt = block(3, 3); lUpperArt.data[(1 * 3 + 1) * 4 + 3] = 0; lUpperArt.data[(1 * 3 + 2) * 4 + 3] = 0; lUpperArt.data[(2 * 3 + 1) * 4 + 3] = 0; lUpperArt.data[(2 * 3 + 2) * 4 + 3] = 0;
+  const lUpperSheet = block(3, 3);
+  for (let v = 0; v < 3; v++) for (let u = 0; u < 3; u++) lUpperSheet.data.set([20 + 20 * u + 40 * v, 20 + 20 * u + 40 * v, 20 + 20 * u + 40 * v, 255], (v * 3 + u) * 4);
+  const lParts = [{ name: 'upper', x: 0, y: 0, w: 3, h: 3, depth: { ...ref, image: 'lu.png' } }, { name: 'lower', x: 0, y: 0, w: 3, h: 3, depth: { ...ref, image: 'll.png' } }];
+  const lImages = new Map<string, Raster>([['upper', lUpperArt], ['lower', block(3, 3)], ['lu.png', lUpperSheet], ['ll.png', block(3, 3)]]);
+  const lSampler = checkedBoundaryDepthSamplers({ lower: { neighbour: 'upper', band: 'lower', contact: 'overlap' } }, lParts, lImages, overlapRoles, 'config.turn.body').get('lower')!;
+  say('BD35_OVERLAP_CONTACT_SAMPLES_NEIGHBOUR_INSIDE_AND_PROJECTS_OUTSIDE',
+    overlapSampler(1.5, 2.5) === 120 && overlapSampler(2.0, 2.5) === 130 && overlapSampler(2.0, 3.5) === 130 && overlapSampler(1.5, 4.5) === 200 && lSampler(1.5, 1.5) === 45,
+    `inside cell=120, inside edge=130, projected band=130, outside band=200, equidistant concave corner=${lSampler(1.5, 1.5)}`);
+  const abuttingWithOverlapContact = fresh();
+  abuttingWithOverlapContact.group.boundaryDepths = { [abuttingWithOverlapContact.target.name]: { neighbour: abuttingWithOverlapContact.neighbour.name, band: abuttingWithOverlapContact.band, contact: 'overlap' } };
+  const noOverlapErr = refusals(() => sampler(abuttingWithOverlapContact));
+  const separatedWithOverlapContact = fresh();
+  separatedWithOverlapContact.neighbour.y--;
+  separatedWithOverlapContact.group.boundaryDepths = { [separatedWithOverlapContact.target.name]: { neighbour: separatedWithOverlapContact.neighbour.name, band: separatedWithOverlapContact.band, contact: 'overlap' } };
+  const sepOverlapErr = refusals(() => sampler(separatedWithOverlapContact));
+  say('BD36_OVERLAP_CONTACT_WITHOUT_OVERLAP_REFUSED',
+    [noOverlapErr, sepOverlapErr].every(e => e?.problems.some(p => p.code === 'RIG_TURN_BOUNDARY_DEPTH' && p.detail.includes('has no overlapping opaque pixel cells')) === true),
+    `abutting: ${codes(noOverlapErr)}; separated: ${codes(sepOverlapErr)}`);
+  const partialBandArt = block(4, 2);
+  partialBandArt.data[(0 * 4 + 2) * 4 + 3] = 0;
+  const partialImages = new Map(overlapImages); partialImages.set('band_mask', partialBandArt);
+  const partialBandProblems = boundaryDepthSamplers({ lower: { neighbour: 'upper', band: 'band_mask', contact: 'overlap' } },
+    [{ ...overlapParts[0], x: -1, w: 5 }, overlapParts[1], overlapParts[2]],
+    new Map([...partialImages, ['band_mask', (() => { const r = block(5, 2); r.data[(0 * 5 + 3) * 4 + 3] = 0; return r; })()]]),
+    overlapRoles, 'config.turn.body');
+  say('BD37_OVERLAP_CONTACT_BAND_MISSING_OVERLAP_CELL_AND_OUTSIDE_REFUSED',
+    partialBandProblems.samplers.size === 0 && partialBandProblems.problems.length === 2 &&
+    partialBandProblems.problems.some(p => p.code === 'RIG_TURN_BOUNDARY_DEPTH' && p.detail.includes('has support outside target "lower" at [-1,2]')) &&
+    partialBandProblems.problems.some(p => p.code === 'RIG_TURN_BOUNDARY_DEPTH' && p.detail.includes('band "band_mask" misses overlap cell [2,2] with "upper"')),
+    JSON.stringify(partialBandProblems.problems));
+  const validOverlapConfig = malformed({ bottomwear: { neighbour: 'topwear', band: 'band_mask', contact: 'overlap' } });
+  const badContactString = malformed({ bottomwear: { neighbour: 'topwear', band: 'band_mask', contact: 'abut' } });
+  const badContactType = malformed({ bottomwear: { neighbour: 'topwear', band: 'band_mask', contact: true } });
+  say('BD38_CONFIG_OVERLAP_CONTACT_ACCEPTED_AND_INVALID_CONTACT_REFUSED',
+    validOverlapConfig === null &&
+    [badContactString, badContactType].every(e => e?.problems.some(p => p.code === 'CONFIG_FIELD_TYPE' && p.object.endsWith('.bottomwear.contact')) === true),
+    `valid: ${codes(validOverlapConfig)}; "abut": ${codes(badContactString)}; true: ${codes(badContactType)}`);
+  // Disconnected two-island target: island [0,1)x[0,1) is wholly inside the
+  // neighbour [0,1)x[0,1), while island [2,3)x[0,1) is disjoint with no shared
+  // edge. A band restricted to the overlap succeeds; a band reaching the
+  // disjoint island is refused instead of dividing by zero.
+  const twoIslandTarget = block(3, 1); twoIslandTarget.data[1 * 4 + 3] = 0;
+  const oneCellArt = block(1, 1);
+  const islandParts = [
+    { name: 'band_only_overlap', x: 0, y: 0, w: 1, h: 1 },
+    { name: 'upper', x: 0, y: 0, w: 1, h: 1, depth: { ...ref, image: 'iu.png' } },
+    { name: 'lower', x: 0, y: 0, w: 3, h: 1, depth: { ...ref, image: 'il.png' } },
+  ];
+  const islandImages = new Map<string, Raster>([
+    ['band_only_overlap', oneCellArt], ['upper', oneCellArt], ['lower', twoIslandTarget],
+    ['iu.png', block(1, 1)], ['il.png', block(3, 1)],
+  ]);
+  const islandOk = boundaryDepthSamplers({ lower: { neighbour: 'upper', band: 'band_only_overlap', contact: 'overlap' } }, islandParts, islandImages, overlapRoles, 'config.turn.body');
+  const islandRefused = boundaryDepthSamplers({ lower: { neighbour: 'upper', band: 'lower', contact: 'overlap' } }, islandParts, islandImages, overlapRoles, 'config.turn.body');
+  const overlapHintCheck = fresh(); overlapHintCheck.neighbour.y++;
+  const overlapHintErr = refusals(() => sampler(overlapHintCheck));
+  say('BD40_DISCONNECTED_ISLAND_BAND_REFUSED_AND_DEFAULT_HINT_NAMES_OVERLAP',
+    islandOk.problems.length === 0 && Number.isFinite(islandOk.samplers.get('lower')!(0.5, 0.5)) &&
+    islandRefused.samplers.size === 0 && islandRefused.problems.some(p => p.code === 'RIG_TURN_BOUNDARY_DEPTH' && p.detail.includes('no neighbour boundary crosses')) &&
+    overlapHintErr?.problems.some(p => p.code === 'RIG_TURN_BOUNDARY_DEPTH' && p.detail.includes('contact: "overlap"')) === true,
+    `contained overlap band finite; disjoint island band: ${JSON.stringify(islandRefused.problems)}; default hint: ${codes(overlapHintErr)}`);
   if (!compiled) return;
   const compileBuilt = (built: ReturnType<typeof buildRig>, label: string) => {
     const home = join(dir, label); mkdirSync(join(home, 'images'), { recursive: true });
@@ -8486,6 +8570,67 @@ export function runBoundaryDepthChecks(dir: string, say: (name: string, ok: bool
     const singleDialSkip = built.rig.invariants?.deformSliderCombinations === undefined &&
       gate.stdout.includes('SKIP  A53_DECLARED_SLIDER_COMBINATIONS_KEEP_WINDING: rig declares no invariants.deformSliderCombinations');
     say(`BD20_${label.toUpperCase().replaceAll('-', '_')}_EXISTING_GATE`, gate.status === 0 && singleDialSkip, `exit ${gate.status}; ${(gate.stdout + gate.stderr).replace(/\s+/g, ' ').trim()}`);
+  }
+  if (gates) {
+    // Planted one-pixel overlap strip [32,33)x[16,40) with a 90-level depth
+    // step at zScale=40 (~3.65 px yaw travel > 1 px overlap, < 4 px grid cell):
+    // body yaw tears open a background seam (`gapOpen > 0`) without a
+    // declaration, and keeps both `gap === 0` and `gapOpen === 0` under
+    // `contact: "overlap"` for both whole-target and contained-patch bands.
+    const makeOverlapSeamFixture = (mode: 'none' | 'whole' | 'patch') => {
+      const ov = abuttingSurfaceFixture('body', false);
+      const left = ov.parts.parts[0], right = ov.parts.parts[1];
+      left.x = 13; left.y = 16; left.w = 20; left.h = 24; left.opaque_px = 20 * 24;
+      right.x = 32; right.y = 16; right.w = 20; right.h = 24; right.opaque_px = 20 * 24;
+      const leftArt = block(20, 24), rightArt = block(20, 24), leftSheet = newRaster(20, 24), rightSheet = newRaster(20, 24);
+      for (let i = 0; i < 20 * 24; i++) leftSheet.data.set([40, 40, 40, 255], i * 4);
+      for (let i = 0; i < 20 * 24; i++) rightSheet.data.set([130, 130, 130, 255], i * 4);
+      left.depth = { ...left.depth!, zScale: 40, sources: [{ ...left.depth!.sources[0], crop: [13, 16, 33, 40] }] };
+      right.depth = { ...right.depth!, zScale: 40, sources: [{ ...right.depth!.sources[0], crop: [32, 16, 52, 40] }] };
+      ov.images.set(left.name, leftArt); ov.images.set(left.depth.image, leftSheet);
+      ov.images.set(right.name, rightArt); ov.images.set(right.depth.image, rightSheet);
+      const ovTurn = ov.config.turn as TurnSpec;
+      ovTurn.body!.grid = [8, 9];
+      if (mode === 'patch') {
+        const patchDecl: Patch = { name: 'band_mask', box: [32, 16, 36, 40], alpha: 'box', draw: 'back' };
+        const patchMade = cutPatch(patchDecl, block(64, 64), null)!;
+        (ov.config.assemble as Record<string, unknown>).patches = [patchDecl];
+        (ov.config.regions as Record<string, string>).band_mask = 'chest';
+        ov.parts.parts.unshift(patchMade.record);
+        ov.images.set('band_mask', patchMade.image);
+        ovTurn.body!.boundaryDepths = { bottomwear: { neighbour: 'topwear', band: 'band_mask', contact: 'overlap' } };
+      } else if (mode === 'whole') {
+        ovTurn.body!.boundaryDepths = { bottomwear: { neighbour: 'topwear', band: 'bottomwear', contact: 'overlap' } };
+      }
+      return ov;
+    };
+    const runOverlapSeam = (tag: string, mode: 'none' | 'whole' | 'patch') => {
+      const ov = makeOverlapSeamFixture(mode);
+      const built = buildRig(parseConfig(ov.config), ov.parts, ov.images);
+      const home = join(dir, tag); mkdirSync(join(home, 'images'), { recursive: true });
+      for (const [name, image] of built.images) writePng(join(home, 'images', name), image);
+      for (const [name, text] of rigOutputTexts(built, null)) writeFileSync(join(home, name), text);
+      const rigcCli = fileURLToPath(import.meta.resolve('@rig-c/core/cli'));
+      const buildOut = join(home, 'built'), seamOut = join(home, 'seam');
+      const gate = spawnSync(process.execPath, [rigcCli, 'build', '--rig', join(home, 'rig.json'), '--motion', join(home, 'motion.json'), '--out', buildOut, '--profile', 'rig-play'], { encoding: 'utf8', maxBuffer: 1 << 24 });
+      if (gate.status !== 0) return { gateStatus: gate.status, renderStatus: -1, banded: 0, openFrames: -1, maxGapOpen: -1, maxGap: -1, log: gate.stdout + gate.stderr };
+      const render = spawnSync(process.execPath, [rigcCli, 'render', '--candidate', buildOut, '--seam', 'topwear:bottomwear', '--fps', '12', '--max', '64', '--out', seamOut], { encoding: 'utf8', maxBuffer: 1 << 24 });
+      const seamJson = JSON.parse(readFileSync(join(seamOut, 'body_turn', 'seam.json'), 'utf8')) as {
+        pairs: Array<{ banded: number; gap: { frames: Array<{ px: number }> }; gapOpen: { frames: Array<{ px: number }> } }>;
+      };
+      const pair = seamJson.pairs[0];
+      const maxGapOpen = pair.gapOpen.frames.reduce((m, r) => Math.max(m, r.px), 0);
+      const maxGap = pair.gap.frames.reduce((m, r) => Math.max(m, r.px), 0);
+      return { gateStatus: gate.status, renderStatus: render.status, banded: pair.banded, openFrames: pair.gapOpen.frames.length, maxGapOpen, maxGap, log: '' };
+    };
+    const tornSeam = runOverlapSeam('overlap-seam-undeclared', 'none');
+    const closedWhole = runOverlapSeam('overlap-seam-whole', 'whole');
+    const closedPatch = runOverlapSeam('overlap-seam-patch', 'patch');
+    say('BD39_OVERLAP_CONTACT_CLOSES_MOTION_SEAM',
+      tornSeam.gateStatus === 0 && tornSeam.renderStatus === 0 && tornSeam.banded > 0 && tornSeam.openFrames > 0 && tornSeam.maxGapOpen > 0 &&
+      closedWhole.gateStatus === 0 && closedWhole.renderStatus === 0 && closedWhole.banded === tornSeam.banded && closedWhole.openFrames === 0 && closedWhole.maxGapOpen === 0 && closedWhole.maxGap === 0 &&
+      closedPatch.gateStatus === 0 && closedPatch.renderStatus === 0 && closedPatch.banded === tornSeam.banded && closedPatch.openFrames === 0 && closedPatch.maxGapOpen === 0 && closedPatch.maxGap === 0,
+      `undeclared: banded=${tornSeam.banded}, openFrames=${tornSeam.openFrames}, maxGapOpen=${tornSeam.maxGapOpen}; whole: maxGap=${closedWhole.maxGap}, maxGapOpen=${closedWhole.maxGapOpen}; patch: maxGap=${closedPatch.maxGap}, maxGapOpen=${closedPatch.maxGapOpen}${closedWhole.log || closedPatch.log ? `; log=${closedWhole.log}${closedPatch.log}` : ''}`);
   }
 }
 
