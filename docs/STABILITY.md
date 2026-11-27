@@ -1337,7 +1337,16 @@ refusals can exit without a completed report.
 Reports keep their existing statuses and have no bar-map entries. A WARN
 is never a bar outcome, so a consumer that refuses on FAIL does not
 refuse on a WARN, matching the exit code. The outer `SEAM_OVER_MOTION.status`
-remains a diagnostic and the bar uses the precedence below.
+remains a diagnostic and the bar uses the precedence below. The outer
+precedence (issue #1592) is body-root `FAIL`, full `SKIP` (no reading or an
+explicit skip reason), `WARN`, partial `SKIP`, then `CLEAR`. Partial `SKIP`
+carries a `reason` when some declared pair/animation readings are measured,
+others are unmeasured, and there is no warning. A `WARN` has no outer `reason`
+key even with incomplete coverage. To determine coverage for any outer status,
+read each `rows[]` entry's `pair`, `animation`, rigc `status` and `banded`.
+`read` with `banded > 0` is measured. A pair with `pairs[].unread` is
+unmeasured for every entry in `animations`. The console names these
+pairs and the unmeasured render rows. [Motion seam coverage](AUTHORING.md#motion-seam-coverage).
 
 | Bar id | Measurement | SKIP reasons in precedence order |
 | --- | --- | --- |

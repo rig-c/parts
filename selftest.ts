@@ -20748,6 +20748,120 @@ function runMotionSeamWorldIntegration(dir: string, say: (name: string, ok: bool
     'the current custom reading remains first, default is reused without a schedule, complete raw render files survive at deterministic relative references after scratch cleanup, and nonphysics has no extra file, call or serialized byte in the seam block.');
 }
 
+function runMotionSeamCoverageCases(
+  dir: string,
+  say: FixtureCaseReporter,
+  runCli: (args: string[]) => { status: number; out: string },
+): void {
+  const size = 64;
+  const width = 12;
+  const rectangles = [
+    { name: 'overlap_left', x: 8, y: 8 },
+    { name: 'overlap_right', x: 16, y: 8 },
+    { name: 'abut_left', x: 8, y: 32 },
+    { name: 'abut_right', x: 20, y: 32 },
+  ];
+  // The first pair shares four columns at setup. The second shares an edge throughout glide.
+  const rig = join(dir, 'coverage-rig');
+  const images = join(rig, 'images');
+  mkdirSync(images, { recursive: true });
+  const art = newRaster(width, width);
+  // Keep one transparent corner in each packed image.
+  for (let i = 4; i < art.data.length; i += 4) art.data.set([140, 90, 70, 255], i);
+  const png = encodePngBytes(art);
+  const pixels = width * width - 1;
+  const records: PartRecord[] = rectangles.map(({ name, x, y }) => {
+    writeFileSync(join(images, `${name}.png`), png);
+    return { name, x, y, w: width, h: width, from: 'full:neckwear', opaque_px: pixels,
+      projected_core_px: pixels, source_px_taken: pixels, refused_drift_px: 0, merged_px: 0, seam_override_px: 0 };
+  });
+  writeFileSync(join(rig, 'rig.json'), JSON.stringify({
+    spec: 'rigc-rig/1', name: 'seam_coverage', images: 'images', skeleton: { x: 0, y: 0, width: size, height: size },
+    bones: [{ name: 'root' }, { name: 'carrier', parent: 'root' }, { name: 'slider', parent: 'carrier' }],
+    slots: rectangles.map(({ name }) => ({ name, bone: name === 'overlap_right' ? 'slider' : 'carrier', attachment: name })),
+    skins: { default: Object.fromEntries(rectangles.map(({ name, x, y }) => [name, { [name]: {
+      type: 'region', image: `${name}.png`, x: x + width / 2, y: cropToSpineY(y + width / 2, size), width, height: width,
+    } }])) },
+  }));
+  const writeMotion = (home: string, bone: string, distance: number): void => {
+    writeFileSync(join(home, 'motion.json'), JSON.stringify({
+      spec: 'rigc-motion/1', archetype: 'seam_coverage', cut: 'seam_coverage', easings: {}, groups: {},
+      animations: { glide: { duration: 1, loop: false, tracks: [
+        { bone, property: 'translate', keys: [{ t: 0, v: [0, 0] }, { t: 1, v: [distance, 0] }] },
+      ] } },
+    }));
+  };
+  const warningRig = join(dir, 'coverage-warning-rig');
+  cpSync(rig, warningRig, { recursive: true });
+  writeMotion(rig, 'carrier', 1);
+  writeMotion(warningRig, 'slider', width);
+
+  const overlap = { part: 'overlap_left', neighbour: 'overlap_right' };
+  const abutting = { part: 'abut_left', neighbour: 'abut_right' };
+  const overlapName = 'overlap_left|overlap_right';
+  const abuttingName = 'abut_left|abut_right';
+  const check = (label: string, motionSeams: Array<typeof overlap>, home = rig, extra: string[] = []) => {
+    const parts = join(dir, `coverage-${label}`);
+    const out = join(parts, 'check');
+    mkdirSync(parts);
+    cpSync(images, join(parts, 'parts'), { recursive: true });
+    writeParts(join(parts, 'parts.json'), { rig_size: [size, size], scale_rig_per_source: 1, ghost_px: {}, parts: records, motion_seams: motionSeams });
+    const result = runCli(['check', '--rig', home, '--parts', parts, '--out', out, '--no-extremes', ...extra]);
+    const fig = readJsonFile(join(out, 'check.json'));
+    const line = fig?.[MOTION_SEAM_LINE] as MotionSeamLine | undefined;
+    const lines = result.out.split('\n').map(text => text.trim());
+    return { status: result.status, fig, line, lines, passed: result.status === 0 && fig?.PASS === true,
+      detail: `exit ${result.status}; ${JSON.stringify(line)}` };
+  };
+  const mixed = check('mixed', [overlap, abutting]);
+  const abuttingOnly = check('abutting', [abutting]);
+  const overlapOnly = check('overlap', [overlap]);
+  const partialReason = 'one or more declared pair/animation readings are unmeasured';
+  const noReadReason = 'rigc read no band on any frame of any declared pair in any animation — nothing measured, which is not a seam that held';
+  const frames = 13; // One second at 12 fps, including both endpoints.
+  const skipLine = `seam "${abuttingName}" in "glide": SKIP — rigc read no band on any of the ${frames} frame(s) both slots draw, so there is no seam to read`;
+  const read = overlapOnly.line?.rows[0];
+  const skipped = abuttingOnly.line?.rows[0];
+  say('SO39_ABUTTING_ONLY_KEEPS_THE_NO_READ_SKIP',
+    abuttingOnly.passed && abuttingOnly.line?.status === 'SKIP' && abuttingOnly.line.reason === noReadReason && abuttingOnly.line.warnings === 0 &&
+      abuttingOnly.line.rows.length === 1 && skipped?.pair === abuttingName && skipped.animation === 'glide' &&
+      skipped.status === 'skip' && skipped.drawn === frames && skipped.banded === 0 && skipped.opens.length === 0 &&
+      abuttingOnly.lines.some(text => text.startsWith(`${MOTION_SEAM_LINE}: SKIP — ${noReadReason};`)) && abuttingOnly.lines.includes(skipLine),
+    abuttingOnly.detail, 'Strict abutment draws both slots in every frame and keeps the existing no-band reason.');
+  say('SO40_OVERLAPPING_ONLY_READS_CLEAR',
+    overlapOnly.passed && overlapOnly.line?.status === 'CLEAR' && !('reason' in overlapOnly.line) && overlapOnly.line.warnings === 0 &&
+      overlapOnly.line.rows.length === 1 && read?.pair === overlapName && read.animation === 'glide' &&
+      read.status === 'read' && read.drawn === frames && read.banded === frames && read.opens.length === 0 &&
+      overlapOnly.lines.some(text => text.startsWith(`${MOTION_SEAM_LINE}: CLEAR —`)),
+    overlapOnly.detail, 'The overlapping rectangles travel together and supply a clean band on every frame.');
+  say('SO41_CLEAR_AND_ABUTTING_PAIRS_REPORT_PARTIAL_SKIP',
+    mixed.passed && mixed.line?.status === 'SKIP' && mixed.line.reason === partialReason && mixed.line.warnings === 0 &&
+      read !== undefined && skipped !== undefined && JSON.stringify(mixed.line.rows) === JSON.stringify([read, skipped]) &&
+      mixed.lines.some(text => text.startsWith(`${MOTION_SEAM_LINE}: SKIP — ${partialReason};`)) && mixed.lines.includes(skipLine),
+    mixed.detail, 'The same two pair rows survive together and partial coverage prints the unmeasured pair and animation.');
+
+  const warning = check('warning', [overlap, abutting], warningRig);
+  const open = warning.line?.rows[0];
+  say('SO42_A_WARNING_WINS_OVER_PARTIAL_SKIP_AND_STILL_NAMES_THE_UNREAD_PAIR',
+    warning.passed && warning.line?.status === 'WARN' && !('reason' in warning.line) && warning.line.warnings === 1 &&
+      warning.line.rows.length === 2 && open?.pair === overlapName && open.animation === 'glide' &&
+      open.status === 'read' && open.banded > 0 && open.opens.length > 0 &&
+      skipped !== undefined && JSON.stringify(warning.line.rows[1]) === JSON.stringify(skipped) &&
+      warning.lines.some(text => text.startsWith(`${MOTION_SEAM_LINE}: WARN —`)) && warning.lines.includes(skipLine) &&
+      warning.lines.some(text => text.startsWith(`WARN seam "${overlapName}" opens `) && text.includes(' in "glide" —')),
+    warning.detail, 'Sliding one overlapping part opens its band while the abutting pair stays unmeasured.');
+
+  const requiredPath = join(dir, 'coverage-required.json');
+  writeFileSync(requiredPath, JSON.stringify({ spec: REQUIREMENTS_SPEC, fps: 12, requirements: [], seam_over_motion: { required: true } }));
+  const required = check('required', [overlap, abutting], rig, ['--requirements', requiredPath]);
+  const refusals = required.lines.filter(text => text.startsWith(`FAIL  ${MOTION_SEAM_REQUIRED_CODE}: `));
+  say('SO43_REQUIRED_PARTIAL_COVERAGE_REFUSES_THE_UNMEASURED_PAIR_BY_NAME',
+    required.status === 1 && onlyFailedCheckBar(required.fig, MOTION_SEAM_LINE) && required.line?.required?.status === 'FAIL' &&
+      required.line.required.failed === 1 && refusals.length === 1 &&
+      refusals[0].startsWith(`FAIL  ${MOTION_SEAM_REQUIRED_CODE}: explicit seam "${abuttingName}" in "glide" — rigc read no band on any of the ${frames} frame(s) both slots draw (status skip)`),
+    `${required.detail}; ${JSON.stringify(refusals)}`, 'The required bar still refuses the unmeasured pair even though the overlapping pair reads clean.');
+}
+
 function runMotionSeamCases(report: FixtureCaseReporter): void {
   const { say, runCli } = fixtureChildDiagnostics(report);
   runMotionSeamContractCases(say, temp);
@@ -20900,6 +21014,7 @@ function runMotionSeamCases(report: FixtureCaseReporter): void {
     runMotionRootRendererCases(dir, cut.out, say);
     runMotionSeamWorldIntegration(dir, say, ln);
     runSeamRequiredCases(dir, built, say, runCli);
+    runMotionSeamCoverageCases(dir, say, runCli);
 
     // Issue #933: openings inside the figure over motion on undeclared setup-overlapping layer pairs.
     // Positive control ("idle"): a deliberate setup gap between arm and body (x 10..15, y 20..39 inside frame_body) is

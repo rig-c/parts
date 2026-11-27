@@ -5575,8 +5575,8 @@ export function motionSeamLine(pairs: MotionSeamPair[], animations: string[], fp
     ...(rootReasons.length === 0 && reason === undefined ? {} : { reason: unmeasured.length === 0 ? (reason ?? missing.join('; ')) : [reason, ...rootReasons].filter(r => r !== undefined).join('; ') }),
     ...(unmeasured.length === 0 ? {} : { unmeasured }),
   };
-  const read = rows.some((r) => r.status === 'read');
-  const skipWhy =
+  const read = rows.some((r) => r.status === 'read' && r.banded > 0);
+  const legacySkipWhy =
     reason ??
     (pairs.length === 0 && unmeasured.length > 0 ? rootGate?.reason : undefined) ??
     (read
@@ -5584,9 +5584,13 @@ export function motionSeamLine(pairs: MotionSeamPair[], animations: string[], fp
       : pairs.every((p) => p.unread !== undefined)
         ? `no declared pair is read: ${pairs.map((p) => `"${p.pair}" ${String(p.unread)}`).join('; ')}`
         : `rigc read no band on any frame of any declared pair in any animation — nothing measured, which is not a seam that held`);
+  // The renderer reader requires one row per animation for every pair with both slots available.
+  const partial = pairs.some(p => p.unread !== undefined) || rows.some(r => r.status === 'skip' || r.banded <= 0);
+  const status = rootGate?.status === 'FAIL' ? 'FAIL'
+    : legacySkipWhy !== undefined ? 'SKIP' : warnings > 0 ? 'WARN' : partial ? 'SKIP' : 'CLEAR';
   return {
-    status: rootGate?.status === 'FAIL' ? 'FAIL' : skipWhy !== undefined ? 'SKIP' : warnings > 0 ? 'WARN' : 'CLEAR',
-    ...(skipWhy === undefined ? {} : { reason: skipWhy }),
+    status,
+    ...(status === 'SKIP' ? { reason: legacySkipWhy ?? 'one or more declared pair/animation readings are unmeasured' } : {}),
     fps,
     floor: MOTION_SEAM_FLOOR,
     pairs: pairs.map(p => ({ ...p, ...checkRow('SEAM_OVER_MOTION.pairs', 'pair', false, [p.a, p.b]) })),

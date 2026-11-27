@@ -8,10 +8,23 @@
 
 * **On a rig that declares physics constraints, a closed physics-off idle now reports `loop` as `SKIP`, not `PASS`.** In `check/check.json` (`rig-parts-check/1`), when `loop_physics` is non-empty and `loop_max_diff === 0`, `bar_outcomes.loop` is `{"status": "SKIP", "reason": "physics-omitted"}` and `skipped.loop` is `"physics-on idle frames not measured; <N> physics constraint(s) omitted"`. `loop_max_diff` keeps its physics-off reading (`0` when closed; `> 0` still fails `CHECK_LOOP_CLOSES` with `bar_outcomes.loop` `FAIL` and `PASS: false`), and top-level `PASS`, `gate_spine_html_green` and `build.model_sha256` are unchanged when the measured bars pass. The console prints `loop: SKIP — physics-on frames not measured …; physics-off idle …: max |d| 0 (0 required)` and counts `loop` under `skipped`. Rigs with zero physics constraints keep byte-identical `check.json` and console output. In the public examples, `examples/{demo,reference-sample,scarf,wind}/expected/{check.json,machine-class.txt}` move; `examples/reference-demo/expected/*` is byte-identical.
 * **`SCENE_ANIMATION_LOOP_CLOSES` keeps its rule code and states in its detail that it checks posed endpoint values with physics omitted.** Its refusal detail now ends `(physics omitted: <names|none>; physics-on frames not measured)`.
+* **Incomplete motion seam coverage can now report `SEAM_OVER_MOTION: SKIP`.**
+  The outer status in `check.json` and the console headline give precedence
+  to body-root `FAIL`, then full `SKIP` (no reading or an explicit skip reason),
+  `WARN`, partial `SKIP`, and `CLEAR`. With some measurements and no warning,
+  an unmeasured declared pair/animation changes the headline and JSON status
+  to `SKIP` with a `reason`. A `WARN` retains its warnings and has no outer
+  `reason` key. Read `rows[].pair`, `animation`, rigc `status` and `banded`
+  for coverage. A measurement requires `read` and `banded > 0`. A pair with
+  `pairs[].unread` is unmeasured across the `animations` roster. Read
+  `bar_outcomes.SEAM_OVER_MOTION` for the body-root and required gate verdicts.
+  [Motion seam coverage](docs/AUTHORING.md#motion-seam-coverage).
 
 ### Bug Fixes
 
 * **check, compose:** stop reporting `loop` `PASS` when physics constraints were omitted from the loop comparison, and state in `check.json`, the console and `SCENE_ANIMATION_LOOP_CLOSES` that physics-on frames were not measured (`#1590`).
+* **check, build:** report partial `SEAM_OVER_MOTION` coverage with a named
+  `SKIP` when the measured readings are clean (`#1592`).
 
 ## 2.61.0 (2026-11-26)
 
