@@ -115,6 +115,7 @@ import { cropToSpineY } from './coords.ts';
 import { failLine, PartsError, type Problem, refuseIfAny } from './errors.ts';
 import { readParts } from './parts.ts';
 import { missingReceipts, readEditorReceipts, type EditorReceipts } from './editreceipt.ts';
+import { edgeLength } from './length.ts';
 import type { MotionSpec } from './motion.ts';
 import { decodePngBytes } from './raster/png.ts';
 import type { Raster } from './raster/types.ts';
@@ -1207,7 +1208,7 @@ function cameraEdgeOverruns(view: CameraPoint[], corners: CameraPoint[], determi
     // The region order is bottom-left, top-left, top-right, bottom-right in
     // art space. The determinant keeps the outside sign under reflections.
     const distances = view.map(([vx, vy]) => dx * (vy - y) - dy * (vx - x));
-    const overrun = Math.max(0, ...distances.map(d => Math.sign(determinant) * d)) / Math.hypot(dx, dy);
+    const overrun = Math.max(0, ...distances.map(d => Math.sign(determinant) * d)) / edgeLength(dx, dy);
     return { side, overrun: overrun <= precision ? 0 : overrun };
   });
 }
