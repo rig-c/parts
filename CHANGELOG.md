@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+* **check** names the governing contour band in a `TEXTURE_STRETCH` refusal. When a vertex of the failing edge lies inside a declared contour band, or at its cutoff, the detail adds the band's region, its target bone, its width with the config path, and each vertex's position in the band. The failure map in AUTHORING sends that case to the band's width, and notes that the reachable angle does not grow steadily with it. A standalone `check --rig` finds the config through a verified `run.json`. Every other refusal keeps its text byte for byte. ([#1598](https://github.com/rig-c/parts/issues/1598))
+
 ## 2.63.0 (2026-11-27)
 
 `compose` can now key a camera, with pan and zoom, as a view transform. The skeleton no longer has to move to zoom or pan a scene, and the stock stretch, fold and physics checks no longer read a camera move as a defect.
