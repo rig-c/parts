@@ -2693,8 +2693,13 @@ function pixelsOver(a: Raster, b: Raster, level: number): number {
  * those ends differ although this line reads max |d| 0.
  */
 export function loopCheckLine(idle: { frames: number; fps: number; duration: number; lastIndex: number }, max: number | null, physics: number): string {
-  const left = physics === 0 ? '' : ` with the rig's ${physics} physics constraint(s) left out (named on the \`loop physics:\` line; rendered with them, the ends need not meet — \`build --loop --lead-in <n>\`)`;
-  return `loop: idle ${idle.frames} frame(s) at ${idle.fps} fps, f0000 vs f${String(idle.lastIndex).padStart(4, '0')} (t = ${idle.duration}s)${left}: max |d| ${String(max)} (0 required)`;
+  const last = String(idle.lastIndex).padStart(4, '0');
+  const frames = `idle ${idle.frames} frame(s) at ${idle.fps} fps, f0000 vs f${last} (t = ${idle.duration}s)`;
+  if (physics === 0) return `loop: ${frames}: max |d| ${String(max)} (0 required)`;
+  if (max === 0) {
+    return `loop: SKIP — physics-on frames not measured (${physics} physics constraint(s) omitted, named on the \`loop physics:\` line; rendered with them, the ends need not meet — \`build --loop --lead-in <n>\`); physics-off ${frames}: max |d| 0 (0 required)`;
+  }
+  return `loop: FAIL — physics-on frames not measured (${physics} physics constraint(s) omitted, named on the \`loop physics:\` line); physics-off ${frames}: max |d| ${String(max)} (0 required)`;
 }
 
 /**

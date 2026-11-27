@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+`check` and `compose` no longer report frame-level loop closure for physics-on frames they did not measure.
+
+**Read before upgrading:**
+
+* **On a rig that declares physics constraints, a closed physics-off idle now reports `loop` as `SKIP`, not `PASS`.** In `check/check.json` (`rig-parts-check/1`), when `loop_physics` is non-empty and `loop_max_diff === 0`, `bar_outcomes.loop` is `{"status": "SKIP", "reason": "physics-omitted"}` and `skipped.loop` is `"physics-on idle frames not measured; <N> physics constraint(s) omitted"`. `loop_max_diff` keeps its physics-off reading (`0` when closed; `> 0` still fails `CHECK_LOOP_CLOSES` with `bar_outcomes.loop` `FAIL` and `PASS: false`), and top-level `PASS`, `gate_spine_html_green` and `build.model_sha256` are unchanged when the measured bars pass. The console prints `loop: SKIP — physics-on frames not measured …; physics-off idle …: max |d| 0 (0 required)` and counts `loop` under `skipped`. Rigs with zero physics constraints keep byte-identical `check.json` and console output. In the public examples, `examples/{demo,reference-sample,scarf,wind}/expected/{check.json,machine-class.txt}` move; `examples/reference-demo/expected/*` is byte-identical.
+* **`SCENE_ANIMATION_LOOP_CLOSES` keeps its rule code and states in its detail that it checks posed endpoint values with physics omitted.** Its refusal detail now ends `(physics omitted: <names|none>; physics-on frames not measured)`.
+
+### Bug Fixes
+
+* **check, compose:** stop reporting `loop` `PASS` when physics constraints were omitted from the loop comparison, and state in `check.json`, the console and `SCENE_ANIMATION_LOOP_CLOSES` that physics-on frames were not measured (`#1590`).
+
 ## 2.61.0 (2026-11-26)
 
 Generated turn dials are now gated in combination, not only one dial at a time, and an eased contour band shared by the head and body dials is adjusted where a declared combination would fold.

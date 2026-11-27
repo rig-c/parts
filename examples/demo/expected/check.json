@@ -5,7 +5,8 @@
    "status": "PASS"
   },
   "loop": {
-   "status": "PASS"
+   "status": "SKIP",
+   "reason": "physics-omitted"
   },
   "seam": {
    "status": "PASS"
@@ -2171,6 +2172,9 @@
     ]
    }
   ]
+ },
+ "skipped": {
+  "loop": "physics-on idle frames not measured; 29 physics constraint(s) omitted"
  },
  "PART_SUPPORT_REPORT": {
   "status": "WARN",

@@ -2817,12 +2817,12 @@ export interface CheckFigures {
    * off them ({@link readCheckEnvironment}). Provenance, not a bar; without the flag no key is written.
    */
   environment?: CheckEnvironment;
-  /** Null when the rig has no idle (issue #77); `skipped.loop` then says why. */
+  /** Null when the rig has no idle (issue #77); with physics constraints, holds the physics-off reading while `bar_outcomes.loop` and `skipped.loop` record that physics-on frames were not measured (issue #1590). */
   loop_max_diff: number | null;
   /**
    * Written only when the rig declares a physics constraint (issue #183):
-   * each one {@link withoutPhysics} left out of the frames `loop_max_diff` was
-   * read from. Reported, not judged; a rig without one writes the keys it always wrote.
+   * each one {@link withoutPhysics} left out of the physics-off frames `loop_max_diff` was
+   * read from; when `loop_max_diff` is 0, `bar_outcomes.loop` is `SKIP` (`physics-omitted`) and `skipped.loop` states that physics-on frames were not measured (issue #1590). A rig without one writes the keys it always wrote.
    */
   loop_physics?: LoopPhysics[];
   /** The seam figures: null when there is no parts.json (issue #77); `skipped.seam` then says why. The two counts are frame pixels. */
@@ -2882,11 +2882,10 @@ export interface CheckFigures {
   /** Written only under `--wind-band` (issue #590): the steady-wind band each declared seam pair holds, REPORTED. */
   [WIND_BAND_LINE]?: WindBandLine;
   /**
-   * Written only when the loop or the seam measured nothing (issue #77): the
-   * reason for each, by the name its console line goes by. The judgement and
-   * reported lines carry their own SKIP; these two bars have figures, not a
-   * status, so their reasons sit here, and a run that measured both writes
-   * the keys it always wrote.
+   * Written only when the loop or the seam did not measure the shipped frames (issues #77, #1590): the
+   * reason for each, by the name its console line goes by (including when `loop_physics` omitted physics constraints
+   * and the physics-off loop closed). The judgement and reported lines carry their own SKIP; these two bars have
+   * figures, not a status, so their reasons sit here, and a run that measured both writes the keys it always wrote.
    */
   skipped?: { loop?: string; seam?: string };
   /** Written only under `--set` or `--all-sets` (issue #454): each checked alternate set's setup-pose seam and recomposite figures, keyed by set name. */
@@ -3149,7 +3148,7 @@ export interface CheckBarSkipReasons {
 }
 
 export type CheckBarSkipReason = NonNullable<CheckBarSkipReasons[keyof CheckBarSkipReasons]>
-  | 'no-idle' | 'no-parts' | 'no-comparable-tracks' | 'no-animation' | 'no-hanging-footwear' | 'no-posed-footwear'
+  | 'no-idle' | 'physics-omitted' | 'no-parts' | 'no-comparable-tracks' | 'no-animation' | 'no-hanging-footwear' | 'no-posed-footwear'
   | 'no-handwear' | 'no-readable-binding' | 'no-limb-segments' | 'no-joint-range' | 'undeclared' | 'no-limit'
   | 'no-complete-threshold-reading' | 'no-root-gate' | 'no-complete-root-reading';
 
@@ -3172,7 +3171,9 @@ function checkBarStatus(fig: Readonly<Record<string, unknown>>, id: CheckBarId):
     case 'gate':
       return fig.gate_spine_html_green === true ? 'PASS' : 'FAIL';
     case 'loop':
-      return typeof fig.loop_max_diff !== 'number' ? 'SKIP' : fig.loop_max_diff === LOOP_MAX_BAR ? 'PASS' : 'FAIL';
+      if (typeof fig.loop_max_diff !== 'number') return 'SKIP';
+      if (fig.loop_max_diff !== LOOP_MAX_BAR) return 'FAIL';
+      return Array.isArray(fig.loop_physics) && fig.loop_physics.length > 0 ? 'SKIP' : 'PASS';
     case 'seam':
       if (seamFigureFailed(fig) || (isRecord(fig.sets) && Object.values(fig.sets).some(s => isRecord(s) && seamFigureFailed(s)))) return 'FAIL';
       return typeof fig.seam_mean === 'number' ? 'PASS' : 'SKIP';
@@ -3196,7 +3197,7 @@ function checkBarSkipReason(fig: Readonly<Record<string, unknown>>, id: Exclude<
   const hasParts = typeof fig.seam_mean === 'number';
   const hasAnimation = fig[FOLD_LINE] !== undefined;
   switch (id) {
-    case 'loop': return 'no-idle';
+    case 'loop': return hasIdle ? 'physics-omitted' : 'no-idle';
     case 'seam': return 'no-parts';
     case 'BREATH_VISIBLE':
     case 'BLINK_NO_HOLE':
@@ -3356,8 +3357,9 @@ export type CheckStatus = 'PASS' | 'FAIL' | 'SKIP' | 'WARN' | 'CLEAR' | 'REPORTE
 /**
  * Every block's status as `check.json` records it (issue #541), read off the figures object `check.json` is written
  * from, in the file's order, one entry per block the file holds. The three bars with figures and no `status` key are
- * read the way {@link barsNotMet} reads the file: `gate` PASS when `gate_spine_html_green` is true, else FAIL (it is
- * never skipped); `loop` SKIP when `loop_max_diff` is null, `seam` SKIP when `seam_mean` is null, otherwise FAIL when
+ * read the way {@link checkBarStatus} reads the file: `gate` PASS when `gate_spine_html_green` is true, else FAIL (it is
+ * never skipped); `loop` SKIP when `loop_max_diff` is null or when `loop_physics` is non-empty and `loop_max_diff` is
+ * {@link LOOP_MAX_BAR} (issue #1590), `seam` SKIP when `seam_mean` is null and no set failed, otherwise FAIL when
  * {@link barsNotMet} names it and PASS when it does not. Every other block carries its own `status` key and is copied:
  * the judgement lines, then {@link FOLD_LINE}, {@link LEVEL_LINE}, {@link STRESS_LINE}, {@link LIMB_LINE},
  * {@link SWEEP_LINE}, {@link MOTION_SEAM_LINE}, {@link CLOTH_LINE}, {@link PHYSICS_CONTRIBUTES_LINE}, the reported lines, {@link SOURCE_LINE} and
@@ -3365,8 +3367,7 @@ export type CheckStatus = 'PASS' | 'FAIL' | 'SKIP' | 'WARN' | 'CLEAR' | 'REPORTE
  */
 export function checkStatuses(fig: Omit<CheckFigures, 'spec' | 'bar_outcomes' | 'build'>): Record<string, CheckStatus> {
   const raw = fig as unknown as Record<string, unknown>;
-  const bar = (id: 'gate' | 'loop' | 'seam', measured: boolean): CheckStatus => (!measured ? 'SKIP' : checkBarStatus(raw, id) === 'FAIL' ? 'FAIL' : 'PASS');
-  const out: Record<string, CheckStatus> = { gate: bar('gate', true), loop: bar('loop', fig.loop_max_diff !== null), seam: bar('seam', fig.seam_mean !== null) };
+  const out: Record<string, CheckStatus> = { gate: checkBarStatus(raw, 'gate'), loop: checkBarStatus(raw, 'loop'), seam: checkBarStatus(raw, 'seam') };
   for (const n of JUDGEMENT_LINES) out[n] = fig[n].status;
   for (const n of [FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, MOTION_SEAM_LINE, CLOTH_LINE, PHYSICS_CONTRIBUTES_LINE, ...REPORTED_LINES, 'figure_openings', SOURCE_LINE, WIND_BAND_LINE, ART_JOINT_LINE, CUT_MATERIAL_LINE, SETUP_PAINTING_LINE, BOUNDARY_COLOUR_LINE, BEHIND_SEAM_LINE, SOURCE_EXPOSURE_LINE, COINCIDE_LINE] as const) {
     const l = fig[n];
@@ -7768,6 +7769,9 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
 
   const skipped: { loop?: string; seam?: string } = {};
   if (inp.noIdle !== null) skipped.loop = inp.noIdle;
+  else if (loop !== null && loop.max === LOOP_MAX_BAR && loopPhysics !== null && loopPhysics.length > 0) {
+    skipped.loop = `physics-on idle frames not measured; ${loopPhysics.length} physics constraint(s) omitted`;
+  }
   if (inp.noParts !== null) skipped.seam = inp.noParts;
   const recordedEnv: CheckEnvironment | null = env === null ? null : { ...env, path: argvPathFromOut(env.path, outDir, process.cwd()) };
   const readings: Omit<CheckFigures, 'spec' | 'bar_outcomes' | 'build' | 'PASS'> = {
