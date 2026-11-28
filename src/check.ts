@@ -96,7 +96,7 @@ import { PHYSICS_CONTRIBUTES_LINE, measurePhysicsContribution, physicsLine, type
 import { jointContactReading, type JointContactReading } from './jointcontact.ts';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
-import type { Candidate, Piece, Viewport as RootCoverageViewport } from '@rig-c/core/render-shared';
+import type { Candidate, Frame, Piece, Poser, Viewport as RootCoverageViewport } from '@rig-c/core/render-shared';
 import { fillHoles } from './raster/morph.ts';
 import { closeSync, copyFileSync, cpSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { argvPathFromOut, diagnosticSegment, diagnosticSiblings, unsafeSegmentReason } from './outputpaths.ts';
@@ -634,6 +634,11 @@ export interface StageBox {
   y: number;
   width: number;
   height: number;
+}
+
+/** Compose's idle measurements, with the authored clip box when it pins the render. */
+export interface PreviewIdle {
+  viewport?: StageBox;
 }
 
 /** What `--parts` is, said once for the refusals and the help. */
@@ -3412,6 +3417,8 @@ export interface CheckReport {
   packOpaque: Array<{ page: string; share: number }>;
   /** Null when the rig has no idle. */
   idle: { frames: number; fps: number; duration: number; lastIndex: number; loopAt: { x: number; y: number } } | null;
+  /** The idle was measured in memory without a retained frame set. */
+  previewIdle?: true;
   /** The physics line ({@link loopPhysicsLine}); null when the rig declares no physics constraint or has no idle. */
   loopPhysics: string | null;
   /** The canonical seam grid with parts; otherwise the source-only fitted still grid. Null when neither was read. */
@@ -6951,6 +6958,155 @@ function renderExtremes(build: string, out: string, animations: readonly string[
   }
 }
 
+type IdleGrid = Pick<FrameSet, 'fps' | 'sampled' | 'written' | 'stride' | 'duration' | 'viewport'> & {
+  frames: ReadonlyArray<{ name: string; index: number }>;
+};
+
+function requireIdleEnd(idle: IdleGrid, duration: number): void {
+  const last = idle.frames[idle.frames.length - 1];
+  // A whole number of frames need not be exact in binary (issue #244).
+  if (idle.stride !== 1 || idle.written !== idle.sampled || Math.abs(idle.duration - duration) > TIME_SLACK || last.index !== idle.sampled - 1) {
+    refuseIfAny([{
+      code: 'CHECK_LOOP_LAST_FRAME_AT_DURATION',
+      object: `idle frame ${last.name}`,
+      detail: `rigc sampled ${idle.sampled} frame(s), wrote ${idle.written} at stride ${idle.stride}, the last at t = ${idle.duration}s; the loop compares frame 0 with the frame at the idle's duration, ${duration}s, so a duration that is a whole number of 1/${IDLE_FPS} s ticks (within ${TIME_SLACK} s) and every frame written are required`,
+    }]);
+  }
+}
+
+function previewRequired(object: string, detail: string): never {
+  throw new PartsError([{ code: 'COMPOSE_PREVIEW_REQUIRED_CHECK', object, detail }]);
+}
+
+// Match the background of Core's stock RGB render.
+const PREVIEW_BACKGROUND: [number, number, number, number] = [232, 232, 232, 255];
+
+function previewViewport(minX: number, minY: number, maxX: number, maxY: number): RootCoverageViewport {
+  const w = maxX - minX, h = maxY - minY;
+  const scale = IDLE_MAX_PX / Math.max(w, h);
+  if (![minX, minY, maxX, maxY, scale].every(Number.isFinite) || w <= 0 || h <= 0 || scale <= 0) {
+    throw new Error(`invalid idle viewport [${minX}, ${minY}, ${maxX}, ${maxY}] at scale ${scale}`);
+  }
+  return { minX, minY, maxX, maxY, scale, width: Math.max(1, Math.round(w * scale)), height: Math.max(1, Math.round(h * scale)) };
+}
+
+/** A single candidate's inspect shot uses render's fitted box without a comparison union. */
+function inspectIdleViewport(rigc: RigcRunner, build: string, scratch: string): { viewport: RootCoverageViewport; poser: 'core' | 'spine' } {
+  const png = join(scratch, 'framing.png');
+  const legend = join(scratch, 'framing.json');
+  const call = rigc(['inspect', '--candidate', build, '--max', String(IDLE_MAX_PX), '--show', 'bones', '--out', png]);
+  if (call.status !== 0) throw new Error(`rigc inspect exited ${call.status}: ${call.out.trim()}${rigcRanClause(call)}`);
+  const lines = call.out.split(/\r?\n/);
+  if (!lines.includes(`  ..    skeleton ${join(build, 'skeleton.json')}`) ||
+      !lines.includes(`  ..    atlas    ${join(build, 'skeleton.atlas')}`) || !lines.includes(`rigc: wrote ${legend}`)) {
+    throw new Error('rigc inspect did not identify the packed candidate and the requested legend');
+  }
+  const raw: unknown = JSON.parse(readFileSync(legend, 'utf8'));
+  if (!isRecord(raw) || raw.spec !== 'rigc-inspect/1' || (raw.poser !== 'core' && raw.poser !== 'spine') ||
+      !isRecord(raw.framing) || raw.framing.kind !== 'shot' || raw.animation !== null || raw.skin !== undefined ||
+      raw.builds !== undefined || !Array.isArray(raw.show) || raw.show.length !== 1 || raw.show[0] !== 'bones' ||
+      !Array.isArray(raw.tiles) || raw.tiles.length !== 1 || !isRecord(raw.viewport)) {
+    throw new Error('rigc inspect legend must be a single fitted setup-pose shot and name its poser');
+  }
+  const { minX, minY, maxX, maxY, scale, width, height } = raw.viewport;
+  if (typeof minX !== 'number' || typeof minY !== 'number' || typeof maxX !== 'number' || typeof maxY !== 'number') {
+    throw new Error('rigc inspect legend lacks numeric world bounds');
+  }
+  const viewport = previewViewport(minX, minY, maxX, maxY);
+  if (scale !== viewport.scale || width !== viewport.width || height !== viewport.height) {
+    throw new Error(`rigc inspect legend grid ${width}x${height} at ${scale} disagrees with the fitted bounds at --max ${IDLE_MAX_PX}`);
+  }
+  const tile: unknown = raw.tiles[0];
+  if (!isRecord(tile) || tile.animation !== null || tile.frame !== 0 || tile.time !== 0 ||
+      !isRecord(tile.box) || tile.box.x !== 0 || tile.box.y !== 0 || tile.box.width !== width || tile.box.height !== height ||
+      !isRecord(tile.transform) || tile.transform.minX !== minX || tile.transform.maxY !== maxY ||
+      tile.transform.scale !== scale || tile.transform.x0 !== 0 || tile.transform.y0 !== 0) {
+    throw new Error('rigc inspect setup tile disagrees with the fitted viewport');
+  }
+  const poserLine = raw.poser === 'core' ? 'rigc core' : 'spine-core';
+  if (!lines.some(line => line.startsWith(`  ..    poser    ${poserLine} — `))) {
+    throw new Error('rigc inspect legend poser disagrees with the candidate poser printed by inspect');
+  }
+  return { viewport, poser: raw.poser };
+}
+
+function previewIdleGeometry(poser: Poser, api: OfficialRenderer, frames: Frame[], grid: IdleGrid): IdleGeometry {
+  const geometryOf = (frame: Frame | undefined, where: string) => {
+    if (frame?.attachments === undefined || frame.bones === undefined) throw new Error(`${where} lacks posed attachments or bones`);
+    for (const bone of frame.bones) {
+      if (![bone.a, bone.b, bone.c, bone.d, bone.worldX, bone.worldY].every(Number.isFinite)) {
+        throw new Error(`${where}: bone ${JSON.stringify(bone.name)} has a non-finite world transform`);
+      }
+    }
+    for (const attachment of frame.attachments) {
+      if (!numberArray(attachment.vertices)) throw new Error(`${where}: attachment ${JSON.stringify(attachment.attachment)} in slot ${JSON.stringify(attachment.slot)} has non-finite vertices`);
+    }
+    return { index: frame.index, time: frame.time, bones: frame.bones, attachments: frame.attachments };
+  };
+  const posed = frames.map(frame => geometryOf(frame, `idle frame ${frame.index}`));
+  const setup = geometryOf(api.sampleSetupPose(poser, { bones: true, geometry: true })[0], 'the setup pose');
+  const rest = poser.rest(undefined, [setup.attachments, ...posed.map(frame => frame.attachments)]);
+  for (const attachment of rest) {
+    if (!numberArray(attachment.vertices)) throw new Error(`rest attachment ${JSON.stringify(attachment.attachment)} in slot ${JSON.stringify(attachment.slot)} has non-finite vertices`);
+  }
+  return parseIdleGeometry({ spec: GEOMETRY_SPEC, viewport: grid.viewport, rest, setup, frames: posed }, 'in-memory idle geometry', grid.written);
+}
+
+/** Pose the full idle grid for geometry, rasterizing only the endpoints read by the RGB bar. */
+function measurePreviewIdle(rigc: RigcRunner, build: string, scratch: string, duration: number, box: StageBox | undefined,
+  { geometry, physics, pixels }: { geometry: boolean; physics: boolean; pixels: boolean }, entry: RigcEntryRecord) {
+  try {
+    const skeleton = join(build, 'skeleton.json'), atlas = join(build, 'skeleton.atlas'), model = join(build, 'skeleton.model.json');
+    const files = [skeleton, atlas, model].map(path => ({ path, bytes: readFileSync(path) }));
+    // A single inspect legend has no digest. Bind its stdout to these exact paths and verify the inputs across the call.
+    const fitted = inspectIdleViewport(rigc, build, scratch);
+    for (const { path, bytes } of files) {
+      if (!bytes.equals(readFileSync(path))) throw new Error(`${path} changed during rigc inspect`);
+    }
+    const view = box === undefined ? fitted.viewport : previewViewport(box.x, box.y, box.x + box.width, box.y + box.height);
+    const api = officialRenderer();
+    const { choice, pages } = api.loadCandidate(
+      { skeletonText: files[0].bytes.toString('utf8'), atlasText: files[1].bytes.toString('utf8'), atlasDir: build, label: skeleton },
+      { skeleton, atlas }, undefined,
+    );
+    const sampled = api.throughPoser(choice, (poser) => {
+      const frames = api.sampleAnimation(poser, 'idle', IDLE_FPS, { bones: geometry, geometry, physics });
+      const last = frames[frames.length - 1];
+      if (last === undefined || frames.some((frame, i) => frame.index !== i || frame.time !== i * (1 / IDLE_FPS))) {
+        throw new Error(`idle sampling did not return a dense ${IDLE_FPS} fps grid starting at frame 0`);
+      }
+      const grid: IdleGrid = {
+        fps: IDLE_FPS, sampled: frames.length, written: frames.length, stride: 1, duration: last.time,
+        viewport: { x: view.minX, y: view.minY, width: view.maxX - view.minX, height: view.maxY - view.minY,
+          scale: view.scale, pixelWidth: view.width, pixelHeight: view.height },
+        frames: frames.map(({ index }) => ({ index, name: `f${String(index).padStart(4, '0')}.png` })),
+      };
+      const posed = geometry ? previewIdleGeometry(poser, api, frames, grid) : null;
+      requireIdleEnd(grid, duration);
+      return { grid, geometry: posed, first: frames[0], last };
+    });
+    if (sampled.poser !== fitted.poser) {
+      throw new Error(`inspect framed with ${fitted.poser}, but idle sampling chose ${sampled.poser} (${sampled.note}); the grid and poses must use the same poser`);
+    }
+    if (sampled.poser === 'spine') {
+      const require = createRequire(import.meta.url);
+      const coreRoot = dirname(require.resolve('@rig-c/core/package.json'));
+      const runtime: unknown = JSON.parse(readFileSync(require.resolve('@esotericsoftware/spine-core/package.json', { paths: [coreRoot] }), 'utf8'));
+      if (!isRecord(runtime) || runtime.version !== entry.spine_core) throw new Error(`in-memory spine-core version differs from the rigc entry's ${entry.spine_core}`);
+    }
+    const { grid, geometry: posed, first, last } = sampled.value;
+    const render = (frame: Frame): Raster => {
+      const { width, height, data } = api.renderFrame(frame, pages, view, PREVIEW_BACKGROUND);
+      return { width, height, data: new Uint8ClampedArray(data.buffer, data.byteOffset, data.byteLength) };
+    };
+    return { grid, geometry: posed, loop: pixels ? maxRgbDiff(render(first), render(last)) : null };
+  } catch (err) {
+    return previewRequired(build, `required idle reading unavailable: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
 /**
  * Run the whole check. Refuses (throws a PartsError) when the inputs are
  * unreadable or a rigc step that everything after it depends on is red — the
@@ -6970,6 +7126,8 @@ function renderExtremes(build: string, out: string, animations: readonly string[
  * or `motion_heat.png`). A declared `loopSeam` requires a positive idle and
  * binds Core's met wrap-seam report to the shipped render. The keyed reading
  * still runs. `source` (`--source`) adds {@link SOURCE_LINE}.
+ * Compose preview keeps the loop and geometry readings in memory, using
+ * the authored viewport when the scene clips to its canvas.
  *
  * `requirements` (`--requirements`, issue #93) is read with the rig directory
  * and resolved against it before anything is built ({@link readRequirements},
@@ -6979,9 +7137,13 @@ function renderExtremes(build: string, out: string, animations: readonly string[
  * MEASURABLE is a problem. Without it nothing here reads, writes or prints
  * anything it did not before.
  */
-export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, partsHome?: string, mode: PackMode = DEFAULT_PACK_MODE, source?: string, requirements?: string, seamPairsAsked = false, keepStills = false, set?: string, allSets = false, environment?: string, _requirementsAs: string | undefined = requirements, config?: InputFileRecord, windBand?: string, noExtremes = false, supportSource?: string, supportFigure?: Mask, assemblyRules?: AssemblyRules, loopSeam?: LoopSeamRequest): CheckReport {
+export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, partsHome?: string, mode: PackMode = DEFAULT_PACK_MODE, source?: string, requirements?: string, seamPairsAsked = false, keepStills = false, set?: string, allSets = false, environment?: string, _requirementsAs: string | undefined = requirements, config?: InputFileRecord, windBand?: string, noExtremes = false, supportSource?: string, supportFigure?: Mask, assemblyRules?: AssemblyRules, loopSeam?: LoopSeamRequest, previewIdle?: PreviewIdle): CheckReport {
   const out = resolve(outDir);
-  if (loopSeam !== undefined) rmSync(join(out, 'check.json'), { force: true });
+  if (loopSeam !== undefined || previewIdle !== undefined) rmSync(join(out, 'check.json'), { force: true });
+  if (previewIdle !== undefined && (!noExtremes || loopSeam !== undefined || environment !== undefined ||
+      partsHome !== undefined || source !== undefined || supportSource !== undefined || supportFigure !== undefined)) {
+    previewRequired(rigDir, 'preview idle requires a composed rig without parts, source evidence, environment, a loop seam request or extremes');
+  }
   const pageSize = parsePageSize(mode.pageSize);
   let inp: CheckInputs;
   let reqFile: RequirementsFile | null = null;
@@ -7000,6 +7162,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   };
   const readInputs = (): CheckInputs => {
     const inputs = readCheckInputs(rigDir, partsHome, source, set, allSets);
+    if (previewIdle !== undefined && inputs.parts !== null) previewRequired(inputs.partsPath, 'preview idle requires a composed rig without parts.json');
     if (loopSeam !== undefined && inputs.idleDuration === null) {
       throw new PartsError([{ code: 'CHECK_IDLE_PRESENT', object: `${inputs.motionPath} animation "idle"`, detail: `--loop-seam-bar requires an idle with positive duration; ${inputs.noIdle}` }]);
     }
@@ -7071,7 +7234,16 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     : allSets ? inp.parts.alternates ?? [] : (inp.parts.alternates ?? []).filter(alt => alt.name === set);
   preflightCheckPaths(animationNames, selectedAlts.map(alt => alt.name), reqFile, noExtremes);
   // A measured material failure is a check bar; unavailable data is a refusal.
-  const rigcEntry = readRigcEntry(requireRigcVersion(rigc));
+  const rigcVersion = requireRigcVersion(rigc);
+  const rigcEntry = readRigcEntry(rigcVersion);
+  if (previewIdle !== undefined && inp.idleDuration !== null) {
+    const require = createRequire(import.meta.url);
+    const core: unknown = require('@rig-c/core/package.json');
+    const binaryVersion = rigcVersion.trimStart().split(/\r?\n/, 1)[0].trim();
+    if (!isRecord(core) || typeof core.version !== 'string' || binaryVersion !== core.version) {
+      previewRequired(rigDir, `preview idle requires matching rigc and in-memory renderer versions; found rigc ${binaryVersion} and renderer ${isRecord(core) ? String(core.version) : 'unknown'}`);
+    }
+  }
   /**
    * Issue #538: a render whose frames a bar or a warning reads, with the physics on — posed under the schedule when
    * `--environment` names one (the path as given; rigc reads the file the same way). A refusal rigc render prints of
@@ -7102,6 +7274,9 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const seamMotionDir = join(out, MOTION_SEAM_SCRATCH);
   const windBandDir = join(out, WIND_BAND_SCRATCH);
   for (const d of [join(out, 'extremes'), join(out, '_extremes'), buildDir, buildReportPath, idleDir, stillDir, isoDir, loopDir, seamDir, keptDir, join(out, 'setup_still_auto'), foldDir, seamMotionDir, windBandDir]) rmSync(d, { recursive: true, force: true });
+  if (previewIdle !== undefined) {
+    for (const name of ['contact.png', 'motion_heat.png']) rmSync(join(out, name), { force: true });
+  }
   const written: string[] = [];
   const write = (name: string, data: string): void => {
     writeFileSync(join(out, name), data);
@@ -7136,8 +7311,10 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
 
   // 3. the idle, the loop, the heat — only when there is an idle
   let idle: FrameSet | null = null;
+  let previewGrid: IdleGrid | null = null;
+  let idleGeometry: IdleGeometry | null = null;
   let loop: { max: number; x: number; y: number } | null = null;
-  let loopSet: FrameSet | null = null;
+  let loopViewport: Viewport | null = null;
   let loopPhysics: LoopPhysics[] | null = null;
   let loopSeamEvidence: LoopSeamReport | null = null;
   // The keyed build (issues #183, #320): with a physics constraint, the same rig and motion with every one left out,
@@ -7194,7 +7371,25 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const limbs = inp.parts === null ? null : limbLine(inp.parts, inp.rig, limbProblems, meshReport);
   const levelProblems: Problem[] = [];
   try {
-    if (inp.idleDuration !== null) {
+    if (inp.idleDuration !== null && previewIdle !== undefined) {
+      const on = measurePreviewIdle(rigc, buildDir, join(loopDir, 'framing-on'), inp.idleDuration, previewIdle.viewport,
+        { geometry: true, physics: stripped !== null, pixels: stripped === null }, rigcEntry);
+      previewGrid = on.grid;
+      idleGeometry = on.geometry;
+      loop = on.loop;
+      loopViewport = on.grid.viewport;
+      if (stripped !== null) {
+        const what = 'the idle with its physics constraint(s) left out';
+        const off = measurePreviewIdle(rigc, keyedBuild(what), join(loopDir, 'framing-off'), inp.idleDuration, previewIdle.viewport,
+          { geometry: false, physics: false, pixels: true }, rigcEntry);
+        if (off.grid.sampled !== on.grid.sampled) {
+          previewRequired(buildDir, `physics-off idle sampled ${off.grid.sampled} frames; the physics-on idle sampled ${on.grid.sampled}`);
+        }
+        loopPhysics = stripped.physics;
+        loop = off.loop;
+        loopViewport = off.grid.viewport;
+      }
+    } else if (inp.idleDuration !== null) {
       const seamArgs = loopSeam === undefined ? [] :
         ['--loop-seam-bar', `${loopSeam.channelDelta},${loopSeam.pixelsAbove}`, '--loop-seam-cap', String(loopSeam.cap)];
       const render = measured(['render', '--candidate', buildDir, '--animation', 'idle', '--fps', String(IDLE_FPS), '--max', String(IDLE_MAX_PX), '--geometry', '--out', idleDir, ...seamArgs]);
@@ -7208,17 +7403,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
       const checked = loopSeam === undefined ? null : readLoopSeam(idleDir, inp.idleDuration, loopSeam);
       idle = checked?.frames ?? readFrameSet(idleDir);
       const last = idle.frames[idle.frames.length - 1];
-      // Issue #244: the last frame's time and the duration are compared within TIME_SLACK, not with `!==` — a whole
-      // number of frames (40/12 s) is not exact in binary, and rigc writes its last frame at 40 * (1/12), one ulp off.
-      if (idle.stride !== 1 || idle.written !== idle.sampled || Math.abs(idle.duration - inp.idleDuration) > TIME_SLACK || last.index !== idle.sampled - 1) {
-        refuseIfAny([
-          {
-            code: 'CHECK_LOOP_LAST_FRAME_AT_DURATION',
-            object: `idle frame ${last.name}`,
-            detail: `rigc sampled ${idle.sampled} frame(s), wrote ${idle.written} at stride ${idle.stride}, the last at t = ${idle.duration}s; the loop compares frame 0 with the frame at the idle's duration, ${inp.idleDuration}s, so a duration that is a whole number of 1/${IDLE_FPS} s ticks (within ${TIME_SLACK} s) and every frame written are required`,
-          },
-        ]);
-      }
+      requireIdleEnd(idle, inp.idleDuration);
       loopSeamEvidence = checked?.report ?? null;
       const contact = join(idle.dir, 'contact.png');
       if (existsSync(contact)) {
@@ -7226,7 +7411,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
         written.push('contact.png');
       }
       loop = maxRgbDiff(idle.frames[0].image, last.image);
-      loopSet = idle;
+      loopViewport = idle.viewport;
       // The keyed loop (issue #183): with a physics constraint, the same rig and motion with every one left out, built
       // the same way and rendered the same way, is what frame 0 and the frame at the duration are read from.
       if (stripped !== null) {
@@ -7246,7 +7431,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
           ]);
         }
         loop = maxRgbDiff(kept.frames[0].image, keptLast.image);
-        loopSet = kept;
+        loopViewport = kept.viewport;
       }
       const idleImages = idle.frames.map((f) => f.image);
       writePng(join(out, 'motion_heat.png'), motionHeat(idleImages));
@@ -7387,17 +7572,16 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   let stretch: JudgementLine = skip(inp.noIdle ?? '');
   let stretchFailedWithoutReading = false;
   let still: JudgementLine = skip(lacking);
-  let idleGeometry: IdleGeometry | null = null;
-  if (idle !== null) {
+  const idleGrid = previewGrid ?? idle;
+  const idleGeometryPath = idle === null ? 'in-memory idle geometry' : join(idle.dir, GEOMETRY_FILE);
+  if (idleGrid !== null) {
     chain = chainLine(inp, problems, reqFile === null ? NO_CHAIN_RESTS : { path: reqFile.path, rests: reqFile.rests });
-    // One reader for the one geometry file: the stretch reads its meshes, the still regions every slot and the head bone.
-    const geometryPath = join(idle.dir, GEOMETRY_FILE);
-    const geometry = readGeometry(geometryPath, idle.written);
-    idleGeometry = geometry;
+    // The stretch reads the same pose cohort whether it came from the renderer's file or from memory.
+    if (idle !== null) idleGeometry = readGeometry(idleGeometryPath, idle.written);
     const beforeStretch = problems.length;
-    stretch = stretchLine(geometry, GEOMETRY_FILE, problems, { ...inp, config }, checkSlotParts(inp.rig, inp.parts?.parts.map(p => p.name) ?? [], inp.parts?.alternates?.map(set => set.name) ?? []), readingSkip('TEXTURE_STRETCH'));
+    stretch = stretchLine(idleGeometry, GEOMETRY_FILE, problems, { ...inp, config }, checkSlotParts(inp.rig, inp.parts?.parts.map(p => p.name) ?? [], inp.parts?.alternates?.map(set => set.name) ?? []), readingSkip('TEXTURE_STRETCH'));
     stretchFailedWithoutReading = stretch.status === 'SKIP' && problems.length > beforeStretch;
-    if (full !== null) still = stillLine(full, idle, geometry, geometryPath, problems, notPlanted, readingSkip('STILL_REGIONS_DARK'));
+    if (full !== null && idle !== null) still = stillLine(full, idle, idleGeometry, idleGeometryPath, problems, notPlanted, readingSkip('STILL_REGIONS_DARK'));
   }
 
   // 3c. a sleeve on one chain, its first link turned large (issue #347): a throwaway copy, physics left out, posed by rigc
@@ -7618,28 +7802,27 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   // 3f. every physics chain read by its tip on the idle as rendered above, physics on (issue #501): a warning, never a
   // bar; SKIP, named, with no idle or no physics constraint
   let cloth: ClothLine;
-  if (idle === null) cloth = clothLine([], IDLE_FPS, 0, 0, inp.noIdle ?? 'no idle');
-  else if (stripped === null) cloth = clothLine([], idle.fps, idle.frames.length, idle.duration, "the rig declares no physics constraint (rig.json's constraints, motion.json's physics), so there is no chain to read");
+  if (idleGrid === null) cloth = clothLine([], IDLE_FPS, 0, 0, inp.noIdle ?? 'no idle');
+  else if (stripped === null) cloth = clothLine([], idleGrid.fps, idleGrid.frames.length, idleGrid.duration, "the rig declares no physics constraint (rig.json's constraints, motion.json's physics), so there is no chain to read");
   else {
-    const geometryPath = join(idle.dir, GEOMETRY_FILE);
     const rows: ClothRow[] = [];
     let unread: string | undefined;
     for (const c of clothChains(inp.rig, stripped.physics)) {
-      const track = boneTrackOf(idleGeometry, idleGeometry === null ? GEOMETRY_FILE : geometryPath, idle, c.tip);
+      const track = boneTrackOf(idleGeometry, idleGeometry === null ? GEOMETRY_FILE : idleGeometryPath, idleGrid, c.tip);
       if (typeof track === 'string') {
         unread = track;
         break;
       }
       rows.push(clothRow(c, track));
     }
-    cloth = unread === undefined ? clothLine(rows, idle.fps, idle.frames.length, idle.duration) : clothLine([], idle.fps, idle.frames.length, idle.duration, unread);
+    cloth = unread === undefined ? clothLine(rows, idleGrid.fps, idleGrid.frames.length, idleGrid.duration) : clothLine([], idleGrid.fps, idleGrid.frames.length, idleGrid.duration, unread);
   }
 
   // 3g. every part under physics, the same compile posed with physics on and off over the idle (issue #1320): a
   // warning, never a bar; SKIP, named, with no idle, no parts or no physics constraint
   let physics: PhysicsContributionLine;
-  if (idle === null) physics = physicsLine([], IDLE_FPS, 0, 'none', "rig-c's default environment", inp.noIdle ?? 'no idle');
-  else if (full === null) physics = physicsLine([], IDLE_FPS, 0, 'none', "rig-c's default environment", inp.noParts ?? 'no parts.json');
+  if (idleGrid === null) physics = physicsLine([], IDLE_FPS, 0, 'none', "rig-c's default environment", inp.noIdle ?? 'no idle');
+  else if (full === null || idle === null) physics = physicsLine([], IDLE_FPS, 0, 'none', "rig-c's default environment", inp.noParts ?? 'no parts.json');
   else {
     const rest = attachmentPoses(join(idle.dir, GEOMETRY_FILE), idle.written)[0] ?? new Map<string, PosedAttachment>();
     physics = measurePhysicsContribution(officialRenderer(), buildDir, inp.rig, inp.motion, full.parts.parts.map((p) => ({
@@ -7953,7 +8136,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     ...(limbs === null ? {} : { [LIMB_LINE]: limbs }),
     ...(sweep === null ? {} : { [SWEEP_LINE]: sweep }),
     ...(motionSeam.pairs.length === 0 && motionSeam.roots === undefined && motionSeam.required === undefined ? {} : { [MOTION_SEAM_LINE]: motionSeam }),
-    ...(stripped === null || idle === null ? {} : { [CLOTH_LINE]: cloth }),
+    ...(stripped === null || idleGrid === null ? {} : { [CLOTH_LINE]: cloth }),
     ...(physics.status === 'SKIP' ? {} : { [PHYSICS_CONTRIBUTES_LINE]: physics }),
     RECOMPOSITE_HOLES: inp.parts === null ? { status: 'SKIP', reason: inp.noParts ?? '' } : holesLine(inp.parts),
     ...(figureOpenings.status === 'SKIP' ? {} : { figure_openings: figureOpenings }),
@@ -7973,12 +8156,12 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   };
   const barProblems: Problem[] = [];
   if (!htmlGreen) barProblems.push(...rigcFailed(packedBuildLabel(mode), build, gateHtml));
-  if (loop !== null && idle !== null && loopSet !== null && loop.max !== LOOP_MAX_BAR) {
-    const last = idle.frames[idle.frames.length - 1];
+  if (loop !== null && idleGrid !== null && loopViewport !== null && loop.max !== LOOP_MAX_BAR) {
+    const last = idleGrid.frames[idleGrid.frames.length - 1];
     barProblems.push({
       code: 'CHECK_LOOP_CLOSES',
-      object: `idle frame f0000.png vs ${last.name} (t = ${idle.duration}s)${loopPhysics === null ? '' : ', its physics constraint(s) left out'}`,
-      detail: `max |d| ${loop.max}/255, first at pixel ${loop.x},${loop.y} of ${loopSet.viewport.pixelWidth}x${loopSet.viewport.pixelHeight}; ${LOOP_MAX_BAR} is required — the idle's last key must equal its first`,
+      object: `idle frame f0000.png vs ${last.name} (t = ${idleGrid.duration}s)${loopPhysics === null ? '' : ', its physics constraint(s) left out'}`,
+      detail: `max |d| ${loop.max}/255, first at pixel ${loop.x},${loop.y} of ${loopViewport.pixelWidth}x${loopViewport.pixelHeight}; ${LOOP_MAX_BAR} is required — the idle's last key must equal its first`,
     });
   }
   if (readings.seam_mean !== null && readings.seam_px_over_40 !== null && readings.seam_frame_scale !== null && seamFigureFailed(readings)) {
@@ -8063,7 +8246,8 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     extremes,
     pack,
     packOpaque,
-    idle: idle === null || loop === null ? null : { frames: idle.frames.length, fps: idle.fps, duration: idle.duration, lastIndex: idle.frames[idle.frames.length - 1].index, loopAt: { x: loop.x, y: loop.y } },
+    idle: idleGrid === null || loop === null ? null : { frames: idleGrid.frames.length, fps: idleGrid.fps, duration: idleGrid.duration, lastIndex: idleGrid.frames[idleGrid.frames.length - 1].index, loopAt: { x: loop.x, y: loop.y } },
+    ...(previewIdle === undefined ? {} : { previewIdle: true as const }),
     loopPhysics: loopPhysics === null ? null : loopPhysicsLine(loopPhysics, stripped?.droppedAnimations),
     seamViewport,
     bars,
@@ -9351,7 +9535,7 @@ export function headBoneOf(inp: Pick<FullInputs, 'rig' | 'parts'>): HeadBone {
  * would be carried onto another grid), the frame indices, the bone on the
  * setup pose and on every frame with six finite numbers, and each frame's time.
  */
-export function boneTrackOf(geo: IdleGeometry | null, path: string, set: FrameSet, bone: string): BoneTrack | string {
+export function boneTrackOf(geo: IdleGeometry | null, path: string, set: Pick<IdleGrid, 'viewport' | 'frames'>, bone: string): BoneTrack | string {
   if (geo === null) return `${path} does not exist, so no bone's per-frame transform is known (rigc render writes it with --geometry)`;
   const gv = geo.viewport;
   const vp = set.viewport;
@@ -9881,6 +10065,10 @@ export function readGeometry(path: string, frames: number): IdleGeometry | null 
   } catch (err) {
     return geometryProblem(path, `does not parse as JSON: ${(err as Error).message}`);
   }
+  return parseIdleGeometry(raw, path, frames);
+}
+
+function parseIdleGeometry(raw: unknown, path: string, frames: number): IdleGeometry {
   if (!isRecord(raw) || raw.spec !== GEOMETRY_SPEC) return geometryProblem(path, `"spec" is ${JSON.stringify(isRecord(raw) ? raw.spec : raw)?.slice(0, 40)}; ${JSON.stringify(GEOMETRY_SPEC)} is required`);
   if (!Array.isArray(raw.rest) || !Array.isArray(raw.frames)) return geometryProblem(path, 'lacks "rest" or "frames"; a rigc-geometry/1 file carries both');
   if (raw.frames.length !== frames) return geometryProblem(path, `holds ${raw.frames.length} frame(s); the frame set beside it wrote ${frames}`);

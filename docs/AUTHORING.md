@@ -7254,6 +7254,7 @@ and stay absent).
 | <a id="SCENE_INVARIANT_AGREES"></a>`SCENE_INVARIANT_AGREES` | two characters declare `invariants.idleDrivesMeshes` with different `why`s | rebuild with this package's `--idle-keys direct`, whose `why` is one sentence |
 | <a id="SCENE_IMAGE_NAME_FREE"></a>`SCENE_IMAGE_NAME_FREE` | two images compose to one file name (`<id>.<file>`: an id `x` with an image `y.cloth.png`, and an id `x.y` with `cloth.png`) | another id |
 | <a id="COMPOSE_RIGC_GREEN"></a>`COMPOSE_RIGC_GREEN` | rig-c refused the composed rig; its line is quoted. A field compose carries as written (a constraint's `mix`, a slot's setup attachment) is rigc's to judge | the build whose field it names |
+| <a id="COMPOSE_PREVIEW_REQUIRED_CHECK"></a>`COMPOSE_PREVIEW_REQUIRED_CHECK` | preview cannot measure the named idle reading, or the declared `--loop-seam-bar` needs the stock idle render evidence on disk | use a matching Core renderer for the named reading, or run without `--output-profile preview` to retain the stock idle render |
 | `REQUIREMENTS_*` | the `--requirements` file, as for `check` | as for `check` |
 
 ### The command line
@@ -7493,7 +7494,7 @@ assemble*, at the end of this section):
 
   **Physics-on idle closure (opt-in, issue #1590).** Pass
   `--loop-seam-bar <channel-delta,pixels> --loop-seam-cap <loops>` together to
-  `check` or `compose`. Use decimal whole numbers: a channel delta from 0 to 255,
+  `check` or `compose` (default diagnostics or `--no-extremes`). Use decimal whole numbers: a channel delta from 0 to 255,
   a nonnegative safe integer pixel limit, and a nonnegative safe integer warm-up
   cap. The rig must have an idle of positive duration. Core's warm-up search is
   incompatible with `check --environment`.
@@ -8041,12 +8042,12 @@ rig directory, copied away from its `parts.json`, reads `5 of 10`: the gate, the
 
 ### Composing several characters (`compose`, issue #74)
 
-`rig-parts compose --scene <scene.json> --out <dir> [--requirements <file.json>] [--accept <bar>[,<bar>…]] [--page-size <px>] [--loop-seam-bar <channel-delta,pixels> --loop-seam-cap <loops>]`
+`rig-parts compose --scene <scene.json> --out <dir> [--requirements <file.json>] [--accept <bar>[,<bar>…]] [--page-size <px>] [--loop-seam-bar <channel-delta,pixels> --loop-seam-cap <loops>] [--output-profile preview] [--no-extremes]`
 binds characters this package already built into one rig. Each character runs the
 single-character path (§4, steps 0–9) on its own, already isolated input to a green
 `build` first; compose reads what that build wrote and changes nothing in it.
-The paired loop seam flags apply to the composed idle under `<out>/check/`, at
-the same viewport compose uses for the shipped frames.
+With default diagnostics or `--no-extremes`, the paired loop seam flags apply to
+the composed idle under `<out>/check/`, at the viewport used for the shipped frames.
 
 ```
 { "spec": "spine-parts-scene/1",
@@ -8363,6 +8364,29 @@ character's input arrives isolated); a composed `parts.json`, so the bars that
 read See-through tags are measured per character by its own `build`, not over the
 scene; a rig `build` did not write.
 
+#### Compose output profiles (issue #1610)
+
+| Options | Omitted diagnostics under `<out>/check/` | Successful terminal verdict | `compose-run.json` `output_profile` |
+| --- | --- | --- | --- |
+| Neither flag | None selected for omission | `compose: PASS — …` | absent |
+| `--no-extremes` alone | `extremes/`, as in `check` and `build` | `compose: NO EXTREMES — checks met; …` | `"no-extremes"` |
+| `--output-profile preview`, with or without `--no-extremes` | `extremes/`, `idle_frames/`, `contact.png`, `motion_heat.png` | `compose: PREVIEW — checks met; …` | `"preview"` |
+
+Preview measures the idle in memory. With any `canvas_clip: true` character,
+the idle uses the authored stage viewport. The rig-c gate, packed build,
+camera binding and check requirements still apply. The `[check]` diagnostics
+lines give the chosen flag as the reason for `extremes: SKIP` and, in preview,
+`idle diagnostics: SKIP`. These lines describe output omissions. Each bar and
+requirement retains its own outcome. Failed checks and accepted failing input
+bars still exit 1 and leave no compose receipt.
+
+`preview` is the only accepted value for `--output-profile`. A valid pair of
+`--loop-seam-bar` and `--loop-seam-cap` in preview exits 1 with
+`COMPOSE_PREVIEW_REQUIRED_CHECK` (`found=preview, required=default or no-extremes`).
+The declared physics-on seam check binds the first and wrap PNGs of the stock
+idle render on disk. This refusal clears `rig/`, `check/`, `scene.json` and
+`compose-run.json` under `--out` before the gate.
+
 #### Keyed scene camera (issue #1596)
 
 A camera projects an already posed scene into the fixed canvas. It follows the
@@ -8471,11 +8495,12 @@ The rig-c gate, composed rig and packed atlas retain the full art, geometry and
 motion so offstage parts can enter the canvas during playback.
 
 When any character opts in, compose gives check renders the authored stage as
-their viewport. Explicit diagnostic viewports take precedence. The retained
+their viewport, including the in-memory idle in preview. Explicit diagnostic
+viewports take precedence. With default diagnostics or `--no-extremes`, the retained
 `check/idle_frames/` and `check/contact.png` use check's existing preview size
 cap and sampling rate. `check/idle_frames/frames.json` records the stage in
-`viewport` and identifies the pin in `pinned.by` as `--viewport`. Extremes use
-their existing explicit diagnostic grid over the same stage box.
+`viewport` and identifies the pin in `pinned.by` as `--viewport`. The default
+extremes use their explicit diagnostic grid over the same stage box.
 The stage rectangle is `[-width/2, 0, width, height]` in rig-c world coordinates,
 y up. To verify native canvas pixels, render the packed build with the stage
 rectangle as `--viewport` and the larger canvas dimension as `--max`.
@@ -8495,12 +8520,13 @@ every character in the declared draw order.
 A fully green compose writes `compose-run.json` at the `--out` root, beside
 `scene.json`, with spec `rig-compose-run/1`. It removes a previous record before
 the stage begins, including before stage option validation; a refused input,
-rig-c gate, check or accepted failing character leaves no record. With neither
-canvas clipping nor a placement pivot declared, the existing rig, scene report
-and check bytes and paths are stable. Core's separate `check/build/run.json`
-retains its own clocks.
+rig-c gate, check or accepted failing character leaves no record. With default
+diagnostics and neither canvas clipping nor a placement pivot declared, the
+existing rig, scene report and check bytes and paths are stable. Core's separate
+`check/build/run.json` retains its own clocks.
 
-The fixed top-level key order is `spec`, `scene`, `characters`, `plate`, `plates`:
+The fixed top-level key order is `spec`, `scene`, `characters`, `plate`, `plates`,
+then `output_profile` when selected.
 
 | entry | exact binding |
 | --- | --- |
@@ -8508,6 +8534,7 @@ The fixed top-level key order is `spec`, `scene`, `characters`, `plate`, `plates
 | `characters` | sorted by `id` in code-unit order. Each row has `id`, `build`, `files`, then `placement` only for `canvas_clip: true`. `build` is as declared and `files` contains `{path, sha256}` entries sorted by build-relative `path`. `placement` holds `{canvas_clip: true, bounds, clipped_bounds}` from the scene report |
 | `plate` | legacy plate `{path, sha256}`, with its image path as declared relative to the scene file, or `null` when absent |
 | `plates` | every named plate `{name, path, sha256}`, sorted by `name` in code-unit order; image paths as declared relative to the scene file; `[]` when absent |
+| `output_profile` | `"preview"` for `--output-profile preview`, including when paired with `--no-extremes`; `"no-extremes"` for `--no-extremes` alone; absent for default diagnostics |
 
 The raw `scene.sha256` binds the placement pivot declaration and its authored
 tracks. A pivot adds no receipt field. The `placement` entry retains its canvas
@@ -8522,13 +8549,14 @@ It does not enumerate the build directory: unused images, packed pages,
 source configs and the character's own `run.json` are excluded. A declared
 `parts.json` painting binding and editor receipts keep their existing validation;
 their declarations are bound through the containing input bytes. This record
-inventories the listed compose inputs, not external requirements or CLI options.
+inventories the listed compose inputs and the selected output profile. External
+requirements and other CLI options are outside its inventory.
 
 Hashes are captured from the same byte buffers consumed before the gate, never
 by rereading inputs after it. Image hashes bind encoded file bytes, including
 any trailing bytes, rather than decoded pixels. Identical inputs at identical
-supplied paths give identical record bytes; there are no clocks. A changed byte
-changes its input entry's hash; if multiple entries reference one physical file,
+supplied paths with the same output profile give identical record bytes. A changed
+byte changes its input entry's hash. If multiple entries reference one physical file,
 each reference changes. Missing scene, build and plate files retain their named
 `SCENE_FILE`, `SCENE_BUILD_PRESENT` and `SCENE_PLATE_PRESENT` refusals.
 

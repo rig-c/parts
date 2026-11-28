@@ -2414,6 +2414,8 @@ export interface ComposeInput {
   requirements?: string;
   /** Declared RGBA loop seam bar and warm-up cap for the composed idle render (issue #1590). */
   loopSeam?: LoopSeamRequest;
+  /** The selected output profile, absent for the full diagnostics (issue #1610). */
+  outputProfile?: ComposeRun['output_profile'];
   /** `--accept`: the bars every character's own check may fail and still be composed (issue #203). */
   accept?: readonly string[];
 }
@@ -2432,6 +2434,17 @@ export interface ComposeResult {
   stoppedAt: ComposeStage | null;
   composed: ComposedScene | null;
   check: CheckReport | null;
+}
+
+/** Refuse before resolving rigc in the CLI, and before the gate for direct stage callers. */
+export function refusePreviewLoopSeam(input: ComposeInput): void {
+  if (input.outputProfile !== 'preview' || input.loopSeam === undefined) return;
+  for (const p of COMPOSE_OWNS) rmSync(join(input.out, p), { recursive: true, force: true });
+  throw new PartsError([{
+    code: 'COMPOSE_PREVIEW_REQUIRED_CHECK',
+    object: '--loop-seam-bar',
+    detail: 'found=preview, required=default or no-extremes. The declared physics-on seam bar requires stock idle render evidence on disk.',
+  }]);
 }
 
 /**
@@ -2461,6 +2474,11 @@ export function composeStage(input: ComposeInput, run: ComposeRunners, log: Log)
     return { stoppedAt: stage, composed, check: null };
   };
   const pageSize = parsePageSize(input.pageSize);
+  try {
+    refusePreviewLoopSeam(input);
+  } catch (err) {
+    return refused('compose', err);
+  }
   mkdirSync(input.out, { recursive: true });
   for (const p of COMPOSE_OWNS) rmSync(join(input.out, p), { recursive: true, force: true });
   const mode: PackMode = { pageEdges: DEFAULT_PAGE_EDGES, packShape: DEFAULT_PACK_SHAPE, ...(pageSize === undefined ? {} : { pageSize }) };
@@ -2559,9 +2577,9 @@ export function composeStage(input: ComposeInput, run: ComposeRunners, log: Log)
     writeFileSync(reportPath, rigJsonText(r));
     say(`${wroteRig}, and ${reportPath}`);
   }
+  const stage = r.characters.some(c => c.canvas_clip === true) ? composed.rig.skeleton : undefined;
   let checkRigc = run.check;
-  if (r.characters.some(c => c.canvas_clip === true)) {
-    const stage = composed.rig.skeleton;
+  if (stage !== undefined) {
     const viewport = [stage.x, stage.y, stage.width, stage.height].join(',');
     checkRigc = args => run.check(args[0] === 'render' && !args.includes('--viewport') && !args.includes('--viewport-from')
       ? [...args, '--viewport', viewport]
@@ -2592,6 +2610,14 @@ export function composeStage(input: ComposeInput, run: ComposeRunners, log: Log)
     writeFileSync(reportPath, rigJsonText(composed.report));
     say(`${wroteRig}, and ${reportPath}`);
   };
+  const preview = input.outputProfile === 'preview';
+  const noExtremes = input.outputProfile !== undefined;
+  const checkLog = prefix('check');
+  if (noExtremes) {
+    const flag = preview ? '--output-profile preview' : '--no-extremes';
+    checkLog(`  extremes: SKIP — ${flag} omits the extra diagnostic renders`);
+  }
+  if (preview) checkLog('  idle diagnostics: SKIP — --output-profile preview omits idle_frames/, contact.png and motion_heat.png');
   let report: CheckReport;
   try {
     report = checkStage({
@@ -2599,7 +2625,9 @@ export function composeStage(input: ComposeInput, run: ComposeRunners, log: Log)
       ...(pageSize === undefined ? {} : { pageSize }),
       ...(input.requirements === undefined ? {} : { requirements: input.requirements }),
       ...(input.loopSeam === undefined ? {} : { loopSeam: input.loopSeam }),
-    }, checkRigc, run.checkBin, prefix('check'));
+      ...(noExtremes ? { noExtremes: true } : {}),
+      ...(preview ? { previewIdle: stage === undefined ? {} : { viewport: stage } } : {}),
+    }, checkRigc, run.checkBin, checkLog);
   } catch (err) {
     if (cameraBindingFailed) {
       for (const p of COMPOSE_OWNS) rmSync(join(input.out, p), { recursive: true, force: true });
@@ -2625,8 +2653,10 @@ export function composeStage(input: ComposeInput, run: ComposeRunners, log: Log)
     log(`compose: stopped at check; the composed rig's check is PASS${acceptedLine} (the composed rig and scene.json are written; the scene is for looking, not shipping)`);
     return { stoppedAt: 'check', composed, check: report };
   }
-  writeFileSync(join(input.out, COMPOSE_RUN_FILE), rigJsonText(composed.runRecord));
-  log(`compose: PASS — ${report.bars.measured.length} of ${report.bars.measured.length + report.bars.skipped.length} bar(s) measured; the packed atlas under ${join(input.out, 'check', 'build')} is the artifact`);
+  const runRecord = input.outputProfile === undefined ? composed.runRecord : { ...composed.runRecord, output_profile: input.outputProfile };
+  writeFileSync(join(input.out, COMPOSE_RUN_FILE), rigJsonText(runRecord));
+  const verdict = preview ? 'PREVIEW — checks met;' : noExtremes ? 'NO EXTREMES — checks met;' : 'PASS —';
+  log(`compose: ${verdict} ${report.bars.measured.length} of ${report.bars.measured.length + report.bars.skipped.length} bar(s) measured; the packed atlas under ${join(input.out, 'check', 'build')} is the artifact`);
   return { stoppedAt: null, composed, check: report };
 }
 

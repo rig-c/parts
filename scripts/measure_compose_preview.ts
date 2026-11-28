@@ -2,7 +2,7 @@
  * POSIX compose disk census. Build the fetched public demo once using its
  * documented build command, then freeze the build's compose inputs:
  *   bun scripts/measure_compose_preview.ts prepare <lane> <green-demo-build>
- *   bun scripts/measure_compose_preview.ts measure <lane> <label> <keyed|unkeyed> [interval-ms]
+ *   bun scripts/measure_compose_preview.ts measure <lane> <label> <keyed|unkeyed> [interval-ms] [--output-profile preview]
  * Use the same lane, fixture and interval for both revisions. The lane must
  * be outside the checkout. Keep inputs/ for the second revision. Runs move
  * their work directories into runs/<label>-<scene>/ after the census.
@@ -123,7 +123,7 @@ function census(root: string, live: boolean) {
   return { bytes, temporary_bytes: temporaryBytes, files, vanished };
 }
 
-async function measure(lane: string, label: string, scene: Scene, interval: number): Promise<void> {
+async function measure(lane: string, label: string, scene: Scene, interval: number, profile: readonly string[]): Promise<void> {
   const inputs = join(lane, 'inputs');
   const frozen = JSON.parse(readFileSync(join(lane, inputManifest), 'utf8'));
   const fixtureMatches = () => JSON.stringify(fixtureManifest(inputs)) === JSON.stringify(frozen);
@@ -153,7 +153,7 @@ async function measure(lane: string, label: string, scene: Scene, interval: numb
   }
   observe(census(active, false), 0);
 
-  const args = [join(repo, 'cli.ts'), 'compose', '--scene', join(inputs, `${scene}.json`), '--out', 'out'];
+  const args = [join(repo, 'cli.ts'), 'compose', '--scene', join(inputs, `${scene}.json`), '--out', 'out', ...profile];
   const env = {
     ...process.env, TMPDIR: tmp, TMP: tmp, TEMP: tmp,
     PATH: dirname(process.execPath) + delimiter + (process.env.PATH ?? ''),
@@ -221,13 +221,14 @@ async function measure(lane: string, label: string, scene: Scene, interval: numb
   else process.exitCode = result.exit;
 }
 
-const [command, root, arg, scene, sampling = '25', ...extra] = process.argv.slice(2);
+const [command, root, arg, scene, sampling = '25', ...profile] = process.argv.slice(2);
 const interval = Number(sampling);
-if ((process.platform !== 'linux' && process.platform !== 'darwin') || !root || !arg || extra.length > 0 ||
+const validProfile = profile.length === 0 || (profile.length === 2 && profile[0] === '--output-profile' && profile[1] === 'preview');
+if ((process.platform !== 'linux' && process.platform !== 'darwin') || !root || !arg || !validProfile ||
     (command === 'prepare' ? scene !== undefined : command !== 'measure' ||
       (scene !== 'keyed' && scene !== 'unkeyed') || !/^[a-zA-Z0-9_-]+$/.test(arg) ||
       !Number.isSafeInteger(interval) || interval <= 0 || interval > 60_000)) {
-  throw new Error('Usage (Linux/macOS): prepare <existing-lane> <green-demo-build> | measure <existing-lane> <label> <keyed|unkeyed> [interval-ms]');
+  throw new Error('Usage (Linux/macOS): prepare <existing-lane> <green-demo-build> | measure <existing-lane> <label> <keyed|unkeyed> [interval-ms] [--output-profile preview]');
 }
 const lane = realpathSync(root);
 const laneFromRepo = relative(repo, lane);
@@ -235,4 +236,4 @@ if (laneFromRepo === '' || (!isAbsolute(laneFromRepo) && laneFromRepo !== '..' &
   throw new Error('The lane must be outside the checkout');
 }
 if (command === 'prepare') prepare(lane, resolve(arg));
-else if (scene === 'keyed' || scene === 'unkeyed') await measure(lane, arg, scene, interval);
+else if (scene === 'keyed' || scene === 'unkeyed') await measure(lane, arg, scene, interval, profile);

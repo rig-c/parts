@@ -101,7 +101,7 @@ import {
 } from './autoreplay.ts';
 import { physicsLines } from './physicscontrib.ts';
 import { besideIdleLine, checkSummaryLine, inputFileRecord, type InputFileRecord, CLOTH_LINE, type ClothLine, clothWarnText, figureOpeningLines, frameRuns, MOTION_SEAM_LINE, type MotionSeamLine, type MotionSeamPlant, motionSeamRequiredLine, motionSeamWarnText, motionJointContactLines, FOLD_LINE, type FoldsLine, LEVEL_LINE, type LevelLine, LIMB_LINE, type LimbLine, STRESS_LINE, SWEEP_LINE, type SweepLine, buildGateLines, causeLines, environmentLine, IDLE_FPS, IDLE_MAX_PX, maxRgbDiff, REQUIREMENTS_DIR, type CheckReport, type PackLine, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, GATE_PROFILE, JUDGEMENT_LINES, type JudgementLine, packedBuildArgs, packedBuildLabel, type PackMode, parsePageSize, readCheckEnvironment, readWindBand, type PackShape, type PageEdges, readFrameSet, rigcFailed, rigcIdentity, rigcRanClause, REPORTED_LINES, type ReportedLine, type RigcRunner, runCheck, SEAM_DIR, SEAM_MEAN_BAR, seamPairText, seamRigPxText, SOURCE_LINE, SEAM_PX_BAR, SEAM_PX_LEVEL, SEAM_PX_LEVEL_HIGH, SPINEBOY_YARDSTICK, STILL_DIR, WIND_BAND_LINE, windBandLines } from './check.ts';
-import type { LoopSeamRequest } from './check.ts';
+import type { LoopSeamRequest, PreviewIdle } from './check.ts';
 import { type CharacterConfig, type Cut, type Extend, loadConfigAndAnimations, loadConfigWithBytes, loadEarlyConfig, type Patch, type PlanEntry } from './config.ts';
 import { coreCompileGuideLine, failLine, foldName, PartsError, type Problem, refuseIfAny } from './errors.ts';
 import { editedConfigImages, editedRunImages, missingReceipts, readEditorReceipts } from './editreceipt.ts';
@@ -2201,6 +2201,8 @@ export interface CheckStageInput {
   keepStills?: boolean;
   /** Skip the extra extremes renders and remove stale extremes outputs (issue #829). */
   noExtremes?: boolean;
+  /** Compose preview measures the required idle readings in memory. */
+  previewIdle?: PreviewIdle;
   /** Declared RGBA loop seam bar and warm-up cap for the shipped idle render (issue #1590). */
   loopSeam?: LoopSeamRequest;
   /** `check --set <name>` (issue #454): measure one declared alternate set's setup-pose seam and recomposite figures. */
@@ -2450,7 +2452,7 @@ export function requirementText(name: string, line: RequirementLine): string {
 export function checkWrote(r: CheckReport, out: string): { written: string[]; dirs: string[] } {
   return {
     written: r.written,
-    dirs: ['build', ...(r.idle === null ? [] : ['idle_frames']), ...(r.requirements === null ? [] : [REQUIREMENTS_DIR]),
+    dirs: ['build', ...(r.idle === null || r.previewIdle === true ? [] : ['idle_frames']), ...(r.requirements === null ? [] : [REQUIREMENTS_DIR]),
       ...(r.figures.seam_pairs === undefined ? [] : [SEAM_DIR]), ...(existsSync(join(out, STILL_DIR)) ? [STILL_DIR] : [])],
   };
 }
@@ -2471,7 +2473,7 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
   const r = runCheck(
     input.rig, input.out, rigc, input.parts, mode, input.source, input.requirements, input.seamPairs === true,
     input.keepStills === true, input.set, input.allSets === true, input.environment, input.requirementsAs, input.config,
-    input.windBand, input.noExtremes === true, input.supportSource, input.supportFigure, input.assemblyRules, input.loopSeam,
+    input.windBand, input.noExtremes === true, input.supportSource, input.supportFigure, input.assemblyRules, input.loopSeam, input.previewIdle,
   );
   if (r.figures.environment !== undefined) log(`  ${environmentLine(r.figures.environment)}`);
   log(`  gate rig-play (rigc ${packedBuildLabel(mode)}), verbatim:`);

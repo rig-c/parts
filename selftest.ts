@@ -50484,7 +50484,7 @@ function runSceneSuite(): number {
         ({ ...base, camera: { backdrop: selectedBackdrop, tracks: selectedTracks } });
       const source = scene(withCamera());
       const out = join(dir, 'camera-compose');
-      const cli = (input: string, output: string) => runCli(['compose', '--scene', input, '--out', output]);
+      const cli = (input: string, output: string, ...flags: string[]) => runCli(['compose', '--scene', input, '--out', output, ...flags]);
       const run = (label: string, body: Record<string, unknown>) => {
         const target = join(dir, `camera-${label}`);
         return { ...cli(scene(body), target), target };
@@ -50573,6 +50573,84 @@ function runSceneSuite(): number {
         `mid view ${JSON.stringify(halfway?.view)}; end view ${JSON.stringify(ending?.view)}; ` +
           `figure ${JSON.stringify(movedFigure)}; expected uncut bounds ${JSON.stringify(wantFigure)}`,
         `${why}: the midpoint window measures 75 by 45; the panned center [70,20] stays at output [50,30] and the figure crosses the left edge`);
+
+      {
+        const why = 'issue #1610';
+        const outputBytes = () => new Map(sceneOutputFiles(out).map(file => [file, readFileSync(join(out, file))]));
+        const checkFile = (file: string) => join('check', file);
+        const idleOutputs = ['idle_frames', 'contact.png', 'motion_heat.png'].map(checkFile);
+        const extremes = checkFile('extremes');
+        const below = (path: string, entry: string) => path === entry || path.startsWith(entry + sep);
+        const fullBytes = outputBytes();
+        const required = [SCENE_REPORT_FILE, COMPOSE_RUN_FILE, checkFile('check.json'),
+          checkFile(join('build', 'skeleton.json')), checkFile(join('build', 'skeleton.atlas')),
+          checkFile(join('build', 'skeleton.model.json')), checkFile(join('build', 'skeleton.png')),
+          checkFile(join('idle_frames', 'frames.json')), checkFile('contact.png'), checkFile('motion_heat.png')];
+        const missing = required.filter(file => !fullBytes.has(file));
+        const terminal = (result: { out: string }) => lastLines(result.out, 1)[0] ?? '';
+        const differences = (parity: ReturnType<typeof compareSceneBytes>) =>
+          `${parity.differences.length} differing paths ${JSON.stringify(parity.differences.slice(0, 6))}`;
+        const noProfile = (row: Record<string, unknown> | ComposeRun | null) => row?.spec === 'rig-compose-run/1' && !('output_profile' in row);
+        rmSync(out, { recursive: true, force: true });
+        const again = cli(source, out);
+        const againBytes = outputBytes();
+        const repeatParity = compareSceneBytes(fullBytes, againBytes);
+        const fullReceipt = readJsonFile(receiptPath);
+        const checkPath = join(out, checkFile('check.json'));
+        const fullCheck = readJsonFile(checkPath);
+        say('SC1610_DEFAULT_COMPOSE_REPEATS_FULL_OUTPUT_WITH_LEGACY_RECEIPT',
+          greenSpec && receiptBinds && noProfile(receipt) && noProfile(fullReceipt) &&
+            again.status === 0 && terminal(green).startsWith('compose: PASS') && terminal(again) === terminal(green) &&
+            missing.length === 0 && [...fullBytes.keys()].some(path => below(path, extremes)) && repeatParity.stableEqual,
+          `exits ${green.status}/${again.status}; ${terminal(green)} | ${terminal(again)}; missing ${missing.join(', ') || 'none'}; ${differences(repeatParity)}`,
+          `${why}: a second default run on the same scene and paths preserves full products and the legacy receipt; only canonical Core receipt clocks may differ`);
+
+        const staleDirs = [checkFile('idle_frames'), extremes];
+        const stalePaths = staleDirs.map(folder => join(out, folder, 'unrelated-old-diagnostic.txt'));
+        for (const path of stalePaths) {
+          mkdirSync(dirname(path), { recursive: true });
+          writeFileSync(path, 'stale diagnostic from a previous run\n');
+        }
+        writeFileSync(checkPath, '{"PASS":false,"stale":true}\n');
+        const planted = stalePaths.every(path => existsSync(path));
+        const preview = cli(source, out, '--no-extremes', '--output-profile', 'preview');
+        const previewBytes = outputBytes();
+        const previewReceipt = readJsonFile(receiptPath);
+        const previewCheck = readJsonFile(checkPath);
+        const expectedOutput = (omitted: string[]) => new Map([...againBytes].filter(([path]) =>
+          path !== COMPOSE_RUN_FILE && !omitted.some(entry => below(path, entry))));
+        const profileReceiptMatches = (row: Record<string, unknown> | null, profile: string) => {
+          if (row?.spec !== 'rig-compose-run/1' || row.output_profile !== profile || !noProfile(fullReceipt)) return false;
+          const { output_profile: _profile, ...inputs } = row;
+          return JSON.stringify(inputs) === JSON.stringify(fullReceipt);
+        };
+        const previewOmissions = [...idleOutputs, extremes];
+        const previewLeftovers = previewOmissions.filter(file => existsSync(join(out, file)));
+        previewBytes.delete(COMPOSE_RUN_FILE);
+        const previewParity = compareSceneBytes(expectedOutput(previewOmissions), previewBytes);
+        say('SC1610_PREVIEW_CLEARS_STALE_DIAGNOSTICS_AND_PRESERVES_CAMERA_CLOCK_PACK_AND_CHECK',
+          preview.status === 0 && terminal(preview).startsWith('compose: PREVIEW') && missing.length === 0 &&
+            planted && previewLeftovers.length === 0 && stalePaths.every(path => !existsSync(path)) && previewParity.stableEqual &&
+            greenSpec && fullCoverage && named?.frames?.at(-1)?.authored_time === namedDuration &&
+            fullCheck?.PASS === true && previewCheck?.PASS === true && checkBarIs(previewCheck, 'gate', 'PASS') && checkBarIs(previewCheck, 'loop', 'PASS') &&
+            profileReceiptMatches(previewReceipt, 'preview'),
+          `exit ${preview.status}; ${terminal(preview)}; receipt ${previewReceipt?.output_profile}; planted ${planted}; ` +
+            `leftovers ${previewLeftovers.join(', ') || 'none'}; loop ${JSON.stringify(checkBarOutcomes(previewCheck).loop)}; ${differences(previewParity)}`,
+          `${why}: preview replaces the planted stale check with matching evidence, keeps the exact scene report, take clock and packed bytes, and clears the omitted diagnostic trees`);
+
+        const lean = cli(source, out, '--no-extremes');
+        const leanBytes = outputBytes();
+        const leanReceipt = readJsonFile(receiptPath);
+        const leanCheck = readJsonFile(checkPath);
+        leanBytes.delete(COMPOSE_RUN_FILE);
+        const leanParity = compareSceneBytes(expectedOutput([extremes]), leanBytes);
+        const missingIdle = idleOutputs.filter(file => !existsSync(join(out, file)));
+        say('SC1610_NO_EXTREMES_RETAINS_IDLE_OUTPUT_AND_MEASURED_LOOP',
+          lean.status === 0 && missing.length === 0 && missingIdle.length === 0 && !existsSync(join(out, extremes)) &&
+            leanCheck?.PASS === true && checkBarIs(leanCheck, 'loop', 'PASS') && leanParity.stableEqual && profileReceiptMatches(leanReceipt, 'no-extremes'),
+          `exit ${lean.status}; receipt ${leanReceipt?.output_profile}; missing idle output ${missingIdle.join(', ') || 'none'}; ${differences(leanParity)}`,
+          `${why}: --no-extremes keeps the ordinary idle take and check evidence when composed after preview`);
+      }
 
       writeFileSync(source, sceneText(withCamera({ ...tracks, sweep: sweep(11) })));
       const red = cli(source, out);
@@ -52044,7 +52122,8 @@ function runSceneSuite(): number {
     );
 
     const acceptOut = join(dir, 'composed-accepted');
-    const accepted = runCli(['compose', '--scene', scene(withPlain('loopy')), '--out', acceptOut, '--accept', 'loop']);
+    const openLoopScene = scene(withPlain('loopy'));
+    const accepted = runCli(['compose', '--scene', openLoopScene, '--out', acceptOut, '--accept', 'loop']);
     const refusedLoopOut = join(dir, 'composed-loop-refused');
     const refusedLoop = runCli(['compose', '--scene', scene(withPlain('loopy')), '--out', refusedLoopOut]);
     const seamOut = join(dir, 'composed-seam');
@@ -52064,6 +52143,19 @@ function runSceneSuite(): number {
       `--accept loop on the build whose loop is open -> exit ${accepted.status}; "${plainLine.slice(plainLine.indexOf('; its own check'))}"; scene.json accepted ${JSON.stringify(aRow?.accepted)}; the composed check: loop max |d| ${String(aFig?.loop_max_diff)}, PASS ${String(aFig?.PASS)}, ${(loopFail ?? 'no CHECK_LOOP_CLOSES line').slice(0, 120)}; without --accept -> exit ${refusedLoop.status}, ${composeFail(refusedLoop.out, 'SCENE_BUILD_GREEN') === null ? 'no SCENE_BUILD_GREEN line' : 'SCENE_BUILD_GREEN'}, rig/ written ${existsSync(join(refusedLoopOut, 'rig'))}; --accept seam on a build red on the seam, which the composed rig (no parts.json) cannot measure -> composed check PASS ${String(sFig?.PASS)}, exit ${seamTaken.status}: ${lastLines(seamTaken.out, 1).join('').slice(0, 160)}`,
       'issue #203: nothing is hidden — the composed rig is measured again and reports the bar as it finds it, and a scene taken with a failing bar is a picture to look at, never a green, even where the composed check cannot see the bar',
     );
+
+    const openPreview = runCli(['compose', '--scene', openLoopScene, '--out', acceptOut, '--accept', 'loop', '--output-profile', 'preview']);
+    const previewLoopReport = readJsonFile(join(acceptOut, 'check', 'check.json'));
+    const previewLoopFail = openPreview.out.split('\n').find(line => line.startsWith('[check]   FAIL  CHECK_LOOP_CLOSES'));
+    say('SC1610_PREVIEW_STILL_FAILS_THE_MEASURED_OPEN_LOOP',
+      accepted.status === 1 && aFig?.PASS === false && checkBarIs(aFig, 'loop', 'FAIL') &&
+        typeof aFig.loop_max_diff === 'number' && aFig.loop_max_diff > 0 && loopFail !== undefined &&
+        openPreview.status === 1 && previewLoopReport?.PASS === false && checkBarIs(previewLoopReport, 'loop', 'FAIL') &&
+        previewLoopReport.loop_max_diff === aFig.loop_max_diff && previewLoopFail === loopFail &&
+        !existsSync(join(acceptOut, 'check', 'idle_frames')),
+      `full/preview exit ${accepted.status}/${openPreview.status}; loop max ${aFig?.loop_max_diff}/${previewLoopReport?.loop_max_diff}; ` +
+        (previewLoopFail ?? lastLines(openPreview.out, 3).join(' | ')),
+      'issue #1610: the accepted source build has a genuinely open idle; the composed check measures the same failure in preview');
 
     const baseOutcomes = { ...checkBarOutcomes(aFig), loop: { status: 'PASS' } };
     const versionedWith = (over: Record<string, unknown>, extra: Record<string, unknown> = {}, gate = true) =>
@@ -52944,6 +53036,8 @@ function runSceneSuite(): number {
       const composeShortHelp = runCli(['compose', '-h']);
       const composeBogus = runCli(['compose', '--bogus']);
       const composeHelpBogus = runCli(['compose', '--help', '--bogus']);
+      const bogusFlags = /^  FAIL  USAGE: compose does not take "--bogus"; it takes (.+) \(see rig-parts guide USAGE\)$/.exec(failLine(composeBogus.out, 'USAGE:') ?? '')?.[1];
+      const composeFlags = ['--scene', '--out', '--requirements', '--accept', '--page-size', '--loop-seam-bar', '--loop-seam-cap', '--no-extremes', '--output-profile', '--help'];
       const unpairedOut = join(dir, 'compose-unpaired-loop-seam');
       const unpaired = runCli(['compose', '--scene', sceneFile, '--out', unpairedOut, '--loop-seam-cap', '2']);
       const unpairedLine = failLine(unpaired.out, 'USAGE');
@@ -52953,17 +53047,17 @@ function runSceneSuite(): number {
           composeShortHelp.status === 0 &&
           composeHelp.out === composeShortHelp.out &&
           composeHelp.out.startsWith('  rig-parts compose --scene <scene.json> --out <dir> [--requirements <file.json>] [--accept <bar>[,<bar>...]] [--page-size <px>]') &&
-          ['--loop-seam-bar <channel-delta,pixels>', '--loop-seam-cap <loops>'].every(flag => composeHelp.out.includes(flag)) &&
+          ['--loop-seam-bar <channel-delta,pixels>', '--loop-seam-cap <loops>', '--no-extremes', '--output-profile', 'preview'].every(flag => composeHelp.out.includes(flag)) &&
           composeHelp.out.replace(/\s+/g, ' ').includes('scene.json (spec "spine-parts-scene-report/1" without a camera, "spine-parts-scene-report/2" with a camera)') &&
           composeHelp.out.trimEnd().endsWith('Exit 0 when the check is PASS and nothing was accepted, 1 otherwise.') &&
           composeBogus.status === 2 &&
-          composeBogus.out.includes('FAIL  USAGE: compose does not take "--bogus"; it takes --scene, --out, --requirements, --accept, --page-size, --loop-seam-bar, --loop-seam-cap, --help (see rig-parts guide USAGE)') &&
+          bogusFlags?.split(', ').sort().join(', ') === composeFlags.sort().join(', ') &&
           composeHelpBogus.status === 2 &&
           composeHelpBogus.out.includes('FAIL  USAGE: compose does not take "--bogus"') &&
           unpaired.status === 2 && unpairedLine?.includes('--loop-seam-bar and --loop-seam-cap must be given together') === true && !existsSync(unpairedOut),
         `--help exit ${composeHelp.status} (${composeHelp.out.split('\n').length} lines); -h exit ${composeShortHelp.status} (equal=${composeHelp.out === composeShortHelp.out}); ` +
-          `--bogus exit ${composeBogus.status}; unpaired exit ${unpaired.status} ${unpairedLine?.trim() ?? 'no usage line'}`,
-        'Compose help gives both flags, keeps the #1350 help contract and names the report version selected by the camera. An unknown flag or an unpaired loop seam cap is a usage error.',
+          `--bogus exit ${composeBogus.status} (${bogusFlags ?? 'no flag list'}); unpaired exit ${unpaired.status} ${unpairedLine?.trim() ?? 'no usage line'}`,
+        'Compose help advertises output profiles and both loop seam flags, keeps the #1350 help contract and names the report version selected by the camera.',
       );
 
       const headerOf = (sceneBody: Record<string, unknown>, tag: string): string => {
@@ -53167,7 +53261,9 @@ function runSceneSuite(): number {
         });
         const physComp = compose(physBody);
         const physOut = join(dir, 'phys-composed');
-        const physCli = runCli(['compose', '--scene', scene(physBody), '--out', physOut, '--loop-seam-bar', '255,0', '--loop-seam-cap', '2']);
+        const physScene = scene(physBody);
+        const loopSeamFlags = ['--loop-seam-bar', '255,0', '--loop-seam-cap', '2'];
+        const physCli = runCli(['compose', '--scene', physScene, '--out', physOut, ...loopSeamFlags]);
         const physCheckDir = join(physOut, 'check');
         const physCheck = readJsonFile(join(physCheckDir, 'check.json'));
         const physSeamFaults = shippedLoopSeamFaults(physCheckDir, physCheck, 2);
@@ -53177,6 +53273,17 @@ function runSceneSuite(): number {
             physCheck.loop_max_diff === 0 && Array.isArray(physCheck.loop_physics) && physCheck.loop_physics.length > 0 && physSeamFaults.length === 0,
           `compose exit ${physCli.status}; loop ${JSON.stringify(checkBarOutcomes(physCheck).loop ?? null)}; shipped seam faults ${physSeamFaults.join(', ') || 'none'}`,
           'issue #1590: compose forwards both flags to the shipped idle render and retains the keyed loop measurements alongside the Core report.');
+        const previewSeamOut = join(dir, 'preview-required-loop-seam');
+        const previewSeam = runCli(['compose', '--scene', physScene, '--out', previewSeamOut, ...loopSeamFlags, '--output-profile', 'preview']);
+        const previewCode = 'COMPOSE_PREVIEW_REQUIRED_CHECK:';
+        const previewSeamRefusal = composeFail(previewSeam.out, previewCode) ?? failLine(previewSeam.out, previewCode);
+        const previewSeamOutputs = entries(previewSeamOut);
+        say('SC1610_PREVIEW_REFUSES_VALID_REQUIRED_LOOP_SEAM_BEFORE_PRODUCT_OUTPUT',
+          physCli.status === 0 && physCheck?.PASS === true && physSeamFaults.length === 0 &&
+            previewSeam.status === 1 && previewSeamRefusal !== null && previewSeamOutputs.length === 0,
+          `full exit ${physCli.status}; preview exit ${previewSeam.status}; output entries ${previewSeamOutputs.join(', ') || 'none'}; ` +
+            (previewSeamRefusal ?? lastLines(previewSeam.out, 3).join(' | ')),
+          'issue #1610: the same paired thresholds measure the shipped idle in full compose and are refused by name before preview emits products');
         const physUnpref = physComp.ok === null ? ['not-composed'] : unprefixedNames(physComp.ok.rig, physComp.ok.motion, ['a', 'b'], true);
         const aWind = (physComp.ok?.motion.animations as Record<string, unknown> | undefined)?.['a:wind'];
         const bGust = (physComp.ok?.motion.animations as Record<string, unknown> | undefined)?.['b:gust'];

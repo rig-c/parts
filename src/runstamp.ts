@@ -36,7 +36,7 @@ export interface RunStampFileEntry {
   sha256: string;
 }
 
-/** Compose's consumed inputs and opted-in placement, captured before its gate. */
+/** Compose's consumed inputs and placement, with the output profile recorded on success. */
 export interface ComposeRun {
   spec: typeof COMPOSE_RUN_SPEC;
   scene: RunStampFileEntry;
@@ -52,6 +52,7 @@ export interface ComposeRun {
   }>;
   plate: RunStampFileEntry | null;
   plates: Array<{ name: string; path: string; sha256: string }>;
+  output_profile?: 'preview' | 'no-extremes';
 }
 
 export interface RunStampInputEntry<Role extends string = RunStampInputRole> {
