@@ -1053,8 +1053,9 @@ usage:
       implies --no-extremes. The gate and check requirements still apply.
       Opt-in success prints PREVIEW or NO EXTREMES and records output_profile
       in compose-run.json. When both flags are given, preview takes precedence.
-      Preview refuses --loop-seam-bar (COMPOSE_PREVIEW_REQUIRED_CHECK): the
-      declared physics-on seam bar requires stock idle render evidence on disk.
+      Preview uses the stock idle render for checks, then removes it.
+      Preview refuses --loop-seam-bar (COMPOSE_PREVIEW_REQUIRED_CHECK) because
+      check.json binds the first and wrap PNGs that must remain in idle_frames/.
       Bind several finished characters into one rig. The scene file (spec
       "${SCENE_SPEC}") states the canvas {width, height}, an optional plate
       {image, provenance: ${PROVENANCES.join(' | ')}, note?}, the characters

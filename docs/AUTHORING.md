@@ -7254,7 +7254,7 @@ and stay absent).
 | <a id="SCENE_INVARIANT_AGREES"></a>`SCENE_INVARIANT_AGREES` | two characters declare `invariants.idleDrivesMeshes` with different `why`s | rebuild with this package's `--idle-keys direct`, whose `why` is one sentence |
 | <a id="SCENE_IMAGE_NAME_FREE"></a>`SCENE_IMAGE_NAME_FREE` | two images compose to one file name (`<id>.<file>`: an id `x` with an image `y.cloth.png`, and an id `x.y` with `cloth.png`) | another id |
 | <a id="COMPOSE_RIGC_GREEN"></a>`COMPOSE_RIGC_GREEN` | rig-c refused the composed rig; its line is quoted. A field compose carries as written (a constraint's `mix`, a slot's setup attachment) is rigc's to judge | the build whose field it names |
-| <a id="COMPOSE_PREVIEW_REQUIRED_CHECK"></a>`COMPOSE_PREVIEW_REQUIRED_CHECK` | preview cannot measure the named idle reading, or the declared `--loop-seam-bar` needs the stock idle render evidence on disk | use a matching Core renderer for the named reading, or run without `--output-profile preview` to retain the stock idle render |
+| <a id="COMPOSE_PREVIEW_REQUIRED_CHECK"></a>`COMPOSE_PREVIEW_REQUIRED_CHECK` | `--loop-seam-bar` with `--output-profile preview`. The `loop_seam` record in `check.json` binds the paths and SHA-256 hashes of the first and wrap PNGs under `check/idle_frames/`, which preview removes | `found=preview, required=default or no-extremes`. Use default diagnostics or `--no-extremes` to retain the bound PNGs |
 | `REQUIREMENTS_*` | the `--requirements` file, as for `check` | as for `check` |
 
 ### The command line
@@ -8372,9 +8372,13 @@ scene; a rig `build` did not write.
 | `--no-extremes` alone | `extremes/`, as in `check` and `build` | `compose: NO EXTREMES — checks met; …` | `"no-extremes"` |
 | `--output-profile preview`, with or without `--no-extremes` | `extremes/`, `idle_frames/`, `contact.png`, `motion_heat.png` | `compose: PREVIEW — checks met; …` | `"preview"` |
 
-Preview measures the idle in memory. With any `canvas_clip: true` character,
-the idle uses the authored stage viewport. The rig-c gate, packed build,
-camera binding and check requirements still apply. The `[check]` diagnostics
+Preview uses Core's stock idle renderer and the existing readers for its
+frames and geometry. With any `canvas_clip: true` character, that render uses
+the authored stage viewport. Core generates a contact sheet alongside the
+temporary idle frames. Parts removes the idle render directory before preview
+success, skips copying the contact sheet to `check/contact.png`, and skips
+generating `check/motion_heat.png`. The rig-c gate, packed build, camera binding
+and check requirements still apply. The `[check]` diagnostics
 lines give the chosen flag as the reason for `extremes: SKIP` and, in preview,
 `idle diagnostics: SKIP`. These lines describe output omissions. Each bar and
 requirement retains its own outcome. Failed checks and accepted failing input
@@ -8383,8 +8387,11 @@ bars still exit 1 and leave no compose receipt.
 `preview` is the only accepted value for `--output-profile`. A valid pair of
 `--loop-seam-bar` and `--loop-seam-cap` in preview exits 1 with
 `COMPOSE_PREVIEW_REQUIRED_CHECK` (`found=preview, required=default or no-extremes`).
-The declared physics-on seam check binds the first and wrap PNGs of the stock
-idle render on disk. This refusal clears `rig/`, `check/`, `scene.json` and
+The declared physics-on seam check embeds Core's `loop_seam` evidence in
+`check.json`. Its `first` and `wrap` entries bind the relative paths and SHA-256
+hashes of `f0000.png` and `loop-wrap.png` under the idle render directory.
+Both files must remain under `check/idle_frames/` for readers to verify the
+seam evidence after the run. This refusal clears `rig/`, `check/`, `scene.json` and
 `compose-run.json` under `--out` before the gate.
 
 #### Keyed scene camera (issue #1596)
@@ -8495,8 +8502,8 @@ The rig-c gate, composed rig and packed atlas retain the full art, geometry and
 motion so offstage parts can enter the canvas during playback.
 
 When any character opts in, compose gives check renders the authored stage as
-their viewport, including the in-memory idle in preview. Explicit diagnostic
-viewports take precedence. With default diagnostics or `--no-extremes`, the retained
+their viewport, including the temporary stock idle render in preview. Explicit
+diagnostic viewports take precedence. With default diagnostics or `--no-extremes`, the retained
 `check/idle_frames/` and `check/contact.png` use check's existing preview size
 cap and sampling rate. `check/idle_frames/frames.json` records the stage in
 `viewport` and identifies the pin in `pinned.by` as `--viewport`. The default

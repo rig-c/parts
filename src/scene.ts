@@ -2443,7 +2443,7 @@ export function refusePreviewLoopSeam(input: ComposeInput): void {
   throw new PartsError([{
     code: 'COMPOSE_PREVIEW_REQUIRED_CHECK',
     object: '--loop-seam-bar',
-    detail: 'found=preview, required=default or no-extremes. The declared physics-on seam bar requires stock idle render evidence on disk.',
+    detail: 'found=preview, required=default or no-extremes. The check.json loop_seam record binds the first and wrap PNG paths and hashes under check/idle_frames/, which preview removes.',
   }]);
 }
 
@@ -2626,7 +2626,7 @@ export function composeStage(input: ComposeInput, run: ComposeRunners, log: Log)
       ...(input.requirements === undefined ? {} : { requirements: input.requirements }),
       ...(input.loopSeam === undefined ? {} : { loopSeam: input.loopSeam }),
       ...(noExtremes ? { noExtremes: true } : {}),
-      ...(preview ? { previewIdle: stage === undefined ? {} : { viewport: stage } } : {}),
+      ...(preview ? { previewIdle: true } : {}),
     }, checkRigc, run.checkBin, checkLog);
   } catch (err) {
     if (cameraBindingFailed) {
