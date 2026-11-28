@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.64.0 (2026-11-28)
+
+`compose` can now run with a preview output profile. It keeps the packed model, its pages, the take, the scene report and the check verdict, and leaves out the diagnostics a view-only preview does not need, so each compose writes much less.
+
+**Read before upgrading:**
+
+* **New, opt-in: `--output-profile preview` and `--no-extremes` on `compose`.** `--no-extremes` means what it already means on `check` and `build`: the extremes renders are left out. `preview` also leaves out `check/idle_frames/`, `check/contact.png` and `check/motion_heat.png`, and implies `--no-extremes`. When both flags are given, preview wins. Nothing changes for a caller that passes neither: the outputs keep their bytes at the same paths, and the success line still reads `compose: PASS — …`.
+* **`compose-run.json` (`rig-compose-run/1`) gains an optional last field, `output_profile`, written only when a non-default profile ran:** `"preview"` or `"no-extremes"`. If it is absent, the default profile ran. Existing receipts stay valid byte for byte.
+* **A preview never prints a full compose's green line.** Success reads `compose: PREVIEW — checks met; …` or `compose: NO EXTREMES — checks met; …`, and each omitted output prints a `SKIP` line naming the flag.
+* **New refusal: `COMPOSE_PREVIEW_REQUIRED_CHECK`.** It is raised for `--loop-seam-bar` under `--output-profile preview`, because the `loop_seam` record binds idle frame files that preview does not keep. It carries one detail text, whichever path raises it.
+* **`rig-parts --version` and the `package.version` field in run stamps and run records now read `2.64.0`.** The version bump changes those receipt bytes. The receipt fields and output hashes keep their meaning. No public example's expected file changes since 2.63.1.
+
+### Features
+
+* **compose** adds the preview output profile. Preview runs the same stock Core idle render and the same check readers as the default profile, then removes the idle frames before it reports success, and also when it stops early. It omits output, never a check. Measured on the public keyed scene: peak bytes 64.0 MB to 25.8 MB (59.7 % less), bytes kept on disk 64.0 MB to 4.1 MB, wall time 15.1 s to 7.9 s. See [Compose output profiles](docs/AUTHORING.md#compose-output-profiles-issue-1610). ([#1610](https://github.com/rig-c/parts/issues/1610), [#1611](https://github.com/rig-c/parts/pull/1611), [#1612](https://github.com/rig-c/parts/issues/1612), [#1613](https://github.com/rig-c/parts/pull/1613))
+
+### Documentation
+
+* AUTHORING's failure map says what a contour band's width does to winding, and what to try first. ([#1606](https://github.com/rig-c/parts/issues/1606), [#1608](https://github.com/rig-c/parts/pull/1608))
+
 ## 2.63.1 (2026-11-27)
 
 A `TEXTURE_STRETCH` refusal at a contour band now names the band, so an author knows which width to change.
