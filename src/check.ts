@@ -233,7 +233,7 @@ const STILL_FPS = 10;
 
 /** The caller's RGBA seam bar and maximum number of warm-up loops. */
 export type LoopSeamRequest = { channelDelta: number; pixelsAbove: number; cap: number };
-
+export const COMPOSE_PREVIEW_LOOP_SEAM_DETAIL = 'found=preview, required=default or no-extremes. The check.json loop_seam record binds the first and wrap PNG paths and hashes under check/idle_frames/, which preview removes.';
 const LOOP_SEAM_SPEC = 'rigc-loop-seam/1';
 export const LOOP_SEAM_BAR_UNMET = 'LOOP_SEAM_BAR_UNMET';
 const LOOP_SEAM_FILE = 'loop-seam.json';
@@ -6986,7 +6986,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   if (previewIdle && loopSeam !== undefined) throw new PartsError([{
     code: 'COMPOSE_PREVIEW_REQUIRED_CHECK',
     object: '--loop-seam-bar',
-    detail: 'found=preview, required=default or no-extremes. The declared physics-on seam bar requires stock idle render evidence on disk.',
+    detail: COMPOSE_PREVIEW_LOOP_SEAM_DETAIL,
   }]);
   const pageSize = parsePageSize(mode.pageSize);
   let inp: CheckInputs;

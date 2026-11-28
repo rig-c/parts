@@ -109,7 +109,7 @@ import { documentPageLookup, readModel, type ModelPageRegion } from '@rig-c/core
 import { CandidateAtlasError, CandidatePairError, CoreInputError, loadCandidate, PoserChoiceError, projector, renderFrame, SpineRuntimeError, throughPoser, type Piece, type Quad, type Viewport } from '@rig-c/core/render-shared';
 import { deformSliderCombinationProblem, type RigStop } from '@rig-c/core/rig';
 import { checkStage, gateThroughRigc, type Log } from './build.ts';
-import { ACCEPTABLE_BARS, barsNotMet, CHECK_SPEC, type CheckReport, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, IDLE_FPS, LOOP_SEAM_BAR_UNMET, type LoopSeamRequest, type PackMode, parsePageSize, requirementsNotPass, type RigcRunner } from './check.ts';
+import { ACCEPTABLE_BARS, barsNotMet, CHECK_SPEC, type CheckReport, COMPOSE_PREVIEW_LOOP_SEAM_DETAIL, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, IDLE_FPS, LOOP_SEAM_BAR_UNMET, type LoopSeamRequest, type PackMode, parsePageSize, requirementsNotPass, type RigcRunner } from './check.ts';
 import { CONSTRAINT_BONE_FIELDS, editorReceiptProblems, ROOT_BONE } from './config.ts';
 import { cropToSpineY } from './coords.ts';
 import { failLine, PartsError, type Problem, refuseIfAny } from './errors.ts';
@@ -2443,7 +2443,7 @@ export function refusePreviewLoopSeam(input: ComposeInput): void {
   throw new PartsError([{
     code: 'COMPOSE_PREVIEW_REQUIRED_CHECK',
     object: '--loop-seam-bar',
-    detail: 'found=preview, required=default or no-extremes. The check.json loop_seam record binds the first and wrap PNG paths and hashes under check/idle_frames/, which preview removes.',
+    detail: COMPOSE_PREVIEW_LOOP_SEAM_DETAIL,
   }]);
 }
 
