@@ -9,7 +9,7 @@
 * **New, opt-in: `--output-profile preview` and `--no-extremes` on `compose`.** `--no-extremes` means what it already means on `check` and `build`: the extremes renders are left out. `preview` also leaves out `check/idle_frames/`, `check/contact.png` and `check/motion_heat.png`, and implies `--no-extremes`. When both flags are given, preview wins. Nothing changes for a caller that passes neither: the outputs keep their bytes at the same paths, and the success line still reads `compose: PASS — …`.
 * **`compose-run.json` (`rig-compose-run/1`) gains an optional last field, `output_profile`, written only when a non-default profile ran:** `"preview"` or `"no-extremes"`. If it is absent, the default profile ran. Existing receipts stay valid byte for byte.
 * **A preview never prints a full compose's green line.** Success reads `compose: PREVIEW — checks met; …` or `compose: NO EXTREMES — checks met; …`, and each omitted output prints a `SKIP` line naming the flag.
-* **New refusal: `COMPOSE_PREVIEW_REQUIRED_CHECK`.** It is raised for `--loop-seam-bar` under `--output-profile preview`, because the `loop_seam` record binds idle frame files that preview does not keep.
+* **New refusal: `COMPOSE_PREVIEW_REQUIRED_CHECK`.** It is raised for `--loop-seam-bar` under `--output-profile preview`, because the `loop_seam` record binds idle frame files that preview does not keep. It carries one detail text, whichever path raises it.
 * **`rig-parts --version` and the `package.version` field in run stamps and run records now read `2.64.0`.** The version bump changes those receipt bytes. The receipt fields and output hashes keep their meaning. No public example's expected file changes since 2.63.1.
 
 ### Features
