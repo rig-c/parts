@@ -7254,6 +7254,7 @@ and stay absent).
 | <a id="SCENE_INVARIANT_AGREES"></a>`SCENE_INVARIANT_AGREES` | two characters declare `invariants.idleDrivesMeshes` with different `why`s | rebuild with this package's `--idle-keys direct`, whose `why` is one sentence |
 | <a id="SCENE_IMAGE_NAME_FREE"></a>`SCENE_IMAGE_NAME_FREE` | two images compose to one file name (`<id>.<file>`: an id `x` with an image `y.cloth.png`, and an id `x.y` with `cloth.png`) | another id |
 | <a id="COMPOSE_RIGC_GREEN"></a>`COMPOSE_RIGC_GREEN` | rig-c refused the composed rig; its line is quoted. A field compose carries as written (a constraint's `mix`, a slot's setup attachment) is rigc's to judge | the build whose field it names |
+| <a id="COMPOSE_PREVIEW_REQUIRED_CHECK"></a>`COMPOSE_PREVIEW_REQUIRED_CHECK` | `--loop-seam-bar` with `--output-profile preview`. The `loop_seam` record in `check.json` binds the paths and SHA-256 hashes of the first and wrap PNGs under `check/idle_frames/`, which preview removes | `found=preview, required=default or no-extremes`. Use default diagnostics or `--no-extremes` to retain the bound PNGs |
 | `REQUIREMENTS_*` | the `--requirements` file, as for `check` | as for `check` |
 
 ### The command line
@@ -7493,7 +7494,7 @@ assemble*, at the end of this section):
 
   **Physics-on idle closure (opt-in, issue #1590).** Pass
   `--loop-seam-bar <channel-delta,pixels> --loop-seam-cap <loops>` together to
-  `check` or `compose`. Use decimal whole numbers: a channel delta from 0 to 255,
+  `check` or `compose` (default diagnostics or `--no-extremes`). Use decimal whole numbers: a channel delta from 0 to 255,
   a nonnegative safe integer pixel limit, and a nonnegative safe integer warm-up
   cap. The rig must have an idle of positive duration. Core's warm-up search is
   incompatible with `check --environment`.
@@ -8041,12 +8042,12 @@ rig directory, copied away from its `parts.json`, reads `5 of 10`: the gate, the
 
 ### Composing several characters (`compose`, issue #74)
 
-`rig-parts compose --scene <scene.json> --out <dir> [--requirements <file.json>] [--accept <bar>[,<bar>…]] [--page-size <px>] [--loop-seam-bar <channel-delta,pixels> --loop-seam-cap <loops>]`
+`rig-parts compose --scene <scene.json> --out <dir> [--requirements <file.json>] [--accept <bar>[,<bar>…]] [--page-size <px>] [--loop-seam-bar <channel-delta,pixels> --loop-seam-cap <loops>] [--output-profile preview] [--no-extremes]`
 binds characters this package already built into one rig. Each character runs the
 single-character path (§4, steps 0–9) on its own, already isolated input to a green
 `build` first; compose reads what that build wrote and changes nothing in it.
-The paired loop seam flags apply to the composed idle under `<out>/check/`, at
-the same viewport compose uses for the shipped frames.
+With default diagnostics or `--no-extremes`, the paired loop seam flags apply to
+the composed idle under `<out>/check/`, at the viewport used for the shipped frames.
 
 ```
 { "spec": "spine-parts-scene/1",
@@ -8363,6 +8364,36 @@ character's input arrives isolated); a composed `parts.json`, so the bars that
 read See-through tags are measured per character by its own `build`, not over the
 scene; a rig `build` did not write.
 
+#### Compose output profiles (issue #1610)
+
+| Options | Omitted diagnostics under `<out>/check/` | Successful terminal verdict | `compose-run.json` `output_profile` |
+| --- | --- | --- | --- |
+| Neither flag | None selected for omission | `compose: PASS — …` | absent |
+| `--no-extremes` alone | `extremes/`, as in `check` and `build` | `compose: NO EXTREMES — checks met; …` | `"no-extremes"` |
+| `--output-profile preview`, with or without `--no-extremes` | `extremes/`, `idle_frames/`, `contact.png`, `motion_heat.png` | `compose: PREVIEW — checks met; …` | `"preview"` |
+
+Preview uses Core's stock idle renderer and the existing readers for its
+frames and geometry. With any `canvas_clip: true` character, that render uses
+the authored stage viewport. Core generates a contact sheet alongside the
+temporary idle frames. Parts removes the idle render directory before preview
+success, skips copying the contact sheet to `check/contact.png`, and skips
+generating `check/motion_heat.png`. The rig-c gate, packed build, camera binding
+and check requirements still apply. The `[check]` diagnostics
+lines give the chosen flag as the reason for `extremes: SKIP` and, in preview,
+`idle diagnostics: SKIP`. These lines describe output omissions. Each bar and
+requirement retains its own outcome. Failed checks and accepted failing input
+bars still exit 1 and leave no compose receipt.
+
+`preview` is the only accepted value for `--output-profile`. A valid pair of
+`--loop-seam-bar` and `--loop-seam-cap` in preview exits 1 with
+`COMPOSE_PREVIEW_REQUIRED_CHECK` (`found=preview, required=default or no-extremes`).
+The declared physics-on seam check embeds Core's `loop_seam` evidence in
+`check.json`. Its `first` and `wrap` entries bind the relative paths and SHA-256
+hashes of `f0000.png` and `loop-wrap.png` under the idle render directory.
+Both files must remain under `check/idle_frames/` for readers to verify the
+seam evidence after the run. This refusal clears `rig/`, `check/`, `scene.json` and
+`compose-run.json` under `--out` before the gate.
+
 #### Keyed scene camera (issue #1596)
 
 A camera projects an already posed scene into the fixed canvas. It follows the
@@ -8471,11 +8502,12 @@ The rig-c gate, composed rig and packed atlas retain the full art, geometry and
 motion so offstage parts can enter the canvas during playback.
 
 When any character opts in, compose gives check renders the authored stage as
-their viewport. Explicit diagnostic viewports take precedence. The retained
+their viewport, including the temporary stock idle render in preview. Explicit
+diagnostic viewports take precedence. With default diagnostics or `--no-extremes`, the retained
 `check/idle_frames/` and `check/contact.png` use check's existing preview size
 cap and sampling rate. `check/idle_frames/frames.json` records the stage in
-`viewport` and identifies the pin in `pinned.by` as `--viewport`. Extremes use
-their existing explicit diagnostic grid over the same stage box.
+`viewport` and identifies the pin in `pinned.by` as `--viewport`. The default
+extremes use their explicit diagnostic grid over the same stage box.
 The stage rectangle is `[-width/2, 0, width, height]` in rig-c world coordinates,
 y up. To verify native canvas pixels, render the packed build with the stage
 rectangle as `--viewport` and the larger canvas dimension as `--max`.
@@ -8495,12 +8527,13 @@ every character in the declared draw order.
 A fully green compose writes `compose-run.json` at the `--out` root, beside
 `scene.json`, with spec `rig-compose-run/1`. It removes a previous record before
 the stage begins, including before stage option validation; a refused input,
-rig-c gate, check or accepted failing character leaves no record. With neither
-canvas clipping nor a placement pivot declared, the existing rig, scene report
-and check bytes and paths are stable. Core's separate `check/build/run.json`
-retains its own clocks.
+rig-c gate, check or accepted failing character leaves no record. With default
+diagnostics and neither canvas clipping nor a placement pivot declared, the
+existing rig, scene report and check bytes and paths are stable. Core's separate
+`check/build/run.json` retains its own clocks.
 
-The fixed top-level key order is `spec`, `scene`, `characters`, `plate`, `plates`:
+The fixed top-level key order is `spec`, `scene`, `characters`, `plate`, `plates`,
+then `output_profile` when selected.
 
 | entry | exact binding |
 | --- | --- |
@@ -8508,6 +8541,7 @@ The fixed top-level key order is `spec`, `scene`, `characters`, `plate`, `plates
 | `characters` | sorted by `id` in code-unit order. Each row has `id`, `build`, `files`, then `placement` only for `canvas_clip: true`. `build` is as declared and `files` contains `{path, sha256}` entries sorted by build-relative `path`. `placement` holds `{canvas_clip: true, bounds, clipped_bounds}` from the scene report |
 | `plate` | legacy plate `{path, sha256}`, with its image path as declared relative to the scene file, or `null` when absent |
 | `plates` | every named plate `{name, path, sha256}`, sorted by `name` in code-unit order; image paths as declared relative to the scene file; `[]` when absent |
+| `output_profile` | `"preview"` for `--output-profile preview`, including when paired with `--no-extremes`; `"no-extremes"` for `--no-extremes` alone; absent for default diagnostics |
 
 The raw `scene.sha256` binds the placement pivot declaration and its authored
 tracks. A pivot adds no receipt field. The `placement` entry retains its canvas
@@ -8522,13 +8556,14 @@ It does not enumerate the build directory: unused images, packed pages,
 source configs and the character's own `run.json` are excluded. A declared
 `parts.json` painting binding and editor receipts keep their existing validation;
 their declarations are bound through the containing input bytes. This record
-inventories the listed compose inputs, not external requirements or CLI options.
+inventories the listed compose inputs and the selected output profile. External
+requirements and other CLI options are outside its inventory.
 
 Hashes are captured from the same byte buffers consumed before the gate, never
 by rereading inputs after it. Image hashes bind encoded file bytes, including
 any trailing bytes, rather than decoded pixels. Identical inputs at identical
-supplied paths give identical record bytes; there are no clocks. A changed byte
-changes its input entry's hash; if multiple entries reference one physical file,
+supplied paths with the same output profile give identical record bytes. A changed
+byte changes its input entry's hash. If multiple entries reference one physical file,
 each reference changes. Missing scene, build and plate files retain their named
 `SCENE_FILE`, `SCENE_BUILD_PRESENT` and `SCENE_PLATE_PRESENT` refusals.
 
@@ -10810,27 +10845,27 @@ Internal `SeamSupport.drawings` never enters check JSON. Named requirement
 | `SETUP_MATCHES_PAINTING.regions[].slots` | `SETUP_MATCHES_PAINTING.regions[].slots` | part when the supplied mapping resolves a piece; otherwise rig | evidence | resolved piece for slot; otherwise [] | [setuppainting.ts:176](../src/setuppainting.ts#L176) |
 | `SOURCE_EXPOSURE.rows` | `SOURCE_EXPOSURE.rows` | 'part' | finding when declared !== undefined && r.px > declared.max_px; otherwise evidence | [r.part] | [sourceexposure.ts:292](../src/sourceexposure.ts#L292) |
 | `SOURCE_EXPOSURE.unmeasured` | `SOURCE_EXPOSURE.unmeasured` | part when the supplied mapping resolves a piece; otherwise rig | finding when declared !== undefined; otherwise evidence | resolved piece for u.slot; otherwise [] | [sourceexposure.ts:293](../src/sourceexposure.ts#L293) |
-| `STILL_REGIONS_DARK.*.crossing` | `STILL_REGIONS_DARK.*.crossing` | part when the supplied mapping resolves a piece; otherwise rig | finding | resolved piece for sl.name; otherwise [] | [check.ts:9523](../src/check.ts#L9523) |
-| `STILL_REGIONS_DARK.*.still_slots` | `STILL_REGIONS_DARK.*.still_slots` | part when the supplied mapping resolves a piece; otherwise rig | evidence; finding when r.max > tolerance; otherwise evidence | resolved piece for slot; otherwise [] | [check.ts:9509](../src/check.ts#L9509), [check.ts:9514](../src/check.ts#L9514) |
+| `STILL_REGIONS_DARK.*.crossing` | `STILL_REGIONS_DARK.*.crossing` | part when the supplied mapping resolves a piece; otherwise rig | finding | resolved piece for sl.name; otherwise [] | [check.ts:9537](../src/check.ts#L9537) |
+| `STILL_REGIONS_DARK.*.still_slots` | `STILL_REGIONS_DARK.*.still_slots` | part when the supplied mapping resolves a piece; otherwise rig | evidence; finding when r.max > tolerance; otherwise evidence | resolved piece for slot; otherwise [] | [check.ts:9523](../src/check.ts#L9523), [check.ts:9528](../src/check.ts#L9528) |
 | `STRESS_OFF_CHAIN.not_read` | `STRESS_OFF_CHAIN.not_read` | 'part' | evidence | [r.part] | [check.ts:4299](../src/check.ts#L4299) |
 | `STRESS_OFF_CHAIN.per_part` | `STRESS_OFF_CHAIN.per_part` | 'part' | finding when poses.some(p => typeof p.reading === 'number' && p.reading > STRESS_RIGID); otherwise evidence | [r.part] | [check.ts:4287](../src/check.ts#L4287) |
 | `STRESS_OFF_CHAIN.per_part[].off_chain` | `STRESS_OFF_CHAIN.per_part[].off_chain` | 'part' | evidence | [r.part] | [check.ts:4287](../src/check.ts#L4287) |
 | `STRESS_OFF_CHAIN.per_part[].poses` | `STRESS_OFF_CHAIN.per_part[].poses` | 'part' | evidence; finding when shown > STRESS_RIGID; otherwise evidence | [r.part] | [check.ts:4255](../src/check.ts#L4255), [check.ts:4273](../src/check.ts#L4273) |
-| `TEXTURE_STRETCH.per_mesh` | `TEXTURE_STRETCH.per_mesh` | part when the supplied mapping resolves a piece; otherwise rig | evidence; finding when severity > TEXTURE_STRETCH_CEILING; otherwise evidence | resolved piece for m.slot; otherwise [] | [check.ts:10290](../src/check.ts#L10290), [check.ts:10300](../src/check.ts#L10300) |
-| `TIP_OVER_ROOT.parts` | `TIP_OVER_ROOT.parts` | 'part' | evidence; finding when !ok && !(!rigid && hanging.onLink && Math.max(c.root, c.tip) < TIP_TRAVEL_FLOOR); otherwise evidence | [p.name] | [check.ts:8898](../src/check.ts#L8898), [check.ts:8903](../src/check.ts#L8903), [check.ts:8924](../src/check.ts#L8924), [check.ts:8935](../src/check.ts#L8935) |
+| `TEXTURE_STRETCH.per_mesh` | `TEXTURE_STRETCH.per_mesh` | part when the supplied mapping resolves a piece; otherwise rig | evidence; finding when severity > TEXTURE_STRETCH_CEILING; otherwise evidence | resolved piece for m.slot; otherwise [] | [check.ts:10304](../src/check.ts#L10304), [check.ts:10314](../src/check.ts#L10314) |
+| `TIP_OVER_ROOT.parts` | `TIP_OVER_ROOT.parts` | 'part' | evidence; finding when !ok && !(!rigid && hanging.onLink && Math.max(c.root, c.tip) < TIP_TRAVEL_FLOOR); otherwise evidence | [p.name] | [check.ts:8912](../src/check.ts#L8912), [check.ts:8917](../src/check.ts#L8917), [check.ts:8938](../src/check.ts#L8938), [check.ts:8949](../src/check.ts#L8949) |
 | `WIND_BAND.pairs` | `WIND_BAND.pairs` | 'pair' | finding when !holdsAll; otherwise evidence | [p.a, p.b] | [check.ts:6833](../src/check.ts#L6833) |
 | `WIND_BAND.pairs[].steps` | `WIND_BAND.pairs[].steps` | 'pair' | finding when !s.holds; otherwise evidence | [p.a, p.b] | [check.ts:6844](../src/check.ts#L6844) |
 | `figure_openings.openings` | `figure_openings.openings` | 'pair' | finding | [ps.under, ps.above] | [check.ts:6150](../src/check.ts#L6150) |
-| `loop_physics` | `loop_physics` | 'rig' | evidence | [] | [check.ts:7935](../src/check.ts#L7935) |
-| `requirements.lines.* (bone)` | `requirements.lines.*` | 'rig' | finding when line.status === 'FAIL'; otherwise evidence | [] | [check.ts:8266](../src/check.ts#L8266) |
-| `requirements.lines.* (seam)` | `requirements.lines.*` | 'pair' | finding when line.status === 'FAIL'; otherwise evidence | [r.part, r.neighbour] | [check.ts:8266](../src/check.ts#L8266) |
-| `requirements.lines.* (stretch)` | `requirements.lines.*` | part when the supplied mapping resolves a piece; otherwise rig | finding when line.status === 'FAIL'; otherwise evidence | resolved piece for r.slot; otherwise [] | [check.ts:8266](../src/check.ts#L8266) |
+| `loop_physics` | `loop_physics` | 'rig' | evidence | [] | [check.ts:7947](../src/check.ts#L7947) |
+| `requirements.lines.* (bone)` | `requirements.lines.*` | 'rig' | finding when line.status === 'FAIL'; otherwise evidence | [] | [check.ts:8280](../src/check.ts#L8280) |
+| `requirements.lines.* (seam)` | `requirements.lines.*` | 'pair' | finding when line.status === 'FAIL'; otherwise evidence | [r.part, r.neighbour] | [check.ts:8280](../src/check.ts#L8280) |
+| `requirements.lines.* (stretch)` | `requirements.lines.*` | part when the supplied mapping resolves a piece; otherwise rig | finding when line.status === 'FAIL'; otherwise evidence | resolved piece for r.slot; otherwise [] | [check.ts:8280](../src/check.ts#L8280) |
 | `seam_cells.frames` | `frames` | 'pair' | evidence | [p.a, p.b] | [check.ts:5030](../src/check.ts#L5030) |
 | `seam_cells.frames[].cells` | `frames[].cells` | part when the supplied mapping resolves a piece; otherwise rig | evidence | resolved piece for cell.setupTop ?? ''; otherwise [] | [check.ts:4990](../src/check.ts#L4990) |
 | `seam_pairs` | `seam_pairs`; `seam_scope.whole_pairs`; `sets.*.seam_pairs`; `sets.*.seam_scope.whole_pairs` | subjects.length === 0 ? 'rig' : subjects.length === 1 ? 'part' : 'pair' | evidence | subjects | [check.ts:2708](../src/check.ts#L2708) |
 | `seam_scope.changes` | `seam_scope.changes`; `sets.*.seam_scope.changes` | 'rig' | evidence | [] | [check.ts:2186](../src/check.ts#L2186) |
 | `seam_scope.domain.states` | `seam_scope.domain.states`; `sets.*.seam_scope.domain.states` | 'rig' | evidence | [] | [check.ts:2271](../src/check.ts#L2271) |
-| `seam_scope.pairs` | `seam_scope.pairs`; `sets.*.seam_scope.pairs` | subjects.length === 0 ? 'rig' : subjects.length === 1 ? 'part' : 'pair' | evidence | subjects | [check.ts:7785](../src/check.ts#L7785) |
+| `seam_scope.pairs` | `seam_scope.pairs`; `sets.*.seam_scope.pairs` | subjects.length === 0 ? 'rig' : subjects.length === 1 ? 'part' : 'pair' | evidence | subjects | [check.ts:7797](../src/check.ts#L7797) |
 | `seam_scope.population.pairs` | `seam_scope.population.pairs`; `sets.*.seam_scope.population.pairs` | 'pair' | evidence | row.parts | [check.ts:2642](../src/check.ts#L2642) |
 | `seam_scope.population.single_art` | `seam_scope.population.single_art`; `sets.*.seam_scope.population.single_art` | 'part' | evidence | [row.part] | [check.ts:2643](../src/check.ts#L2643) |
 

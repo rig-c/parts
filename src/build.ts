@@ -2201,6 +2201,8 @@ export interface CheckStageInput {
   keepStills?: boolean;
   /** Skip the extra extremes renders and remove stale extremes outputs (issue #829). */
   noExtremes?: boolean;
+  /** Use the stock idle render as scratch for compose preview. */
+  previewIdle?: boolean;
   /** Declared RGBA loop seam bar and warm-up cap for the shipped idle render (issue #1590). */
   loopSeam?: LoopSeamRequest;
   /** `check --set <name>` (issue #454): measure one declared alternate set's setup-pose seam and recomposite figures. */
@@ -2447,10 +2449,10 @@ export function requirementText(name: string, line: RequirementLine): string {
  * check wrote them, then the directories it wrote whole (`build`, and `idle_frames`, the requirements, seam and
  * setup-still directories when they were written). The `check-run.json` record lists the files under these.
  */
-export function checkWrote(r: CheckReport, out: string): { written: string[]; dirs: string[] } {
+export function checkWrote(r: CheckReport, out: string, previewIdle = false): { written: string[]; dirs: string[] } {
   return {
     written: r.written,
-    dirs: ['build', ...(r.idle === null ? [] : ['idle_frames']), ...(r.requirements === null ? [] : [REQUIREMENTS_DIR]),
+    dirs: ['build', ...(r.idle === null || previewIdle ? [] : ['idle_frames']), ...(r.requirements === null ? [] : [REQUIREMENTS_DIR]),
       ...(r.figures.seam_pairs === undefined ? [] : [SEAM_DIR]), ...(existsSync(join(out, STILL_DIR)) ? [STILL_DIR] : [])],
   };
 }
@@ -2471,7 +2473,7 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
   const r = runCheck(
     input.rig, input.out, rigc, input.parts, mode, input.source, input.requirements, input.seamPairs === true,
     input.keepStills === true, input.set, input.allSets === true, input.environment, input.requirementsAs, input.config,
-    input.windBand, input.noExtremes === true, input.supportSource, input.supportFigure, input.assemblyRules, input.loopSeam,
+    input.windBand, input.noExtremes === true, input.supportSource, input.supportFigure, input.assemblyRules, input.loopSeam, input.previewIdle,
   );
   if (r.figures.environment !== undefined) log(`  ${environmentLine(r.figures.environment)}`);
   log(`  gate rig-play (rigc ${packedBuildLabel(mode)}), verbatim:`);
@@ -2559,7 +2561,7 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
     log(`  ${summaryText(r.requirements.summary)}`);
   }
   log(`  gate: rig-play ${fig.gate_spine_html_green ? 'green' : 'RED'} (${fig.rigc_entry.entry}${fig.rigc_entry.spine_core === null ? ', rigc\'s own validator' : `, the spine-core ${fig.rigc_entry.spine_core} round trip`})`);
-  const wrote = checkWrote(r, input.out);
+  const wrote = checkWrote(r, input.out, input.previewIdle);
   log(`  wrote ${[...wrote.written.map((w) => join(input.out, w)), ...wrote.dirs.map((d) => `${join(input.out, d)}/`)].join(', ')}`);
   for (const p of r.problems) log(failLine(p));
   log(checkSummaryLine(r));

@@ -218,7 +218,7 @@ export const PATH_TO_SUITE_MAP: readonly MapRule[] = [
   { pattern: 'src/remeshdelta.ts', suites: ['remesh', 'retune', 'tree'], why: 'remesh geometry delta helper' },
   { pattern: 'src/retune.ts', suites: ['retune', 'remesh', 'tree'], why: 'retune stage owned by retune and remesh' },
 
-  { pattern: 'src/build.ts', suites: ['build', 'loop', 'tree'], why: 'build stage owned by build and loop' },
+  { pattern: 'src/build.ts', suites: ['build', 'loop', 'scene', 'tree'], why: 'build and loop stages, and the check stage used by compose' },
   { pattern: 'src/apng.ts', suites: ['loop', 'readme-loop', 'tree'], why: 'APNG encoder owned by loop suite' },
   { pattern: 'src/gif.ts', suites: ['loop', 'readme-loop', 'tree'], why: 'GIF encoder owned by loop suite' },
   { pattern: 'src/palette.ts', suites: ['loop', 'tree'], why: 'palette quantizer owned by loop suite' },
@@ -228,7 +228,7 @@ export const PATH_TO_SUITE_MAP: readonly MapRule[] = [
   { pattern: 'src/scenerepeat.ts', suites: ['scene', 'tree'], why: 'scene character idle repeat compiler owned by scene' },
 
   // Phase B addition: src/check.ts also selects `chain` (catches #1317 and #938)
-  { pattern: 'src/check.ts', suites: ['check', 'chain', 'behind-seams', 'joint-contact', 'core-pointer', 'requirements', 'fixed-skeleton', 'setup-painting', 'boundary-colour', 'contour-wiring', 'retune', 'build', 'tree'], why: 'check stage, chain (CH04), sub-check suites, retune (RN09), and build (BU165/BU212)' },
+  { pattern: 'src/check.ts', suites: ['check', 'chain', 'behind-seams', 'joint-contact', 'core-pointer', 'requirements', 'fixed-skeleton', 'setup-painting', 'boundary-colour', 'contour-wiring', 'retune', 'build', 'scene', 'tree'], why: 'check stage, chain (CH04), sub-check suites, retune (RN09), build (BU165/BU212), and compose preview' },
   { pattern: 'src/checkrow.ts', suites: ['check', 'behind-seams', 'joint-contact', 'setup-painting', 'retune', 'tree'], why: 'check row builder (TY823/TY830/TY831 in tree)' },
   { pattern: 'src/behindseams.ts', suites: ['behind-seams', 'scene', 'tree'], why: 'BEHIND_PART_SEAMS owned by behind-seams and scene' },
   { pattern: 'src/boundarycolour.ts', suites: ['boundary-colour', 'scene', 'tree'], why: 'BOUNDARY_COLOUR owned by boundary-colour and scene' },

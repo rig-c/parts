@@ -55,7 +55,7 @@ import { RETUNE_FILE, RETUNE_SPEC, retuneStage } from './src/retune.ts';
 import { checkPainting, DEFAULT_PAINTING_FORM, isPaintingForm, PAINTING_FORMS, paintingFormOf } from './src/paintcheck.ts';
 import { decodePngBytes, readPng, writePng } from './src/raster/png.ts';
 import { REQUIREMENTS_SENTENCE } from './src/requirements.ts';
-import { composeStage, IMAGE_SEP, PLATE, PROVENANCES, SCENE_CAMERA_REPORT_SPEC, SCENE_REPORT_FILE, SCENE_REPORT_SPEC, SCENE_SPEC } from './src/scene.ts';
+import { type ComposeInput, composeStage, IMAGE_SEP, PLATE, PROVENANCES, refusePreviewLoopSeam, SCENE_CAMERA_REPORT_SPEC, SCENE_REPORT_FILE, SCENE_REPORT_SPEC, SCENE_SPEC } from './src/scene.ts';
 import { buildSheet, defaultCaption, type Tile, tilesFrom } from './src/sheet.ts';
 import { loadComparison, requiredProblems, structureLines } from './src/structure.ts';
 import { type ArgvTable, assembleOutputFiles, BUILD_RUN_FILE, CHECK_RUN_FILE, clearComposeRun, clearRunRecord, clearRunStamp, readPackageIdentity, recordArgv, rigOutputFiles, RUN_STAMP_FILE, RUN_STAMP_SPEC, writeRunRecord, writeRunStamp } from './src/runstamp.ts';
@@ -1046,7 +1046,16 @@ usage:
 
   rig-parts compose --scene <scene.json> --out <dir> [--requirements <file.json>] [--accept <bar>[,<bar>...]] [--page-size <px>]
                     [--loop-seam-bar <channel-delta,pixels> --loop-seam-cap <loops>]
+                    [--output-profile preview] [--no-extremes]
       The loop seam flags measure the composed idle in check/, as for check.
+      --no-extremes omits the extra extremes renders. --output-profile preview
+      also omits published idle_frames/, contact.png and motion_heat.png, and
+      implies --no-extremes. The gate and check requirements still apply.
+      Opt-in success prints PREVIEW or NO EXTREMES and records output_profile
+      in compose-run.json. When both flags are given, preview takes precedence.
+      Preview uses the stock idle render for checks, then removes it.
+      Preview refuses --loop-seam-bar (COMPOSE_PREVIEW_REQUIRED_CHECK) because
+      check.json binds the first and wrap PNGs that must remain in idle_frames/.
       Bind several finished characters into one rig. The scene file (spec
       "${SCENE_SPEC}") states the canvas {width, height}, an optional plate
       {image, provenance: ${PROVENANCES.join(' | ')}, note?}, the characters
@@ -1303,7 +1312,7 @@ const TAKES = {
   'comfy plate': { valued: ['--mode', '--painting', '--mask-from', '--occluder', '--out', '--graph', '--model', '--checkpoint-sha256', '--seed', '--grow', '--steps', '--cfg', '--prompt', '--negative', '--host', '--wait', '--timeout', '--poll'], switches: ['--holes', '--help'] },
   inputs: { valued: ['--source', '--config', '--out'], switches: ['--help'] },
   build: { valued: ['--config', '--source', '--full', '--head', '--out', '--seam', '--project', '--page-edges', '--pack-shape', '--page-size', '--requirements', '--idle-keys', '--lead-in', '--alt', '--set', '--environment', '--wind-band'], switches: ['--loop', '--seam-pairs', '--keep-stills', '--all-sets', '--no-extremes', '--help'] },
-  compose: { valued: ['--scene', '--out', '--requirements', '--accept', '--page-size', '--loop-seam-bar', '--loop-seam-cap'], switches: ['--help'] },
+  compose: { valued: ['--scene', '--out', '--requirements', '--accept', '--page-size', '--loop-seam-bar', '--loop-seam-cap', '--output-profile'], switches: ['--no-extremes', '--help'] },
   'mesh-draft': { valued: ['--config', '--parts', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape', '--page-size'], switches: ['--more-triangles', '--help'] },
   'mesh-stats': { valued: ['--config', '--parts'], switches: ['--help'] },
   remesh: { valued: ['--rig', '--config', '--parts', '--part', '--mesh', '--delta', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape', '--page-size', '--input-check'], switches: ['--record-input-check', '--help'] },
@@ -1633,15 +1642,22 @@ function cmdRig(args: string[]): number {
  * the spawn from here. A call that fails carries which rigc ran it, path and
  * version ({@link rigcRunnerAt}, issue #337), and every refusal quoting it says so.
  */
-/** The command's valued flags as `--flag value` pairs, each one its {@link TAKES} row holds; `required` must all be given. Its bare switches are taken out by the caller before this reads the rest. A string is a usage error. */
-function flags(args: string[], command: Command, required: readonly string[]): Map<string, string> | string {
+/** Read the command's required and optional `--flag value` pairs, and collect its bare switches in `on` when supplied. A string is a usage error. */
+function flags(args: string[], command: Command, required: readonly string[], on?: Set<string>): Map<string, string> | string {
   const got = new Map<string, string>();
-  for (let i = 0; i < args.length; i += 2) {
+  const switches: readonly string[] = TAKES[command].switches;
+  for (let i = 0; i < args.length; i++) {
     const flag = args[i];
+    if (on !== undefined && switches.includes(flag)) {
+      if (on.has(flag)) return `${flag} is given twice`;
+      on.add(flag);
+      continue;
+    }
     if (!takesValued(command, flag)) return notTaken(command, flag);
     if (args[i + 1] === undefined) return `${flag} needs a value`;
     if (got.has(flag)) return `${flag} is given twice`;
     got.set(flag, args[i + 1]);
+    i++;
   }
   for (const k of required) if (!got.has(k)) return `${command} needs ${k} <value>`;
   return got;
@@ -2605,15 +2621,28 @@ function cmdBuild(args: string[]): number {
 }
 
 function cmdCompose(args: string[]): number {
-  const f = flags(args, 'compose', ['--scene', '--out']);
+  const on = new Set<string>();
+  const f = flags(args, 'compose', ['--scene', '--out'], on);
   if (typeof f === 'string') return usage(f);
+  const profile = f.get('--output-profile');
+  if (profile !== undefined && profile !== 'preview') return usage(`--output-profile ${JSON.stringify(profile)}; preview is required when this flag is given`);
+  const outputProfile = profile ?? (on.has('--no-extremes') ? 'no-extremes' : undefined);
   const loopSeam = parseLoopSeamFlags(f);
   if (typeof loopSeam === 'string') return usage(loopSeam);
   const out = f.get('--out') as string;
   clearComposeRun(out);
-  let size: number | undefined;
+  let input: ComposeInput;
   try {
-    size = parsePageSize(f.get('--page-size'));
+    const size = parsePageSize(f.get('--page-size'));
+    const req = f.get('--requirements');
+    const accept = f.get('--accept');
+    input = {
+      scene: f.get('--scene') as string, out, ...(size === undefined ? {} : { pageSize: size }),
+      ...(req === undefined ? {} : { requirements: req }), ...(accept === undefined ? {} : { accept: accept.split(',') }),
+      ...(loopSeam === undefined ? {} : { loopSeam }),
+      ...(outputProfile === undefined ? {} : { outputProfile }),
+    };
+    refusePreviewLoopSeam(input);
   } catch (err) {
     return printRefusal(err);
   }
@@ -2625,14 +2654,8 @@ function cmdCompose(args: string[]): number {
   }
   const scratch = mkdtempSync(join(tmpdir(), 'rig-parts-compose-'));
   try {
-    const req = f.get('--requirements');
-    const accept = f.get('--accept');
     const r = composeStage(
-      {
-        scene: f.get('--scene') as string, out, ...(size === undefined ? {} : { pageSize: size }),
-        ...(req === undefined ? {} : { requirements: req }), ...(accept === undefined ? {} : { accept: accept.split(',') }),
-        ...(loopSeam === undefined ? {} : { loopSeam }),
-      },
+      input,
       { rig: rigcRunner(bin), check: rigcRunner(bin), checkBin: bin, scratch: join(scratch, 'gate') },
       console.log,
     );

@@ -6970,6 +6970,7 @@ function renderExtremes(build: string, out: string, animations: readonly string[
  * or `motion_heat.png`). A declared `loopSeam` requires a positive idle and
  * binds Core's met wrap-seam report to the shipped render. The keyed reading
  * still runs. `source` (`--source`) adds {@link SOURCE_LINE}.
+ * Compose preview reads the stock idle render as scratch and omits the idle diagnostics.
  *
  * `requirements` (`--requirements`, issue #93) is read with the rig directory
  * and resolved against it before anything is built ({@link readRequirements},
@@ -6979,9 +6980,14 @@ function renderExtremes(build: string, out: string, animations: readonly string[
  * MEASURABLE is a problem. Without it nothing here reads, writes or prints
  * anything it did not before.
  */
-export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, partsHome?: string, mode: PackMode = DEFAULT_PACK_MODE, source?: string, requirements?: string, seamPairsAsked = false, keepStills = false, set?: string, allSets = false, environment?: string, _requirementsAs: string | undefined = requirements, config?: InputFileRecord, windBand?: string, noExtremes = false, supportSource?: string, supportFigure?: Mask, assemblyRules?: AssemblyRules, loopSeam?: LoopSeamRequest): CheckReport {
+export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, partsHome?: string, mode: PackMode = DEFAULT_PACK_MODE, source?: string, requirements?: string, seamPairsAsked = false, keepStills = false, set?: string, allSets = false, environment?: string, _requirementsAs: string | undefined = requirements, config?: InputFileRecord, windBand?: string, noExtremes = false, supportSource?: string, supportFigure?: Mask, assemblyRules?: AssemblyRules, loopSeam?: LoopSeamRequest, previewIdle = false): CheckReport {
   const out = resolve(outDir);
-  if (loopSeam !== undefined) rmSync(join(out, 'check.json'), { force: true });
+  if (loopSeam !== undefined || previewIdle) rmSync(join(out, 'check.json'), { force: true });
+  if (previewIdle && loopSeam !== undefined) throw new PartsError([{
+    code: 'COMPOSE_PREVIEW_REQUIRED_CHECK',
+    object: '--loop-seam-bar',
+    detail: 'found=preview, required=default or no-extremes. The declared physics-on seam bar requires stock idle render evidence on disk.',
+  }]);
   const pageSize = parsePageSize(mode.pageSize);
   let inp: CheckInputs;
   let reqFile: RequirementsFile | null = null;
@@ -7069,7 +7075,8 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const animationNames = isRecord(inp.motion.animations) ? Object.keys(inp.motion.animations) : [];
   const selectedAlts = inp.parts === null || (set === undefined && !allSets) ? []
     : allSets ? inp.parts.alternates ?? [] : (inp.parts.alternates ?? []).filter(alt => alt.name === set);
-  preflightCheckPaths(animationNames, selectedAlts.map(alt => alt.name), reqFile, noExtremes);
+  const omitExtremes = noExtremes || previewIdle;
+  preflightCheckPaths(animationNames, selectedAlts.map(alt => alt.name), reqFile, omitExtremes);
   // A measured material failure is a check bar; unavailable data is a refusal.
   const rigcEntry = readRigcEntry(requireRigcVersion(rigc));
   /**
@@ -7102,6 +7109,9 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const seamMotionDir = join(out, MOTION_SEAM_SCRATCH);
   const windBandDir = join(out, WIND_BAND_SCRATCH);
   for (const d of [join(out, 'extremes'), join(out, '_extremes'), buildDir, buildReportPath, idleDir, stillDir, isoDir, loopDir, seamDir, keptDir, join(out, 'setup_still_auto'), foldDir, seamMotionDir, windBandDir]) rmSync(d, { recursive: true, force: true });
+  if (previewIdle) {
+    for (const name of ['contact.png', 'motion_heat.png']) rmSync(join(out, name), { force: true });
+  }
   const written: string[] = [];
   const write = (name: string, data: string): void => {
     writeFileSync(join(out, name), data);
@@ -7221,7 +7231,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
       }
       loopSeamEvidence = checked?.report ?? null;
       const contact = join(idle.dir, 'contact.png');
-      if (existsSync(contact)) {
+      if (!previewIdle && existsSync(contact)) {
         copyFileSync(contact, join(out, 'contact.png'));
         written.push('contact.png');
       }
@@ -7248,9 +7258,11 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
         loop = maxRgbDiff(kept.frames[0].image, keptLast.image);
         loopSet = kept;
       }
-      const idleImages = idle.frames.map((f) => f.image);
-      writePng(join(out, 'motion_heat.png'), motionHeat(idleImages));
-      written.push('motion_heat.png');
+      if (!previewIdle) {
+        const idleImages = idle.frames.map((f) => f.image);
+        writePng(join(out, 'motion_heat.png'), motionHeat(idleImages));
+        written.push('motion_heat.png');
+      }
     }
 
     // 3a. every animation, the idle included, read for folds by rigc (issues #320, #333, #363) — only when there is one; at
@@ -7327,7 +7339,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
             level = levelLine(feet, inp.rig, levelReadings, fps, stripped.physics.length, levelProblems);
           }
         }
-        if (!noExtremes) extremesFrames = readJson(join(stripped === null ? foldDir : join(foldDir, 'on'), 'frames.json'), []);
+        if (!omitExtremes) extremesFrames = readJson(join(stripped === null ? foldDir : join(foldDir, 'on'), 'frames.json'), []);
       } finally {
         rmSync(foldDir, { recursive: true, force: true });
       }
@@ -8019,13 +8031,14 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     ...readings,
     PASS: problems.length === 0,
   };
+  if (previewIdle) rmSync(idleDir, { recursive: true, force: true });
   const publishCheck = (): void => {
     publishMotionSeamCells(out, motionSeam.required, motionCellEvidence, () => write('check.json', serializeCheckRows(figures)));
     if (motionSeam.required?.cells !== undefined) written.push(MOTION_CELLS_FILE);
   };
   if (motionSeam.worlds === undefined) publishCheck();
   else publishMotionSeamWorlds(out, seamMotionDir, motionSeam.worlds, publishCheck);
-  const extremes = noExtremes ? [] : renderExtremes(buildDir, out, animationNames, idle === null ? extremesFrames : readJson(join(idleDir, 'frames.json'), []), extremesFrames, measured);
+  const extremes = omitExtremes ? [] : renderExtremes(buildDir, out, animationNames, idle === null ? extremesFrames : readJson(join(idleDir, 'frames.json'), []), extremesFrames, measured);
   if (existsSync(join(out, 'extremes'))) written.push('extremes/');
   const bars: CheckReport['bars'] = { measured: ['gate'], skipped: [] };
   const tally = (bar: string, reason: string | null): void => {
@@ -8081,6 +8094,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     ...(windBandRead === null ? {} : { windBand: windBandRead }),
   };
   } finally {
+    if (previewIdle) rmSync(idleDir, { recursive: true, force: true });
     rmSync(seamMotionDir, { recursive: true, force: true });
   }
 }
