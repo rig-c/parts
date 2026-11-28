@@ -81,7 +81,6 @@ export const PATH_TO_SUITE_MAP: readonly MapRule[] = [
   { pattern: 'scripts/readme_policy.ts', suites: ['tree'], why: 'invoked by check:readme and runReadmePolicyChecks in tree' },
   { pattern: 'scripts/verify_nova.ts', suites: ['tree'], why: 'tested by runVerifyNovaChecks in tree' },
   { pattern: 'scripts/scene_parity.ts', suites: ['scene', 'tree'], why: 'imported by runSceneSuite' },
-  { pattern: 'scripts/measure_compose_preview.ts', suites: ['tree'], why: 'standalone compose disk measurement tool covered by tree rules' },
   { pattern: 'scripts/selftest_measure.ts', tier: 'full', suites: ['run-tally', 'tree'], why: 'tested by runMeasurementControls in run-tally and TY24–TY26 (requires full-tier merge)' },
   { pattern: 'scripts/selftest_prefixes.ts', tier: 'full', suites: ['run-tally', 'tree'], why: 'tested by tallyPrefixCase (RT14) in run-tally (requires full-tier merge)' },
   { pattern: 'scripts/rig_oracle.ts', suites: ['rig', 'tree'], why: 'rig oracle script' },
